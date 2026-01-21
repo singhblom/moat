@@ -1400,12 +1400,14 @@ dependencies = [
 name = "moat-core"
 version = "0.1.0"
 dependencies = [
+ "hkdf",
  "openmls",
  "openmls_basic_credential",
  "openmls_rust_crypto",
  "rand",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 2.0.18",
 ]

@@ -4,15 +4,17 @@
 //! No IO operations are performed - all state is passed in and out as byte slices.
 
 mod error;
+mod event;
 mod padding;
 mod tag;
 
 pub use error::{Error, Result};
+pub use event::{Event, EventKind};
 pub use padding::{pad_to_bucket, unpad, Bucket};
 pub use tag::{derive_conversation_tag, derive_tag_from_group_id};
 
-use openmls::prelude::*;
 use openmls::prelude::tls_codec::{Deserialize, Serialize as TlsSerialize};
+use openmls::prelude::*;
 use openmls_basic_credential::SignatureKeyPair;
 use openmls_rust_crypto::OpenMlsRustCrypto;
 use serde::{Deserialize as SerdeDeserialize, Serialize as SerdeSerialize};
@@ -29,12 +31,14 @@ pub struct KeyBundle {
     pub signature_key: Vec<u8>,
 }
 
-/// Serialized group state for storage
+/// Minimal group state for storage (MVP approach)
+///
+/// For MVP, we store just enough to identify the group.
+/// Full MLS group state persistence would require more complex serialization.
 #[derive(Debug, Clone, SerdeSerialize, SerdeDeserialize)]
 pub struct GroupState {
     pub group_id: Vec<u8>,
     pub epoch: u64,
-    pub serialized: Vec<u8>,
 }
 
 /// Result of creating a welcome message for a new member
@@ -42,18 +46,20 @@ pub struct WelcomeResult {
     pub new_group_state: Vec<u8>,
     pub welcome: Vec<u8>,
     pub commit: Vec<u8>,
+    pub group_id: Vec<u8>,
 }
 
-/// Result of encrypting a message
+/// Result of encrypting an event
 pub struct EncryptResult {
     pub new_group_state: Vec<u8>,
+    pub tag: [u8; 16],
     pub ciphertext: Vec<u8>,
 }
 
-/// Result of decrypting a message
+/// Result of decrypting an event
 pub struct DecryptResult {
     pub new_group_state: Vec<u8>,
-    pub plaintext: Vec<u8>,
+    pub event: Event,
 }
 
 /// Pure MLS operations with no IO
@@ -84,12 +90,7 @@ impl MoatCore {
 
         // Generate key package
         let key_package_bundle = KeyPackage::builder()
-            .build(
-                CIPHERSUITE,
-                provider,
-                &signature_keys,
-                credential_with_key,
-            )
+            .build(CIPHERSUITE, provider, &signature_keys, credential_with_key)
             .map_err(|e| Error::KeyPackageGeneration(e.to_string()))?;
 
         // Get the key package for publishing
@@ -163,48 +164,48 @@ impl MoatCore {
             .build();
 
         // Create the group
-        let group = MlsGroup::new(
-            provider,
-            &signature_keys,
-            &group_config,
-            credential_with_key,
-        )
-        .map_err(|e| Error::GroupCreation(e.to_string()))?;
+        let group = MlsGroup::new(provider, &signature_keys, &group_config, credential_with_key)
+            .map_err(|e| Error::GroupCreation(e.to_string()))?;
 
-        // Serialize group state
-        Self::serialize_group(&group, provider)
+        // Serialize minimal group state
+        let state = GroupState {
+            group_id: group.group_id().as_slice().to_vec(),
+            epoch: group.epoch().as_u64(),
+        };
+
+        serde_json::to_vec(&state).map_err(|e| Error::Serialization(e.to_string()))
     }
 
     /// Get the current epoch of the group from serialized state.
     pub fn get_epoch(group_state: &[u8]) -> Result<u64> {
-        let state: GroupState =
-            serde_json::from_slice(group_state).map_err(|e| Error::Deserialization(e.to_string()))?;
+        let state: GroupState = serde_json::from_slice(group_state)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
         Ok(state.epoch)
     }
 
     /// Get the group ID from serialized state.
     pub fn get_group_id(group_state: &[u8]) -> Result<Vec<u8>> {
-        let state: GroupState =
-            serde_json::from_slice(group_state).map_err(|e| Error::Deserialization(e.to_string()))?;
+        let state: GroupState = serde_json::from_slice(group_state)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
         Ok(state.group_id)
     }
 
-    // Internal helpers
+    /// Derive the current conversation tag from group state.
+    pub fn get_current_tag(group_state: &[u8]) -> Result<[u8; 16]> {
+        let state: GroupState = serde_json::from_slice(group_state)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
+        derive_tag_from_group_id(&state.group_id, state.epoch)
+    }
 
-    fn serialize_group(group: &MlsGroup, provider: &OpenMlsRustCrypto) -> Result<Vec<u8>> {
-        // Export a secret for verification that the group is valid
-        let exported = group
-            .export_secret(provider, "moat-export", &[], 32)
-            .map_err(|e| Error::Serialization(e.to_string()))?;
+    /// Derive conversation tags for a range of epochs (for message filtering).
+    pub fn get_tags_for_epochs(group_state: &[u8], epochs: &[u64]) -> Result<Vec<[u8; 16]>> {
+        let state: GroupState = serde_json::from_slice(group_state)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
 
-        // Create a simplified state representation
-        let state = GroupState {
-            group_id: group.group_id().as_slice().to_vec(),
-            epoch: group.epoch().as_u64(),
-            serialized: exported,
-        };
-
-        serde_json::to_vec(&state).map_err(|e| Error::Serialization(e.to_string()))
+        epochs
+            .iter()
+            .map(|&epoch| derive_tag_from_group_id(&state.group_id, epoch))
+            .collect()
     }
 }
 

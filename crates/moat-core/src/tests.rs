@@ -1,6 +1,6 @@
 //! Integration tests for moat-core
 
-use crate::{derive_tag_from_group_id, pad_to_bucket, unpad, MoatCore};
+use crate::{derive_tag_from_group_id, pad_to_bucket, unpad, Event, EventKind, MoatCore};
 
 #[test]
 fn test_key_package_generation() {
@@ -109,7 +109,7 @@ fn test_padding_preserves_content() {
     let messages = vec![
         b"Short".to_vec(),
         b"A slightly longer message".to_vec(),
-        vec![0xAB; 300], // Medium bucket
+        vec![0xAB; 300],  // Medium bucket
         vec![0xCD; 1500], // Large bucket
     ];
 
@@ -118,4 +118,124 @@ fn test_padding_preserves_content() {
         let recovered = unpad(&padded);
         assert_eq!(recovered, msg, "Padding round-trip should preserve content");
     }
+}
+
+#[test]
+fn test_event_creation() {
+    let event = Event::message(b"group-123".to_vec(), 5, b"Hello, world!");
+    assert_eq!(event.kind, EventKind::Message);
+    assert_eq!(event.group_id, b"group-123");
+    assert_eq!(event.epoch, 5);
+    assert_eq!(event.payload, b"Hello, world!");
+}
+
+#[test]
+fn test_event_roundtrip() {
+    let event = Event::message(b"group-123".to_vec(), 5, b"Hello, world!");
+
+    let bytes = event.to_bytes().unwrap();
+    let recovered = Event::from_bytes(&bytes).unwrap();
+
+    assert_eq!(recovered.kind, EventKind::Message);
+    assert_eq!(recovered.group_id, b"group-123");
+    assert_eq!(recovered.epoch, 5);
+    assert_eq!(recovered.payload, b"Hello, world!");
+}
+
+#[test]
+fn test_event_kinds() {
+    let msg = Event::message(vec![], 0, b"text");
+    assert_eq!(msg.kind, EventKind::Message);
+
+    let commit = Event::commit(vec![], 0, vec![1, 2, 3]);
+    assert_eq!(commit.kind, EventKind::Commit);
+
+    let welcome = Event::welcome(vec![], 0, vec![4, 5, 6]);
+    assert_eq!(welcome.kind, EventKind::Welcome);
+
+    let checkpoint = Event::checkpoint(vec![], 0, vec![7, 8, 9]);
+    assert_eq!(checkpoint.kind, EventKind::Checkpoint);
+}
+
+#[test]
+fn test_event_with_device_id() {
+    let event = Event::message(vec![], 0, b"test").with_device_id("device-1".to_string());
+    assert_eq!(event.sender_device_id, Some("device-1".to_string()));
+}
+
+#[test]
+fn test_get_current_tag() {
+    let identity = b"alice@example.com";
+    let (_key_package, key_bundle) = MoatCore::generate_key_package(identity).unwrap();
+    let group_state = MoatCore::create_group(identity, &key_bundle).unwrap();
+
+    // Should be able to derive tag
+    let tag = MoatCore::get_current_tag(&group_state).unwrap();
+    assert_eq!(tag.len(), 16);
+
+    // Tag should be consistent
+    let tag2 = MoatCore::get_current_tag(&group_state).unwrap();
+    assert_eq!(tag, tag2);
+}
+
+#[test]
+fn test_get_tags_for_epochs() {
+    let identity = b"alice@example.com";
+    let (_key_package, key_bundle) = MoatCore::generate_key_package(identity).unwrap();
+    let group_state = MoatCore::create_group(identity, &key_bundle).unwrap();
+
+    let epochs = vec![0, 1, 2, 3];
+    let tags = MoatCore::get_tags_for_epochs(&group_state, &epochs).unwrap();
+
+    assert_eq!(tags.len(), 4);
+
+    // All tags should be different
+    for i in 0..tags.len() {
+        for j in (i + 1)..tags.len() {
+            assert_ne!(tags[i], tags[j], "Tags for different epochs should differ");
+        }
+    }
+}
+
+#[test]
+fn test_tag_derived_from_group_state() {
+    // Create a group
+    let identity = b"alice@example.com";
+    let (_key_package, key_bundle) = MoatCore::generate_key_package(identity).unwrap();
+    let group_state = MoatCore::create_group(identity, &key_bundle).unwrap();
+
+    // Get tag from group state
+    let tag_from_state = MoatCore::get_current_tag(&group_state).unwrap();
+
+    // Get tag directly from group ID and epoch
+    let group_id = MoatCore::get_group_id(&group_state).unwrap();
+    let epoch = MoatCore::get_epoch(&group_state).unwrap();
+    let tag_direct = derive_tag_from_group_id(&group_id, epoch).unwrap();
+
+    // Should match
+    assert_eq!(tag_from_state, tag_direct);
+}
+
+#[test]
+fn test_event_serialization_with_padding() {
+    // Test that events can be serialized, padded, and recovered
+    let event = Event::message(b"group-xyz".to_vec(), 42, b"Hello, this is a test message!");
+
+    // Serialize
+    let event_bytes = event.to_bytes().unwrap();
+
+    // Pad
+    let padded = pad_to_bucket(&event_bytes);
+    assert_eq!(padded.len(), 256); // Should fit in small bucket
+
+    // Unpad
+    let unpadded = unpad(&padded);
+
+    // Deserialize
+    let recovered = Event::from_bytes(&unpadded).unwrap();
+
+    assert_eq!(recovered.kind, EventKind::Message);
+    assert_eq!(recovered.group_id, b"group-xyz");
+    assert_eq!(recovered.epoch, 42);
+    assert_eq!(recovered.payload, b"Hello, this is a test message!");
 }

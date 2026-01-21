@@ -12,6 +12,8 @@ openmls_rust_crypto = { workspace = true }
 openmls_basic_credential = { workspace = true }
 thiserror = { workspace = true }
 rand = { workspace = true }
+hkdf = { workspace = true }
+sha2 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
