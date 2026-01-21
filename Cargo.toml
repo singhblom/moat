@@ -1,0 +1,48 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/moat-core",
+    "crates/moat-atproto",
+    "crates/moat-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.75"
+
+[workspace.dependencies]
+# MLS
+openmls = "0.6"
+openmls_rust_crypto = "0.3"
+openmls_basic_credential = "0.3"
+
+# ATProto
+atrium-api = "0.24"
+atrium-xrpc-client = "0.5"
+
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Utilities
+directories = "5"
+dirs = "5"
+thiserror = "2"
+chrono = { version = "0.4", features = ["serde"] }
+base64 = "0.22"
+rand = "0.8"
+anyhow = "1"
+tempfile = "3"
+
+# Internal crates
+moat-core = { path = "crates/moat-core" }
+moat-atproto = { path = "crates/moat-atproto" }

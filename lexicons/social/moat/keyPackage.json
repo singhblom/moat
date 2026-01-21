@@ -1,0 +1,42 @@
+{
+  "lexicon": 1,
+  "id": "social.moat.keyPackage",
+  "defs": {
+    "main": {
+      "type": "record",
+      "key": "tid",
+      "description": "MLS key package for establishing encrypted conversations",
+      "record": {
+        "type": "object",
+        "required": ["v", "ciphersuite", "keyPackage", "expiresAt", "createdAt"],
+        "properties": {
+          "v": {
+            "type": "integer",
+            "description": "Schema version",
+            "minimum": 1,
+            "maximum": 1
+          },
+          "ciphersuite": {
+            "type": "string",
+            "description": "MLS ciphersuite identifier"
+          },
+          "keyPackage": {
+            "type": "bytes",
+            "description": "TLS-serialized MLS KeyPackage",
+            "maxLength": 65536
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "Expiration time of this key package"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "Creation time"
+          }
+        }
+      }
+    }
+  }
+}

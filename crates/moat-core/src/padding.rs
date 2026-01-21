@@ -1,0 +1,168 @@
+//! Phase A: Size bucketing to hide message length
+//!
+//! Messages are padded to fixed bucket sizes (256B, 1KB, 4KB) to prevent
+//! traffic analysis from inferring message content based on size.
+
+use rand::Rng;
+
+/// Bucket sizes for message padding
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bucket {
+    /// 256 bytes - for short messages
+    Small = 256,
+    /// 1024 bytes - for medium messages
+    Medium = 1024,
+    /// 4096 bytes - for large messages
+    Large = 4096,
+}
+
+impl Bucket {
+    /// Get the appropriate bucket for a given plaintext length
+    pub fn for_size(len: usize) -> Self {
+        // Reserve 4 bytes for length prefix
+        let needed = len + 4;
+        if needed <= 256 {
+            Bucket::Small
+        } else if needed <= 1024 {
+            Bucket::Medium
+        } else {
+            Bucket::Large
+        }
+    }
+
+    /// Get the byte size of this bucket
+    pub fn size(self) -> usize {
+        self as usize
+    }
+}
+
+/// Pad plaintext to the nearest bucket size.
+///
+/// Format: [4-byte big-endian length][plaintext][random padding]
+///
+/// The total output will be exactly one of: 256, 1024, or 4096 bytes.
+pub fn pad_to_bucket(plaintext: &[u8]) -> Vec<u8> {
+    let bucket = Bucket::for_size(plaintext.len());
+    let target_size = bucket.size();
+
+    let mut result = Vec::with_capacity(target_size);
+
+    // Write length prefix (4 bytes, big-endian)
+    let len = plaintext.len() as u32;
+    result.extend_from_slice(&len.to_be_bytes());
+
+    // Write plaintext
+    result.extend_from_slice(plaintext);
+
+    // Fill remainder with random bytes
+    let padding_len = target_size - result.len();
+    if padding_len > 0 {
+        let mut rng = rand::thread_rng();
+        let padding: Vec<u8> = (0..padding_len).map(|_| rng.gen()).collect();
+        result.extend_from_slice(&padding);
+    }
+
+    result
+}
+
+/// Remove padding and extract original plaintext.
+///
+/// Returns the original plaintext without the length prefix and padding.
+pub fn unpad(padded: &[u8]) -> Vec<u8> {
+    if padded.len() < 4 {
+        return Vec::new();
+    }
+
+    // Read length prefix
+    let len = u32::from_be_bytes([padded[0], padded[1], padded[2], padded[3]]) as usize;
+
+    // Validate length
+    if len > padded.len() - 4 {
+        return Vec::new();
+    }
+
+    // Extract plaintext
+    padded[4..4 + len].to_vec()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bucket_selection() {
+        // Small messages go to 256B bucket
+        assert_eq!(Bucket::for_size(0), Bucket::Small);
+        assert_eq!(Bucket::for_size(100), Bucket::Small);
+        assert_eq!(Bucket::for_size(252), Bucket::Small); // 252 + 4 = 256
+
+        // Medium messages go to 1KB bucket
+        assert_eq!(Bucket::for_size(253), Bucket::Medium);
+        assert_eq!(Bucket::for_size(500), Bucket::Medium);
+        assert_eq!(Bucket::for_size(1020), Bucket::Medium); // 1020 + 4 = 1024
+
+        // Large messages go to 4KB bucket
+        assert_eq!(Bucket::for_size(1021), Bucket::Large);
+        assert_eq!(Bucket::for_size(2000), Bucket::Large);
+        assert_eq!(Bucket::for_size(4000), Bucket::Large);
+    }
+
+    #[test]
+    fn test_pad_unpad_small() {
+        let plaintext = b"Hello, world!";
+        let padded = pad_to_bucket(plaintext);
+
+        assert_eq!(padded.len(), 256);
+        assert_eq!(unpad(&padded), plaintext);
+    }
+
+    #[test]
+    fn test_pad_unpad_medium() {
+        let plaintext = vec![0x42; 500];
+        let padded = pad_to_bucket(&plaintext);
+
+        assert_eq!(padded.len(), 1024);
+        assert_eq!(unpad(&padded), plaintext);
+    }
+
+    #[test]
+    fn test_pad_unpad_large() {
+        let plaintext = vec![0x42; 2000];
+        let padded = pad_to_bucket(&plaintext);
+
+        assert_eq!(padded.len(), 4096);
+        assert_eq!(unpad(&padded), plaintext);
+    }
+
+    #[test]
+    fn test_pad_unpad_empty() {
+        let plaintext = b"";
+        let padded = pad_to_bucket(plaintext);
+
+        assert_eq!(padded.len(), 256);
+        assert_eq!(unpad(&padded), plaintext);
+    }
+
+    #[test]
+    fn test_unpad_invalid() {
+        // Too short
+        assert!(unpad(&[0, 0, 0]).is_empty());
+
+        // Length exceeds data
+        let bad = [0, 0, 0, 100, 1, 2, 3];
+        assert!(unpad(&bad).is_empty());
+    }
+
+    #[test]
+    fn test_padding_is_random() {
+        let plaintext = b"test";
+        let padded1 = pad_to_bucket(plaintext);
+        let padded2 = pad_to_bucket(plaintext);
+
+        // Plaintext portion should be identical
+        assert_eq!(&padded1[..8], &padded2[..8]);
+
+        // Padding portion should differ (with very high probability)
+        assert_ne!(&padded1[8..], &padded2[8..]);
+    }
+}

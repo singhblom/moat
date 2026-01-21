@@ -1,0 +1,27 @@
+[package]
+name = "moat-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Ratatui terminal UI for Moat encrypted messenger"
+
+[[bin]]
+name = "moat"
+path = "src/main.rs"
+
+[dependencies]
+moat-core = { workspace = true }
+moat-atproto = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+tokio = { workspace = true }
+dirs = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
