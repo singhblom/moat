@@ -3,7 +3,7 @@
 use crate::keystore::KeyStore;
 use crossterm::event::{KeyCode, KeyEvent};
 use moat_atproto::MoatAtprotoClient;
-use moat_core::{derive_tag_from_group_id, pad_to_bucket, MoatCore, CIPHERSUITE};
+use moat_core::{derive_tag_from_group_id, pad_to_bucket, MoatCore, MoatSession, CIPHERSUITE};
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -77,6 +77,7 @@ pub struct DisplayMessage {
 pub struct App {
     pub keys: KeyStore,
     pub client: Option<MoatAtprotoClient>,
+    pub mls: MoatSession,
 
     // UI state
     pub focus: Focus,
@@ -106,6 +107,20 @@ impl App {
     pub fn new() -> Result<Self> {
         let keys = KeyStore::new()?;
 
+        // Initialize MoatSession with persistent storage at ~/.moat/mls.bin
+        let mls_path = dirs::home_dir()
+            .ok_or_else(|| AppError::Other("home directory not found".to_string()))?
+            .join(".moat")
+            .join("mls.bin");
+
+        // Ensure parent directory exists
+        if let Some(parent) = mls_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| AppError::Other(format!("Failed to create .moat directory: {e}")))?;
+        }
+
+        let mls = MoatSession::new(mls_path)?;
+
         let focus = if keys.has_credentials() {
             Focus::Conversations
         } else {
@@ -115,6 +130,7 @@ impl App {
         Ok(Self {
             keys,
             client: None,
+            mls,
             focus,
             login_form: LoginForm::default(),
             error_message: None,
@@ -236,14 +252,18 @@ impl App {
         // Store credentials
         self.keys.store_credentials(&handle, &password)?;
 
-        // Generate identity key if needed
+        // Generate identity key if needed (using MoatSession for persistence)
         if !self.keys.has_identity_key() {
             self.set_status("Generating identity key...".to_string());
             let identity = client.did().as_bytes();
-            let (key_package, private_key) = MoatCore::generate_key_package(identity)?;
-            self.keys.store_identity_key(&private_key)?;
 
-            // Publish key package
+            // Use MoatSession for persistent key generation
+            let (key_package, key_bundle) = self.mls.generate_key_package(identity)?;
+
+            // Store key bundle locally (needed for encryption operations)
+            self.keys.store_identity_key(&key_bundle)?;
+
+            // Publish key package to PDS
             self.set_status("Publishing key package...".to_string());
             let ciphersuite_name = format!("{:?}", CIPHERSUITE);
             client.publish_key_package(&key_package, &ciphersuite_name).await?;

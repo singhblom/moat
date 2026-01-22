@@ -30,13 +30,20 @@ An encrypted group chat on ATProto using MLS, combining metadata obfuscation tec
 - ✓ Ratatui UI structure with conversation list and message panes
 - ✓ Local keystore at `~/.moat/keys/`
 
+**Phase 2: ATProto Client (mostly complete)**
+- ✓ `publish_event(tag, ciphertext)` - publish encrypted events
+- ✓ `fetch_events_from_did(did, cursor)` - fetch events with pagination
+- ✓ `fetch_events_by_tag(did, tag)` - filter events by conversation tag
+- ✓ `resolve_did(handle)` - handle-to-DID resolution
+- ✓ `publish_key_package()` / `fetch_key_packages()` - key package CRUD
+
 ### In Progress
 
-- Phase 2: ATProto Integration (wire up `MoatSession` to CLI)
-- Phase 3: CLI Conversation Flows
+- Phase 2.5: Wire up MoatSession to CLI (see concrete steps below)
 
 ### Not Started
 
+- Phase 3: CLI Conversation Flows (new conversation UI, polling)
 - Phase 4: Local Storage expansion
 - Phase 5: Privacy Hardening
 
@@ -47,13 +54,23 @@ An encrypted group chat on ATProto using MLS, combining metadata obfuscation tec
 ```
 moat/
 ├── crates/
-│   ├── moat-core/       # Pure MLS logic, no IO (exists, needs work)
-│   ├── moat-atproto/    # PDS interaction (exists, needs expansion)
-│   └── moat-cli/        # Ratatui UI (exists, needs conversation flows)
-└── lexicons/            # JSON lexicon definitions (to be created)
+│   ├── moat-core/       # MLS logic with FileStorage persistence (complete)
+│   ├── moat-atproto/    # ATProto client (complete)
+│   └── moat-cli/        # Ratatui UI (needs MoatSession wiring)
+└── lexicons/            # ATProto lexicon definitions
 ```
 
-**Key principle:** The Rust MLS core is pure—bytes in, bytes out, no storage or network. All IO happens in the CLI layer.
+**Key principle:** MoatSession handles all MLS state persistence. CLI orchestrates MoatSession + ATProto client.
+
+**Storage layout:**
+```
+~/.moat/
+├── mls.bin              # MoatSession's FileStorage (MLS groups, keys)
+└── keys/
+    ├── credentials      # handle + app password
+    ├── identity.key     # KeyBundle (for MLS operations)
+    └── conversations/   # Metadata (participant handle, etc.)
+```
 
 ---
 
@@ -172,121 +189,287 @@ impl MoatCore {
 
 ---
 
-## Phase 2: ATProto Integration
+## Phase 2: ATProto Integration ✓ MOSTLY COMPLETE
 
-### Step 2.1: Expand moat-atproto client
+### Step 2.1: ATProto client methods ✓
 
-Add methods for the unified event model:
+All required methods already exist in `moat-atproto`:
 
 ```rust
 impl MoatAtprotoClient {
-    // Existing
+    // Authentication
     pub async fn login(handle: &str, password: &str) -> Result<Self>;
-    pub async fn publish_key_package(&self, key_package: &[u8]) -> Result<()>;
-    pub async fn fetch_key_package(&self, did: &str) -> Result<Vec<u8>>;
+    pub fn did(&self) -> &str;
 
-    // New: unified events
-    pub async fn publish_event(&self, tag: &[u8], ciphertext: &[u8]) -> Result<RecordUri>;
-    pub async fn fetch_events_by_author(&self, did: &str, since: Option<Timestamp>) -> Result<Vec<EventRecord>>;
+    // Key packages
+    pub async fn publish_key_package(&self, key_package: &[u8], ciphersuite: &str) -> Result<String>;
+    pub async fn fetch_key_packages(&self, did: &str) -> Result<Vec<KeyPackageRecord>>;
 
-    // Group state (public parts, stored in user's repo)
-    pub async fn publish_group_state(&self, conv_id: &str, state: &[u8]) -> Result<()>;
-    pub async fn fetch_group_state(&self, conv_id: &str) -> Result<Vec<u8>>;
+    // Unified events
+    pub async fn publish_event(&self, tag: &[u8; 16], ciphertext: &[u8]) -> Result<String>;
+    pub async fn fetch_events_from_did(&self, did: &str, cursor: Option<&str>) -> Result<(Vec<EventRecord>, Option<String>)>;
+    pub async fn fetch_events_by_tag(&self, did: &str, tag: &[u8; 16]) -> Result<Vec<EventRecord>>;
 
     // Discovery
-    pub async fn resolve_handle(&self, handle: &str) -> Result<Did>;
+    pub async fn resolve_did(&self, handle: &str) -> Result<String>;
 }
 ```
 
-### Step 2.2: Implement firehose filtering
+### Step 2.2: Firehose filtering (deferred)
 
-For real-time message receipt, subscribe to relay firehose and filter:
+MVP will use simple polling instead of firehose subscription.
+
+---
+
+## Phase 2.5: Wire MoatSession to CLI
+
+**Goal:** Replace stub implementations in moat-cli with actual MLS operations using MoatSession.
+
+### Current State
+
+The CLI has scaffolding but key functions are stubs:
+- `app.rs:send_message()` - publishes padded plaintext, not MLS ciphertext
+- `app.rs:start_new_conversation()` - just shows a status message
+- `app.rs:load_messages()` - shows placeholder, doesn't fetch from PDS
+- Uses `MoatCore` (stateless) instead of `MoatSession` (persistent)
+
+### Step 2.5.1: Add MoatSession to App ✓
 
 ```rust
-pub async fn subscribe_to_events(
-    relay_url: &str,
-    watched_dids: &[Did],
-    active_tags: &HashSet<Tag>,
-) -> impl Stream<Item = EventRecord> {
-    // Connect to com.atproto.sync.subscribeRepos
-    // Filter commits for collection: social.moat.event
-    // Filter by author DID
-    // Yield matching records
+// In app.rs
+pub struct App {
+    pub keys: KeyStore,
+    pub client: Option<MoatAtprotoClient>,
+    pub mls: MoatSession,  // Added - non-optional, initialized on startup
+    // ... rest unchanged
 }
 ```
 
-**MVP alternative:** Simple polling of each participant's repo. Less efficient but simpler.
+**Storage architecture decision:** MoatSession uses its own FileStorage at `~/.moat/mls.bin`. KeyStore continues to manage credentials and conversation metadata at `~/.moat/keys/`. This keeps MLS state (managed by OpenMLS) separate from app state.
+
+**Implementation (completed):**
+1. ✓ Create `MoatSession::new(~/.moat/mls.bin)` on app startup
+2. ✓ Store key bundle in KeyStore after `generate_key_package()`
+3. ✓ MLS groups persist automatically via MoatSession's FileStorage
+4. ✓ Updated `do_login()` to use `MoatSession::generate_key_package()` instead of stateless `MoatCore`
+
+### Step 2.5.2: Fix key generation flow ✓
+
+Completed as part of Step 2.5.1. The `do_login()` now uses `MoatSession::generate_key_package()`:
+
+```rust
+// In do_login() - IMPLEMENTED
+if !self.keys.has_identity_key() {
+    let identity = client.did().as_bytes();
+    let (key_package, key_bundle) = self.mls.generate_key_package(identity)?;
+
+    // Store key bundle locally (needed for encryption)
+    self.keys.store_identity_key(&key_bundle)?;
+
+    // Publish key package to PDS
+    client.publish_key_package(&key_package, &ciphersuite_name).await?;
+}
+```
+
+### Step 2.5.3: Implement start_new_conversation()
+
+```rust
+async fn start_new_conversation(&mut self, recipient_handle: &str) -> Result<()> {
+    let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
+    let mls = self.mls.as_ref().ok_or(AppError::Other("MLS not initialized".into()))?;
+
+    // 1. Resolve handle to DID
+    let recipient_did = client.resolve_did(recipient_handle).await?;
+
+    // 2. Fetch recipient's key package
+    let key_packages = client.fetch_key_packages(&recipient_did).await?;
+    let recipient_kp = key_packages.first()
+        .ok_or(AppError::Other("No key package found".into()))?;
+
+    // 3. Load our key bundle
+    let key_bundle = self.keys.load_identity_key()?;
+    let identity = client.did().as_bytes();
+
+    // 4. Create MLS group
+    let group_id = mls.create_group(identity, &key_bundle)?;
+
+    // 5. Add recipient to group
+    let welcome_result = mls.add_member(&group_id, &key_bundle, &recipient_kp.key_package)?;
+
+    // 6. Publish welcome as encrypted event
+    //    (recipient will recognize via their pending key package)
+    let welcome_event = Event::welcome(group_id.clone(), 0, welcome_result.welcome);
+    let encrypted = mls.encrypt_event(&group_id, &key_bundle, &welcome_event)?;
+    client.publish_event(&encrypted.tag, &encrypted.ciphertext).await?;
+
+    // 7. Store conversation metadata
+    let conv_id = hex::encode(&group_id);
+    self.keys.store_group_metadata(&conv_id, &GroupMetadata {
+        participant_did: recipient_did.clone(),
+        participant_handle: recipient_handle.to_string(),
+    })?;
+
+    // 8. Update UI
+    self.conversations.push(Conversation {
+        id: conv_id,
+        name: recipient_handle.to_string(),
+        participant_did: recipient_did,
+        current_epoch: 1,  // Post-add epoch
+        unread: 0,
+    });
+
+    // 9. Register tag for this conversation
+    self.tag_map.insert(encrypted.tag, group_id);
+
+    Ok(())
+}
+```
+
+### Step 2.5.4: Implement send_message() with MLS encryption
+
+```rust
+async fn send_message(&mut self) -> Result<()> {
+    let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
+    let mls = self.mls.as_ref().ok_or(AppError::Other("MLS not initialized".into()))?;
+    let conv_idx = self.active_conversation.ok_or(AppError::NoConversation)?;
+    let conv = &self.conversations[conv_idx];
+
+    // Load key bundle
+    let key_bundle = self.keys.load_identity_key()?;
+
+    // Parse group_id from hex
+    let group_id = hex::decode(&conv.id)?;
+
+    // Create message event
+    let event = Event::message(
+        group_id.clone(),
+        conv.current_epoch,
+        self.input_buffer.as_bytes(),
+    );
+
+    // Encrypt with MLS (handles padding internally)
+    let encrypted = mls.encrypt_event(&group_id, &key_bundle, &event)?;
+
+    // Publish to PDS
+    client.publish_event(&encrypted.tag, &encrypted.ciphertext).await?;
+
+    // Update local display
+    self.messages.push(DisplayMessage {
+        from: "You".to_string(),
+        content: self.input_buffer.clone(),
+        timestamp: chrono::Utc::now(),
+        is_own: true,
+    });
+
+    self.input_buffer.clear();
+    self.cursor_position = 0;
+
+    Ok(())
+}
+```
+
+### Step 2.5.5: Implement message polling
+
+```rust
+async fn poll_messages(&mut self) -> Result<()> {
+    let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
+    let mls = self.mls.as_ref().ok_or(AppError::Other("MLS not initialized".into()))?;
+
+    // For each conversation, poll participant's repo
+    for conv in &self.conversations {
+        let events = client.fetch_events_from_did(&conv.participant_did, None).await?;
+
+        for event_record in events {
+            // Check if tag matches any known conversation
+            if let Some(group_id) = self.tag_map.get(&event_record.tag) {
+                // Decrypt
+                let decrypted = mls.decrypt_event(group_id, &event_record.ciphertext)?;
+
+                match decrypted.event.kind {
+                    EventKind::Message => {
+                        let content = String::from_utf8_lossy(&decrypted.event.payload);
+                        self.messages.push(DisplayMessage {
+                            from: conv.name.clone(),
+                            content: content.to_string(),
+                            timestamp: event_record.created_at,
+                            is_own: false,
+                        });
+                    }
+                    EventKind::Welcome => {
+                        // Process incoming conversation invite
+                        self.process_welcome(&decrypted.event).await?;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+```
+
+### Step 2.5.6: Add "new conversation" UI prompt
+
+Modify `handle_conversations_key()` to prompt for handle:
+
+```rust
+KeyCode::Char('n') => {
+    // Switch to a "new conversation" input mode
+    self.focus = Focus::NewConversation;
+    self.new_conv_handle = String::new();
+}
+```
+
+Add new focus state and input handler for entering recipient handle.
+
+---
+
+### Implementation Order
+
+1. **Add MoatSession to App** - Initialize on startup, store alongside KeyStore
+2. **Fix key generation** - Use MoatSession instead of MoatCore
+3. **Wire send_message()** - Replace plaintext publish with MLS encrypt
+4. **Add poll_messages()** - Basic polling in tick(), decrypt incoming
+5. **Implement start_new_conversation()** - Full flow with UI
+6. **Test end-to-end** - Two terminals, two accounts
+
+### Files to Modify
+
+- `crates/moat-cli/src/app.rs` - Main wiring work
+- `crates/moat-cli/src/keystore.rs` - Add `store_group_metadata()`, `load_group_metadata()`
+- `crates/moat-cli/Cargo.toml` - Ensure moat-core dependency has all features
 
 ---
 
 ## Phase 3: CLI Conversation Flows
 
-### Step 3.1: Start conversation flow
+> Note: Core flows are now detailed in Phase 2.5 above. This section covers remaining UI polish.
 
-When user presses `n` and enters a handle:
+### Step 3.1: Incoming welcome detection
 
-1. Resolve handle to DID
-2. Fetch recipient's key package from their PDS
-3. `moat_core.create_group()` → initial state
-4. `moat_core.create_welcome()` → welcome + commit
-5. Create unified event with `kind: welcome`, publish to own repo
-6. Store private key locally
-7. Store group state to PDS
-8. Add conversation to local list
+When polling, detect new conversation invites:
 
-### Step 3.2: Receive conversation flow
-
-On poll/sync:
-
-1. Fetch events from known contacts' repos (or firehose)
-2. For each event, check if tag matches any known tag-set
-3. If no match but we have a pending key package, try as welcome
-4. On successful welcome processing, add new conversation
-5. Store group state, update UI
-
-### Step 3.3: Send message flow
-
-When user types and presses Enter:
-
-1. Load group state from local cache (backed by PDS)
-2. Load private key from keystore
-3. Create event: `{ kind: "msg", payload: padded_text, ... }`
-4. `moat_core.encrypt_event()` → new state + tag + ciphertext
-5. Publish event to own repo
-6. Update local group state
-7. Display message in UI
-
-### Step 3.4: Receive message flow
-
-On poll/firehose event:
-
-1. Match tag against active tags
-2. `moat_core.decrypt_event()` → event
-3. Based on `kind`:
-   - `msg`: Add to message list, display
-   - `commit`: Process membership change, update state
-   - `checkpoint`: Update cached state if newer
-4. Update group state
-
-### Step 3.5: Update Ratatui UI
-
-Current layout (keep it):
-```
-┌─────────────────────────────────────────┐
-│ Conversations          │ Messages       │
-│ ────────────────────── │ ────────────── │
-│ > alice.bsky.social    │ alice: hello   │
-│   bob.bsky.social      │ you: hi there  │
-│                        │                │
-├─────────────────────────────────────────┤
-│ > type message here...                  │
-└─────────────────────────────────────────┘
+```rust
+// In poll_messages(), after fetching events:
+// If event tag doesn't match any known conversation,
+// try to process as welcome using pending key packages
+for event in unknown_tag_events {
+    if let Ok(group_id) = mls.process_welcome(&event.ciphertext) {
+        // New conversation! Add to list
+        self.conversations.push(...);
+        self.tag_map.insert(current_tag, group_id);
+    }
+}
 ```
 
-Add:
-- `n` to create new conversation (prompt for handle)
+### Step 3.2: UI polish
+
+Keep current layout, add:
 - Status bar showing connection state, last sync time
 - Visual indicator for pending/unread messages
+- Error toast for failed operations
+- Loading spinner during network ops
 
 ---
 
@@ -360,12 +543,13 @@ Periodically publish dummy events indistinguishable from real ones.
 
 1. ✓ **moat-core**: Implement `encrypt_event`/`decrypt_event` with tag derivation and padding
 2. ✓ **moat-core**: Add tests for full group lifecycle (38 tests, including two-party messaging)
-3. **moat-atproto**: Add `publish_event`, `fetch_events_by_author`
-4. **moat-cli**: Implement "new conversation" flow (n key)
-5. **moat-cli**: Implement message send flow
-6. **moat-cli**: Implement polling/receive flow
-7. **moat-cli**: Wire up UI updates
-8. **Test**: Two terminals, two accounts, exchange encrypted messages
+3. ✓ **moat-atproto**: `publish_event`, `fetch_events_from_did`, `fetch_events_by_tag` (already existed)
+4. **moat-cli**: Add `MoatSession` to App struct, initialize on startup
+5. **moat-cli**: Wire `send_message()` to use MLS encryption
+6. **moat-cli**: Implement `poll_messages()` with decryption
+7. **moat-cli**: Implement `start_new_conversation()` with handle prompt UI
+8. **moat-cli**: Add conversation metadata storage to KeyStore
+9. **Test**: Two terminals, two accounts, exchange encrypted messages
 
 ---
 

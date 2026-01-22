@@ -129,11 +129,13 @@ This is an MVP implementation.
 - Login screen with credential storage
 - Basic terminal UI with Ratatui
 - Local keystore at `~/.moat/keys/`
+- MoatSession integration with persistent MLS state at `~/.moat/mls.bin`
+- Key generation via MoatSession (persisted to storage)
 
 ### Not Yet Implemented
 
-- Wire up `MoatSession` to CLI for actual messaging
-- Real-time message polling/firehose
+- Wire `send_message()` to use MLS encryption
+- Message polling/decryption
 - "New conversation" UI flow
 - Multi-device support
 
