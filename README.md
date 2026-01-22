@@ -131,12 +131,12 @@ This is an MVP implementation.
 - Local keystore at `~/.moat/keys/`
 - MoatSession integration with persistent MLS state at `~/.moat/mls.bin`
 - Key generation via MoatSession (persisted to storage)
+- New conversation flow (press 'n', enter handle, creates MLS group + publishes welcome)
 
 ### Not Yet Implemented
 
 - Wire `send_message()` to use MLS encryption
 - Message polling/decryption
-- "New conversation" UI flow
 - Multi-device support
 
 ## License

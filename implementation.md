@@ -271,59 +271,28 @@ if !self.keys.has_identity_key() {
 }
 ```
 
-### Step 2.5.3: Implement start_new_conversation()
+### Step 2.5.3: Implement start_new_conversation() ✓
 
-```rust
-async fn start_new_conversation(&mut self, recipient_handle: &str) -> Result<()> {
-    let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
-    let mls = self.mls.as_ref().ok_or(AppError::Other("MLS not initialized".into()))?;
+**Implementation (completed):**
 
-    // 1. Resolve handle to DID
-    let recipient_did = client.resolve_did(recipient_handle).await?;
+1. ✓ Added `NewConversation` focus state to enable handle input mode
+2. ✓ Added `new_conv_handle` field to `App` for input buffer
+3. ✓ Added `GroupMetadata` type to `keystore.rs` with `store_group_metadata()`/`load_group_metadata()`
+4. ✓ Implemented `handle_new_conversation_key()` for text input
+5. ✓ Implemented full `start_new_conversation()` flow:
+   - Resolve handle to DID
+   - Fetch recipient's key package from PDS
+   - Create MLS group
+   - Add recipient, generate welcome
+   - Encrypt and publish welcome event
+   - Store conversation metadata locally
+   - Update UI and register tag mapping
+6. ✓ Updated `load_conversations()` to use metadata for display names
 
-    // 2. Fetch recipient's key package
-    let key_packages = client.fetch_key_packages(&recipient_did).await?;
-    let recipient_kp = key_packages.first()
-        .ok_or(AppError::Other("No key package found".into()))?;
-
-    // 3. Load our key bundle
-    let key_bundle = self.keys.load_identity_key()?;
-    let identity = client.did().as_bytes();
-
-    // 4. Create MLS group
-    let group_id = mls.create_group(identity, &key_bundle)?;
-
-    // 5. Add recipient to group
-    let welcome_result = mls.add_member(&group_id, &key_bundle, &recipient_kp.key_package)?;
-
-    // 6. Publish welcome as encrypted event
-    //    (recipient will recognize via their pending key package)
-    let welcome_event = Event::welcome(group_id.clone(), 0, welcome_result.welcome);
-    let encrypted = mls.encrypt_event(&group_id, &key_bundle, &welcome_event)?;
-    client.publish_event(&encrypted.tag, &encrypted.ciphertext).await?;
-
-    // 7. Store conversation metadata
-    let conv_id = hex::encode(&group_id);
-    self.keys.store_group_metadata(&conv_id, &GroupMetadata {
-        participant_did: recipient_did.clone(),
-        participant_handle: recipient_handle.to_string(),
-    })?;
-
-    // 8. Update UI
-    self.conversations.push(Conversation {
-        id: conv_id,
-        name: recipient_handle.to_string(),
-        participant_did: recipient_did,
-        current_epoch: 1,  // Post-add epoch
-        unread: 0,
-    });
-
-    // 9. Register tag for this conversation
-    self.tag_map.insert(encrypted.tag, group_id);
-
-    Ok(())
-}
-```
+**UI Flow:**
+- Press 'n' in Conversations view → enters NewConversation mode
+- Type recipient handle → press Enter to start conversation
+- Press Esc to cancel
 
 ### Step 2.5.4: Implement send_message() with MLS encryption
 

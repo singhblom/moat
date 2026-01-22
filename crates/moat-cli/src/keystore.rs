@@ -2,6 +2,7 @@
 //!
 //! Keys are stored in ~/.moat/keys/ with appropriate file permissions.
 
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -16,6 +17,16 @@ pub enum KeyStoreError {
 
     #[error("invalid key data")]
     InvalidData,
+
+    #[error("JSON error: {0}")]
+    Json(#[from] serde_json::Error),
+}
+
+/// Metadata about a conversation/group
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupMetadata {
+    pub participant_did: String,
+    pub participant_handle: String,
 }
 
 pub type Result<T> = std::result::Result<T, KeyStoreError>;
@@ -105,7 +116,7 @@ impl KeyStore {
         Ok(fs::read(&path)?)
     }
 
-    /// List all stored group IDs
+    /// List all stored group IDs (looks for .meta files now)
     pub fn list_groups(&self) -> Result<Vec<String>> {
         let mut groups = Vec::new();
 
@@ -113,10 +124,11 @@ impl KeyStore {
             let entry = entry?;
             let name = entry.file_name().to_string_lossy().to_string();
 
-            if name.starts_with("group_") && name.ends_with(".state") {
+            // Look for metadata files (group_<id>.meta)
+            if name.starts_with("group_") && name.ends_with(".meta") {
                 let group_id = name
                     .strip_prefix("group_")
-                    .and_then(|s| s.strip_suffix(".state"))
+                    .and_then(|s| s.strip_suffix(".meta"))
                     .map(|s| s.to_string());
 
                 if let Some(id) = group_id {
@@ -126,6 +138,25 @@ impl KeyStore {
         }
 
         Ok(groups)
+    }
+
+    /// Store group metadata (participant info, etc.)
+    pub fn store_group_metadata(&self, group_id: &str, metadata: &GroupMetadata) -> Result<()> {
+        let path = self.base_path.join(format!("group_{group_id}.meta"));
+        let json = serde_json::to_vec_pretty(metadata)?;
+        fs::write(&path, json)?;
+        Ok(())
+    }
+
+    /// Load group metadata
+    pub fn load_group_metadata(&self, group_id: &str) -> Result<GroupMetadata> {
+        let path = self.base_path.join(format!("group_{group_id}.meta"));
+        if !path.exists() {
+            return Err(KeyStoreError::NotFound(format!("group metadata: {group_id}")));
+        }
+        let data = fs::read(&path)?;
+        let metadata: GroupMetadata = serde_json::from_slice(&data)?;
+        Ok(metadata)
     }
 
     /// Store credentials (handle and app password)
@@ -188,7 +219,7 @@ impl KeyStore {
 }
 
 /// Hex encoding utilities
-mod hex {
+pub mod hex {
     const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
 
     pub fn encode(data: &[u8]) -> String {

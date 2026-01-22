@@ -1,9 +1,9 @@
 //! Application state and logic
 
-use crate::keystore::KeyStore;
+use crate::keystore::{hex, GroupMetadata, KeyStore};
 use crossterm::event::{KeyCode, KeyEvent};
 use moat_atproto::MoatAtprotoClient;
-use moat_core::{derive_tag_from_group_id, pad_to_bucket, MoatCore, MoatSession, CIPHERSUITE};
+use moat_core::{derive_tag_from_group_id, pad_to_bucket, Event, MoatCore, MoatSession, CIPHERSUITE};
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -37,6 +37,7 @@ pub enum Focus {
     Messages,
     Input,
     Login,
+    NewConversation,
 }
 
 /// Login form state
@@ -98,7 +99,10 @@ pub struct App {
     pub input_buffer: String,
     pub cursor_position: usize,
 
-    // Tag -> conversation mapping
+    // New conversation input
+    pub new_conv_handle: String,
+
+    // Tag -> conversation mapping (tag -> hex-encoded group_id)
     pub tag_map: HashMap<[u8; 16], String>,
 }
 
@@ -142,6 +146,7 @@ impl App {
             message_scroll: 0,
             input_buffer: String::new(),
             cursor_position: 0,
+            new_conv_handle: String::new(),
             tag_map: HashMap::new(),
         })
     }
@@ -171,6 +176,7 @@ impl App {
             Focus::Conversations => self.handle_conversations_key(key).await,
             Focus::Messages => self.handle_messages_key(key).await,
             Focus::Input => self.handle_input_key(key).await,
+            Focus::NewConversation => self.handle_new_conversation_key(key).await,
         }
     }
 
@@ -279,17 +285,26 @@ impl App {
     }
 
     async fn load_conversations(&mut self) -> Result<()> {
-        // Load conversations from stored group states
+        // Load conversations from stored group metadata
         let group_ids = self.keys.list_groups()?;
 
         self.conversations.clear();
         for group_id in group_ids {
-            // For now, just create a placeholder conversation
+            // Try to load metadata for this group
+            let (name, participant_did) = match self.keys.load_group_metadata(&group_id) {
+                Ok(meta) => (meta.participant_handle, meta.participant_did),
+                Err(_) => {
+                    // Fallback for old groups without metadata
+                    let short_id = &group_id[..8.min(group_id.len())];
+                    (format!("Conversation {}", short_id), String::new())
+                }
+            };
+
             self.conversations.push(Conversation {
                 id: group_id.clone(),
-                name: format!("Conversation {}", &group_id[..8.min(group_id.len())]),
-                participant_did: String::new(),
-                current_epoch: 0,
+                name,
+                participant_did,
+                current_epoch: 0, // Will be updated when loading group
                 unread: 0,
             });
         }
@@ -301,7 +316,9 @@ impl App {
         match key.code {
             KeyCode::Char('q') => return Ok(true),
             KeyCode::Char('n') => {
-                self.start_new_conversation().await?;
+                // Switch to new conversation input mode
+                self.focus = Focus::NewConversation;
+                self.new_conv_handle.clear();
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 if !self.conversations.is_empty() {
@@ -330,10 +347,129 @@ impl App {
         Ok(false)
     }
 
-    async fn start_new_conversation(&mut self) -> Result<()> {
-        // For MVP, we'd prompt for a handle here
-        // For now, just show a message
-        self.set_status("Press 'n' and enter a handle to start a conversation".to_string());
+    async fn handle_new_conversation_key(&mut self, key: KeyEvent) -> Result<bool> {
+        match key.code {
+            KeyCode::Enter => {
+                if !self.new_conv_handle.is_empty() {
+                    let handle = self.new_conv_handle.clone();
+                    self.start_new_conversation(&handle).await?;
+                }
+            }
+            KeyCode::Char(c) => {
+                self.new_conv_handle.push(c);
+            }
+            KeyCode::Backspace => {
+                self.new_conv_handle.pop();
+            }
+            KeyCode::Esc => {
+                self.focus = Focus::Conversations;
+                self.new_conv_handle.clear();
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    async fn start_new_conversation(&mut self, recipient_handle: &str) -> Result<()> {
+        // Check login first
+        if self.client.is_none() {
+            return Err(AppError::NotLoggedIn);
+        }
+
+        self.set_status(format!("Resolving {}...", recipient_handle));
+
+        // 1. Resolve handle to DID
+        let recipient_did = self
+            .client
+            .as_ref()
+            .unwrap()
+            .resolve_did(recipient_handle)
+            .await?;
+
+        self.set_status(format!("Fetching key package for {}...", recipient_handle));
+
+        // 2. Fetch recipient's key package
+        let key_packages = self
+            .client
+            .as_ref()
+            .unwrap()
+            .fetch_key_packages(&recipient_did)
+            .await?;
+        let recipient_kp_bytes = key_packages
+            .first()
+            .ok_or_else(|| AppError::Other(format!("No key package found for {}", recipient_handle)))?
+            .key_package
+            .clone();
+
+        // 3. Load our key bundle and get identity
+        let key_bundle = self.keys.load_identity_key()?;
+        let identity = self.client.as_ref().unwrap().did().as_bytes().to_vec();
+
+        self.set_status("Creating encrypted group...".to_string());
+
+        // 4. Create MLS group
+        let group_id = self.mls.create_group(&identity, &key_bundle)?;
+
+        // 5. Add recipient to group
+        let welcome_result = self
+            .mls
+            .add_member(&group_id, &key_bundle, &recipient_kp_bytes)?;
+
+        self.set_status("Publishing welcome message...".to_string());
+
+        // 6. Publish welcome as encrypted event
+        // Note: Welcome messages use a special tag derivation (epoch 0 before recipient joins)
+        // The recipient will try to process any incoming events as potential welcomes
+        let welcome_event = Event::welcome(group_id.clone(), 0, welcome_result.welcome);
+        let encrypted = self
+            .mls
+            .encrypt_event(&group_id, &key_bundle, &welcome_event)?;
+        self.client
+            .as_ref()
+            .unwrap()
+            .publish_event(&encrypted.tag, &encrypted.ciphertext)
+            .await?;
+
+        // 7. Store conversation metadata
+        let conv_id = hex::encode(&group_id);
+        self.keys.store_group_metadata(
+            &conv_id,
+            &GroupMetadata {
+                participant_did: recipient_did.clone(),
+                participant_handle: recipient_handle.to_string(),
+            },
+        )?;
+
+        // 8. Update UI - add conversation to list
+        self.conversations.push(Conversation {
+            id: conv_id.clone(),
+            name: recipient_handle.to_string(),
+            participant_did: recipient_did,
+            current_epoch: 1, // Post-add epoch
+            unread: 0,
+        });
+
+        // 9. Register tag for this conversation
+        self.tag_map.insert(encrypted.tag, conv_id.clone());
+
+        // 10. Select the new conversation and switch to input mode
+        self.active_conversation = Some(self.conversations.len() - 1);
+        self.focus = Focus::Input;
+        self.new_conv_handle.clear();
+        self.status_message = None;
+
+        // Load placeholder message for the new conversation
+        self.messages.clear();
+        self.messages.push(DisplayMessage {
+            from: "System".to_string(),
+            content: format!(
+                "Conversation started with {}. Type a message below.",
+                recipient_handle
+            ),
+            timestamp: chrono::Utc::now(),
+            is_own: false,
+        });
+
         Ok(())
     }
 
