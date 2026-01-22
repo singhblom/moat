@@ -239,3 +239,127 @@ fn test_event_serialization_with_padding() {
     assert_eq!(recovered.epoch, 42);
     assert_eq!(recovered.payload, b"Hello, this is a test message!");
 }
+
+#[test]
+fn test_moat_session_in_memory() {
+    use crate::MoatSession;
+
+    let session = MoatSession::in_memory();
+
+    // Generate key package
+    let identity = b"alice@example.com";
+    let (key_package, key_bundle) = session.generate_key_package(identity).unwrap();
+
+    assert!(!key_package.is_empty());
+    assert!(!key_bundle.is_empty());
+
+    // Create a group
+    let group_id = session.create_group(identity, &key_bundle).unwrap();
+    assert!(!group_id.is_empty());
+
+    // Should be able to load the group back
+    let loaded_group = session.load_group(&group_id).unwrap();
+    assert!(loaded_group.is_some());
+}
+
+#[test]
+fn test_moat_session_persistence() {
+    use crate::MoatSession;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let storage_path = temp_dir.path().join("test_mls.bin");
+
+    let group_id: Vec<u8>;
+    let identity = b"alice@example.com";
+
+    // First session: create group
+    {
+        let session = MoatSession::new(storage_path.clone()).unwrap();
+
+        let (_key_package, key_bundle) = session.generate_key_package(identity).unwrap();
+        group_id = session.create_group(identity, &key_bundle).unwrap();
+
+        // Verify group is accessible
+        let loaded = session.load_group(&group_id).unwrap();
+        assert!(loaded.is_some(), "Group should be loadable in same session");
+    }
+
+    // Second session: reload and verify
+    {
+        let session = MoatSession::new(storage_path.clone()).unwrap();
+
+        // Group should still be accessible
+        let loaded = session.load_group(&group_id).unwrap();
+        assert!(loaded.is_some(), "Group should be loadable after restart");
+    }
+}
+
+#[test]
+fn test_encrypt_event() {
+    use crate::{MoatSession, Event};
+
+    let session = MoatSession::in_memory();
+
+    // Create Alice
+    let alice_identity = b"alice@example.com";
+    let (_alice_kp, alice_bundle) = session.generate_key_package(alice_identity).unwrap();
+    let group_id = session.create_group(alice_identity, &alice_bundle).unwrap();
+
+    // Create an event
+    let original_event = Event::message(group_id.clone(), 0, b"Hello, world!");
+
+    // Encrypt
+    let encrypt_result = session.encrypt_event(&group_id, &alice_bundle, &original_event).unwrap();
+    assert!(!encrypt_result.ciphertext.is_empty());
+    assert_eq!(encrypt_result.tag.len(), 16);
+
+    // Note: In MLS, a sender cannot decrypt their own messages.
+    // Full encrypt/decrypt test requires two parties (see test_two_party_messaging).
+}
+
+#[test]
+fn test_two_party_messaging() {
+    use crate::{MoatSession, Event};
+
+    // Create separate sessions for Alice and Bob
+    let alice_session = MoatSession::in_memory();
+    let bob_session = MoatSession::in_memory();
+
+    // Alice creates her identity
+    let alice_identity = b"alice@example.com";
+    let (_alice_kp, alice_bundle) = alice_session.generate_key_package(alice_identity).unwrap();
+
+    // Bob creates his identity
+    let bob_identity = b"bob@example.com";
+    let (bob_kp, bob_bundle) = bob_session.generate_key_package(bob_identity).unwrap();
+
+    // Alice creates a group
+    let group_id = alice_session.create_group(alice_identity, &alice_bundle).unwrap();
+
+    // Alice adds Bob to the group
+    let welcome_result = alice_session.add_member(&group_id, &alice_bundle, &bob_kp).unwrap();
+    assert!(!welcome_result.welcome.is_empty());
+    assert!(!welcome_result.commit.is_empty());
+
+    // Bob joins using the welcome
+    let bob_group_id = bob_session.process_welcome(&welcome_result.welcome).unwrap();
+    assert_eq!(bob_group_id, group_id);
+
+    // Alice sends a message
+    let message = Event::message(group_id.clone(), 0, b"Hello Bob!");
+    let encrypted = alice_session.encrypt_event(&group_id, &alice_bundle, &message).unwrap();
+
+    // Bob decrypts the message
+    let decrypted = bob_session.decrypt_event(&bob_group_id, &encrypted.ciphertext).unwrap();
+    assert_eq!(decrypted.event.kind, EventKind::Message);
+    assert_eq!(decrypted.event.payload, b"Hello Bob!");
+
+    // Bob replies
+    let reply = Event::message(group_id.clone(), 0, b"Hello Alice!");
+    let encrypted_reply = bob_session.encrypt_event(&bob_group_id, &bob_bundle, &reply).unwrap();
+
+    // Alice decrypts Bob's reply
+    let decrypted_reply = alice_session.decrypt_event(&group_id, &encrypted_reply.ciphertext).unwrap();
+    assert_eq!(decrypted_reply.event.kind, EventKind::Message);
+    assert_eq!(decrypted_reply.event.payload, b"Hello Alice!");
+}

@@ -20,6 +20,12 @@ pub enum Error {
     #[error("group creation failed: {0}")]
     GroupCreation(String),
 
+    #[error("group load failed: {0}")]
+    GroupLoad(String),
+
+    #[error("storage error: {0}")]
+    Storage(String),
+
     #[error("serialization failed: {0}")]
     Serialization(String),
 

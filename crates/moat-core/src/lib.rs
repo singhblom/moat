@@ -1,23 +1,50 @@
 //! moat-core: Pure MLS logic for Moat encrypted messenger
 //!
-//! This crate provides stateless, bytes-in/bytes-out MLS operations.
-//! No IO operations are performed - all state is passed in and out as byte slices.
+//! This crate provides MLS operations for the Moat encrypted messenger.
+//!
+//! # Main Types
+//!
+//! - [`MoatSession`] - Holds a persistent provider for MLS operations
+//! - [`MoatCore`] - Static utility methods for simple operations
+//! - [`MoatProvider`] - OpenMLS provider with file-backed storage
+//!
+//! # Example
+//!
+//! ```no_run
+//! use moat_core::MoatSession;
+//! use std::path::PathBuf;
+//!
+//! // Create a session with persistent storage
+//! let session = MoatSession::new(PathBuf::from("~/.moat/mls.bin")).unwrap();
+//!
+//! // Generate a key package (persisted to storage)
+//! let identity = b"alice@example.com";
+//! let (key_package, key_bundle) = session.generate_key_package(identity).unwrap();
+//!
+//! // Create a group (persisted to storage)
+//! let group_id = session.create_group(identity, &key_bundle).unwrap();
+//! ```
 
 mod error;
 mod event;
 mod padding;
+mod storage;
 mod tag;
 
 pub use error::{Error, Result};
 pub use event::{Event, EventKind};
 pub use padding::{pad_to_bucket, unpad, Bucket};
+pub use storage::{FileStorage, FileStorageError, MoatProvider};
 pub use tag::{derive_conversation_tag, derive_tag_from_group_id};
 
 use openmls::prelude::tls_codec::{Deserialize, Serialize as TlsSerialize};
 use openmls::prelude::*;
+use openmls::framing::MlsMessageBodyIn;
 use openmls_basic_credential::SignatureKeyPair;
 use openmls_rust_crypto::OpenMlsRustCrypto;
+use openmls_traits::OpenMlsProvider;
 use serde::{Deserialize as SerdeDeserialize, Serialize as SerdeSerialize};
+use std::path::PathBuf;
 
 /// The ciphersuite used by Moat
 pub const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
@@ -60,6 +87,346 @@ pub struct EncryptResult {
 pub struct DecryptResult {
     pub new_group_state: Vec<u8>,
     pub event: Event,
+}
+
+/// A persistent MLS session.
+///
+/// MoatSession holds a [`MoatProvider`] that persists MLS state to disk.
+/// All operations (key generation, group creation, encryption) automatically
+/// persist state, allowing the session to be reloaded later.
+///
+/// # Example
+///
+/// ```no_run
+/// use moat_core::MoatSession;
+/// use std::path::PathBuf;
+///
+/// // Create or reload a session
+/// let session = MoatSession::new(PathBuf::from("~/.moat/mls.bin")).unwrap();
+///
+/// // Operations persist automatically
+/// let (key_package, key_bundle) = session.generate_key_package(b"alice").unwrap();
+/// let group_id = session.create_group(b"alice", &key_bundle).unwrap();
+///
+/// // Later, reload from the same path to continue
+/// let session2 = MoatSession::new(PathBuf::from("~/.moat/mls.bin")).unwrap();
+/// // session2 has access to the previously created groups
+/// ```
+pub struct MoatSession {
+    provider: MoatProvider,
+}
+
+impl MoatSession {
+    /// Create a new session with file-backed storage.
+    ///
+    /// If the file exists, existing state will be loaded.
+    pub fn new(storage_path: PathBuf) -> Result<Self> {
+        let provider = MoatProvider::new(storage_path)
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        Ok(Self { provider })
+    }
+
+    /// Create an in-memory session (for testing).
+    pub fn in_memory() -> Self {
+        Self {
+            provider: MoatProvider::in_memory(),
+        }
+    }
+
+    /// Generate a new key package for the given identity.
+    ///
+    /// The key package and signature keys are persisted to storage.
+    /// Returns (key_package_bytes, key_bundle_bytes).
+    pub fn generate_key_package(&self, identity: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+        // Generate signature keypair
+        let signature_keys = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm())
+            .map_err(|e| Error::KeyGeneration(e.to_string()))?;
+
+        // Store the signature keys (persisted to file)
+        signature_keys
+            .store(self.provider.storage())
+            .map_err(|e| Error::KeyGeneration(e.to_string()))?;
+
+        // Create basic credential
+        let credential = BasicCredential::new(identity.to_vec());
+        let credential_with_key = CredentialWithKey {
+            credential: credential.into(),
+            signature_key: signature_keys.to_public_vec().into(),
+        };
+
+        // Generate key package
+        let key_package_bundle = KeyPackage::builder()
+            .build(CIPHERSUITE, &self.provider, &signature_keys, credential_with_key)
+            .map_err(|e| Error::KeyPackageGeneration(e.to_string()))?;
+
+        // Get the key package for publishing
+        let key_package = key_package_bundle.key_package();
+
+        // Serialize key package
+        let key_package_bytes = key_package
+            .tls_serialize_detached()
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+
+        // Serialize signature keys
+        let signature_key_bytes = signature_keys
+            .tls_serialize_detached()
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+
+        // Get the init private key
+        let init_private_key_bytes = key_package_bundle
+            .init_private_key()
+            .tls_serialize_detached()
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+
+        // Create key bundle (for compatibility with existing code)
+        let key_bundle = KeyBundle {
+            key_package: key_package_bytes.clone(),
+            init_private_key: init_private_key_bytes,
+            encryption_private_key: Vec::new(), // Stored in provider
+            signature_key: signature_key_bytes,
+        };
+
+        let key_bundle_bytes =
+            serde_json::to_vec(&key_bundle).map_err(|e| Error::Serialization(e.to_string()))?;
+
+        Ok((key_package_bytes, key_bundle_bytes))
+    }
+
+    /// Create a new MLS group.
+    ///
+    /// The group state is persisted to storage.
+    /// Returns the group ID as bytes.
+    pub fn create_group(&self, identity: &[u8], key_bundle: &[u8]) -> Result<Vec<u8>> {
+        // Deserialize key bundle
+        let bundle: KeyBundle =
+            serde_json::from_slice(key_bundle).map_err(|e| Error::Deserialization(e.to_string()))?;
+
+        // Deserialize signature keys
+        let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
+
+        // Store the signature keys (may already exist from generate_key_package)
+        signature_keys
+            .store(self.provider.storage())
+            .map_err(|e| Error::KeyGeneration(e.to_string()))?;
+
+        // Create credential
+        let credential = BasicCredential::new(identity.to_vec());
+        let credential_with_key = CredentialWithKey {
+            credential: credential.into(),
+            signature_key: signature_keys.to_public_vec().into(),
+        };
+
+        // Create group config
+        let group_config = MlsGroupCreateConfig::builder()
+            .ciphersuite(CIPHERSUITE)
+            .use_ratchet_tree_extension(true)
+            .build();
+
+        // Create the group (persisted to storage via provider)
+        let group = MlsGroup::new(&self.provider, &signature_keys, &group_config, credential_with_key)
+            .map_err(|e| Error::GroupCreation(e.to_string()))?;
+
+        let group_id = group.group_id().as_slice().to_vec();
+        Ok(group_id)
+    }
+
+    /// Load an existing group by ID.
+    ///
+    /// Returns None if the group doesn't exist in storage.
+    pub fn load_group(&self, group_id: &[u8]) -> Result<Option<MlsGroup>> {
+        let group_id = GroupId::from_slice(group_id);
+
+        // Try to load the group from storage
+        match MlsGroup::load(self.provider.storage(), &group_id) {
+            Ok(Some(group)) => Ok(Some(group)),
+            Ok(None) => Ok(None),
+            Err(e) => Err(Error::GroupLoad(e.to_string())),
+        }
+    }
+
+    /// Add a member to an existing group.
+    ///
+    /// Returns (commit_bytes, welcome_bytes) to send to the new member.
+    pub fn add_member(
+        &self,
+        group_id: &[u8],
+        key_bundle: &[u8],
+        new_member_key_package: &[u8],
+    ) -> Result<WelcomeResult> {
+        // Load the group
+        let mut group = self.load_group(group_id)?
+            .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
+
+        // Deserialize our key bundle to get signature keys
+        let bundle: KeyBundle =
+            serde_json::from_slice(key_bundle).map_err(|e| Error::Deserialization(e.to_string()))?;
+        let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
+
+        // Deserialize the new member's key package
+        let new_key_package = KeyPackageIn::tls_deserialize_exact(new_member_key_package)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
+
+        // Validate the key package
+        let validated_key_package = new_key_package
+            .validate(self.provider.crypto(), ProtocolVersion::Mls10)
+            .map_err(|e| Error::KeyPackageValidation(e.to_string()))?;
+
+        // Add the member
+        let (commit, welcome, _group_info) = group
+            .add_members(&self.provider, &signature_keys, &[validated_key_package])
+            .map_err(|e| Error::AddMember(e.to_string()))?;
+
+        // Merge the pending commit
+        group
+            .merge_pending_commit(&self.provider)
+            .map_err(|e| Error::MergeCommit(e.to_string()))?;
+
+        // Serialize results
+        let commit_bytes = commit
+            .tls_serialize_detached()
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+
+        let welcome_bytes = welcome
+            .tls_serialize_detached()
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+
+        Ok(WelcomeResult {
+            new_group_state: Vec::new(), // No longer needed - state is in provider
+            welcome: welcome_bytes,
+            commit: commit_bytes,
+            group_id: group_id.to_vec(),
+        })
+    }
+
+    /// Process a welcome message to join a group.
+    ///
+    /// Returns the group ID of the joined group.
+    pub fn process_welcome(
+        &self,
+        welcome_bytes: &[u8],
+    ) -> Result<Vec<u8>> {
+        // Deserialize the welcome
+        let mls_message = MlsMessageIn::tls_deserialize_exact(welcome_bytes)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
+
+        // Extract the welcome from the message body
+        let welcome = match mls_message.extract() {
+            MlsMessageBodyIn::Welcome(w) => w,
+            _ => return Err(Error::Deserialization("Not a welcome message".to_string())),
+        };
+
+        // Join the group
+        let join_config = MlsGroupJoinConfig::builder()
+            .use_ratchet_tree_extension(true)
+            .build();
+
+        let group = StagedWelcome::new_from_welcome(&self.provider, &join_config, welcome, None)
+            .map_err(|e| Error::ProcessWelcome(e.to_string()))?
+            .into_group(&self.provider)
+            .map_err(|e| Error::ProcessWelcome(e.to_string()))?;
+
+        let group_id = group.group_id().as_slice().to_vec();
+        Ok(group_id)
+    }
+
+    /// Encrypt an event for a group.
+    ///
+    /// The event is serialized, padded, and encrypted using MLS.
+    /// Returns (conversation_tag, ciphertext).
+    pub fn encrypt_event(
+        &self,
+        group_id: &[u8],
+        key_bundle: &[u8],
+        event: &Event,
+    ) -> Result<EncryptResult> {
+        // Load the group
+        let mut group = self.load_group(group_id)?
+            .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
+
+        // Get signature keys from key bundle
+        let bundle: KeyBundle =
+            serde_json::from_slice(key_bundle).map_err(|e| Error::Deserialization(e.to_string()))?;
+        let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
+
+        // Serialize and pad the event
+        let event_bytes = event.to_bytes()
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+        let padded = pad_to_bucket(&event_bytes);
+
+        // Encrypt the message
+        let ciphertext = group
+            .create_message(&self.provider, &signature_keys, &padded)
+            .map_err(|e| Error::Encryption(e.to_string()))?;
+
+        // Serialize the ciphertext
+        let ciphertext_bytes = ciphertext
+            .tls_serialize_detached()
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+
+        // Derive conversation tag for current epoch
+        let tag = derive_tag_from_group_id(group_id, group.epoch().as_u64())?;
+
+        Ok(EncryptResult {
+            new_group_state: Vec::new(), // State is managed by provider
+            tag,
+            ciphertext: ciphertext_bytes,
+        })
+    }
+
+    /// Decrypt a ciphertext for a group.
+    ///
+    /// The ciphertext is decrypted, unpadded, and deserialized.
+    /// Returns the decrypted event.
+    pub fn decrypt_event(
+        &self,
+        group_id: &[u8],
+        ciphertext: &[u8],
+    ) -> Result<DecryptResult> {
+        // Load the group
+        let mut group = self.load_group(group_id)?
+            .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
+
+        // Deserialize the MLS message
+        let mls_message = MlsMessageIn::tls_deserialize_exact(ciphertext)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
+
+        // Convert to protocol message
+        let protocol_message = mls_message
+            .try_into_protocol_message()
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
+
+        // Process the message
+        let processed = group
+            .process_message(&self.provider, protocol_message)
+            .map_err(|e| Error::Decryption(e.to_string()))?;
+
+        // Extract the application message
+        let padded_bytes = match processed.into_content() {
+            ProcessedMessageContent::ApplicationMessage(app_msg) => app_msg.into_bytes(),
+            ProcessedMessageContent::ProposalMessage(_) => {
+                return Err(Error::InvalidMessageType("Unexpected proposal message".to_string()));
+            }
+            ProcessedMessageContent::StagedCommitMessage(_) => {
+                return Err(Error::InvalidMessageType("Unexpected commit message".to_string()));
+            }
+            ProcessedMessageContent::ExternalJoinProposalMessage(_) => {
+                return Err(Error::InvalidMessageType("Unexpected external join".to_string()));
+            }
+        };
+
+        // Unpad and deserialize
+        let event_bytes = unpad(&padded_bytes);
+        let event = Event::from_bytes(&event_bytes)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
+
+        Ok(DecryptResult {
+            new_group_state: Vec::new(), // State is managed by provider
+            event,
+        })
+    }
 }
 
 /// Pure MLS operations with no IO

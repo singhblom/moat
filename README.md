@@ -16,10 +16,13 @@ moat/
 ### moat-core
 
 Pure Rust MLS operations using OpenMLS. Handles:
-- Key package generation
-- Group creation
-- Tag derivation (rotating 16-byte tags for conversation privacy)
-- Message padding (256B / 1KB / 4KB buckets to hide message length)
+- Key package generation with persistence
+- Group creation, loading, and member management
+- Welcome/commit message processing
+- Event encryption/decryption with automatic padding
+- Tag derivation (rotating 16-byte tags per epoch)
+- Message padding (256B / 1KB / 4KB buckets)
+- File-backed storage provider for MLS state persistence
 
 ### moat-atproto
 
@@ -82,7 +85,14 @@ cargo test -p moat-cli
 
 ### Test Coverage
 
-- **moat-core**: Key generation, group creation, padding, tag derivation
+- **moat-core** (38 tests):
+  - Key package generation and persistence
+  - Group creation, loading, and persistence across restarts
+  - Member addition with welcome/commit
+  - Two-party encrypted messaging (Alice ↔ Bob)
+  - Event encryption/decryption with padding
+  - Rotating tag derivation
+  - Padding bucket selection and round-trip
 - **moat-atproto**: Record serialization (integration tests require a live PDS)
 - **moat-cli**: Keystore operations
 
@@ -96,16 +106,35 @@ On first run, you'll be prompted to log in with your Bluesky handle and an app p
 
 ## Current Status
 
-This is an MVP implementation. Working:
-- MLS key package generation
-- ATProto record publishing/fetching
-- Local key storage
-- Basic terminal UI
+This is an MVP implementation.
 
-Not yet implemented:
-- Full MLS group state persistence
-- Welcome/commit processing
-- Real-time message polling
+### Working ✓
+
+**moat-core (complete)**
+- MLS key package generation with persistence
+- Group creation with file-backed storage
+- Member addition with welcome/commit generation
+- Welcome processing to join groups
+- Event encryption/decryption with padding
+- Rotating conversation tags via HKDF-SHA256
+- Full MLS state persistence across restarts
+- 38 passing tests including two-party messaging
+
+**moat-atproto**
+- ATProto authentication (handle + app password)
+- Key package publishing/fetching (`social.moat.keyPackage`)
+- Basic record operations
+
+**moat-cli**
+- Login screen with credential storage
+- Basic terminal UI with Ratatui
+- Local keystore at `~/.moat/keys/`
+
+### Not Yet Implemented
+
+- Wire up `MoatSession` to CLI for actual messaging
+- Real-time message polling/firehose
+- "New conversation" UI flow
 - Multi-device support
 
 ## License

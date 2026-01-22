@@ -6,13 +6,39 @@ An encrypted group chat on ATProto using MLS, combining metadata obfuscation tec
 
 ## Current State
 
-The basic scaffolding exists:
-- Login flow with Bluesky handle + app password
-- Key package generation and publishing to PDS (`social.moat.keyPackage`)
-- Ratatui UI structure with conversation list and message panes
-- Local keystore at `~/.moat/keys/`
+### Completed ✓
 
-What's missing: actual conversation creation, message sending/receiving, and MLS integration.
+**Phase 1: Core MLS Functionality**
+- ✓ Unified `Event` type with `EventKind` enum (msg, commit, welcome, checkpoint)
+- ✓ Rotating conversation tags via HKDF-SHA256 (`derive_tag_from_group_id`)
+- ✓ Message padding to fixed buckets (256B, 1KB, 4KB)
+- ✓ `FileStorage` implementing OpenMLS `StorageProvider` trait (~50 methods)
+- ✓ `MoatProvider` combining `FileStorage` + `RustCrypto`
+- ✓ `MoatSession` with persistent MLS operations:
+  - `generate_key_package()` - generate and persist key packages
+  - `create_group()` - create and persist MLS groups
+  - `load_group()` - reload groups from storage
+  - `add_member()` - add members, generate welcome/commit
+  - `process_welcome()` - join groups via welcome message
+  - `encrypt_event()` - encrypt with padding and tag derivation
+  - `decrypt_event()` - decrypt and unpad events
+- ✓ Full test coverage (38 tests) including two-party messaging
+
+**Existing Infrastructure**
+- ✓ Login flow with Bluesky handle + app password
+- ✓ Key package publishing to PDS (`social.moat.keyPackage`)
+- ✓ Ratatui UI structure with conversation list and message panes
+- ✓ Local keystore at `~/.moat/keys/`
+
+### In Progress
+
+- Phase 2: ATProto Integration (wire up `MoatSession` to CLI)
+- Phase 3: CLI Conversation Flows
+
+### Not Started
+
+- Phase 4: Local Storage expansion
+- Phase 5: Privacy Hardening
 
 ---
 
@@ -31,9 +57,9 @@ moat/
 
 ---
 
-## Phase 1: Core MLS Functionality
+## Phase 1: Core MLS Functionality ✓ COMPLETE
 
-### Step 1.1: Define the unified event lexicon
+### Step 1.1: Define the unified event lexicon ✓
 
 Instead of separate collections for messages, commits, and state, use a **single unified record type** that hides event types from observers.
 
@@ -54,17 +80,18 @@ Instead of separate collections for messages, commits, and state, use a **single
 
 **Why unified?** Observers can't distinguish "Alice sent a message" from "Alice added a member"—they just see ciphertext blobs with opaque tags.
 
-### Step 1.2: Implement rotating conversation tags
+### Step 1.2: Implement rotating conversation tags ✓
 
-Replace stable `groupId` in plaintext with a **per-epoch derived tag**:
+Implemented in `moat-core/src/tag.rs`:
 
 ```rust
-// In moat-core
-pub fn derive_conversation_tag(
-    epoch_secret: &[u8],
-    context: &[u8],  // app ID, room salt
-) -> [u8; 16] {
-    // tag = Truncate128(HKDF(epoch_secret, "moat-conversation-tag", context))
+// Actual implementation
+pub fn derive_tag_from_group_id(group_id: &[u8], epoch: u64) -> Result<[u8; 16]> {
+    let hk = Hkdf::<Sha256>::new(Some(TAG_LABEL), group_id);
+    let info = epoch.to_be_bytes();
+    let mut tag = [0u8; 16];
+    hk.expand(&info, &mut tag).expect("16 bytes is valid");
+    Ok(tag)
 }
 ```
 
@@ -76,9 +103,9 @@ pub fn derive_conversation_tag(
 
 **Win:** Outsiders can't easily cluster messages into "this is all one conversation."
 
-### Step 1.3: Implement message padding
+### Step 1.3: Implement message padding ✓
 
-Pad messages to fixed size buckets before MLS encryption:
+Implemented in `moat-core/src/padding.rs`:
 
 | Bucket | Plaintext size |
 |--------|----------------|
@@ -87,68 +114,59 @@ Pad messages to fixed size buckets before MLS encryption:
 | Large  | 4 KB           |
 
 ```rust
-pub fn pad_message(plaintext: &[u8]) -> Vec<u8> {
-    let bucket = if plaintext.len() <= 256 { 256 }
-                 else if plaintext.len() <= 1024 { 1024 }
-                 else { 4096 };
-    let mut padded = vec![0u8; bucket];
-    padded[..plaintext.len()].copy_from_slice(plaintext);
-    // Include real length at the start (encrypted)
+// Actual implementation uses length-prefixed padding with random fill
+pub fn pad_to_bucket(plaintext: &[u8]) -> Vec<u8> {
+    let bucket = Bucket::for_size(plaintext.len());
+    let mut padded = vec![0u8; bucket.size()];
+    // 4-byte length prefix + content + random padding
+    padded[..4].copy_from_slice(&(plaintext.len() as u32).to_le_bytes());
+    padded[4..4 + plaintext.len()].copy_from_slice(plaintext);
+    rand::thread_rng().fill_bytes(&mut padded[4 + plaintext.len()..]);
     padded
 }
 ```
 
 **Win:** Hides whether someone sent "ok" vs a paragraph.
 
-### Step 1.4: Clean up moat-core API
+### Step 1.4: Clean up moat-core API ✓
 
-Ensure the MLS core is stateless and pure:
+Implemented with `MoatSession` for stateful persistent operations:
 
 ```rust
-pub struct MoatCore { /* stateless */ }
+// MoatSession holds a MoatProvider for persistent MLS state
+pub struct MoatSession {
+    provider: MoatProvider,  // FileStorage + RustCrypto
+}
 
+impl MoatSession {
+    pub fn new(storage_path: PathBuf) -> Result<Self>;
+    pub fn in_memory() -> Self;  // For testing
+
+    // Key package generation (persisted)
+    pub fn generate_key_package(&self, identity: &[u8]) -> Result<(Vec<u8>, Vec<u8>)>;
+
+    // Group operations (persisted)
+    pub fn create_group(&self, identity: &[u8], key_bundle: &[u8]) -> Result<Vec<u8>>;
+    pub fn load_group(&self, group_id: &[u8]) -> Result<Option<MlsGroup>>;
+
+    // Member management
+    pub fn add_member(&self, group_id: &[u8], key_bundle: &[u8],
+                      new_member_key_package: &[u8]) -> Result<WelcomeResult>;
+    pub fn process_welcome(&self, welcome_bytes: &[u8]) -> Result<Vec<u8>>;
+
+    // Messaging (with padding and tag derivation)
+    pub fn encrypt_event(&self, group_id: &[u8], key_bundle: &[u8],
+                         event: &Event) -> Result<EncryptResult>;
+    pub fn decrypt_event(&self, group_id: &[u8], ciphertext: &[u8]) -> Result<DecryptResult>;
+}
+
+// MoatCore still exists for stateless utility operations
+pub struct MoatCore;
 impl MoatCore {
-    // Key package generation
-    pub fn generate_key_package(identity: &[u8]) -> Result<(KeyPackageBytes, PrivateKeyBytes)>;
-
-    // Group creation
-    pub fn create_group(private_key: &[u8]) -> Result<GroupStateBytes>;
-
-    // Adding members
-    pub fn create_welcome(
-        group_state: &[u8],
-        private_key: &[u8],
-        recipient_key_package: &[u8],
-    ) -> Result<(NewGroupState, WelcomeBytes, CommitBytes)>;
-
-    pub fn process_welcome(
-        welcome: &[u8],
-        private_key: &[u8],
-    ) -> Result<GroupStateBytes>;
-
-    // Messaging (with tag derivation and padding built in)
-    pub fn encrypt_event(
-        group_state: &[u8],
-        private_key: &[u8],
-        event: &Event,
-    ) -> Result<(NewGroupState, Tag, Ciphertext)>;
-
-    pub fn decrypt_event(
-        group_state: &[u8],
-        private_key: &[u8],
-        ciphertext: &[u8],
-    ) -> Result<(NewGroupState, Event)>;
-
-    // State management
-    pub fn process_commit(
-        group_state: &[u8],
-        private_key: &[u8],
-        commit: &[u8],
-    ) -> Result<NewGroupState>;
-
-    // Tag derivation for filtering
-    pub fn derive_current_tag(group_state: &[u8]) -> Result<Tag>;
-    pub fn derive_tag_for_epoch(group_state: &[u8], epoch: u64) -> Result<Tag>;
+    pub fn get_epoch(group_state: &[u8]) -> Result<u64>;
+    pub fn get_group_id(group_state: &[u8]) -> Result<Vec<u8>>;
+    pub fn get_current_tag(group_state: &[u8]) -> Result<[u8; 16]>;
+    pub fn get_tags_for_epochs(group_state: &[u8], epochs: &[u64]) -> Result<Vec<[u8; 16]>>;
 }
 ```
 
@@ -340,8 +358,8 @@ Periodically publish dummy events indistinguishable from real ones.
 
 ## Build Order
 
-1. **moat-core**: Implement `encrypt_event`/`decrypt_event` with tag derivation and padding
-2. **moat-core**: Add tests for full group lifecycle
+1. ✓ **moat-core**: Implement `encrypt_event`/`decrypt_event` with tag derivation and padding
+2. ✓ **moat-core**: Add tests for full group lifecycle (38 tests, including two-party messaging)
 3. **moat-atproto**: Add `publish_event`, `fetch_events_by_author`
 4. **moat-cli**: Implement "new conversation" flow (n key)
 5. **moat-cli**: Implement message send flow
