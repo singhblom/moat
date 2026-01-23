@@ -49,7 +49,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
         terminal.draw(|f| ui::draw(f, &app))?;
 
         // Poll for events with timeout to allow async operations
-        if event::poll(Duration::from_millis(100))? {
+        if event::poll(Duration::from_millis(16))? {
             if let Event::Key(key) = event::read()? {
                 // Global quit
                 if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {

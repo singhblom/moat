@@ -8,6 +8,19 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame,
 };
+use std::{sync::LazyLock, time::Instant};
+
+static START_TIME: LazyLock<Instant> = LazyLock::new(Instant::now);
+
+fn color_pulse(start_r: f32, start_g: f32, start_b: f32, end_r: f32, end_g: f32, end_b: f32, period_ms: u32) -> Color {
+    let elapsed = START_TIME.elapsed().as_millis() as f32;
+    let t = ((elapsed / period_ms as f32) * std::f32::consts::TAU).sin();
+    let t = (t + 1.0) / 2.0;
+    let r = start_r * (1.0 - t) + t * end_r;
+    let g = start_g * (1.0 - t) + t * end_g;
+    let b = start_b * (1.0 - t) + t * end_b;
+    Color::Rgb(r as u8, g as u8, b as u8)
+}
 
 /// Main draw function
 pub fn draw(frame: &mut Frame, app: &App) {
@@ -148,16 +161,15 @@ fn draw_main(frame: &mut Frame, app: &App) {
 }
 
 fn draw_conversations(frame: &mut Frame, app: &App, area: Rect) {
-    let is_focused = app.focus == Focus::Conversations;
+    // let is_focused = app.focus == Focus::Conversations;
+    let color = color_pulse(38.0, 227.0, 195.0, 38.0, 195.0, 227.0, 5000);
+    let style = Style::default().fg(color);
 
     let block = Block::default()
         .title(" Conversations ")
+        .title_style(style.add_modifier(Modifier::BOLD))
         .borders(Borders::ALL)
-        .border_style(if is_focused {
-            Style::default().fg(Color::Cyan)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        });
+        .style(style);
 
     let items: Vec<ListItem> = app
         .conversations
