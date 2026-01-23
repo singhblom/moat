@@ -70,11 +70,12 @@ fn draw_login(frame: &mut Frame, app: &App) {
         .split(vertical[1]);
 
     let form_area = horizontal[1];
-
+    let color = color_pulse(38.0, 227.0, 195.0, 38.0, 195.0, 227.0, 5000);
+    let style = Style::default().fg(color);
     let block = Block::default()
         .title(" Moat - Login ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+        .style(style);
 
     let inner = block.inner(form_area);
     frame.render_widget(block, form_area);
@@ -103,7 +104,7 @@ fn draw_login(frame: &mut Frame, app: &App) {
         if app.login_form.field == LoginField::Handle {
             Style::default().fg(Color::Yellow)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(Color::Gray)
         },
     );
     let handle_input = Paragraph::new(app.login_form.handle.as_str())
@@ -124,7 +125,7 @@ fn draw_login(frame: &mut Frame, app: &App) {
         if app.login_form.field == LoginField::Password {
             Style::default().fg(Color::Yellow)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(Color::Gray)
         },
     );
     let masked: String = "*".repeat(app.login_form.password.len());
@@ -168,8 +169,12 @@ fn draw_main(frame: &mut Frame, app: &App) {
 }
 
 fn draw_conversations(frame: &mut Frame, app: &App, area: Rect) {
-    // let is_focused = app.focus == Focus::Conversations;
-    let color = color_pulse(38.0, 227.0, 195.0, 38.0, 195.0, 227.0, 5000);
+    let is_focused = app.focus == Focus::Conversations;
+    let color = if is_focused {
+        color_pulse(38.0, 227.0, 195.0, 38.0, 195.0, 227.0, 5000)
+    } else {
+        Color::Gray
+    };
     let style = Style::default().fg(color);
 
     let block = Block::default()
@@ -212,7 +217,7 @@ fn draw_conversations(frame: &mut Frame, app: &App, area: Rect) {
         let inner = block.inner(area);
         frame.render_widget(block, area);
         let help = Paragraph::new("'n' new conversation\n'w' watch for invites\n'q' to quit")
-            .style(Style::default().fg(Color::DarkGray));
+            .style(Style::default().fg(Color::Gray));
         frame.render_widget(help, inner);
     } else {
         let list = List::new(items).block(block);
@@ -222,15 +227,17 @@ fn draw_conversations(frame: &mut Frame, app: &App, area: Rect) {
 
 fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
     let is_focused = app.focus == Focus::Messages;
+    let color = if is_focused {
+        color_pulse(38.0, 227.0, 195.0, 38.0, 195.0, 227.0, 5000)
+    } else {
+        Color::Gray
+    };
+    let style = Style::default().fg(color);
 
     let block = Block::default()
         .title(" Messages ")
         .borders(Borders::ALL)
-        .border_style(if is_focused {
-            Style::default().fg(Color::Cyan)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        });
+        .style(style);
 
     let items: Vec<ListItem> = app
         .messages
@@ -244,7 +251,7 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
 
             let time = msg.timestamp.format("%H:%M").to_string();
             let line = Line::from(vec![
-                Span::styled(format!("[{}] ", time), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("[{}] ", time), Style::default().fg(Color::Gray)),
                 Span::styled(format!("{}: ", msg.from), style.add_modifier(Modifier::BOLD)),
                 Span::raw(&msg.content),
             ]);
@@ -258,7 +265,7 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
         let inner = block.inner(area);
         frame.render_widget(block, area);
         let help = Paragraph::new("Select a conversation\nor press 'n' to start one")
-            .style(Style::default().fg(Color::DarkGray));
+            .style(Style::default().fg(Color::Gray));
         frame.render_widget(help, inner);
     } else {
         let list = List::new(items).block(block);
@@ -268,15 +275,17 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
 
 fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
     let is_focused = app.focus == Focus::Input;
+    let color = if is_focused {
+        color_pulse(38.0, 227.0, 195.0, 38.0, 195.0, 227.0, 5000)
+    } else {
+        Color::Gray
+    };
+    let style = Style::default().fg(color);
 
     let block = Block::default()
         .title(" Message ")
         .borders(Borders::ALL)
-        .border_style(if is_focused {
-            Style::default().fg(Color::Cyan)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        });
+        .style(style);
 
     let input = Paragraph::new(app.input_buffer.as_str())
         .block(block)
@@ -326,7 +335,7 @@ fn draw_status(frame: &mut Frame, status: &str) {
     let status_area = Rect::new(0, area.height - 1, area.width, 1);
 
     let text = Paragraph::new(status)
-        .style(Style::default().fg(Color::Yellow).bg(Color::DarkGray));
+        .style(Style::default().fg(Color::Yellow).bg(Color::Gray));
 
     frame.render_widget(text, status_area);
 }
