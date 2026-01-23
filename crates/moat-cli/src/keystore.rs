@@ -230,6 +230,49 @@ pub mod hex {
         }
         result
     }
+
+    pub fn decode(s: &str) -> Result<Vec<u8>, DecodeError> {
+        if s.len() % 2 != 0 {
+            return Err(DecodeError::OddLength);
+        }
+
+        let mut result = Vec::with_capacity(s.len() / 2);
+        let bytes = s.as_bytes();
+
+        for chunk in bytes.chunks(2) {
+            let high = hex_char_to_nibble(chunk[0])?;
+            let low = hex_char_to_nibble(chunk[1])?;
+            result.push((high << 4) | low);
+        }
+
+        Ok(result)
+    }
+
+    fn hex_char_to_nibble(c: u8) -> Result<u8, DecodeError> {
+        match c {
+            b'0'..=b'9' => Ok(c - b'0'),
+            b'a'..=b'f' => Ok(c - b'a' + 10),
+            b'A'..=b'F' => Ok(c - b'A' + 10),
+            _ => Err(DecodeError::InvalidChar(c as char)),
+        }
+    }
+
+    #[derive(Debug)]
+    pub enum DecodeError {
+        OddLength,
+        InvalidChar(char),
+    }
+
+    impl std::fmt::Display for DecodeError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                DecodeError::OddLength => write!(f, "odd length hex string"),
+                DecodeError::InvalidChar(c) => write!(f, "invalid hex character: {}", c),
+            }
+        }
+    }
+
+    impl std::error::Error for DecodeError {}
 }
 
 #[cfg(test)]
@@ -282,8 +325,17 @@ mod tests {
         let dir = tempdir().unwrap();
         let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
 
-        store.store_group_state("group-a", b"state-a").unwrap();
-        store.store_group_state("group-b", b"state-b").unwrap();
+        let meta_a = GroupMetadata {
+            participant_did: "did:plc:aaa".to_string(),
+            participant_handle: "alice.bsky.social".to_string(),
+        };
+        let meta_b = GroupMetadata {
+            participant_did: "did:plc:bbb".to_string(),
+            participant_handle: "bob.bsky.social".to_string(),
+        };
+
+        store.store_group_metadata("group-a", &meta_a).unwrap();
+        store.store_group_metadata("group-b", &meta_b).unwrap();
 
         let groups = store.list_groups().unwrap();
         assert_eq!(groups.len(), 2);

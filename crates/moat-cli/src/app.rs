@@ -3,7 +3,7 @@
 use crate::keystore::{hex, GroupMetadata, KeyStore};
 use crossterm::event::{KeyCode, KeyEvent};
 use moat_atproto::MoatAtprotoClient;
-use moat_core::{derive_tag_from_group_id, pad_to_bucket, Event, MoatCore, MoatSession, CIPHERSUITE};
+use moat_core::{Event, MoatSession, CIPHERSUITE};
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -568,22 +568,31 @@ impl App {
         let conv_idx = self.active_conversation.ok_or(AppError::NoConversation)?;
         let conv = &self.conversations[conv_idx];
 
-        // Load group state
-        let group_state = self.keys.load_group_state(&conv.id)?;
+        // Load key bundle for signing
+        let key_bundle = self.keys.load_identity_key()?;
 
-        // Pad message
-        let plaintext = self.input_buffer.as_bytes();
-        let padded = pad_to_bucket(plaintext);
+        // Parse group_id from hex
+        let group_id = hex::decode(&conv.id)
+            .map_err(|e| AppError::Other(format!("Invalid group ID: {}", e)))?;
 
-        // Get conversation tag from group ID
-        let group_id = MoatCore::get_group_id(&group_state)?;
-        let epoch = MoatCore::get_epoch(&group_state)?;
-        let tag = derive_tag_from_group_id(&group_id, epoch)?;
+        // Create message event
+        let event = Event::message(
+            group_id.clone(),
+            conv.current_epoch,
+            self.input_buffer.as_bytes(),
+        );
 
-        // Publish padded message to PDS
-        // Note: In MVP, we're publishing the padded plaintext directly
-        // Full implementation would use MLS encryption
-        client.publish_event(&tag, &padded).await?;
+        // Encrypt with MLS (handles padding internally)
+        let encrypted = self.mls.encrypt_event(&group_id, &key_bundle, &event)?;
+
+        // Update stored group state (epoch may have advanced)
+        self.keys.store_group_state(&conv.id, &encrypted.new_group_state)?;
+
+        // Publish encrypted event to PDS
+        client.publish_event(&encrypted.tag, &encrypted.ciphertext).await?;
+
+        // Update tag mapping with new tag
+        self.tag_map.insert(encrypted.tag, conv.id.clone());
 
         // Add to messages display
         self.messages.push(DisplayMessage {
