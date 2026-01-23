@@ -29,6 +29,13 @@ pub fn draw(frame: &mut Frame, app: &App) {
         _ => draw_main(frame, app),
     }
 
+    // Draw input popups
+    if app.focus == Focus::NewConversation {
+        draw_handle_input_popup(frame, "New Conversation", "Enter handle:", &app.new_conv_handle);
+    } else if app.focus == Focus::WatchHandle {
+        draw_handle_input_popup(frame, "Watch for Invites", "Enter handle to watch:", &app.watch_handle_input);
+    }
+
     // Draw error popup if present
     if let Some(ref error) = app.error_message {
         draw_error_popup(frame, error);
@@ -204,7 +211,7 @@ fn draw_conversations(frame: &mut Frame, app: &App, area: Rect) {
     if app.conversations.is_empty() {
         let inner = block.inner(area);
         frame.render_widget(block, area);
-        let help = Paragraph::new("Press 'n' to start\na new conversation")
+        let help = Paragraph::new("'n' new conversation\n'w' watch for invites")
             .style(Style::default().fg(Color::DarkGray));
         frame.render_widget(help, inner);
     } else {
@@ -322,4 +329,45 @@ fn draw_status(frame: &mut Frame, status: &str) {
         .style(Style::default().fg(Color::Yellow).bg(Color::DarkGray));
 
     frame.render_widget(text, status_area);
+}
+
+fn draw_handle_input_popup(frame: &mut Frame, title: &str, label: &str, input: &str) {
+    let area = frame.area();
+
+    // Center popup
+    let popup_width = 50.min(area.width.saturating_sub(4));
+    let popup_height = 6;
+    let popup_x = (area.width - popup_width) / 2;
+    let popup_y = (area.height - popup_height) / 2;
+
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+    frame.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .title(format!(" {} ", title))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(3)])
+        .split(inner);
+
+    // Label
+    let label_widget = Paragraph::new(label).style(Style::default().fg(Color::Yellow));
+    frame.render_widget(label_widget, chunks[0]);
+
+    // Input field
+    let input_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+    let input_widget = Paragraph::new(input).block(input_block);
+    frame.render_widget(input_widget, chunks[1]);
+
+    // Cursor
+    frame.set_cursor_position((chunks[1].x + 1 + input.len() as u16, chunks[1].y + 1));
 }

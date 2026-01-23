@@ -37,15 +37,25 @@ An encrypted group chat on ATProto using MLS, combining metadata obfuscation tec
 - ✓ `resolve_did(handle)` - handle-to-DID resolution
 - ✓ `publish_key_package()` / `fetch_key_packages()` - key package CRUD
 
-### In Progress
+**Phase 2.5: Wire MoatSession to CLI ✓**
+- ✓ `MoatSession` integrated into App struct with persistent storage at `~/.moat/mls.bin`
+- ✓ `send_message()` uses MLS encryption via `encrypt_event()`
+- ✓ `poll_messages()` fetches and decrypts incoming messages
+- ✓ `start_new_conversation()` full flow: resolve handle → fetch key package → create group → publish welcome
+- ✓ Welcome detection for incoming conversation invites
+- ✓ Watch handle feature (`w` key) to receive invites from new contacts
 
-- Phase 2.5: Wire up MoatSession to CLI (see concrete steps below)
+**Phase 3: CLI Conversation Flows ✓**
+- ✓ New conversation UI popup (press `n`, enter handle)
+- ✓ Watch for invites UI popup (press `w`, enter handle)
+- ✓ Message polling every 5 seconds
+- ✓ Unread message count display
+- ✓ Tag-based conversation routing
 
 ### Not Started
 
-- Phase 3: CLI Conversation Flows (new conversation UI, polling)
-- Phase 4: Local Storage expansion
-- Phase 5: Privacy Hardening
+- Phase 4: Local Storage expansion (cursor-based pagination, offline sync)
+- Phase 5: Privacy Hardening (stealth addresses, cover traffic)
 
 ---
 
@@ -294,150 +304,76 @@ if !self.keys.has_identity_key() {
 - Type recipient handle → press Enter to start conversation
 - Press Esc to cancel
 
-### Step 2.5.4: Implement send_message() with MLS encryption
+### Step 2.5.4: Implement send_message() with MLS encryption ✓
+
+**Implementation (completed):**
 
 ```rust
 async fn send_message(&mut self) -> Result<()> {
-    let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
-    let mls = self.mls.as_ref().ok_or(AppError::Other("MLS not initialized".into()))?;
-    let conv_idx = self.active_conversation.ok_or(AppError::NoConversation)?;
-    let conv = &self.conversations[conv_idx];
-
-    // Load key bundle
+    // Load key bundle and parse group_id from hex
     let key_bundle = self.keys.load_identity_key()?;
-
-    // Parse group_id from hex
     let group_id = hex::decode(&conv.id)?;
 
-    // Create message event
-    let event = Event::message(
-        group_id.clone(),
-        conv.current_epoch,
-        self.input_buffer.as_bytes(),
-    );
+    // Create and encrypt message event
+    let event = Event::message(group_id.clone(), conv.current_epoch, self.input_buffer.as_bytes());
+    let encrypted = self.mls.encrypt_event(&group_id, &key_bundle, &event)?;
 
-    // Encrypt with MLS (handles padding internally)
-    let encrypted = mls.encrypt_event(&group_id, &key_bundle, &event)?;
-
-    // Publish to PDS
+    // Update stored group state and publish
+    self.keys.store_group_state(&conv.id, &encrypted.new_group_state)?;
     client.publish_event(&encrypted.tag, &encrypted.ciphertext).await?;
 
-    // Update local display
-    self.messages.push(DisplayMessage {
-        from: "You".to_string(),
-        content: self.input_buffer.clone(),
-        timestamp: chrono::Utc::now(),
-        is_own: true,
-    });
-
-    self.input_buffer.clear();
-    self.cursor_position = 0;
-
-    Ok(())
+    // Update tag mapping and display
+    self.tag_map.insert(encrypted.tag, conv.id.clone());
+    // ... add to messages display
 }
 ```
 
-### Step 2.5.5: Implement message polling
+### Step 2.5.5: Implement message polling ✓
 
-```rust
-async fn poll_messages(&mut self) -> Result<()> {
-    let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
-    let mls = self.mls.as_ref().ok_or(AppError::Other("MLS not initialized".into()))?;
+**Implementation (completed):**
 
-    // For each conversation, poll participant's repo
-    for conv in &self.conversations {
-        let events = client.fetch_events_from_did(&conv.participant_did, None).await?;
+- Polls every 5 seconds via `tick()`
+- Fetches events from all conversation participants
+- Decrypts known-tag events and displays messages
+- Attempts `process_welcome()` on unknown-tag events
+- Tracks processed URIs to avoid duplicates (TODO: switch to cursor-based pagination)
 
-        for event_record in events {
-            // Check if tag matches any known conversation
-            if let Some(group_id) = self.tag_map.get(&event_record.tag) {
-                // Decrypt
-                let decrypted = mls.decrypt_event(group_id, &event_record.ciphertext)?;
+### Step 2.5.6: Add "new conversation" UI prompt ✓
 
-                match decrypted.event.kind {
-                    EventKind::Message => {
-                        let content = String::from_utf8_lossy(&decrypted.event.payload);
-                        self.messages.push(DisplayMessage {
-                            from: conv.name.clone(),
-                            content: content.to_string(),
-                            timestamp: event_record.created_at,
-                            is_own: false,
-                        });
-                    }
-                    EventKind::Welcome => {
-                        // Process incoming conversation invite
-                        self.process_welcome(&decrypted.event).await?;
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
+- Press `n` → `Focus::NewConversation` → popup with handle input
+- Press `w` → `Focus::WatchHandle` → popup to watch for invites from a handle
 
-    Ok(())
-}
-```
+### Step 2.5.7: Watch handle feature ✓
 
-### Step 2.5.6: Add "new conversation" UI prompt
+**Implementation (completed):**
 
-Modify `handle_conversations_key()` to prompt for handle:
+Cold start problem: Bob can't receive invites from Alice if they've never talked (Bob isn't polling Alice's repo).
 
-```rust
-KeyCode::Char('n') => {
-    // Switch to a "new conversation" input mode
-    self.focus = Focus::NewConversation;
-    self.new_conv_handle = String::new();
-}
-```
-
-Add new focus state and input handler for entering recipient handle.
+Solution: "Watch" a handle to poll their repo for welcomes:
+- `watched_dids: HashSet<String>` tracks DIDs to poll for invites
+- `poll_messages()` polls watched DIDs and tries `process_welcome()` on each event
+- When a welcome is successfully processed, the DID moves from `watched_dids` to `conversations`
 
 ---
 
-### Implementation Order
+## Phase 3: CLI Conversation Flows ✓ COMPLETE
 
-1. **Add MoatSession to App** - Initialize on startup, store alongside KeyStore
-2. **Fix key generation** - Use MoatSession instead of MoatCore
-3. **Wire send_message()** - Replace plaintext publish with MLS encrypt
-4. **Add poll_messages()** - Basic polling in tick(), decrypt incoming
-5. **Implement start_new_conversation()** - Full flow with UI
-6. **Test end-to-end** - Two terminals, two accounts
+### Step 3.1: Incoming welcome detection ✓
 
-### Files to Modify
+Implemented in `poll_messages()` and `try_process_welcome()`:
+- Unknown-tag events trigger `mls.process_welcome()` attempt
+- Successful welcomes create new conversation entries
+- Watch handle feature enables receiving invites from new contacts
 
-- `crates/moat-cli/src/app.rs` - Main wiring work
-- `crates/moat-cli/src/keystore.rs` - Add `store_group_metadata()`, `load_group_metadata()`
-- `crates/moat-cli/Cargo.toml` - Ensure moat-core dependency has all features
+### Step 3.2: UI polish (partial)
 
----
+Implemented:
+- ✓ Unread message count in conversation list
+- ✓ Error popup for failed operations
+- ✓ Status bar during network operations
 
-## Phase 3: CLI Conversation Flows
-
-> Note: Core flows are now detailed in Phase 2.5 above. This section covers remaining UI polish.
-
-### Step 3.1: Incoming welcome detection
-
-When polling, detect new conversation invites:
-
-```rust
-// In poll_messages(), after fetching events:
-// If event tag doesn't match any known conversation,
-// try to process as welcome using pending key packages
-for event in unknown_tag_events {
-    if let Ok(group_id) = mls.process_welcome(&event.ciphertext) {
-        // New conversation! Add to list
-        self.conversations.push(...);
-        self.tag_map.insert(current_tag, group_id);
-    }
-}
-```
-
-### Step 3.2: UI polish
-
-Keep current layout, add:
-- Status bar showing connection state, last sync time
-- Visual indicator for pending/unread messages
-- Error toast for failed operations
+Not yet implemented:
+- Connection state indicator
 - Loading spinner during network ops
 
 ---
@@ -513,12 +449,13 @@ Periodically publish dummy events indistinguishable from real ones.
 1. ✓ **moat-core**: Implement `encrypt_event`/`decrypt_event` with tag derivation and padding
 2. ✓ **moat-core**: Add tests for full group lifecycle (38 tests, including two-party messaging)
 3. ✓ **moat-atproto**: `publish_event`, `fetch_events_from_did`, `fetch_events_by_tag` (already existed)
-4. **moat-cli**: Add `MoatSession` to App struct, initialize on startup
-5. **moat-cli**: Wire `send_message()` to use MLS encryption
-6. **moat-cli**: Implement `poll_messages()` with decryption
-7. **moat-cli**: Implement `start_new_conversation()` with handle prompt UI
-8. **moat-cli**: Add conversation metadata storage to KeyStore
-9. **Test**: Two terminals, two accounts, exchange encrypted messages
+4. ✓ **moat-cli**: Add `MoatSession` to App struct, initialize on startup
+5. ✓ **moat-cli**: Wire `send_message()` to use MLS encryption
+6. ✓ **moat-cli**: Implement `poll_messages()` with decryption
+7. ✓ **moat-cli**: Implement `start_new_conversation()` with handle prompt UI
+8. ✓ **moat-cli**: Add conversation metadata storage to KeyStore
+9. ✓ **moat-cli**: Add watch handle feature for receiving invites from new contacts
+10. **Test**: Two terminals, two accounts, exchange encrypted messages
 
 ---
 

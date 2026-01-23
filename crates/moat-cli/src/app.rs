@@ -3,8 +3,9 @@
 use crate::keystore::{hex, GroupMetadata, KeyStore};
 use crossterm::event::{KeyCode, KeyEvent};
 use moat_atproto::MoatAtprotoClient;
-use moat_core::{Event, MoatSession, CIPHERSUITE};
+use moat_core::{Event, EventKind, MoatSession, CIPHERSUITE};
 use std::collections::HashMap;
+use std::time::Instant;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -38,6 +39,7 @@ pub enum Focus {
     Input,
     Login,
     NewConversation,
+    WatchHandle,
 }
 
 /// Login form state
@@ -104,6 +106,16 @@ pub struct App {
 
     // Tag -> conversation mapping (tag -> hex-encoded group_id)
     pub tag_map: HashMap<[u8; 16], String>,
+
+    // Polling state
+    last_poll: Option<Instant>,
+    // TODO: Replace with cursor-based pagination per DID to avoid unbounded growth
+    // and to persist across restarts. Currently this grows forever within a session.
+    processed_event_uris: std::collections::HashSet<String>,
+
+    // DIDs to watch for incoming invites
+    watched_dids: std::collections::HashSet<String>,
+    pub watch_handle_input: String,
 }
 
 impl App {
@@ -148,6 +160,10 @@ impl App {
             cursor_position: 0,
             new_conv_handle: String::new(),
             tag_map: HashMap::new(),
+            last_poll: None,
+            processed_event_uris: std::collections::HashSet::new(),
+            watched_dids: std::collections::HashSet::new(),
+            watch_handle_input: String::new(),
         })
     }
 
@@ -177,6 +193,7 @@ impl App {
             Focus::Messages => self.handle_messages_key(key).await,
             Focus::Input => self.handle_input_key(key).await,
             Focus::NewConversation => self.handle_new_conversation_key(key).await,
+            Focus::WatchHandle => self.handle_watch_handle_key(key).await,
         }
     }
 
@@ -187,8 +204,21 @@ impl App {
             self.auto_login().await?;
         }
 
-        // Poll for new messages if logged in and have active conversation
-        // (deferred for now)
+        // Poll for new messages if logged in (every 5 seconds)
+        if self.client.is_some() {
+            let should_poll = self
+                .last_poll
+                .map(|t| t.elapsed().as_secs() >= 5)
+                .unwrap_or(true);
+
+            if should_poll {
+                self.last_poll = Some(Instant::now());
+                if let Err(e) = self.poll_messages().await {
+                    // Log error but don't fail the tick
+                    self.set_error(format!("Poll error: {e}"));
+                }
+            }
+        }
 
         Ok(())
     }
@@ -320,6 +350,11 @@ impl App {
                 self.focus = Focus::NewConversation;
                 self.new_conv_handle.clear();
             }
+            KeyCode::Char('w') => {
+                // Switch to watch handle input mode
+                self.focus = Focus::WatchHandle;
+                self.watch_handle_input.clear();
+            }
             KeyCode::Up | KeyCode::Char('k') => {
                 if !self.conversations.is_empty() {
                     let current = self.active_conversation.unwrap_or(0);
@@ -368,6 +403,49 @@ impl App {
             _ => {}
         }
         Ok(false)
+    }
+
+    async fn handle_watch_handle_key(&mut self, key: KeyEvent) -> Result<bool> {
+        match key.code {
+            KeyCode::Enter => {
+                if !self.watch_handle_input.is_empty() {
+                    let handle = self.watch_handle_input.clone();
+                    self.watch_handle(&handle).await?;
+                }
+            }
+            KeyCode::Char(c) => {
+                self.watch_handle_input.push(c);
+            }
+            KeyCode::Backspace => {
+                self.watch_handle_input.pop();
+            }
+            KeyCode::Esc => {
+                self.focus = Focus::Conversations;
+                self.watch_handle_input.clear();
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    async fn watch_handle(&mut self, handle: &str) -> Result<()> {
+        if self.client.is_none() {
+            return Err(AppError::NotLoggedIn);
+        }
+
+        self.set_status(format!("Resolving {}...", handle));
+
+        // Resolve handle to DID
+        let did = self.client.as_ref().unwrap().resolve_did(handle).await?;
+
+        // Add to watched DIDs
+        self.watched_dids.insert(did);
+
+        self.status_message = None;
+        self.focus = Focus::Conversations;
+        self.watch_handle_input.clear();
+
+        Ok(())
     }
 
     async fn start_new_conversation(&mut self, recipient_handle: &str) -> Result<()> {
@@ -607,5 +685,172 @@ impl App {
         self.cursor_position = 0;
 
         Ok(())
+    }
+
+    /// Poll for new messages from all conversation participants
+    async fn poll_messages(&mut self) -> Result<()> {
+        use moat_atproto::EventRecord;
+
+        // Collect DIDs to poll and fetch all events first (to avoid borrow issues)
+        let participants: Vec<(usize, String)> = self
+            .conversations
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (i, c.participant_did.clone()))
+            .collect();
+
+        let watched: Vec<String> = self.watched_dids.iter().cloned().collect();
+
+        // Fetch events from participants
+        let mut participant_events: Vec<(usize, EventRecord)> = Vec::new();
+        {
+            let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
+            for (conv_idx, participant_did) in participants {
+                let (events, _cursor) = client.fetch_events_from_did(&participant_did, None).await?;
+                for event in events {
+                    participant_events.push((conv_idx, event));
+                }
+            }
+        }
+
+        // Fetch events from watched DIDs
+        let mut watched_events: Vec<(String, EventRecord)> = Vec::new();
+        {
+            let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
+            for did in &watched {
+                let (events, _cursor) = client.fetch_events_from_did(did, None).await?;
+                for event in events {
+                    watched_events.push((did.clone(), event));
+                }
+            }
+        }
+
+        // Process participant events
+        for (conv_idx, event_record) in participant_events {
+            // Skip events we've already processed
+            if self.processed_event_uris.contains(&event_record.uri) {
+                continue;
+            }
+
+            // Check if tag matches any known conversation
+            if let Some(conv_id) = self.tag_map.get(&event_record.tag).cloned() {
+                // Decrypt the event
+                let group_id = hex::decode(&conv_id)
+                    .map_err(|e| AppError::Other(format!("Invalid group ID: {}", e)))?;
+
+                match self.mls.decrypt_event(&group_id, &event_record.ciphertext) {
+                    Ok(decrypted) => {
+                        // Update group state
+                        self.keys.store_group_state(&conv_id, &decrypted.new_group_state)?;
+
+                        // Handle based on event kind
+                        match decrypted.event.kind {
+                            EventKind::Message => {
+                                let content =
+                                    String::from_utf8_lossy(&decrypted.event.payload).to_string();
+
+                                // Find conversation name
+                                let from = self
+                                    .conversations
+                                    .get(conv_idx)
+                                    .map(|c| c.name.clone())
+                                    .unwrap_or_else(|| "Unknown".to_string());
+
+                                // Only add to display if this is the active conversation
+                                if self.active_conversation == Some(conv_idx) {
+                                    self.messages.push(DisplayMessage {
+                                        from,
+                                        content,
+                                        timestamp: event_record.created_at,
+                                        is_own: false,
+                                    });
+                                } else {
+                                    // Increment unread count
+                                    if let Some(conv) = self.conversations.get_mut(conv_idx) {
+                                        conv.unread += 1;
+                                    }
+                                }
+                            }
+                            EventKind::Commit => {
+                                // MLS commit - state already updated above
+                            }
+                            EventKind::Checkpoint => {
+                                // Checkpoint - could use for faster sync
+                            }
+                            EventKind::Welcome => {
+                                // Welcome inside existing conversation - unusual
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        // Decryption failed - might be for a different epoch/key
+                        // Just skip this event
+                    }
+                }
+
+                self.processed_event_uris.insert(event_record.uri.clone());
+            } else {
+                // Unknown tag - might be a welcome for a new conversation
+                self.try_process_welcome(&event_record.ciphertext, &event_record.author_did, event_record.tag)?;
+                self.processed_event_uris.insert(event_record.uri.clone());
+            }
+        }
+
+        // Process watched DID events
+        for (did, event_record) in watched_events {
+            // Skip events we've already processed
+            if self.processed_event_uris.contains(&event_record.uri) {
+                continue;
+            }
+
+            // Skip if tag matches known conversation (already handled above or will be)
+            if self.tag_map.contains_key(&event_record.tag) {
+                self.processed_event_uris.insert(event_record.uri.clone());
+                continue;
+            }
+
+            // Try to process as welcome
+            if self.try_process_welcome(&event_record.ciphertext, &event_record.author_did, event_record.tag)? {
+                // Remove from watched list - they're now a conversation participant
+                self.watched_dids.remove(&did);
+            }
+
+            self.processed_event_uris.insert(event_record.uri.clone());
+        }
+
+        Ok(())
+    }
+
+    /// Try to process ciphertext as a welcome message. Returns true if successful.
+    fn try_process_welcome(&mut self, ciphertext: &[u8], author_did: &str, tag: [u8; 16]) -> Result<bool> {
+        if let Ok(group_id) = self.mls.process_welcome(ciphertext) {
+            // Successfully joined a new group!
+            let conv_id = hex::encode(&group_id);
+
+            // Store metadata
+            self.keys.store_group_metadata(
+                &conv_id,
+                &GroupMetadata {
+                    participant_did: author_did.to_string(),
+                    participant_handle: author_did.to_string(), // TODO: resolve to handle
+                },
+            )?;
+
+            // Add to conversations list
+            self.conversations.push(Conversation {
+                id: conv_id.clone(),
+                name: author_did.to_string(), // TODO: resolve to handle
+                participant_did: author_did.to_string(),
+                current_epoch: 1,
+                unread: 1,
+            });
+
+            // Register tag
+            self.tag_map.insert(tag, conv_id);
+
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 }

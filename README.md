@@ -36,9 +36,13 @@ ATProto client for interacting with a PDS (Personal Data Server). Handles:
 
 Terminal UI built with Ratatui. Features:
 - Login screen with credential storage
-- Conversation list
-- Message display
+- Conversation list with unread counts
+- Message display with MLS decryption
+- New conversation flow (resolve handle → create MLS group → publish welcome)
+- Watch for invites from new contacts
+- Background polling for incoming messages
 - Local key storage in `~/.moat/keys/`
+- MLS state persistence in `~/.moat/mls.bin`
 
 ## Lexicons
 
@@ -96,7 +100,7 @@ cargo test -p moat-cli
 - **moat-atproto**: Record serialization (integration tests require a live PDS)
 - **moat-cli**: Keystore operations
 
-## Running the CLI
+## Usage
 
 ```bash
 cargo run -p moat-cli
@@ -104,9 +108,29 @@ cargo run -p moat-cli
 
 On first run, you'll be prompted to log in with your Bluesky handle and an app password.
 
+### Key Bindings
+
+| Key | Action |
+|-----|--------|
+| `n` | Start new conversation (enter recipient handle) |
+| `w` | Watch for invites from a handle |
+| `↑`/`↓` or `j`/`k` | Navigate conversation list |
+| `Enter` | Select conversation / Send message |
+| `Tab` | Switch between panes |
+| `Esc` | Cancel / Go back |
+| `q` | Quit |
+
+### Test Flow (Two Users)
+
+1. **User A** runs moat, logs in
+2. **User B** runs moat, logs in, presses `w`, enters User A's handle (now watching for invites)
+3. **User A** presses `n`, enters User B's handle (creates conversation, sends welcome)
+4. **User B**'s next poll discovers the welcome, conversation appears
+5. Both users can now exchange encrypted messages
+
 ## Current Status
 
-This is an MVP implementation.
+This is an MVP implementation. End-to-end encrypted messaging works but needs real-world testing.
 
 ### Working ✓
 
@@ -120,24 +144,28 @@ This is an MVP implementation.
 - Full MLS state persistence across restarts
 - 38 passing tests including two-party messaging
 
-**moat-atproto**
+**moat-atproto (complete)**
 - ATProto authentication (handle + app password)
 - Key package publishing/fetching (`social.moat.keyPackage`)
-- Basic record operations
+- Event publishing/fetching (`social.moat.event`)
+- Handle-to-DID resolution
 
-**moat-cli**
+**moat-cli (MVP complete)**
 - Login screen with credential storage
-- Basic terminal UI with Ratatui
-- Local keystore at `~/.moat/keys/`
-- MoatSession integration with persistent MLS state at `~/.moat/mls.bin`
-- Key generation via MoatSession (persisted to storage)
-- New conversation flow (press 'n', enter handle, creates MLS group + publishes welcome)
+- Ratatui terminal UI with conversation list and message panes
+- MoatSession integration with persistent MLS state
+- New conversation flow: resolve handle → fetch key package → create group → publish welcome
+- Send messages with MLS encryption
+- Poll and decrypt incoming messages
+- Watch handle feature for receiving invites from new contacts
+- Unread message counts
 
 ### Not Yet Implemented
 
-- Wire `send_message()` to use MLS encryption
-- Message polling/decryption
+- Cursor-based pagination (currently uses URI deduplication)
 - Multi-device support
+- Stealth addresses for invites
+- Handle resolution for incoming invites (currently shows DID)
 
 ## License
 
