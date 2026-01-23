@@ -44,6 +44,7 @@ rand = "0.8"
 hkdf = "0.12"
 sha2 = "0.10"
 anyhow = "1"
+clap = { version = "4", features = ["derive"] }
 tempfile = "3"
 
 # Internal crates

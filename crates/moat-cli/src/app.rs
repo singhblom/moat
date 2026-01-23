@@ -120,14 +120,21 @@ pub struct App {
 
 impl App {
     /// Create a new App instance
-    pub fn new() -> Result<Self> {
-        let keys = KeyStore::new()?;
+    ///
+    /// If `storage_dir` is `None`, uses the default `~/.moat` directory.
+    pub fn new(storage_dir: Option<std::path::PathBuf>) -> Result<Self> {
+        // Determine the base storage directory
+        let base_dir = match storage_dir {
+            Some(dir) => dir,
+            None => dirs::home_dir()
+                .ok_or_else(|| AppError::Other("home directory not found".to_string()))?
+                .join(".moat"),
+        };
 
-        // Initialize MoatSession with persistent storage at ~/.moat/mls.bin
-        let mls_path = dirs::home_dir()
-            .ok_or_else(|| AppError::Other("home directory not found".to_string()))?
-            .join(".moat")
-            .join("mls.bin");
+        let keys = KeyStore::with_path(base_dir.join("keys"))?;
+
+        // Initialize MoatSession with persistent storage
+        let mls_path = base_dir.join("mls.bin");
 
         // Ensure parent directory exists
         if let Some(parent) = mls_path.parent() {

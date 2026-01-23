@@ -108,6 +108,19 @@ cargo run -p moat-cli
 
 On first run, you'll be prompted to log in with your Bluesky handle and an app password.
 
+### Command Line Options
+
+| Option | Description |
+|--------|-------------|
+| `-s`, `--storage-dir <PATH>` | Custom storage directory (default: `~/.moat`) |
+
+Example with custom storage directory (useful for testing with multiple identities):
+
+```bash
+cargo run -p moat-cli -- -s /tmp/moat-alice
+cargo run -p moat-cli -- --storage-dir /tmp/moat-bob
+```
+
 ### Key Bindings
 
 | Key | Action |
