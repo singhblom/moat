@@ -16,6 +16,7 @@ Thumbs.db
 # Local data
 .moat/
 .plans/
+.claude
 
 # Environment
 .env
