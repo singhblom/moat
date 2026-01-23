@@ -211,7 +211,7 @@ fn draw_conversations(frame: &mut Frame, app: &App, area: Rect) {
     if app.conversations.is_empty() {
         let inner = block.inner(area);
         frame.render_widget(block, area);
-        let help = Paragraph::new("'n' new conversation\n'w' watch for invites")
+        let help = Paragraph::new("'n' new conversation\n'w' watch for invites\n'q' to quit")
             .style(Style::default().fg(Color::DarkGray));
         frame.render_widget(help, inner);
     } else {
