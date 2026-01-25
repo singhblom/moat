@@ -3,7 +3,7 @@
 use crate::keystore::{hex, GroupMetadata, KeyStore};
 use crossterm::event::{KeyCode, KeyEvent};
 use moat_atproto::MoatAtprotoClient;
-use moat_core::{Event, EventKind, MoatSession, CIPHERSUITE};
+use moat_core::{stealth, Event, EventKind, MoatSession, CIPHERSUITE};
 use std::collections::HashMap;
 use std::time::Instant;
 use thiserror::Error;
@@ -312,6 +312,20 @@ impl App {
             client.publish_key_package(&key_package, &ciphersuite_name).await?;
         }
 
+        // Generate stealth address if needed (for receiving private invites)
+        if !self.keys.has_stealth_key() {
+            self.set_status("Generating stealth address...".to_string());
+
+            let (stealth_privkey, stealth_pubkey) = stealth::generate_stealth_keypair();
+
+            // Store private key locally
+            self.keys.store_stealth_key(&stealth_privkey)?;
+
+            // Publish public key to PDS
+            self.set_status("Publishing stealth address...".to_string());
+            client.publish_stealth_address(&stealth_pubkey).await?;
+        }
+
         self.client = Some(client);
         self.status_message = None;
         self.focus = Focus::Conversations;
@@ -471,9 +485,25 @@ impl App {
             .resolve_did(recipient_handle)
             .await?;
 
+        self.set_status(format!("Fetching stealth address for {}...", recipient_handle));
+
+        // 2. Fetch recipient's stealth address (for encrypting the welcome)
+        let recipient_stealth_pubkey = self
+            .client
+            .as_ref()
+            .unwrap()
+            .fetch_stealth_address(&recipient_did)
+            .await?
+            .ok_or_else(|| {
+                AppError::Other(format!(
+                    "No stealth address found for {}. They may need to update their Moat client.",
+                    recipient_handle
+                ))
+            })?;
+
         self.set_status(format!("Fetching key package for {}...", recipient_handle));
 
-        // 2. Fetch recipient's key package
+        // 3. Fetch recipient's MLS key package
         let key_packages = self
             .client
             .as_ref()
@@ -482,40 +512,43 @@ impl App {
             .await?;
         let recipient_kp_bytes = key_packages
             .first()
-            .ok_or_else(|| AppError::Other(format!("No key package found for {}", recipient_handle)))?
+            .ok_or_else(|| {
+                AppError::Other(format!("No key package found for {}", recipient_handle))
+            })?
             .key_package
             .clone();
 
-        // 3. Load our key bundle and get identity
+        // 4. Load our key bundle and get identity
         let key_bundle = self.keys.load_identity_key()?;
         let identity = self.client.as_ref().unwrap().did().as_bytes().to_vec();
 
         self.set_status("Creating encrypted group...".to_string());
 
-        // 4. Create MLS group
+        // 5. Create MLS group
         let group_id = self.mls.create_group(&identity, &key_bundle)?;
 
-        // 5. Add recipient to group
+        // 6. Add recipient to group (generates MLS Welcome)
         let welcome_result = self
             .mls
             .add_member(&group_id, &key_bundle, &recipient_kp_bytes)?;
 
         self.set_status("Publishing welcome message...".to_string());
 
-        // 6. Publish welcome as encrypted event
-        // Note: Welcome messages use a special tag derivation (epoch 0 before recipient joins)
-        // The recipient will try to process any incoming events as potential welcomes
-        let welcome_event = Event::welcome(group_id.clone(), 0, welcome_result.welcome);
-        let encrypted = self
-            .mls
-            .encrypt_event(&group_id, &key_bundle, &welcome_event)?;
+        // 7. Encrypt Welcome with recipient's stealth address (NOT MLS encryption!)
+        // This allows the recipient to decrypt without being in the group yet,
+        // while hiding from observers that this invite is for them.
+        let stealth_ciphertext =
+            stealth::encrypt_for_stealth(&recipient_stealth_pubkey, &welcome_result.welcome)?;
+
+        // 8. Publish with random tag (not group-derived, since recipient doesn't know group yet)
+        let random_tag: [u8; 16] = rand::random();
         self.client
             .as_ref()
             .unwrap()
-            .publish_event(&encrypted.tag, &encrypted.ciphertext)
+            .publish_event(&random_tag, &stealth_ciphertext)
             .await?;
 
-        // 7. Store conversation metadata
+        // 9. Store conversation metadata
         let conv_id = hex::encode(&group_id);
         self.keys.store_group_metadata(
             &conv_id,
@@ -525,7 +558,7 @@ impl App {
             },
         )?;
 
-        // 8. Update UI - add conversation to list
+        // 10. Update UI - add conversation to list
         self.conversations.push(Conversation {
             id: conv_id.clone(),
             name: recipient_handle.to_string(),
@@ -534,10 +567,11 @@ impl App {
             unread: 0,
         });
 
-        // 9. Register tag for this conversation
-        self.tag_map.insert(encrypted.tag, conv_id.clone());
+        // 11. Register current epoch's tag for this conversation (for future messages)
+        let current_tag = moat_core::derive_tag_from_group_id(&group_id, 1)?;
+        self.tag_map.insert(current_tag, conv_id.clone());
 
-        // 10. Select the new conversation and switch to input mode
+        // 12. Select the new conversation and switch to input mode
         self.active_conversation = Some(self.conversations.len() - 1);
         self.focus = Focus::Input;
         self.new_conv_handle.clear();
@@ -828,36 +862,58 @@ impl App {
         Ok(())
     }
 
-    /// Try to process ciphertext as a welcome message. Returns true if successful.
-    fn try_process_welcome(&mut self, ciphertext: &[u8], author_did: &str, tag: [u8; 16]) -> Result<bool> {
-        if let Ok(group_id) = self.mls.process_welcome(ciphertext) {
-            // Successfully joined a new group!
-            let conv_id = hex::encode(&group_id);
+    /// Try to process ciphertext as a stealth-encrypted welcome message.
+    /// Returns true if successful.
+    fn try_process_welcome(
+        &mut self,
+        ciphertext: &[u8],
+        author_did: &str,
+        _tag: [u8; 16],
+    ) -> Result<bool> {
+        // Load our stealth private key
+        let stealth_privkey = match self.keys.load_stealth_key() {
+            Ok(key) => key,
+            Err(_) => return Ok(false), // No stealth key, can't process welcomes
+        };
 
-            // Store metadata
-            self.keys.store_group_metadata(
-                &conv_id,
-                &GroupMetadata {
-                    participant_did: author_did.to_string(),
-                    participant_handle: author_did.to_string(), // TODO: resolve to handle
-                },
-            )?;
+        // Try stealth decryption first
+        let welcome_bytes = match stealth::try_decrypt_stealth(&stealth_privkey, ciphertext) {
+            Some(bytes) => bytes,
+            None => return Ok(false), // Not for us, or not a stealth-encrypted welcome
+        };
 
-            // Add to conversations list
-            self.conversations.push(Conversation {
-                id: conv_id.clone(),
-                name: author_did.to_string(), // TODO: resolve to handle
+        // Now try to process the decrypted bytes as an MLS Welcome
+        let group_id = match self.mls.process_welcome(&welcome_bytes) {
+            Ok(id) => id,
+            Err(_) => return Ok(false), // Decrypted but not a valid MLS Welcome
+        };
+
+        // Successfully joined a new group!
+        let conv_id = hex::encode(&group_id);
+
+        // Store metadata
+        self.keys.store_group_metadata(
+            &conv_id,
+            &GroupMetadata {
                 participant_did: author_did.to_string(),
-                current_epoch: 1,
-                unread: 1,
-            });
+                participant_handle: author_did.to_string(), // TODO: resolve to handle
+            },
+        )?;
 
-            // Register tag
-            self.tag_map.insert(tag, conv_id);
+        // Add to conversations list
+        self.conversations.push(Conversation {
+            id: conv_id.clone(),
+            name: author_did.to_string(), // TODO: resolve to handle
+            participant_did: author_did.to_string(),
+            current_epoch: 1,
+            unread: 1,
+        });
 
-            Ok(true)
-        } else {
-            Ok(false)
+        // Register current epoch's tag for this conversation
+        if let Ok(current_tag) = moat_core::derive_tag_from_group_id(&group_id, 1) {
+            self.tag_map.insert(current_tag, conv_id);
         }
+
+        Ok(true)
     }
 }

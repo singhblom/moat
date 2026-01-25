@@ -84,6 +84,29 @@ impl KeyStore {
         self.base_path.join("identity.key").exists()
     }
 
+    /// Store the stealth address private key (32 bytes)
+    pub fn store_stealth_key(&self, key: &[u8; 32]) -> Result<()> {
+        let path = self.base_path.join("stealth.key");
+        self.write_key_file(&path, key)
+    }
+
+    /// Load the stealth address private key
+    pub fn load_stealth_key(&self) -> Result<[u8; 32]> {
+        let path = self.base_path.join("stealth.key");
+        let data = self.read_key_file(&path)?;
+        if data.len() != 32 {
+            return Err(KeyStoreError::InvalidData);
+        }
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&data);
+        Ok(key)
+    }
+
+    /// Check if stealth key exists
+    pub fn has_stealth_key(&self) -> bool {
+        self.base_path.join("stealth.key").exists()
+    }
+
     /// Store a group private key
     pub fn store_group_key(&self, group_id: &str, key: &[u8]) -> Result<()> {
         let safe_id = Self::sanitize_group_id(group_id);
@@ -355,5 +378,23 @@ mod tests {
         let (handle, password) = store.load_credentials().unwrap();
         assert_eq!(handle, "alice.bsky.social");
         assert_eq!(password, "app-password");
+    }
+
+    #[test]
+    fn test_stealth_key_roundtrip() {
+        let dir = tempdir().unwrap();
+        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+
+        let key: [u8; 32] = [
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29, 30, 31, 32,
+        ];
+
+        assert!(!store.has_stealth_key());
+        store.store_stealth_key(&key).unwrap();
+        assert!(store.has_stealth_key());
+
+        let loaded = store.load_stealth_key().unwrap();
+        assert_eq!(loaded, key);
     }
 }

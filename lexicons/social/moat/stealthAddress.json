@@ -1,0 +1,34 @@
+{
+  "lexicon": 1,
+  "id": "social.moat.stealthAddress",
+  "defs": {
+    "main": {
+      "type": "record",
+      "key": "self",
+      "description": "Stealth meta-address for receiving private conversation invites",
+      "record": {
+        "type": "object",
+        "required": ["v", "scanPubkey", "createdAt"],
+        "properties": {
+          "v": {
+            "type": "integer",
+            "description": "Schema version",
+            "minimum": 1,
+            "maximum": 1
+          },
+          "scanPubkey": {
+            "type": "bytes",
+            "description": "X25519 public key for stealth address derivation",
+            "maxLength": 32,
+            "minLength": 32
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "Creation time"
+          }
+        }
+      }
+    }
+  }
+}

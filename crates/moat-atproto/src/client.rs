@@ -1,7 +1,10 @@
 //! ATProto client for Moat
 
 use crate::error::{Error, Result};
-use crate::records::{EventData, EventRecord, KeyPackageData, KeyPackageRecord};
+use crate::records::{
+    EventData, EventRecord, KeyPackageData, KeyPackageRecord, StealthAddressData,
+    StealthAddressRecord,
+};
 use atrium_api::agent::{store::MemorySessionStore, AtpAgent};
 use atrium_api::com::atproto::repo::{create_record, list_records};
 use atrium_api::types::string::{AtIdentifier, Nsid};
@@ -15,6 +18,9 @@ const KEY_PACKAGE_NSID: &str = "social.moat.keyPackage";
 
 /// Lexicon NSID for events
 const EVENT_NSID: &str = "social.moat.event";
+
+/// Lexicon NSID for stealth addresses
+const STEALTH_ADDRESS_NSID: &str = "social.moat.stealthAddress";
 
 /// Default PDS URL (Bluesky)
 const DEFAULT_PDS_URL: &str = "https://bsky.social";
@@ -283,6 +289,96 @@ impl MoatAtprotoClient {
             .map_err(|e| Error::Pds(e.to_string()))?;
 
         Ok(output.did.to_string())
+    }
+
+    /// Publish a stealth address to the PDS.
+    ///
+    /// This is a singleton record (key: "self"), so calling this will
+    /// replace any existing stealth address.
+    ///
+    /// Returns the AT-URI of the created record.
+    pub async fn publish_stealth_address(&self, scan_pubkey: &[u8; 32]) -> Result<String> {
+        let data = StealthAddressData {
+            v: 1,
+            scan_pubkey: *scan_pubkey,
+            created_at: Utc::now(),
+        };
+
+        let record_value = serde_json::to_value(&data)?;
+        let ipld_record = json_to_ipld(record_value)?;
+
+        let record = match ipld_record {
+            Ipld::Map(map) => atrium_api::types::Unknown::Object(
+                map.into_iter()
+                    .map(|(k, v)| (k, v.try_into().expect("valid ipld")))
+                    .collect(),
+            ),
+            _ => return Err(Error::Serialization("expected object".to_string())),
+        };
+
+        let input = create_record::InputData {
+            collection: Nsid::new(STEALTH_ADDRESS_NSID.to_string())
+                .map_err(|e| Error::InvalidRecord(e.to_string()))?,
+            record,
+            repo: AtIdentifier::Did(
+                self.did.parse().map_err(|_| Error::InvalidDid(self.did.clone()))?,
+            ),
+            rkey: Some("self".to_string()), // Singleton record
+            swap_commit: None,
+            validate: None,
+        };
+
+        let output = self
+            .agent
+            .api
+            .com
+            .atproto
+            .repo
+            .create_record(input.into())
+            .await
+            .map_err(|e| Error::Pds(e.to_string()))?;
+
+        Ok(output.uri.to_string())
+    }
+
+    /// Fetch a user's stealth address.
+    ///
+    /// Returns `None` if the user hasn't published a stealth address.
+    pub async fn fetch_stealth_address(&self, did: &str) -> Result<Option<[u8; 32]>> {
+        let input = list_records::ParametersData {
+            collection: Nsid::new(STEALTH_ADDRESS_NSID.to_string())
+                .map_err(|e| Error::InvalidRecord(e.to_string()))?,
+            cursor: None,
+            limit: Some(1.try_into().unwrap()),
+            repo: AtIdentifier::Did(
+                did.parse().map_err(|_| Error::InvalidDid(did.to_string()))?,
+            ),
+            reverse: None,
+            rkey_start: None,
+            rkey_end: None,
+        };
+
+        let output = self
+            .agent
+            .api
+            .com
+            .atproto
+            .repo
+            .list_records(input.into())
+            .await
+            .map_err(|e| Error::Pds(e.to_string()))?;
+
+        // Look for the stealth address record
+        for item in &output.records {
+            let value = serde_json::to_value(&item.value)
+                .map_err(|e| Error::Serialization(e.to_string()))?;
+
+            if let Ok(record) = serde_json::from_value::<StealthAddressRecord>(value) {
+                return Ok(Some(record.scan_pubkey));
+            }
+        }
+
+        Ok(None)
     }
 }
 

@@ -1491,6 +1491,7 @@ dependencies = [
  "dirs",
  "moat-atproto",
  "moat-core",
+ "rand",
  "ratatui",
  "serde",
  "serde_json",
@@ -1503,6 +1504,7 @@ dependencies = [
 name = "moat-core"
 version = "0.1.0"
 dependencies = [
+ "chacha20poly1305",
  "hkdf",
  "openmls",
  "openmls_basic_credential",
@@ -1514,6 +1516,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror 2.0.18",
+ "x25519-dalek",
 ]
 
 [[package]]

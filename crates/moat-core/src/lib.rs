@@ -28,6 +28,7 @@
 mod error;
 mod event;
 mod padding;
+pub mod stealth;
 mod storage;
 mod tag;
 

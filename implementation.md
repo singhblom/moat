@@ -22,7 +22,7 @@ An encrypted group chat on ATProto using MLS, combining metadata obfuscation tec
   - `process_welcome()` - join groups via welcome message
   - `encrypt_event()` - encrypt with padding and tag derivation
   - `decrypt_event()` - decrypt and unpad events
-- ✓ Full test coverage (38 tests) including two-party messaging
+- ✓ Full test coverage (46 tests in moat-core) including two-party messaging
 
 **Existing Infrastructure**
 - ✓ Login flow with Bluesky handle + app password
@@ -52,10 +52,22 @@ An encrypted group chat on ATProto using MLS, combining metadata obfuscation tec
 - ✓ Unread message count display
 - ✓ Tag-based conversation routing
 
+**Phase 5: Stealth Addresses ✓**
+- ✓ `moat-core/src/stealth.rs` with ECDH + HKDF + XChaCha20-Poly1305
+- ✓ `generate_stealth_keypair()`, `encrypt_for_stealth()`, `try_decrypt_stealth()`
+- ✓ 8 unit tests for stealth encryption
+- ✓ `social.moat.stealthAddress` lexicon (singleton record)
+- ✓ `publish_stealth_address()`, `fetch_stealth_address()` client methods
+- ✓ KeyStore stealth key storage (`stealth.key`)
+- ✓ `do_login()` generates and publishes stealth address on first login
+- ✓ `start_new_conversation()` encrypts Welcome with stealth address
+- ✓ `try_process_welcome()` uses stealth decryption before MLS processing
+- ✓ Full test coverage (54 tests total)
+
 ### Not Started
 
 - Phase 4: Local Storage expansion (cursor-based pagination, offline sync)
-- Phase 5: Privacy Hardening (stealth addresses, cover traffic)
+- Phase 6: Additional Privacy Hardening (cover traffic)
 
 ---
 
@@ -72,6 +84,19 @@ moat/
 
 **Key principle:** MoatSession handles all MLS state persistence. CLI orchestrates MoatSession + ATProto client.
 
+### Future: Mobile Apps via FFI
+
+**moat-cli is an MVP.** After the MVP milestone, the CLI will be replaced by cross-platform mobile apps (iOS/Android). The core crates should be designed with FFI in mind:
+
+- **moat-core**: Will be exposed via FFI (likely UniFFI) to Swift/Kotlin. All MLS cryptography stays in Rust for security and single-implementation benefits.
+- **moat-atproto**: Will likely be re-implemented natively per platform. ATProto is pure HTTP/REST, and each platform has superior networking libraries (URLSession, OkHttp) with better OS integration for auth flows.
+
+**Design implications for moat-core:**
+- Keep operations synchronous (no async) — much simpler FFI story
+- Prefer fixed-size arrays (`[u8; 32]`) over `Vec<u8>` where possible
+- Error types should be FFI-friendly (consider error codes + message accessors)
+- Storage should be controllable by the native side (see FFI Storage Considerations below)
+
 **Storage layout:**
 ```
 ~/.moat/
@@ -81,6 +106,34 @@ moat/
     ├── identity.key     # KeyBundle (for MLS operations)
     └── conversations/   # Metadata (participant handle, etc.)
 ```
+
+### FFI Storage Considerations
+
+The current `MoatSession` writes to disk on every operation (via `FileStorage::save_to_file()`). This has FFI concerns:
+
+1. **Blocking I/O on main thread** — Mobile platforms are sensitive to this; can cause UI jank or ANRs
+2. **No control over persistence timing** — Native apps often want to batch writes or persist on app suspend
+3. **Platform storage expectations** — iOS/Android have specific locations (app sandbox, `getFilesDir()`)
+
+**Recommended refactoring (Option B: Explicit Save):**
+
+```rust
+impl MoatSession {
+    /// Operations modify in-memory state only (no disk I/O)
+    pub fn encrypt_event(&self, ...) -> Result<EncryptResult> { ... }
+
+    /// Explicit persistence — native side calls when appropriate
+    pub fn save(&self) -> Result<()> { ... }
+
+    /// Export full state as bytes (for native-managed storage)
+    pub fn export_state(&self) -> Result<Vec<u8>> { ... }
+
+    /// Import state from bytes
+    pub fn import_state(&mut self, data: &[u8]) -> Result<()> { ... }
+}
+```
+
+This gives the native side full control over when and where to persist, while keeping MLS operations fast and non-blocking. The existing `in_memory()` constructor already supports this pattern — the refactoring would make it the default for FFI usage.
 
 ---
 
@@ -426,36 +479,359 @@ File structure:
 
 ---
 
-## Phase 5: Privacy Hardening (Post-MVP)
+## Phase 5: Stealth Addresses for Invites ✓ COMPLETE
 
-These can be added incrementally after basic functionality works:
+### Problem (Solved)
 
-### 5.1: Remove senderDeviceId from plaintext
+The original invitation flow was broken: Alice MLS-encrypted the Welcome, but Bob couldn't decrypt it because he wasn't in the group yet. Publishing unencrypted would reveal "Alice is starting a conversation with Bob" to observers.
+
+**Solution:** Stealth addresses encrypt the Welcome with Bob's published X25519 public key. Only Bob can decrypt, and observers cannot determine the recipient.
+
+---
+
+### Step 5.1: Stealth Address Cryptography ✓
+
+**Implemented in `moat-core/src/stealth.rs`**
+
+Bob publishes a stealth meta-address. Alice uses it to derive a one-time shared secret, encrypts the Welcome, and publishes an ephemeral public key. Bob scans events, attempts derivation with each ephemeral key, and can decrypt only his invites.
+
+**Cryptographic scheme (ECDH + HKDF + XChaCha20-Poly1305):**
+
+```
+Bob's stealth meta-address:
+  - scan_privkey (s) : X25519 private key (kept secret)
+  - scan_pubkey (S)  : X25519 public key (published)
+
+Alice sending an invite:
+  1. Generate ephemeral keypair: (r, R) where R = r·G
+  2. Compute shared secret: shared = ECDH(r, S) = r·S
+  3. Derive encryption key: key = HKDF-SHA256(shared, "moat-stealth-v1")
+  4. Encrypt Welcome: ciphertext = XChaCha20-Poly1305(key, nonce, welcome_bytes)
+  5. Publish event with:
+     - tag: random 16 bytes (not derived from group - invite has no group yet for recipient)
+     - payload: R || nonce || ciphertext
+
+Bob scanning for invites:
+  1. For each event from watched DIDs with unknown tag:
+     a. Parse R || nonce || ciphertext from payload
+     b. Compute shared = ECDH(s, R) = s·R
+     c. Derive key = HKDF-SHA256(shared, "moat-stealth-v1")
+     d. Attempt decrypt: if success, it's an invite for Bob
+  2. On successful decrypt, process the Welcome bytes via MLS
+```
+
+**Why this works:**
+- Only Bob (who knows `s`) can compute the same shared secret Alice used
+- Each invite uses a fresh ephemeral `R`, so invites are unlinkable
+- The tag is random, not derived from any group ID (since Bob doesn't know the group yet)
+
+---
+
+### Step 5.2: New Lexicon for Stealth Meta-Address ✓
+
+**Implemented in `lexicons/social/moat/stealthAddress.json`**
+
+**Collection:** `social.moat.stealthAddress`
+
+```json
+{
+  "lexicon": 1,
+  "id": "social.moat.stealthAddress",
+  "defs": {
+    "main": {
+      "type": "record",
+      "key": "self",
+      "record": {
+        "type": "object",
+        "required": ["v", "scanPubkey", "createdAt"],
+        "properties": {
+          "v": { "type": "integer", "description": "Schema version" },
+          "scanPubkey": { "type": "bytes", "maxLength": 32, "description": "X25519 public key for stealth address derivation" },
+          "createdAt": { "type": "string", "format": "datetime" }
+        }
+      }
+    }
+  }
+}
+```
+
+**Key:** `self` (singleton record per user, like a profile)
+
+---
+
+### Step 5.3: Storage Layout Changes ✓
+
+```
+~/.moat/
+├── keys/
+│   ├── credentials
+│   ├── identity.key        # MLS KeyBundle
+│   └── stealth.key         # NEW: scan_privkey (32 bytes)
+└── ...
+```
+
+**KeyStore additions:**
+
+```rust
+impl KeyStore {
+    // Stealth address keys
+    pub fn store_stealth_key(&self, privkey: &[u8; 32]) -> Result<()>;
+    pub fn load_stealth_key(&self) -> Result<[u8; 32]>;
+    pub fn has_stealth_key(&self) -> bool;
+}
+```
+
+---
+
+### Step 5.4: moat-core Stealth Module ✓
+
+**Implemented in `moat-core/src/stealth.rs`** with 8 unit tests.
+
+```rust
+use x25519_dalek::{EphemeralSecret, PublicKey, StaticSecret};
+use hkdf::Hkdf;
+use sha2::Sha256;
+use chacha20poly1305::{XChaCha20Poly1305, aead::{Aead, KeyInit}};
+
+const STEALTH_LABEL: &[u8] = b"moat-stealth-v1";
+
+/// Generate a new stealth keypair
+pub fn generate_stealth_keypair() -> ([u8; 32], [u8; 32]) {
+    let privkey = StaticSecret::random();
+    let pubkey = PublicKey::from(&privkey);
+    (privkey.to_bytes(), pubkey.to_bytes())
+}
+
+/// Encrypt a Welcome for a recipient's stealth address
+pub fn encrypt_for_stealth(
+    recipient_scan_pubkey: &[u8; 32],
+    welcome_bytes: &[u8],
+) -> Result<Vec<u8>> {
+    // Generate ephemeral keypair
+    let ephemeral_secret = EphemeralSecret::random();
+    let ephemeral_public = PublicKey::from(&ephemeral_secret);
+
+    // ECDH
+    let recipient_pubkey = PublicKey::from(*recipient_scan_pubkey);
+    let shared_secret = ephemeral_secret.diffie_hellman(&recipient_pubkey);
+
+    // Derive key
+    let hk = Hkdf::<Sha256>::new(None, shared_secret.as_bytes());
+    let mut key = [0u8; 32];
+    hk.expand(STEALTH_LABEL, &mut key).unwrap();
+
+    // Encrypt
+    let cipher = XChaCha20Poly1305::new(&key.into());
+    let nonce = rand::random::<[u8; 24]>();
+    let ciphertext = cipher.encrypt(&nonce.into(), welcome_bytes)?;
+
+    // Pack: ephemeral_pubkey (32) || nonce (24) || ciphertext
+    let mut result = Vec::with_capacity(32 + 24 + ciphertext.len());
+    result.extend_from_slice(ephemeral_public.as_bytes());
+    result.extend_from_slice(&nonce);
+    result.extend_from_slice(&ciphertext);
+    Ok(result)
+}
+
+/// Try to decrypt a stealth-encrypted Welcome
+pub fn try_decrypt_stealth(
+    scan_privkey: &[u8; 32],
+    payload: &[u8],
+) -> Option<Vec<u8>> {
+    if payload.len() < 32 + 24 + 16 {  // min: pubkey + nonce + auth tag
+        return None;
+    }
+
+    // Unpack
+    let ephemeral_public = PublicKey::from(<[u8; 32]>::try_from(&payload[..32]).ok()?);
+    let nonce: [u8; 24] = payload[32..56].try_into().ok()?;
+    let ciphertext = &payload[56..];
+
+    // ECDH
+    let privkey = StaticSecret::from(*scan_privkey);
+    let shared_secret = privkey.diffie_hellman(&ephemeral_public);
+
+    // Derive key
+    let hk = Hkdf::<Sha256>::new(None, shared_secret.as_bytes());
+    let mut key = [0u8; 32];
+    hk.expand(STEALTH_LABEL, &mut key).ok()?;
+
+    // Decrypt
+    let cipher = XChaCha20Poly1305::new(&key.into());
+    cipher.decrypt(&nonce.into(), ciphertext).ok()
+}
+```
+
+---
+
+### Step 5.5: moat-atproto Client Additions ✓
+
+```rust
+impl MoatAtprotoClient {
+    /// Publish stealth address (singleton record)
+    pub async fn publish_stealth_address(&self, scan_pubkey: &[u8; 32]) -> Result<String>;
+
+    /// Fetch a user's stealth address
+    pub async fn fetch_stealth_address(&self, did: &str) -> Result<Option<[u8; 32]>>;
+}
+```
+
+---
+
+### Step 5.6: Updated Invitation Flow ✓
+
+**Implemented in `moat-cli/src/app.rs`**
+
+**Alice starting a conversation with Bob:**
+
+```rust
+async fn start_new_conversation(&mut self, recipient_handle: &str) -> Result<()> {
+    // 1. Resolve handle to DID
+    let recipient_did = client.resolve_did(recipient_handle).await?;
+
+    // 2. Fetch Bob's stealth address (NOT key package yet)
+    let recipient_stealth_pubkey = client
+        .fetch_stealth_address(&recipient_did)
+        .await?
+        .ok_or_else(|| AppError::Other("Recipient has no stealth address".into()))?;
+
+    // 3. Fetch Bob's MLS key package
+    let recipient_kp = client.fetch_key_packages(&recipient_did).await?...;
+
+    // 4. Create MLS group and add Bob
+    let group_id = self.mls.create_group(&identity, &key_bundle)?;
+    let welcome_result = self.mls.add_member(&group_id, &key_bundle, &recipient_kp)?;
+
+    // 5. Encrypt Welcome with stealth address (NOT MLS encryption)
+    let stealth_ciphertext = stealth::encrypt_for_stealth(
+        &recipient_stealth_pubkey,
+        &welcome_result.welcome,
+    )?;
+
+    // 6. Publish with random tag (not group-derived)
+    let random_tag: [u8; 16] = rand::random();
+    client.publish_event(&random_tag, &stealth_ciphertext).await?;
+
+    // 7. Store conversation metadata locally
+    // ...
+}
+```
+
+**Bob scanning for invites:**
+
+```rust
+fn try_process_welcome(&mut self, payload: &[u8], author_did: &str, tag: [u8; 16]) -> Result<bool> {
+    // Load our stealth private key
+    let stealth_privkey = self.keys.load_stealth_key()?;
+
+    // Try stealth decryption
+    let Some(welcome_bytes) = stealth::try_decrypt_stealth(&stealth_privkey, payload) else {
+        return Ok(false);  // Not for us
+    };
+
+    // Process the MLS Welcome
+    let group_id = self.mls.process_welcome(&welcome_bytes)?;
+
+    // Create conversation entry
+    // ...
+
+    Ok(true)
+}
+```
+
+---
+
+### Step 5.7: Key Generation Flow Update ✓
+
+**Implemented in `moat-cli/src/app.rs:do_login()`**
+
+On first login, generate both MLS key package AND stealth address:
+
+```rust
+async fn do_login(&mut self) -> Result<()> {
+    // ... existing login code ...
+
+    // Generate MLS identity key if needed (existing)
+    if !self.keys.has_identity_key() {
+        let (key_package, key_bundle) = self.mls.generate_key_package(identity)?;
+        self.keys.store_identity_key(&key_bundle)?;
+        client.publish_key_package(&key_package, &ciphersuite_name).await?;
+    }
+
+    // NEW: Generate stealth address if needed
+    if !self.keys.has_stealth_key() {
+        let (stealth_privkey, stealth_pubkey) = stealth::generate_stealth_keypair();
+        self.keys.store_stealth_key(&stealth_privkey)?;
+        client.publish_stealth_address(&stealth_pubkey).await?;
+    }
+
+    // ...
+}
+```
+
+---
+
+### Step 5.8: Implementation Order ✓ COMPLETE
+
+1. ✓ **moat-core**: Add `stealth.rs` with `generate_stealth_keypair()`, `encrypt_for_stealth()`, `try_decrypt_stealth()`
+2. ✓ **moat-core**: Add tests for stealth encryption round-trip (8 tests)
+3. ✓ **moat-atproto**: Add `publish_stealth_address()`, `fetch_stealth_address()`
+4. ✓ **moat-atproto**: Add lexicon file `social.moat.stealthAddress`
+5. ✓ **moat-cli/keystore**: Add `store_stealth_key()`, `load_stealth_key()`, `has_stealth_key()`
+6. ✓ **moat-cli/app**: Update `do_login()` to generate and publish stealth address
+7. ✓ **moat-cli/app**: Update `start_new_conversation()` to use stealth encryption
+8. ✓ **moat-cli/app**: Update `try_process_welcome()` to use stealth decryption
+9. **Test**: Two terminals, verify invites work with unlinkable stealth addresses
+
+---
+
+### Privacy Analysis
+
+**After stealth addresses:**
+
+| What observers see | What they learn |
+|--------------------|-----------------|
+| Alice publishes event with random tag | Alice is active |
+| Event contains ephemeral pubkey + ciphertext | Nothing about recipient |
+| Bob later joins a group | Bob is active |
+
+**Cannot determine:**
+- That Alice's event was an invite to Bob
+- That multiple invites are for the same person
+- The relationship between Alice and Bob from the invite alone
+
+**Still visible:**
+- That Alice and Bob both use Moat (key packages and stealth addresses are public)
+- Timing correlations (Alice posts, Bob joins shortly after)
+- Once messaging starts, conversation participants can be correlated by who's posting to the same tags
+
+---
+
+## Phase 6: Additional Privacy Hardening (Post-Stealth)
+
+### 6.1: Remove senderDeviceId from plaintext
 Move into encrypted payload only.
 
-### 5.2: Stealth addresses for invites
-Instead of publishing welcomes that reveal "Alice invited Bob":
-- Bob publishes a stealth meta-address
-- Alice derives one-time conversation ID from it
-- Only Bob can recognize invites to him
-
-### 5.3: Cover traffic (optional, expensive)
+### 6.2: Cover traffic (optional, expensive)
 Periodically publish dummy events indistinguishable from real ones.
 
 ---
 
-## Build Order
+## Build Order ✓ COMPLETE
 
 1. ✓ **moat-core**: Implement `encrypt_event`/`decrypt_event` with tag derivation and padding
-2. ✓ **moat-core**: Add tests for full group lifecycle (38 tests, including two-party messaging)
-3. ✓ **moat-atproto**: `publish_event`, `fetch_events_from_did`, `fetch_events_by_tag` (already existed)
+2. ✓ **moat-core**: Add tests for full group lifecycle (46 tests, including two-party messaging)
+3. ✓ **moat-atproto**: `publish_event`, `fetch_events_from_did`, `fetch_events_by_tag`
 4. ✓ **moat-cli**: Add `MoatSession` to App struct, initialize on startup
 5. ✓ **moat-cli**: Wire `send_message()` to use MLS encryption
 6. ✓ **moat-cli**: Implement `poll_messages()` with decryption
 7. ✓ **moat-cli**: Implement `start_new_conversation()` with handle prompt UI
 8. ✓ **moat-cli**: Add conversation metadata storage to KeyStore
 9. ✓ **moat-cli**: Add watch handle feature for receiving invites from new contacts
-10. **Test**: Two terminals, two accounts, exchange encrypted messages
+10. ✓ **moat-core**: Implement stealth address module (`stealth.rs`)
+11. ✓ **moat-atproto**: Add stealth address lexicon and client methods
+12. ✓ **moat-cli**: Integrate stealth addresses into login and invitation flows
+13. **Test**: Two terminals, two accounts, exchange encrypted messages
 
 ---
 
@@ -471,11 +847,14 @@ Two terminals running moat, logged into different Bluesky accounts, successfully
 - Message content (MLS E2E encryption)
 - Conversation identity from casual observers (rotating tags)
 - Message length patterns (padding buckets)
+- Invitation recipients (stealth addresses - observers can't tell who an invite is for)
+- Invitation correlation (each invite uses fresh ephemeral keys, so multiple invites to the same person are unlinkable)
 
 **Not hidden:**
 - Who is posting events (author DID is public in ATProto)
 - Timing of activity
-- That you're using moat (key packages are public)
+- That you're using moat (key packages and stealth addresses are public)
+- Timing correlations (if Alice posts an invite and Bob joins shortly after, observers may infer a relationship)
 
 **Caveat for users:**
-> "Your messages are end-to-end encrypted. Who you're talking to is obscured from casual observers but visible to your PDS operator and anyone who can correlate your activity patterns."
+> "Your messages are end-to-end encrypted. Invitation recipients are hidden from observers. Conversation participants are obscured from casual observers but may be inferrable by your PDS operator and anyone who can correlate activity timing patterns."

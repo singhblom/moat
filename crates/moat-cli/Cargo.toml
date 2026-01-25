@@ -23,6 +23,7 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
+rand = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

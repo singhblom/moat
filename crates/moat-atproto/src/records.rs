@@ -87,6 +87,39 @@ pub struct EventData {
     pub created_at: DateTime<Utc>,
 }
 
+/// Stealth address record stored on PDS
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StealthAddressRecord {
+    /// Record AT-URI
+    #[serde(skip_serializing)]
+    pub uri: String,
+
+    /// Record CID
+    #[serde(skip_serializing)]
+    pub cid: String,
+
+    /// Schema version
+    pub v: u32,
+
+    /// X25519 public key for stealth address derivation (32 bytes)
+    #[serde(with = "base64_pubkey")]
+    pub scan_pubkey: [u8; 32],
+
+    /// Creation time
+    pub created_at: DateTime<Utc>,
+}
+
+/// Record data for creating a new stealth address
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StealthAddressData {
+    pub v: u32,
+    #[serde(with = "base64_pubkey")]
+    pub scan_pubkey: [u8; 32],
+    pub created_at: DateTime<Utc>,
+}
+
 /// Helper module for base64 encoding/decoding of byte vectors
 mod base64_bytes {
     use base64::{engine::general_purpose::STANDARD, Engine};
@@ -135,6 +168,33 @@ mod base64_tag {
     }
 }
 
+/// Helper module for base64 encoding/decoding of 32-byte public keys
+mod base64_pubkey {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(bytes: &[u8; 32], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&STANDARD.encode(bytes))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 32], D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let bytes = STANDARD.decode(&s).map_err(serde::de::Error::custom)?;
+        if bytes.len() != 32 {
+            return Err(serde::de::Error::custom("pubkey must be exactly 32 bytes"));
+        }
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&bytes);
+        Ok(arr)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,5 +232,23 @@ mod tests {
         assert_eq!(parsed.v, data.v);
         assert_eq!(parsed.ciphersuite, data.ciphersuite);
         assert_eq!(parsed.key_package, data.key_package);
+    }
+
+    #[test]
+    fn test_stealth_address_data_serialization() {
+        let data = StealthAddressData {
+            v: 1,
+            scan_pubkey: [
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+                24, 25, 26, 27, 28, 29, 30, 31, 32,
+            ],
+            created_at: Utc::now(),
+        };
+
+        let json = serde_json::to_string(&data).unwrap();
+        let parsed: StealthAddressData = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.v, data.v);
+        assert_eq!(parsed.scan_pubkey, data.scan_pubkey);
     }
 }

@@ -9,4 +9,4 @@ mod records;
 
 pub use client::MoatAtprotoClient;
 pub use error::{Error, Result};
-pub use records::{EventRecord, KeyPackageRecord};
+pub use records::{EventRecord, KeyPackageRecord, StealthAddressRecord};

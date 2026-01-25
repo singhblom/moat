@@ -55,4 +55,7 @@ pub enum Error {
 
     #[error("tag derivation failed: {0}")]
     TagDerivation(String),
+
+    #[error("stealth encryption failed: {0}")]
+    StealthEncryption(String),
 }
