@@ -8,8 +8,11 @@ use crate::records::{
 use atrium_api::agent::{store::MemorySessionStore, AtpAgent};
 use atrium_api::com::atproto::repo::{create_record, list_records};
 use atrium_api::types::string::{AtIdentifier, Nsid};
-use atrium_xrpc_client::reqwest::ReqwestClient;
+use atrium_xrpc_client::reqwest::{ReqwestClient, ReqwestClientBuilder};
 use chrono::{Duration, Utc};
+
+/// Default timeout for HTTP requests (30 seconds)
+const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 use ipld_core::ipld::Ipld;
 use std::collections::BTreeMap;
 
@@ -25,9 +28,15 @@ const STEALTH_ADDRESS_NSID: &str = "social.moat.stealthAddress";
 /// Default PDS URL (Bluesky)
 const DEFAULT_PDS_URL: &str = "https://bsky.social";
 
+/// PLC Directory URL for DID resolution
+const PLC_DIRECTORY_URL: &str = "https://plc.directory";
+
 /// ATProto client for Moat operations
 pub struct MoatAtprotoClient {
+    /// Authenticated agent for the user's PDS (used for writes)
     agent: AtpAgent<MemorySessionStore, ReqwestClient>,
+    /// HTTP client for PLC directory lookups
+    http_client: reqwest::Client,
     did: String,
 }
 
@@ -39,10 +48,15 @@ impl MoatAtprotoClient {
 
     /// Create a new client with a custom PDS URL.
     pub async fn login_with_pds(handle: &str, password: &str, pds_url: &str) -> Result<Self> {
-        let agent = AtpAgent::new(
-            ReqwestClient::new(pds_url.to_string()),
-            MemorySessionStore::default(),
-        );
+        // Create HTTP client with timeout
+        let http_client = reqwest::Client::builder()
+            .timeout(HTTP_TIMEOUT)
+            .build()
+            .map_err(|e| Error::Pds(format!("Failed to create HTTP client: {}", e)))?;
+
+        // Use the same client for the ATProto agent
+        let xrpc_client = ReqwestClientBuilder::new(pds_url).client(http_client.clone()).build();
+        let agent = AtpAgent::new(xrpc_client, MemorySessionStore::default());
 
         agent
             .login(handle, password)
@@ -56,8 +70,55 @@ impl MoatAtprotoClient {
 
         Ok(Self {
             agent,
+            http_client,
             did: session.did.to_string(),
         })
+    }
+
+    /// Resolve a DID's PDS endpoint from the PLC directory.
+    async fn resolve_pds_endpoint(&self, did: &str) -> Result<String> {
+        let url = format!("{}/{}", PLC_DIRECTORY_URL, did);
+        let response = self
+            .http_client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| Error::Pds(format!("Failed to fetch DID document: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(Error::Pds(format!(
+                "PLC directory returned {}: {}",
+                response.status(),
+                did
+            )));
+        }
+
+        let doc: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| Error::Pds(format!("Failed to parse DID document: {}", e)))?;
+
+        // Extract the PDS endpoint from the service array
+        let services = doc["service"]
+            .as_array()
+            .ok_or_else(|| Error::Pds("DID document has no services".to_string()))?;
+
+        for service in services {
+            if service["type"].as_str() == Some("AtprotoPersonalDataServer") {
+                if let Some(endpoint) = service["serviceEndpoint"].as_str() {
+                    return Ok(endpoint.to_string());
+                }
+            }
+        }
+
+        Err(Error::Pds(format!("No PDS endpoint found for {}", did)))
+    }
+
+    /// Create an unauthenticated agent for a specific PDS (reuses the timeout client).
+    fn agent_for_pds(&self, pds_url: &str) -> AtpAgent<MemorySessionStore, ReqwestClient> {
+        let xrpc_client =
+            ReqwestClientBuilder::new(pds_url).client(self.http_client.clone()).build();
+        AtpAgent::new(xrpc_client, MemorySessionStore::default())
     }
 
     /// Get the authenticated user's DID.
@@ -122,7 +183,13 @@ impl MoatAtprotoClient {
     }
 
     /// Fetch key packages for a given DID.
+    ///
+    /// Resolves the DID's PDS and queries it directly.
     pub async fn fetch_key_packages(&self, did: &str) -> Result<Vec<KeyPackageRecord>> {
+        // Resolve the target user's PDS
+        let pds_url = self.resolve_pds_endpoint(did).await?;
+        let pds_agent = self.agent_for_pds(&pds_url);
+
         let input = list_records::ParametersData {
             collection: Nsid::new(KEY_PACKAGE_NSID.to_string())
                 .map_err(|e| Error::InvalidRecord(e.to_string()))?,
@@ -136,8 +203,7 @@ impl MoatAtprotoClient {
             rkey_end: None,
         };
 
-        let output = self
-            .agent
+        let output = pds_agent
             .api
             .com
             .atproto
@@ -151,10 +217,7 @@ impl MoatAtprotoClient {
             let value = serde_json::to_value(&item.value)
                 .map_err(|e| Error::Serialization(e.to_string()))?;
 
-            if let Ok(mut record) = serde_json::from_value::<KeyPackageRecord>(value) {
-                record.uri = item.uri.to_string();
-                record.cid = item.cid.as_ref().to_string();
-
+            if let Ok(record) = serde_json::from_value::<KeyPackageRecord>(value) {
                 // Skip expired key packages
                 if record.expires_at > Utc::now() {
                     records.push(record);
@@ -214,11 +277,17 @@ impl MoatAtprotoClient {
     }
 
     /// Fetch events from a specific DID.
+    ///
+    /// Resolves the DID's PDS and queries it directly.
     pub async fn fetch_events_from_did(
         &self,
         did: &str,
         cursor: Option<&str>,
     ) -> Result<(Vec<EventRecord>, Option<String>)> {
+        // Resolve the target user's PDS
+        let pds_url = self.resolve_pds_endpoint(did).await?;
+        let pds_agent = self.agent_for_pds(&pds_url);
+
         let input = list_records::ParametersData {
             collection: Nsid::new(EVENT_NSID.to_string())
                 .map_err(|e| Error::InvalidRecord(e.to_string()))?,
@@ -232,8 +301,7 @@ impl MoatAtprotoClient {
             rkey_end: None,
         };
 
-        let output = self
-            .agent
+        let output = pds_agent
             .api
             .com
             .atproto
@@ -249,7 +317,6 @@ impl MoatAtprotoClient {
 
             if let Ok(mut record) = serde_json::from_value::<EventRecord>(value) {
                 record.uri = item.uri.to_string();
-                record.cid = item.cid.as_ref().to_string();
                 record.author_did = did.to_string();
                 records.push(record);
             }
@@ -289,6 +356,47 @@ impl MoatAtprotoClient {
             .map_err(|e| Error::Pds(e.to_string()))?;
 
         Ok(output.did.to_string())
+    }
+
+    /// Resolve a DID to a handle.
+    ///
+    /// Fetches the DID document from PLC directory and extracts the handle
+    /// from the `alsoKnownAs` field.
+    pub async fn resolve_handle(&self, did: &str) -> Result<String> {
+        let url = format!("{}/{}", PLC_DIRECTORY_URL, did);
+        let response = self
+            .http_client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| Error::Pds(format!("Failed to fetch DID document: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(Error::Pds(format!(
+                "PLC directory returned {}: {}",
+                response.status(),
+                did
+            )));
+        }
+
+        let doc: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| Error::Pds(format!("Failed to parse DID document: {}", e)))?;
+
+        // Extract handle from alsoKnownAs array (format: "at://handle")
+        if let Some(aliases) = doc["alsoKnownAs"].as_array() {
+            for alias in aliases {
+                if let Some(s) = alias.as_str() {
+                    if let Some(handle) = s.strip_prefix("at://") {
+                        return Ok(handle.to_string());
+                    }
+                }
+            }
+        }
+
+        // Fallback to DID if no handle found
+        Ok(did.to_string())
     }
 
     /// Publish a stealth address to the PDS.
@@ -343,8 +451,13 @@ impl MoatAtprotoClient {
 
     /// Fetch a user's stealth address.
     ///
+    /// Resolves the DID's PDS and queries it directly.
     /// Returns `None` if the user hasn't published a stealth address.
     pub async fn fetch_stealth_address(&self, did: &str) -> Result<Option<[u8; 32]>> {
+        // Resolve the target user's PDS
+        let pds_url = self.resolve_pds_endpoint(did).await?;
+        let pds_agent = self.agent_for_pds(&pds_url);
+
         let input = list_records::ParametersData {
             collection: Nsid::new(STEALTH_ADDRESS_NSID.to_string())
                 .map_err(|e| Error::InvalidRecord(e.to_string()))?,
@@ -358,8 +471,7 @@ impl MoatAtprotoClient {
             rkey_end: None,
         };
 
-        let output = self
-            .agent
+        let output = pds_agent
             .api
             .com
             .atproto

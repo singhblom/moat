@@ -5,8 +5,34 @@ use crossterm::event::{KeyCode, KeyEvent};
 use moat_atproto::MoatAtprotoClient;
 use moat_core::{stealth, Event, EventKind, MoatSession, CIPHERSUITE};
 use std::collections::HashMap;
+use std::io::Write;
+use std::path::PathBuf;
 use std::time::Instant;
 use thiserror::Error;
+
+/// Debug logger that writes to a file in the storage directory
+struct DebugLog {
+    path: PathBuf,
+}
+
+impl DebugLog {
+    fn new(storage_dir: &std::path::Path) -> Self {
+        Self {
+            path: storage_dir.join("debug.log"),
+        }
+    }
+
+    fn log(&self, msg: &str) {
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+        {
+            let timestamp = chrono::Local::now().format("%H:%M:%S%.3f");
+            let _ = writeln!(file, "[{}] {}", timestamp, msg);
+        }
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -81,6 +107,7 @@ pub struct App {
     pub keys: KeyStore,
     pub client: Option<MoatAtprotoClient>,
     pub mls: MoatSession,
+    debug_log: DebugLog,
 
     // UI state
     pub focus: Focus,
@@ -144,6 +171,8 @@ impl App {
 
         let mls = MoatSession::new(mls_path)?;
 
+        let debug_log = DebugLog::new(&base_dir);
+
         let focus = if keys.has_credentials() {
             Focus::Conversations
         } else {
@@ -154,6 +183,7 @@ impl App {
             keys,
             client: None,
             mls,
+            debug_log,
             focus,
             login_form: LoginForm::default(),
             error_message: None,
@@ -342,7 +372,7 @@ impl App {
         self.conversations.clear();
         for group_id in group_ids {
             // Try to load metadata for this group
-            let (name, participant_did) = match self.keys.load_group_metadata(&group_id) {
+            let (mut name, participant_did) = match self.keys.load_group_metadata(&group_id) {
                 Ok(meta) => (meta.participant_handle, meta.participant_did),
                 Err(_) => {
                     // Fallback for old groups without metadata
@@ -351,11 +381,49 @@ impl App {
                 }
             };
 
+            // If name looks like a DID, try to resolve it to a handle
+            if name.starts_with("did:") {
+                if let Some(client) = &self.client {
+                    if let Ok(handle) = client.resolve_handle(&name).await {
+                        // Update stored metadata with resolved handle
+                        let _ = self.keys.store_group_metadata(
+                            &group_id,
+                            &GroupMetadata {
+                                participant_did: participant_did.clone(),
+                                participant_handle: handle.clone(),
+                            },
+                        );
+                        name = handle;
+                    }
+                }
+            }
+
+            // Get the current epoch from the MLS group and register the tag
+            let group_id_bytes = hex::decode(&group_id)
+                .unwrap_or_default();
+
+            let current_epoch = if let Ok(Some(group)) = self.mls.load_group(&group_id_bytes) {
+                group.epoch().as_u64()
+            } else {
+                1 // Default to epoch 1 if group can't be loaded
+            };
+
+            // Register tag for current epoch
+            if let Ok(tag) = moat_core::derive_tag_from_group_id(&group_id_bytes, current_epoch) {
+                self.debug_log.log(&format!(
+                    "load_conversations: registering tag {:02x?} for conv {} epoch {}",
+                    &tag[..4],
+                    &group_id[..16.min(group_id.len())],
+                    current_epoch
+                ));
+                self.tag_map.insert(tag, group_id.clone());
+            }
+
             self.conversations.push(Conversation {
                 id: group_id.clone(),
                 name,
                 participant_did,
-                current_epoch: 0, // Will be updated when loading group
+                current_epoch,
                 unread: 0,
             });
         }
@@ -477,13 +545,32 @@ impl App {
 
         self.set_status(format!("Resolving {}...", recipient_handle));
 
-        // 1. Resolve handle to DID
+        // 1. Resolve handle to DID first so we can check for duplicates
         let recipient_did = self
             .client
             .as_ref()
             .unwrap()
             .resolve_did(recipient_handle)
             .await?;
+
+        // Check if we already have a conversation with this participant
+        if let Some(existing_idx) = self
+            .conversations
+            .iter()
+            .position(|c| c.participant_did == recipient_did)
+        {
+            // Switch to existing conversation instead of creating a duplicate
+            self.active_conversation = Some(existing_idx);
+            self.load_messages().await?;
+            self.focus = Focus::Input;
+            self.new_conv_handle.clear();
+            self.status_message = None;
+            self.set_status(format!(
+                "Switched to existing conversation with {}",
+                recipient_handle
+            ));
+            return Ok(());
+        }
 
         self.set_status(format!("Fetching stealth address for {}...", recipient_handle));
 
@@ -569,6 +656,11 @@ impl App {
 
         // 11. Register current epoch's tag for this conversation (for future messages)
         let current_tag = moat_core::derive_tag_from_group_id(&group_id, 1)?;
+        self.debug_log.log(&format!(
+            "start_conv: registering tag {:02x?} for conv {}",
+            &current_tag[..4],
+            &conv_id[..16]
+        ));
         self.tag_map.insert(current_tag, conv_id.clone());
 
         // 12. Select the new conversation and switch to input mode
@@ -687,6 +779,13 @@ impl App {
         let conv_idx = self.active_conversation.ok_or(AppError::NoConversation)?;
         let conv = &self.conversations[conv_idx];
 
+        self.debug_log.log(&format!(
+            "send_message: conv_id={}, epoch={}, msg_len={}",
+            &conv.id[..16],
+            conv.current_epoch,
+            self.input_buffer.len()
+        ));
+
         // Load key bundle for signing
         let key_bundle = self.keys.load_identity_key()?;
 
@@ -704,11 +803,18 @@ impl App {
         // Encrypt with MLS (handles padding internally)
         let encrypted = self.mls.encrypt_event(&group_id, &key_bundle, &event)?;
 
+        self.debug_log.log(&format!(
+            "send_message: encrypted, tag={:02x?}",
+            &encrypted.tag[..4]
+        ));
+
         // Update stored group state (epoch may have advanced)
         self.keys.store_group_state(&conv.id, &encrypted.new_group_state)?;
 
         // Publish encrypted event to PDS
         client.publish_event(&encrypted.tag, &encrypted.ciphertext).await?;
+
+        self.debug_log.log("send_message: published to PDS");
 
         // Update tag mapping with new tag
         self.tag_map.insert(encrypted.tag, conv.id.clone());
@@ -742,14 +848,51 @@ impl App {
 
         let watched: Vec<String> = self.watched_dids.iter().cloned().collect();
 
+        self.debug_log.log(&format!(
+            "poll: {} conversations, {} watched DIDs, {} known tags",
+            participants.len(),
+            watched.len(),
+            self.tag_map.len()
+        ));
+
+        // Log all known tags for debugging
+        for (tag, conv_id) in &self.tag_map {
+            self.debug_log.log(&format!(
+                "poll: known tag {:02x?} -> conv {}",
+                &tag[..4],
+                &conv_id[..16.min(conv_id.len())]
+            ));
+        }
+
         // Fetch events from participants
         let mut participant_events: Vec<(usize, EventRecord)> = Vec::new();
         {
             let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
             for (conv_idx, participant_did) in participants {
-                let (events, _cursor) = client.fetch_events_from_did(&participant_did, None).await?;
-                for event in events {
-                    participant_events.push((conv_idx, event));
+                self.debug_log.log(&format!(
+                    "poll: fetching from participant DID {} for conv_idx {}",
+                    &participant_did[..20.min(participant_did.len())],
+                    conv_idx
+                ));
+                // Skip DIDs that fail to fetch (repo may not exist)
+                match client.fetch_events_from_did(&participant_did, None).await {
+                    Ok((events, _cursor)) => {
+                        self.debug_log.log(&format!(
+                            "poll: got {} events from {}",
+                            events.len(),
+                            &participant_did[..20.min(participant_did.len())]
+                        ));
+                        for event in events {
+                            participant_events.push((conv_idx, event));
+                        }
+                    }
+                    Err(e) => {
+                        self.debug_log.log(&format!(
+                            "poll: error fetching from {}: {}",
+                            &participant_did[..20.min(participant_did.len())],
+                            e
+                        ));
+                    }
                 }
             }
         }
@@ -759,12 +902,20 @@ impl App {
         {
             let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
             for did in &watched {
-                let (events, _cursor) = client.fetch_events_from_did(did, None).await?;
-                for event in events {
-                    watched_events.push((did.clone(), event));
+                // Skip DIDs that fail to fetch (repo may not exist)
+                if let Ok((events, _cursor)) = client.fetch_events_from_did(did, None).await {
+                    for event in events {
+                        watched_events.push((did.clone(), event));
+                    }
                 }
             }
         }
+
+        self.debug_log.log(&format!(
+            "poll: fetched {} participant events, {} watched events",
+            participant_events.len(),
+            watched_events.len()
+        ));
 
         // Process participant events
         for (conv_idx, event_record) in participant_events {
@@ -773,14 +924,24 @@ impl App {
                 continue;
             }
 
+            self.debug_log.log(&format!(
+                "poll: new event from {}, tag={:02x?}",
+                &event_record.author_did[..20],
+                &event_record.tag[..4]
+            ));
+
             // Check if tag matches any known conversation
             if let Some(conv_id) = self.tag_map.get(&event_record.tag).cloned() {
+                self.debug_log.log(&format!("poll: tag matched conv {}", &conv_id[..16]));
+
                 // Decrypt the event
                 let group_id = hex::decode(&conv_id)
                     .map_err(|e| AppError::Other(format!("Invalid group ID: {}", e)))?;
 
                 match self.mls.decrypt_event(&group_id, &event_record.ciphertext) {
                     Ok(decrypted) => {
+                        self.debug_log.log(&format!("poll: decrypted, kind={:?}", decrypted.event.kind));
+
                         // Update group state
                         self.keys.store_group_state(&conv_id, &decrypted.new_group_state)?;
 
@@ -823,15 +984,16 @@ impl App {
                             }
                         }
                     }
-                    Err(_) => {
+                    Err(e) => {
                         // Decryption failed - might be for a different epoch/key
-                        // Just skip this event
+                        self.debug_log.log(&format!("poll: decryption failed: {}", e));
                     }
                 }
 
                 self.processed_event_uris.insert(event_record.uri.clone());
             } else {
                 // Unknown tag - might be a welcome for a new conversation
+                self.debug_log.log("poll: tag not matched, trying as welcome");
                 self.try_process_welcome(&event_record.ciphertext, &event_record.author_did, event_record.tag)?;
                 self.processed_event_uris.insert(event_record.uri.clone());
             }
@@ -873,37 +1035,53 @@ impl App {
         // Load our stealth private key
         let stealth_privkey = match self.keys.load_stealth_key() {
             Ok(key) => key,
-            Err(_) => return Ok(false), // No stealth key, can't process welcomes
+            Err(_) => {
+                self.debug_log.log("try_process_welcome: no stealth key");
+                return Ok(false);
+            }
         };
 
         // Try stealth decryption first
         let welcome_bytes = match stealth::try_decrypt_stealth(&stealth_privkey, ciphertext) {
-            Some(bytes) => bytes,
+            Some(bytes) => {
+                self.debug_log.log(&format!(
+                    "try_process_welcome: stealth decrypted {} bytes from {}",
+                    bytes.len(),
+                    &author_did[..20]
+                ));
+                bytes
+            }
             None => return Ok(false), // Not for us, or not a stealth-encrypted welcome
         };
 
         // Now try to process the decrypted bytes as an MLS Welcome
         let group_id = match self.mls.process_welcome(&welcome_bytes) {
-            Ok(id) => id,
-            Err(_) => return Ok(false), // Decrypted but not a valid MLS Welcome
+            Ok(id) => {
+                self.debug_log.log(&format!("try_process_welcome: MLS welcome processed, group_id len={}", id.len()));
+                id
+            }
+            Err(e) => {
+                self.debug_log.log(&format!("try_process_welcome: MLS welcome failed: {}", e));
+                return Ok(false);
+            }
         };
 
         // Successfully joined a new group!
         let conv_id = hex::encode(&group_id);
 
-        // Store metadata
+        // Store metadata (handle will be resolved in load_conversations)
         self.keys.store_group_metadata(
             &conv_id,
             &GroupMetadata {
                 participant_did: author_did.to_string(),
-                participant_handle: author_did.to_string(), // TODO: resolve to handle
+                participant_handle: author_did.to_string(),
             },
         )?;
 
-        // Add to conversations list
+        // Add to conversations list (handle will be resolved on next load)
         self.conversations.push(Conversation {
             id: conv_id.clone(),
-            name: author_did.to_string(), // TODO: resolve to handle
+            name: author_did.to_string(),
             participant_did: author_did.to_string(),
             current_epoch: 1,
             unread: 1,
@@ -911,9 +1089,15 @@ impl App {
 
         // Register current epoch's tag for this conversation
         if let Ok(current_tag) = moat_core::derive_tag_from_group_id(&group_id, 1) {
+            self.debug_log.log(&format!(
+                "process_welcome: registering tag {:02x?} for conv {}",
+                &current_tag[..4],
+                &conv_id[..16]
+            ));
             self.tag_map.insert(current_tag, conv_id);
         }
 
+        self.debug_log.log("process_welcome: successfully joined group");
         Ok(true)
     }
 }

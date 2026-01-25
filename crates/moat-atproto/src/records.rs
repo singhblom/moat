@@ -7,14 +7,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyPackageRecord {
-    /// Record AT-URI
-    #[serde(skip_serializing)]
-    pub uri: String,
-
-    /// Record CID
-    #[serde(skip_serializing)]
-    pub cid: String,
-
     /// Schema version
     pub v: u32,
 
@@ -36,16 +28,12 @@ pub struct KeyPackageRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventRecord {
-    /// Record AT-URI
-    #[serde(skip_serializing)]
+    /// Record AT-URI (populated after fetch, not in record itself)
+    #[serde(skip)]
     pub uri: String,
 
-    /// Record CID
-    #[serde(skip_serializing)]
-    pub cid: String,
-
-    /// Author DID
-    #[serde(skip_serializing)]
+    /// Author DID (populated after fetch, not in record itself)
+    #[serde(skip)]
     pub author_did: String,
 
     /// Schema version
@@ -91,14 +79,6 @@ pub struct EventData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StealthAddressRecord {
-    /// Record AT-URI
-    #[serde(skip_serializing)]
-    pub uri: String,
-
-    /// Record CID
-    #[serde(skip_serializing)]
-    pub cid: String,
-
     /// Schema version
     pub v: u32,
 

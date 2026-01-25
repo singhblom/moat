@@ -16,3 +16,4 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 base64 = { workspace = true }
 ipld-core = "0.4"
+reqwest = { version = "0.12", features = ["json"] }
