@@ -30,12 +30,15 @@ An encrypted group chat on ATProto using MLS, combining metadata obfuscation tec
 - ✓ Ratatui UI structure with conversation list and message panes
 - ✓ Local keystore at `~/.moat/keys/`
 
-**Phase 2: ATProto Client (mostly complete)**
+**Phase 2: ATProto Client ✓**
 - ✓ `publish_event(tag, ciphertext)` - publish encrypted events
-- ✓ `fetch_events_from_did(did, cursor)` - fetch events with pagination
+- ✓ `fetch_events_from_did(did, cursor)` - fetch events with pagination (cross-PDS via PLC directory)
 - ✓ `fetch_events_by_tag(did, tag)` - filter events by conversation tag
 - ✓ `resolve_did(handle)` - handle-to-DID resolution
-- ✓ `publish_key_package()` / `fetch_key_packages()` - key package CRUD
+- ✓ `resolve_handle(did)` - DID-to-handle resolution via PLC directory
+- ✓ `publish_key_package()` / `fetch_key_packages()` - key package CRUD (cross-PDS)
+- ✓ `fetch_stealth_address()` - cross-PDS stealth address lookup
+- ✓ HTTP timeout (30s) to prevent hanging on network failures
 
 **Phase 2.5: Wire MoatSession to CLI ✓**
 - ✓ `MoatSession` integrated into App struct with persistent storage at `~/.moat/mls.bin`
@@ -51,6 +54,9 @@ An encrypted group chat on ATProto using MLS, combining metadata obfuscation tec
 - ✓ Message polling every 5 seconds
 - ✓ Unread message count display
 - ✓ Tag-based conversation routing
+- ✓ Tag registration on app startup (loads epoch from MLS group state)
+- ✓ Duplicate conversation prevention (checks by participant DID)
+- ✓ DID-to-handle resolution for conversation display names
 
 **Phase 5: Stealth Addresses ✓**
 - ✓ `moat-core/src/stealth.rs` with ECDH + HKDF + XChaCha20-Poly1305
@@ -831,13 +837,18 @@ Periodically publish dummy events indistinguishable from real ones.
 10. ✓ **moat-core**: Implement stealth address module (`stealth.rs`)
 11. ✓ **moat-atproto**: Add stealth address lexicon and client methods
 12. ✓ **moat-cli**: Integrate stealth addresses into login and invitation flows
-13. **Test**: Two terminals, two accounts, exchange encrypted messages
+13. ✓ **Test**: Two terminals, two accounts, exchange encrypted messages
 
 ---
 
-## First Milestone
+## First Milestone ✓ ACHIEVED
 
-Two terminals running moat, logged into different Bluesky accounts, successfully exchange one encrypted message. The message content is E2E encrypted, and the conversation tag rotates with each epoch.
+Two terminals running moat, logged into different Bluesky accounts, successfully exchange encrypted messages. The message content is E2E encrypted, and the conversation tag rotates with each epoch.
+
+**Verified:**
+- Cross-PDS communication via PLC directory resolution
+- Bidirectional message exchange
+- Stealth address-based invitations
 
 ---
 
