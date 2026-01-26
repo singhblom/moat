@@ -268,7 +268,15 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
             .style(Style::default().fg(Color::Gray));
         frame.render_widget(help, inner);
     } else {
-        let list = List::new(items).block(block);
+        // Calculate how many messages can fit in the visible area
+        // Each message takes 1 line, area height minus 2 for borders
+        let visible_height = area.height.saturating_sub(2) as usize;
+
+        // Show only the last N messages that fit (auto-scroll to bottom)
+        let skip_count = items.len().saturating_sub(visible_height);
+        let items_to_show: Vec<ListItem> = items.into_iter().skip(skip_count).collect();
+
+        let list = List::new(items_to_show).block(block);
         frame.render_widget(list, area);
     }
 }

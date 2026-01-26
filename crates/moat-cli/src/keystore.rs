@@ -37,6 +37,25 @@ pub struct PaginationState {
     pub last_rkeys: std::collections::HashMap<String, String>,
 }
 
+/// A locally stored message (for sent messages we can't decrypt from PDS)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredMessage {
+    /// The rkey of the published record (for ordering)
+    pub rkey: String,
+    /// Message content (plaintext)
+    pub content: String,
+    /// Timestamp
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    /// Whether this is our own message
+    pub is_own: bool,
+}
+
+/// All stored messages for a conversation
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ConversationMessages {
+    pub messages: Vec<StoredMessage>,
+}
+
 pub type Result<T> = std::result::Result<T, KeyStoreError>;
 
 /// Local key storage
@@ -220,6 +239,38 @@ impl KeyStore {
         let mut state = self.load_pagination_state()?;
         state.last_rkeys.insert(did.to_string(), rkey.to_string());
         self.store_pagination_state(&state)
+    }
+
+    /// Load messages for a conversation
+    pub fn load_messages(&self, conv_id: &str) -> Result<ConversationMessages> {
+        let path = self.base_path.join(format!("messages_{}.json", conv_id));
+        if !path.exists() {
+            return Ok(ConversationMessages::default());
+        }
+        let data = fs::read(&path)?;
+        let messages: ConversationMessages = serde_json::from_slice(&data)?;
+        Ok(messages)
+    }
+
+    /// Store messages for a conversation
+    pub fn store_messages(&self, conv_id: &str, messages: &ConversationMessages) -> Result<()> {
+        let path = self.base_path.join(format!("messages_{}.json", conv_id));
+        let json = serde_json::to_vec_pretty(messages)?;
+        fs::write(&path, json)?;
+        Ok(())
+    }
+
+    /// Append a message to a conversation's local storage
+    pub fn append_message(&self, conv_id: &str, message: StoredMessage) -> Result<()> {
+        let mut messages = self.load_messages(conv_id)?;
+        messages.messages.push(message);
+        self.store_messages(conv_id, &messages)
+    }
+
+    /// Check if we have a message with the given rkey
+    pub fn has_message(&self, conv_id: &str, rkey: &str) -> Result<bool> {
+        let messages = self.load_messages(conv_id)?;
+        Ok(messages.messages.iter().any(|m| m.rkey == rkey))
     }
 
     /// Store credentials (handle and app password)

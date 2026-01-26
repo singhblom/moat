@@ -687,16 +687,137 @@ impl App {
             return Ok(());
         };
 
-        let _conv = &self.conversations[idx];
+        let conv = &self.conversations[idx];
+        let conv_id = conv.id.clone();
+        let participant_did = conv.participant_did.clone();
+        let participant_name = conv.name.clone();
+        let current_epoch = conv.current_epoch;
 
-        // For MVP, messages would be loaded from PDS
-        // For now, just show a placeholder
-        self.messages.push(DisplayMessage {
-            from: "System".to_string(),
-            content: "Conversation loaded. Type a message below.".to_string(),
-            timestamp: chrono::Utc::now(),
-            is_own: false,
-        });
+        let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
+        let my_did = client.did().to_string();
+
+        self.debug_log.log(&format!(
+            "load_messages: conv={}, participant={}, my_did={}, epoch={}",
+            &conv_id[..16.min(conv_id.len())],
+            &participant_did[..20.min(participant_did.len())],
+            &my_did[..20.min(my_did.len())],
+            current_epoch
+        ));
+
+        // Load locally stored messages (our sent messages that MLS can't decrypt)
+        let local_messages = self.keys.load_messages(&conv_id).unwrap_or_default();
+        let local_rkeys: std::collections::HashSet<String> = local_messages
+            .messages
+            .iter()
+            .map(|m| m.rkey.clone())
+            .collect();
+
+        self.debug_log.log(&format!(
+            "load_messages: {} locally stored messages",
+            local_messages.messages.len()
+        ));
+
+        // Generate all valid tags for this conversation (epochs 0 through current)
+        let group_id = hex::decode(&conv_id)
+            .map_err(|e| AppError::Other(format!("Invalid group ID: {}", e)))?;
+
+        let epochs: Vec<u64> = (0..=current_epoch).collect();
+        let valid_tags: std::collections::HashSet<[u8; 16]> = epochs
+            .iter()
+            .filter_map(|&epoch| moat_core::derive_tag_from_group_id(&group_id, epoch).ok())
+            .collect();
+
+        self.debug_log.log(&format!(
+            "load_messages: generated {} valid tags for epochs 0..={}",
+            valid_tags.len(),
+            current_epoch
+        ));
+
+        // Fetch events from participant only (we have our own messages locally)
+        let their_events = client.fetch_events_from_did(&participant_did, None).await.unwrap_or_default();
+
+        self.debug_log.log(&format!(
+            "load_messages: fetched {} events from participant",
+            their_events.len()
+        ));
+
+        // Filter by valid tags for this conversation
+        let their_events: Vec<_> = their_events
+            .into_iter()
+            .filter(|e| valid_tags.contains(&e.tag))
+            .collect();
+
+        self.debug_log.log(&format!(
+            "load_messages: {} events match conversation tags",
+            their_events.len()
+        ));
+
+        // Build a combined list of (rkey, DisplayMessage)
+        let mut all_messages: Vec<(String, DisplayMessage)> = Vec::new();
+
+        // Add locally stored messages (our sent messages)
+        for stored in &local_messages.messages {
+            all_messages.push((
+                stored.rkey.clone(),
+                DisplayMessage {
+                    from: "You".to_string(),
+                    content: stored.content.clone(),
+                    timestamp: stored.timestamp,
+                    is_own: true,
+                },
+            ));
+        }
+
+        // Decrypt and add received messages
+        for event_record in their_events {
+            // Skip if we somehow have this rkey locally (shouldn't happen for their messages)
+            if local_rkeys.contains(&event_record.rkey) {
+                continue;
+            }
+
+            match self.mls.decrypt_event(&group_id, &event_record.ciphertext) {
+                Ok(decrypted) => {
+                    if let EventKind::Message = decrypted.event.kind {
+                        let content = String::from_utf8_lossy(&decrypted.event.payload).to_string();
+
+                        all_messages.push((
+                            event_record.rkey.clone(),
+                            DisplayMessage {
+                                from: participant_name.clone(),
+                                content,
+                                timestamp: event_record.created_at,
+                                is_own: false,
+                            },
+                        ));
+                    }
+                    // Ignore non-message events (Commit, Checkpoint, Welcome)
+                }
+                Err(e) => {
+                    self.debug_log.log(&format!(
+                        "load_messages: failed to decrypt event {}: {}",
+                        &event_record.rkey,
+                        e
+                    ));
+                    // Skip events we can't decrypt (might be from before we joined)
+                }
+            }
+        }
+
+        // Sort by rkey (chronological order since rkeys are TIDs)
+        all_messages.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // Extract just the messages
+        self.messages = all_messages.into_iter().map(|(_, msg)| msg).collect();
+
+        // Clear unread count since we've now loaded the conversation
+        if let Some(conv) = self.conversations.get_mut(idx) {
+            conv.unread = 0;
+        }
+
+        self.debug_log.log(&format!(
+            "load_messages: loaded {} messages total",
+            self.messages.len()
+        ));
 
         Ok(())
     }
@@ -808,18 +929,33 @@ impl App {
         self.keys.store_group_state(&conv.id, &encrypted.new_group_state)?;
 
         // Publish encrypted event to PDS
-        client.publish_event(&encrypted.tag, &encrypted.ciphertext).await?;
+        let uri = client.publish_event(&encrypted.tag, &encrypted.ciphertext).await?;
 
-        self.debug_log.log("send_message: published to PDS");
+        // Extract rkey from URI: at://did:plc:xxx/social.moat.event/rkey
+        let rkey = uri.split('/').last().unwrap_or("unknown").to_string();
+        let timestamp = chrono::Utc::now();
+
+        self.debug_log.log(&format!("send_message: published to PDS, rkey={}", rkey));
 
         // Update tag mapping with new tag
         self.tag_map.insert(encrypted.tag, conv.id.clone());
+
+        // Store message locally (MLS can't decrypt our own messages)
+        let stored_msg = crate::keystore::StoredMessage {
+            rkey: rkey.clone(),
+            content: self.input_buffer.clone(),
+            timestamp,
+            is_own: true,
+        };
+        if let Err(e) = self.keys.append_message(&conv.id, stored_msg) {
+            self.debug_log.log(&format!("send_message: failed to store locally: {}", e));
+        }
 
         // Add to messages display
         self.messages.push(DisplayMessage {
             from: "You".to_string(),
             content: self.input_buffer.clone(),
-            timestamp: chrono::Utc::now(),
+            timestamp,
             is_own: true,
         });
 
@@ -873,20 +1009,30 @@ impl App {
                 match client.fetch_events_from_did(participant_did, last_rkey.as_deref()).await {
                     Ok(events) => {
                         self.debug_log.log(&format!(
-                            "poll: got {} new events from {}",
+                            "poll: got {} events from {}",
                             events.len(),
                             &participant_did[..20.min(participant_did.len())]
                         ));
 
-                        // Track max rkey seen
-                        let mut max_rkey: Option<String> = last_rkey;
+                        // Track max rkey seen and filter out already-seen events
+                        // Note: rkey_start is INCLUSIVE in ATProto, so we must skip events <= last_rkey
+                        let mut max_rkey: Option<String> = last_rkey.clone();
+                        let mut new_count = 0;
                         for event in events {
+                            // Skip events we've already seen (rkey_start is inclusive)
+                            if let Some(ref last) = last_rkey {
+                                if event.rkey <= *last {
+                                    continue;
+                                }
+                            }
+                            new_count += 1;
                             // Update max rkey (rkeys are TIDs that sort lexicographically)
                             if max_rkey.as_ref().map_or(true, |m| event.rkey > *m) {
                                 max_rkey = Some(event.rkey.clone());
                             }
                             participant_events.push((conv_indices.clone(), event, participant_did.clone()));
                         }
+                        self.debug_log.log(&format!("poll: {} new events after filtering", new_count));
 
                         // Record the new max rkey for this DID
                         if let Some(rkey) = max_rkey {
@@ -913,8 +1059,14 @@ impl App {
 
                 match client.fetch_events_from_did(did, last_rkey.as_deref()).await {
                     Ok(events) => {
-                        let mut max_rkey = last_rkey;
+                        let mut max_rkey = last_rkey.clone();
                         for event in events {
+                            // Skip events we've already seen (rkey_start is inclusive)
+                            if let Some(ref last) = last_rkey {
+                                if event.rkey <= *last {
+                                    continue;
+                                }
+                            }
                             if max_rkey.as_ref().map_or(true, |m| event.rkey > *m) {
                                 max_rkey = Some(event.rkey.clone());
                             }
@@ -958,7 +1110,9 @@ impl App {
                         self.debug_log.log(&format!("poll: decrypted, kind={:?}", decrypted.event.kind));
 
                         // Update group state
-                        self.keys.store_group_state(&conv_id, &decrypted.new_group_state)?;
+                        if let Err(e) = self.keys.store_group_state(&conv_id, &decrypted.new_group_state) {
+                            self.debug_log.log(&format!("poll: failed to store group state: {}", e));
+                        }
 
                         // Handle based on event kind
                         match decrypted.event.kind {

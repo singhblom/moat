@@ -70,9 +70,15 @@ An encrypted group chat on ATProto using MLS, combining metadata obfuscation tec
 - ✓ `try_process_welcome()` uses stealth decryption before MLS processing
 - ✓ Full test coverage (54 tests total)
 
+**Phase 4: Local Storage & Pagination (partial) ✓**
+- ✓ Rkey-based pagination to replace unbounded URI tracking
+- ✓ Local message storage for sent messages (MLS can't decrypt own messages)
+- ✓ Proper filtering for ATProto's inclusive `rkey_start` parameter
+- ✓ UI auto-scroll to show newest messages
+
 ### Not Started
 
-- Phase 4: Local Storage expansion (cursor-based pagination, offline sync)
+- Phase 4: Remaining local storage expansion (offline sync, message history export)
 - Phase 6: Additional Privacy Hardening (cover traffic)
 
 ---
@@ -395,7 +401,7 @@ async fn send_message(&mut self) -> Result<()> {
 - Fetches events from all conversation participants
 - Decrypts known-tag events and displays messages
 - Attempts `process_welcome()` on unknown-tag events
-- Tracks processed URIs to avoid duplicates (TODO: switch to cursor-based pagination)
+- Uses rkey-based pagination with persistent storage (per-DID last seen rkey)
 
 ### Step 2.5.6: Add "new conversation" UI prompt ✓
 
@@ -437,51 +443,55 @@ Not yet implemented:
 
 ---
 
-## Phase 4: Local Storage
+## Phase 4: Local Storage (Partial) ✓
 
-### Step 4.1: Expand keystore
+### Step 4.1: Pagination State ✓
+
+**Implementation (completed):**
+
+Rkey-based pagination replaces unbounded URI tracking:
 
 ```rust
-pub struct KeyStore {
-    base_path: PathBuf,  // ~/.moat/keys/
+/// Pagination state (per-DID last seen rkey)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PaginationState {
+    pub last_rkeys: HashMap<String, String>,
 }
 
 impl KeyStore {
-    // Existing
-    pub fn store_credentials(&self, handle: &str, password: &str) -> Result<()>;
-    pub fn load_credentials(&self) -> Result<(String, String)>;
-    pub fn store_identity_key(&self, key: &[u8]) -> Result<()>;
-    pub fn load_identity_key(&self) -> Result<Vec<u8>>;
-
-    // New: per-conversation keys
-    pub fn store_group_key(&self, group_id: &str, key: &[u8]) -> Result<()>;
-    pub fn load_group_key(&self, group_id: &str) -> Result<Vec<u8>>;
-
-    // Group state cache (mirrors PDS, for offline/fast access)
-    pub fn cache_group_state(&self, group_id: &str, state: &[u8]) -> Result<()>;
-    pub fn load_cached_group_state(&self, group_id: &str) -> Result<Vec<u8>>;
-
-    // Conversation metadata
-    pub fn list_groups(&self) -> Result<Vec<String>>;
-    pub fn store_group_metadata(&self, group_id: &str, meta: &GroupMetadata) -> Result<()>;
+    pub fn get_last_rkey(&self, did: &str) -> Result<Option<String>>;
+    pub fn set_last_rkey(&self, did: &str, rkey: &str) -> Result<()>;
 }
 ```
 
-File structure:
+**Key insight:** ATProto's `rkey_start` parameter is **inclusive**, so we filter out events where `event.rkey <= last_rkey` client-side.
+
+### Step 4.2: Local Message Storage ✓
+
+**Implementation (completed):**
+
+MLS cannot decrypt your own sent messages (by design - "Cannot create decryption secrets from own sender ratchet"). Solution: store sent messages locally.
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredMessage {
+    pub rkey: String,
+    pub content: String,
+    pub timestamp: DateTime<Utc>,
+    pub is_own: bool,
+}
+
+impl KeyStore {
+    pub fn load_messages(&self, conv_id: &str) -> Result<ConversationMessages>;
+    pub fn append_message(&self, conv_id: &str, message: StoredMessage) -> Result<()>;
+}
 ```
-~/.moat/
-├── keys/
-│   ├── credentials        # handle\npassword
-│   └── identity.key       # MLS identity private key
-├── groups/
-│   ├── {group_id}/
-│   │   ├── private.key    # MLS group private key
-│   │   ├── state.bin      # Cached group state
-│   │   └── meta.json      # Participants, name, etc.
-│   └── ...
-└── sync/
-    └── cursors.json       # Last-seen timestamps per DID
-```
+
+### Step 4.3: Remaining (Not Started)
+
+- Offline message sync
+- Message history export/backup
+- Multi-device sync (would require inviting each device as separate MLS member)
 
 ---
 
