@@ -32,6 +32,11 @@ pub struct EventRecord {
     #[serde(skip)]
     pub uri: String,
 
+    /// Record rkey (populated after fetch, not in record itself)
+    /// Used for cursor-based pagination
+    #[serde(skip)]
+    pub rkey: String,
+
     /// Author DID (populated after fetch, not in record itself)
     #[serde(skip)]
     pub author_did: String,

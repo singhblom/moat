@@ -279,50 +279,71 @@ impl MoatAtprotoClient {
     /// Fetch events from a specific DID.
     ///
     /// Resolves the DID's PDS and queries it directly.
+    ///
+    /// If `rkey_start` is provided, only fetches records with rkey > rkey_start.
+    /// This enables efficient incremental polling without needing to track all seen URIs.
+    ///
+    /// Automatically paginates through all results using the cursor.
     pub async fn fetch_events_from_did(
         &self,
         did: &str,
-        cursor: Option<&str>,
-    ) -> Result<(Vec<EventRecord>, Option<String>)> {
+        rkey_start: Option<&str>,
+    ) -> Result<Vec<EventRecord>> {
         // Resolve the target user's PDS
         let pds_url = self.resolve_pds_endpoint(did).await?;
         let pds_agent = self.agent_for_pds(&pds_url);
 
-        let input = list_records::ParametersData {
-            collection: Nsid::new(EVENT_NSID.to_string())
-                .map_err(|e| Error::InvalidRecord(e.to_string()))?,
-            cursor: cursor.map(|s| s.to_string()),
-            limit: Some(100.try_into().unwrap()),
-            repo: AtIdentifier::Did(
-                did.parse().map_err(|_| Error::InvalidDid(did.to_string()))?,
-            ),
-            reverse: None,
-            rkey_start: None,
-            rkey_end: None,
-        };
+        let mut all_records = Vec::new();
+        let mut cursor: Option<String> = None;
 
-        let output = pds_agent
-            .api
-            .com
-            .atproto
-            .repo
-            .list_records(input.into())
-            .await
-            .map_err(|e| Error::Pds(e.to_string()))?;
+        loop {
+            let input = list_records::ParametersData {
+                collection: Nsid::new(EVENT_NSID.to_string())
+                    .map_err(|e| Error::InvalidRecord(e.to_string()))?,
+                cursor: cursor.clone(),
+                limit: Some(100.try_into().unwrap()),
+                repo: AtIdentifier::Did(
+                    did.parse().map_err(|_| Error::InvalidDid(did.to_string()))?,
+                ),
+                reverse: None,
+                rkey_start: rkey_start.map(|s| s.to_string()),
+                rkey_end: None,
+            };
 
-        let mut records = Vec::new();
-        for item in &output.records {
-            let value = serde_json::to_value(&item.value)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
+            let output = pds_agent
+                .api
+                .com
+                .atproto
+                .repo
+                .list_records(input.into())
+                .await
+                .map_err(|e| Error::Pds(e.to_string()))?;
 
-            if let Ok(mut record) = serde_json::from_value::<EventRecord>(value) {
-                record.uri = item.uri.to_string();
-                record.author_did = did.to_string();
-                records.push(record);
+            for item in &output.records {
+                let value = serde_json::to_value(&item.value)
+                    .map_err(|e| Error::Serialization(e.to_string()))?;
+
+                if let Ok(mut record) = serde_json::from_value::<EventRecord>(value) {
+                    record.uri = item.uri.to_string();
+                    record.author_did = did.to_string();
+                    // Extract rkey from URI: at://did:plc:xxx/social.moat.event/rkey
+                    if let Some(rkey) = item.uri.split('/').last() {
+                        record.rkey = rkey.to_string();
+                    }
+                    all_records.push(record);
+                }
+            }
+
+            // Continue pagination if there's more data
+            match &output.cursor {
+                Some(next_cursor) if !output.records.is_empty() => {
+                    cursor = Some(next_cursor.clone());
+                }
+                _ => break,
             }
         }
 
-        Ok((records, output.cursor.clone()))
+        Ok(all_records)
     }
 
     /// Fetch events matching a specific tag from a DID.
@@ -331,7 +352,7 @@ impl MoatAtprotoClient {
         did: &str,
         tag: &[u8; 16],
     ) -> Result<Vec<EventRecord>> {
-        let (all_events, _) = self.fetch_events_from_did(did, None).await?;
+        let all_events = self.fetch_events_from_did(did, None).await?;
 
         // Filter by tag
         let matching: Vec<_> = all_events.into_iter().filter(|e| &e.tag == tag).collect();

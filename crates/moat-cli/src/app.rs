@@ -136,9 +136,6 @@ pub struct App {
 
     // Polling state
     last_poll: Option<Instant>,
-    // TODO: Replace with cursor-based pagination per DID to avoid unbounded growth
-    // and to persist across restarts. Currently this grows forever within a session.
-    processed_event_uris: std::collections::HashSet<String>,
 
     // DIDs to watch for incoming invites
     watched_dids: std::collections::HashSet<String>,
@@ -198,7 +195,6 @@ impl App {
             new_conv_handle: String::new(),
             tag_map: HashMap::new(),
             last_poll: None,
-            processed_event_uris: std::collections::HashSet::new(),
             watched_dids: std::collections::HashSet::new(),
             watch_handle_input: String::new(),
         })
@@ -835,55 +831,66 @@ impl App {
     }
 
     /// Poll for new messages from all conversation participants
+    ///
+    /// Uses rkey-based pagination to only fetch new events since last poll.
+    /// This avoids unbounded memory growth from tracking all seen URIs.
     async fn poll_messages(&mut self) -> Result<()> {
         use moat_atproto::EventRecord;
 
-        // Collect DIDs to poll and fetch all events first (to avoid borrow issues)
-        let participants: Vec<(usize, String)> = self
-            .conversations
-            .iter()
-            .enumerate()
-            .map(|(i, c)| (i, c.participant_did.clone()))
-            .collect();
+        // Collect DIDs to poll (deduplicated)
+        let mut dids_to_poll: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+        for (idx, conv) in self.conversations.iter().enumerate() {
+            dids_to_poll
+                .entry(conv.participant_did.clone())
+                .or_default()
+                .push(idx);
+        }
 
         let watched: Vec<String> = self.watched_dids.iter().cloned().collect();
 
         self.debug_log.log(&format!(
-            "poll: {} conversations, {} watched DIDs, {} known tags",
-            participants.len(),
+            "poll: {} unique participant DIDs, {} watched DIDs, {} known tags",
+            dids_to_poll.len(),
             watched.len(),
             self.tag_map.len()
         ));
 
-        // Log all known tags for debugging
-        for (tag, conv_id) in &self.tag_map {
-            self.debug_log.log(&format!(
-                "poll: known tag {:02x?} -> conv {}",
-                &tag[..4],
-                &conv_id[..16.min(conv_id.len())]
-            ));
-        }
-
-        // Fetch events from participants
-        let mut participant_events: Vec<(usize, EventRecord)> = Vec::new();
+        // Fetch events from participants using rkey-based pagination
+        let mut participant_events: Vec<(Vec<usize>, EventRecord, String)> = Vec::new(); // (conv_indices, event, did)
+        let mut new_rkeys: Vec<(String, String)> = Vec::new(); // (did, max_rkey)
         {
             let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
-            for (conv_idx, participant_did) in participants {
+            for (participant_did, conv_indices) in &dids_to_poll {
+                // Get last seen rkey for this DID
+                let last_rkey = self.keys.get_last_rkey(participant_did).ok().flatten();
+
                 self.debug_log.log(&format!(
-                    "poll: fetching from participant DID {} for conv_idx {}",
+                    "poll: fetching from DID {} (last_rkey={:?})",
                     &participant_did[..20.min(participant_did.len())],
-                    conv_idx
+                    last_rkey.as_ref().map(|r| &r[..10.min(r.len())])
                 ));
-                // Skip DIDs that fail to fetch (repo may not exist)
-                match client.fetch_events_from_did(&participant_did, None).await {
-                    Ok((events, _cursor)) => {
+
+                match client.fetch_events_from_did(participant_did, last_rkey.as_deref()).await {
+                    Ok(events) => {
                         self.debug_log.log(&format!(
-                            "poll: got {} events from {}",
+                            "poll: got {} new events from {}",
                             events.len(),
                             &participant_did[..20.min(participant_did.len())]
                         ));
+
+                        // Track max rkey seen
+                        let mut max_rkey: Option<String> = last_rkey;
                         for event in events {
-                            participant_events.push((conv_idx, event));
+                            // Update max rkey (rkeys are TIDs that sort lexicographically)
+                            if max_rkey.as_ref().map_or(true, |m| event.rkey > *m) {
+                                max_rkey = Some(event.rkey.clone());
+                            }
+                            participant_events.push((conv_indices.clone(), event, participant_did.clone()));
+                        }
+
+                        // Record the new max rkey for this DID
+                        if let Some(rkey) = max_rkey {
+                            new_rkeys.push((participant_did.clone(), rkey));
                         }
                     }
                     Err(e) => {
@@ -902,10 +909,23 @@ impl App {
         {
             let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
             for did in &watched {
-                // Skip DIDs that fail to fetch (repo may not exist)
-                if let Ok((events, _cursor)) = client.fetch_events_from_did(did, None).await {
-                    for event in events {
-                        watched_events.push((did.clone(), event));
+                let last_rkey = self.keys.get_last_rkey(did).ok().flatten();
+
+                match client.fetch_events_from_did(did, last_rkey.as_deref()).await {
+                    Ok(events) => {
+                        let mut max_rkey = last_rkey;
+                        for event in events {
+                            if max_rkey.as_ref().map_or(true, |m| event.rkey > *m) {
+                                max_rkey = Some(event.rkey.clone());
+                            }
+                            watched_events.push((did.clone(), event));
+                        }
+                        if let Some(rkey) = max_rkey {
+                            new_rkeys.push((did.clone(), rkey));
+                        }
+                    }
+                    Err(_) => {
+                        // Silently skip DIDs that fail (repo may not exist)
                     }
                 }
             }
@@ -918,15 +938,10 @@ impl App {
         ));
 
         // Process participant events
-        for (conv_idx, event_record) in participant_events {
-            // Skip events we've already processed
-            if self.processed_event_uris.contains(&event_record.uri) {
-                continue;
-            }
-
+        for (conv_indices, event_record, _did) in participant_events {
             self.debug_log.log(&format!(
-                "poll: new event from {}, tag={:02x?}",
-                &event_record.author_did[..20],
+                "poll: processing event rkey={}, tag={:02x?}",
+                &event_record.rkey[..10.min(event_record.rkey.len())],
                 &event_record.tag[..4]
             ));
 
@@ -951,24 +966,26 @@ impl App {
                                 let content =
                                     String::from_utf8_lossy(&decrypted.event.payload).to_string();
 
+                                // Find the first matching conversation index
+                                let conv_idx = conv_indices.first().copied();
+
                                 // Find conversation name
-                                let from = self
-                                    .conversations
-                                    .get(conv_idx)
+                                let from = conv_idx
+                                    .and_then(|idx| self.conversations.get(idx))
                                     .map(|c| c.name.clone())
                                     .unwrap_or_else(|| "Unknown".to_string());
 
                                 // Only add to display if this is the active conversation
-                                if self.active_conversation == Some(conv_idx) {
+                                if self.active_conversation == conv_idx {
                                     self.messages.push(DisplayMessage {
                                         from,
                                         content,
                                         timestamp: event_record.created_at,
                                         is_own: false,
                                     });
-                                } else {
+                                } else if let Some(idx) = conv_idx {
                                     // Increment unread count
-                                    if let Some(conv) = self.conversations.get_mut(conv_idx) {
+                                    if let Some(conv) = self.conversations.get_mut(idx) {
                                         conv.unread += 1;
                                     }
                                 }
@@ -989,26 +1006,17 @@ impl App {
                         self.debug_log.log(&format!("poll: decryption failed: {}", e));
                     }
                 }
-
-                self.processed_event_uris.insert(event_record.uri.clone());
             } else {
                 // Unknown tag - might be a welcome for a new conversation
                 self.debug_log.log("poll: tag not matched, trying as welcome");
                 self.try_process_welcome(&event_record.ciphertext, &event_record.author_did, event_record.tag)?;
-                self.processed_event_uris.insert(event_record.uri.clone());
             }
         }
 
         // Process watched DID events
         for (did, event_record) in watched_events {
-            // Skip events we've already processed
-            if self.processed_event_uris.contains(&event_record.uri) {
-                continue;
-            }
-
             // Skip if tag matches known conversation (already handled above or will be)
             if self.tag_map.contains_key(&event_record.tag) {
-                self.processed_event_uris.insert(event_record.uri.clone());
                 continue;
             }
 
@@ -1017,8 +1025,13 @@ impl App {
                 // Remove from watched list - they're now a conversation participant
                 self.watched_dids.remove(&did);
             }
+        }
 
-            self.processed_event_uris.insert(event_record.uri.clone());
+        // Persist new rkeys for all DIDs we fetched from
+        for (did, rkey) in new_rkeys {
+            if let Err(e) = self.keys.set_last_rkey(&did, &rkey) {
+                self.debug_log.log(&format!("poll: failed to save rkey for {}: {}", &did[..20.min(did.len())], e));
+            }
         }
 
         Ok(())

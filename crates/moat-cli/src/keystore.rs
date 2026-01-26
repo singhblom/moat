@@ -29,6 +29,14 @@ pub struct GroupMetadata {
     pub participant_handle: String,
 }
 
+/// Pagination state (per-DID last seen rkey)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PaginationState {
+    /// Maps DID -> last seen rkey for incremental fetching
+    /// rkeys in ATProto are typically TIDs (timestamp-based) which sort chronologically
+    pub last_rkeys: std::collections::HashMap<String, String>,
+}
+
 pub type Result<T> = std::result::Result<T, KeyStoreError>;
 
 /// Local key storage
@@ -180,6 +188,38 @@ impl KeyStore {
         let data = fs::read(&path)?;
         let metadata: GroupMetadata = serde_json::from_slice(&data)?;
         Ok(metadata)
+    }
+
+    /// Load pagination state
+    pub fn load_pagination_state(&self) -> Result<PaginationState> {
+        let path = self.base_path.join("pagination.json");
+        if !path.exists() {
+            return Ok(PaginationState::default());
+        }
+        let data = fs::read(&path)?;
+        let state: PaginationState = serde_json::from_slice(&data)?;
+        Ok(state)
+    }
+
+    /// Store pagination state
+    pub fn store_pagination_state(&self, state: &PaginationState) -> Result<()> {
+        let path = self.base_path.join("pagination.json");
+        let json = serde_json::to_vec_pretty(state)?;
+        fs::write(&path, json)?;
+        Ok(())
+    }
+
+    /// Get last seen rkey for a specific DID
+    pub fn get_last_rkey(&self, did: &str) -> Result<Option<String>> {
+        let state = self.load_pagination_state()?;
+        Ok(state.last_rkeys.get(did).cloned())
+    }
+
+    /// Set last seen rkey for a specific DID
+    pub fn set_last_rkey(&self, did: &str, rkey: &str) -> Result<()> {
+        let mut state = self.load_pagination_state()?;
+        state.last_rkeys.insert(did.to_string(), rkey.to_string());
+        self.store_pagination_state(&state)
     }
 
     /// Store credentials (handle and app password)
@@ -396,5 +436,41 @@ mod tests {
 
         let loaded = store.load_stealth_key().unwrap();
         assert_eq!(loaded, key);
+    }
+
+    #[test]
+    fn test_pagination_state_roundtrip() {
+        let dir = tempdir().unwrap();
+        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+
+        // Initially empty
+        assert!(store.get_last_rkey("did:plc:abc123").unwrap().is_none());
+
+        // Set rkey for a DID
+        store.set_last_rkey("did:plc:abc123", "3lf7abc").unwrap();
+        assert_eq!(
+            store.get_last_rkey("did:plc:abc123").unwrap(),
+            Some("3lf7abc".to_string())
+        );
+
+        // Set rkey for another DID
+        store.set_last_rkey("did:plc:xyz789", "3lf8def").unwrap();
+        assert_eq!(
+            store.get_last_rkey("did:plc:xyz789").unwrap(),
+            Some("3lf8def".to_string())
+        );
+
+        // First DID still has its rkey
+        assert_eq!(
+            store.get_last_rkey("did:plc:abc123").unwrap(),
+            Some("3lf7abc".to_string())
+        );
+
+        // Update existing rkey
+        store.set_last_rkey("did:plc:abc123", "3lf9ghi").unwrap();
+        assert_eq!(
+            store.get_last_rkey("did:plc:abc123").unwrap(),
+            Some("3lf9ghi".to_string())
+        );
     }
 }
