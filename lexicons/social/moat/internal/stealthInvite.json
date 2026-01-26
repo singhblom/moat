@@ -1,0 +1,76 @@
+{
+  "lexicon": 1,
+  "id": "social.moat.internal.stealthInvite",
+  "description": "Stealth address invite format. Published as a social.moat.event with a random tag (not derived from any group). Recipients scan by attempting decryption with their stealth private key.",
+  "defs": {
+    "main": {
+      "type": "object",
+      "description": "Binary layout of a stealth-encrypted invite. This is the raw ciphertext in social.moat.event, NOT inside MLS encryption.",
+      "properties": {
+        "ephemeralPubkey": {
+          "type": "bytes",
+          "minLength": 32,
+          "maxLength": 32,
+          "description": "Sender's ephemeral X25519 public key (32 bytes)"
+        },
+        "nonce": {
+          "type": "bytes",
+          "minLength": 24,
+          "maxLength": 24,
+          "description": "XChaCha20-Poly1305 nonce (24 bytes)"
+        },
+        "ciphertext": {
+          "type": "bytes",
+          "description": "XChaCha20-Poly1305 encrypted MLS Welcome message (includes 16-byte auth tag)"
+        }
+      }
+    },
+    "keyDerivation": {
+      "type": "object",
+      "description": "Key derivation parameters for stealth encryption",
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "const": "HKDF-SHA256",
+          "description": "Key derivation function"
+        },
+        "ikm": {
+          "type": "string",
+          "const": "ECDH(ephemeral_private, recipient_scan_pubkey)",
+          "description": "Input key material from X25519 Diffie-Hellman"
+        },
+        "salt": {
+          "type": "string",
+          "const": "none",
+          "description": "No salt used"
+        },
+        "info": {
+          "type": "bytes",
+          "const": "moat-stealth-v1",
+          "description": "Domain separation label"
+        },
+        "outputLength": {
+          "type": "integer",
+          "const": 32,
+          "description": "256-bit key for XChaCha20-Poly1305"
+        }
+      }
+    },
+    "encryption": {
+      "type": "object",
+      "description": "Encryption parameters",
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "const": "XChaCha20-Poly1305",
+          "description": "AEAD cipher"
+        },
+        "plaintext": {
+          "type": "string",
+          "const": "TLS-serialized MLS Welcome",
+          "description": "The MLS Welcome message being encrypted"
+        }
+      }
+    }
+  }
+}

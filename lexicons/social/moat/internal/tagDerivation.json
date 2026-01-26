@@ -1,0 +1,78 @@
+{
+  "lexicon": 1,
+  "id": "social.moat.internal.tagDerivation",
+  "description": "Tag derivation algorithm for conversation clustering. Tags rotate with each MLS epoch to prevent traffic analysis.",
+  "defs": {
+    "main": {
+      "type": "object",
+      "description": "Parameters for deriving the 16-byte rotating conversation tag",
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "const": "HKDF-SHA256",
+          "description": "Key derivation function"
+        },
+        "salt": {
+          "type": "bytes",
+          "const": "moat-conversation-tag-v1",
+          "description": "Domain separation label used as HKDF salt"
+        },
+        "ikm": {
+          "type": "bytes",
+          "description": "Input key material: the MLS group_id (variable length)"
+        },
+        "info": {
+          "type": "bytes",
+          "description": "HKDF info parameter: epoch as 8-byte big-endian unsigned integer"
+        },
+        "outputLength": {
+          "type": "integer",
+          "const": 16,
+          "description": "128-bit output tag"
+        }
+      }
+    },
+    "properties": {
+      "type": "object",
+      "description": "Security properties of the tag derivation scheme",
+      "properties": {
+        "deterministic": {
+          "type": "boolean",
+          "const": true,
+          "description": "Same (group_id, epoch) always produces the same tag"
+        },
+        "rotatesWithEpoch": {
+          "type": "boolean",
+          "const": true,
+          "description": "Tag changes when epoch increments, preventing long-term correlation"
+        },
+        "groupUnique": {
+          "type": "boolean",
+          "const": true,
+          "description": "Different groups produce different tags even at the same epoch"
+        },
+        "unlinkableAcrossEpochs": {
+          "type": "boolean",
+          "const": true,
+          "description": "Observers cannot link tags from different epochs without knowing group_id"
+        }
+      }
+    },
+    "stealthInviteTag": {
+      "type": "object",
+      "description": "Special case: stealth invites use random tags, not derived tags",
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "const": "random",
+          "description": "16 random bytes from CSPRNG"
+        },
+        "rationale": {
+          "type": "string",
+          "const": "Stealth invites have no group yet, and random tags prevent correlation with any conversation",
+          "description": "Why stealth invites don't use derived tags"
+        }
+      }
+    }
+  }
+}

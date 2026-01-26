@@ -1,0 +1,85 @@
+{
+  "lexicon": 1,
+  "id": "social.moat.internal.paddedPayload",
+  "description": "Internal payload format. This is the structure inside the MLS ciphertext, before padding is removed. Not a public ATProto record.",
+  "defs": {
+    "main": {
+      "type": "object",
+      "description": "Padded binary container wrapping the JSON event. Format: length prefix + JSON + random padding.",
+      "properties": {
+        "length": {
+          "type": "integer",
+          "description": "4-byte big-endian length prefix indicating the size of the JSON payload"
+        },
+        "json": {
+          "type": "ref",
+          "ref": "#event",
+          "description": "The actual event data, serialized as JSON"
+        },
+        "padding": {
+          "type": "bytes",
+          "description": "Random bytes filling the remainder to reach the bucket size"
+        }
+      }
+    },
+    "bucket": {
+      "type": "string",
+      "description": "Padding bucket sizes. Total padded size is always one of these values.",
+      "knownValues": ["small", "medium", "large"]
+    },
+    "bucketSizes": {
+      "type": "object",
+      "description": "Bucket size definitions in bytes",
+      "properties": {
+        "small": {
+          "type": "integer",
+          "const": 256,
+          "description": "256 bytes - for payloads up to 252 bytes"
+        },
+        "medium": {
+          "type": "integer",
+          "const": 1024,
+          "description": "1024 bytes - for payloads up to 1020 bytes"
+        },
+        "large": {
+          "type": "integer",
+          "const": 4096,
+          "description": "4096 bytes - for payloads up to 4092 bytes"
+        }
+      }
+    },
+    "event": {
+      "type": "object",
+      "description": "The plaintext event structure serialized as JSON inside the padded payload",
+      "required": ["kind", "group_id", "epoch", "payload"],
+      "properties": {
+        "kind": {
+          "type": "ref",
+          "ref": "#eventKind",
+          "description": "The type of event"
+        },
+        "group_id": {
+          "type": "bytes",
+          "description": "Internal stable group identifier (MLS group ID)"
+        },
+        "epoch": {
+          "type": "integer",
+          "description": "MLS epoch number when this event was created"
+        },
+        "sender_device_id": {
+          "type": "string",
+          "description": "Optional device identifier for multi-device support"
+        },
+        "payload": {
+          "type": "bytes",
+          "description": "Event-specific payload. Interpretation depends on 'kind'."
+        }
+      }
+    },
+    "eventKind": {
+      "type": "string",
+      "description": "Discriminator for event payload interpretation",
+      "knownValues": ["message", "commit", "welcome", "checkpoint"]
+    }
+  }
+}

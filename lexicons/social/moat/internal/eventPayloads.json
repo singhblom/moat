@@ -1,0 +1,47 @@
+{
+  "lexicon": 1,
+  "id": "social.moat.internal.eventPayloads",
+  "description": "Payload formats for each event kind. These describe the contents of the 'payload' field in social.moat.internal.paddedPayload#event.",
+  "defs": {
+    "message": {
+      "type": "object",
+      "description": "Chat message payload. The 'payload' bytes are UTF-8 encoded text.",
+      "properties": {
+        "payload": {
+          "type": "string",
+          "description": "UTF-8 encoded message text"
+        }
+      }
+    },
+    "commit": {
+      "type": "object",
+      "description": "MLS commit payload. The 'payload' bytes are a TLS-serialized MLS commit message.",
+      "properties": {
+        "payload": {
+          "type": "bytes",
+          "description": "TLS-serialized MLS PublicMessage containing a Commit (RFC 9420)"
+        }
+      }
+    },
+    "welcome": {
+      "type": "object",
+      "description": "MLS welcome payload. The 'payload' bytes are a TLS-serialized MLS Welcome message.",
+      "properties": {
+        "payload": {
+          "type": "bytes",
+          "description": "TLS-serialized MLS Welcome message (RFC 9420)"
+        }
+      }
+    },
+    "checkpoint": {
+      "type": "object",
+      "description": "Group state checkpoint payload. The 'payload' bytes are a serialized group state snapshot for faster sync.",
+      "properties": {
+        "payload": {
+          "type": "bytes",
+          "description": "Serialized MLS group state for recovery/sync"
+        }
+      }
+    }
+  }
+}
