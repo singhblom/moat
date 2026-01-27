@@ -272,9 +272,10 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
         // Each message takes 1 line, area height minus 2 for borders
         let visible_height = area.height.saturating_sub(2) as usize;
 
-        // Show only the last N messages that fit (auto-scroll to bottom)
-        let skip_count = items.len().saturating_sub(visible_height);
-        let items_to_show: Vec<ListItem> = items.into_iter().skip(skip_count).collect();
+        // message_scroll is offset from the bottom (0 = showing latest)
+        let end = items.len().saturating_sub(app.message_scroll);
+        let start = end.saturating_sub(visible_height);
+        let items_to_show: Vec<ListItem> = items.into_iter().skip(start).take(end - start).collect();
 
         let list = List::new(items_to_show).block(block);
         frame.render_widget(list, area);

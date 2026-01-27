@@ -119,7 +119,6 @@ pub struct App {
     // Conversations
     pub conversations: Vec<Conversation>,
     pub active_conversation: Option<usize>,
-    pub conversation_scroll: usize,
 
     // Messages for active conversation
     pub messages: Vec<DisplayMessage>,
@@ -195,7 +194,6 @@ impl App {
             status_message: None,
             conversations: Vec::new(),
             active_conversation: None,
-            conversation_scroll: 0,
             messages: Vec::new(),
             message_scroll: 0,
             input_buffer: String::new(),
@@ -476,6 +474,7 @@ impl App {
             KeyCode::Enter => {
                 if self.active_conversation.is_some() {
                     self.load_messages().await?;
+                    self.message_scroll = 0;
                     self.focus = Focus::Input;
                 }
             }
@@ -855,12 +854,15 @@ impl App {
                 self.focus = Focus::Input;
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                self.message_scroll = self.message_scroll.saturating_sub(1);
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if self.message_scroll < self.messages.len().saturating_sub(1) {
+                // Scroll up (increase offset from bottom)
+                let max_scroll = self.messages.len().saturating_sub(1);
+                if self.message_scroll < max_scroll {
                     self.message_scroll += 1;
                 }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                // Scroll down (decrease offset from bottom)
+                self.message_scroll = self.message_scroll.saturating_sub(1);
             }
             KeyCode::Esc => {
                 self.focus = Focus::Conversations;

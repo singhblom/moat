@@ -64,19 +64,6 @@ pub struct KeyStore {
 }
 
 impl KeyStore {
-    /// Create a new KeyStore with the default path (~/.moat/keys/)
-    pub fn new() -> Result<Self> {
-        let base_path = dirs::home_dir()
-            .ok_or_else(|| KeyStoreError::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "home directory not found",
-            )))?
-            .join(".moat")
-            .join("keys");
-
-        Self::with_path(base_path)
-    }
-
     /// Create a new KeyStore with a custom path
     pub fn with_path(base_path: PathBuf) -> Result<Self> {
         // Create directory if it doesn't exist
@@ -134,36 +121,12 @@ impl KeyStore {
         self.base_path.join("stealth.key").exists()
     }
 
-    /// Store a group private key
-    pub fn store_group_key(&self, group_id: &str, key: &[u8]) -> Result<()> {
-        let safe_id = Self::sanitize_group_id(group_id);
-        let path = self.base_path.join(format!("group_{safe_id}.key"));
-        self.write_key_file(&path, key)
-    }
-
-    /// Load a group private key
-    pub fn load_group_key(&self, group_id: &str) -> Result<Vec<u8>> {
-        let safe_id = Self::sanitize_group_id(group_id);
-        let path = self.base_path.join(format!("group_{safe_id}.key"));
-        self.read_key_file(&path)
-    }
-
     /// Store group state
     pub fn store_group_state(&self, group_id: &str, state: &[u8]) -> Result<()> {
         let safe_id = Self::sanitize_group_id(group_id);
         let path = self.base_path.join(format!("group_{safe_id}.state"));
         fs::write(&path, state)?;
         Ok(())
-    }
-
-    /// Load group state
-    pub fn load_group_state(&self, group_id: &str) -> Result<Vec<u8>> {
-        let safe_id = Self::sanitize_group_id(group_id);
-        let path = self.base_path.join(format!("group_{safe_id}.state"));
-        if !path.exists() {
-            return Err(KeyStoreError::NotFound(format!("group state: {group_id}")));
-        }
-        Ok(fs::read(&path)?)
     }
 
     /// List all stored group IDs (looks for .meta files now)
@@ -265,12 +228,6 @@ impl KeyStore {
         let mut messages = self.load_messages(conv_id)?;
         messages.messages.push(message);
         self.store_messages(conv_id, &messages)
-    }
-
-    /// Check if we have a message with the given rkey
-    pub fn has_message(&self, conv_id: &str, rkey: &str) -> Result<bool> {
-        let messages = self.load_messages(conv_id)?;
-        Ok(messages.messages.iter().any(|m| m.rkey == rkey))
     }
 
     /// Store credentials (handle and app password)
@@ -406,32 +363,6 @@ mod tests {
 
         let loaded = store.load_identity_key().unwrap();
         assert_eq!(loaded, key);
-    }
-
-    #[test]
-    fn test_group_key_roundtrip() {
-        let dir = tempdir().unwrap();
-        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
-
-        let group_id = "test-group-123";
-        let key = b"group-private-key";
-        store.store_group_key(group_id, key).unwrap();
-
-        let loaded = store.load_group_key(group_id).unwrap();
-        assert_eq!(loaded, key);
-    }
-
-    #[test]
-    fn test_group_state_roundtrip() {
-        let dir = tempdir().unwrap();
-        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
-
-        let group_id = "test-group";
-        let state = b"serialized-group-state";
-        store.store_group_state(group_id, state).unwrap();
-
-        let loaded = store.load_group_state(group_id).unwrap();
-        assert_eq!(loaded, state);
     }
 
     #[test]
