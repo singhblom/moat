@@ -13,11 +13,18 @@ cargo build                  # Build all crates
 cargo test                   # Run all tests (49 total)
 cargo test -p moat-core      # Run core crypto tests only (46 tests)
 cargo test -p moat-atproto   # Run ATProto tests only (3 tests)
-cargo run -p moat-cli        # Run the CLI
+cargo run -p moat-cli        # Run the TUI (default, no subcommand)
 
 # Testing multiple accounts locally
 cargo run -p moat-cli -- -s /tmp/moat-alice
 cargo run -p moat-cli -- -s /tmp/moat-bob
+
+# CLI subcommands (run-once, no TUI)
+cargo run -p moat-cli -- fetch --repository handle.bsky.social   # Fetch & decrypt new events (read-only)
+cargo run -p moat-cli -- status                                  # Show account info, conversation count, storage
+cargo run -p moat-cli -- send-test --tag <32-hex> --message "…"  # Publish test message to a conversation
+cargo run -p moat-cli -- export --log /tmp/debug.log             # Export debug log
+cargo run -p moat-cli -- export --events /tmp/e.json --repository handle.bsky.social  # Export events as JSON
 ```
 
 ## Workspace Structure
