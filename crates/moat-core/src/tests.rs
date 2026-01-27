@@ -1,6 +1,6 @@
 //! Integration tests for moat-core
 
-use crate::{derive_tag_from_group_id, pad_to_bucket, unpad, Event, EventKind, MoatCore};
+use crate::{derive_tag_from_group_id, pad_to_bucket, unpad, Event, EventKind, MoatCore, Error, ErrorCode};
 
 #[test]
 fn test_key_package_generation() {
@@ -437,4 +437,51 @@ fn test_device_id_unique_per_session() {
 
     // Two sessions should have different device IDs
     assert_ne!(session1.device_id(), session2.device_id());
+}
+
+#[test]
+fn test_error_code_values() {
+    // Verify repr(u32) values are stable (FFI consumers depend on these)
+    assert_eq!(ErrorCode::KeyGeneration as u32, 1);
+    assert_eq!(ErrorCode::KeyPackageGeneration as u32, 2);
+    assert_eq!(ErrorCode::KeyPackageValidation as u32, 3);
+    assert_eq!(ErrorCode::GroupCreation as u32, 4);
+    assert_eq!(ErrorCode::GroupLoad as u32, 5);
+    assert_eq!(ErrorCode::Storage as u32, 6);
+    assert_eq!(ErrorCode::Serialization as u32, 7);
+    assert_eq!(ErrorCode::Deserialization as u32, 8);
+    assert_eq!(ErrorCode::InvalidMessageType as u32, 9);
+    assert_eq!(ErrorCode::AddMember as u32, 10);
+    assert_eq!(ErrorCode::MergeCommit as u32, 11);
+    assert_eq!(ErrorCode::ProcessWelcome as u32, 12);
+    assert_eq!(ErrorCode::Encryption as u32, 13);
+    assert_eq!(ErrorCode::Decryption as u32, 14);
+    assert_eq!(ErrorCode::ProcessCommit as u32, 15);
+    assert_eq!(ErrorCode::TagDerivation as u32, 16);
+    assert_eq!(ErrorCode::StealthEncryption as u32, 17);
+}
+
+#[test]
+fn test_error_code_and_message_accessors() {
+    let err = Error::Deserialization("bad data".into());
+    assert_eq!(err.code(), ErrorCode::Deserialization);
+    assert_eq!(err.message(), "bad data");
+
+    let err = Error::Encryption("key expired".into());
+    assert_eq!(err.code(), ErrorCode::Encryption);
+    assert_eq!(err.message(), "key expired");
+}
+
+#[test]
+fn test_error_code_from_real_failure() {
+    use crate::MoatSession;
+
+    // from_state with invalid data should produce a Deserialization error
+    let result = MoatSession::from_state(b"BADXsome data here plus padding!");
+    let err = match result {
+        Err(e) => e,
+        Ok(_) => panic!("expected error"),
+    };
+    assert_eq!(err.code(), ErrorCode::Deserialization);
+    assert!(!err.message().is_empty());
 }

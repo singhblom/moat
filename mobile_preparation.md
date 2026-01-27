@@ -209,11 +209,11 @@ The codebase already implements the target design:
 
 ### Phase 3: FFI-Friendly Error Types (High Priority)
 
-Current errors use `String` for details, which doesn't map cleanly to FFI.
+**Status: Complete**
 
 #### Task 3.1: Add Error Codes
 
-**Status:** Not Started
+**Status:** Complete
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,9 +246,11 @@ impl Error {
 
 No UniFFI dependency yet — just ensure the types are compatible with future `#[derive(uniffi::Error)]`.
 
+`ErrorCode` is `#[repr(u32)]` with stable numeric values (1–17). `Error` exposes `code() -> ErrorCode` and `message() -> &str` accessors. 3 new tests verify error code values, accessor correctness, and real failure codes.
+
 #### Task 3.2: Result Type for FFI
 
-**Status:** Not Started
+**Status:** Complete (no custom type needed)
 
 **Decision:** Rely on UniFFI's error handling when we add bindings. No custom `FfiResult<T>` type. Just ensure `Error` has `code()` and `message()` accessors.
 

@@ -30,7 +30,7 @@ pub mod stealth;
 mod storage;
 mod tag;
 
-pub use error::{Error, Result};
+pub use error::{Error, ErrorCode, Result};
 pub use event::{Event, EventKind};
 pub use padding::{pad_to_bucket, unpad, Bucket};
 pub use storage::{MlsStorage, MlsStorageError, MoatProvider};
