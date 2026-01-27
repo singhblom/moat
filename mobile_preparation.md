@@ -20,7 +20,9 @@ This document tracks work to prepare moat-core for mobile (iOS/Android) before s
 
 Moat should be thought of as **a protocol and reusable libraries** for encrypted messaging on ATProto, not just an app. This affects our FFI strategy.
 
-### FFI Strategy: UniFFI (Recommended)
+### FFI Strategy: UniFFI
+
+**Decision:** Use UniFFI as the canonical FFI layer with **proc macros** (not UDL files).
 
 For a library meant to be used by others, **UniFFI is the better choice** over flutter_rust_bridge:
 
@@ -32,10 +34,8 @@ For a library meant to be used by others, **UniFFI is the better choice** over f
 | **For our Flutter MVP** | Use via `dart:ffi` + `ffigen` | Native support |
 | **Maintenance burden** | One binding system for all | Flutter-only, others need UniFFI anyway |
 
-**Decision:** Use UniFFI as the canonical FFI layer.
-
 - UniFFI generates bindings for Swift, Kotlin, Python, etc.
-- For Flutter: UniFFI generates C headers → use `ffigen` to create Dart bindings
+- For Flutter: UniFFI generates C headers -> use `ffigen` to create Dart bindings
 - Anyone building native apps gets first-class support
 - We maintain one FFI system, not two
 
@@ -43,7 +43,7 @@ For a library meant to be used by others, **UniFFI is the better choice** over f
 
 For our Flutter MVP, the path with UniFFI:
 
-1. Add UniFFI to moat-core (proc macros or UDL file)
+1. Add UniFFI proc macros to moat-core
 2. Generate C header via `uniffi-bindgen-cs` or similar
 3. Use Dart's `ffigen` to generate Dart bindings from C header
 4. Write thin Dart wrapper for ergonomics
@@ -118,10 +118,11 @@ cargo run -p moat-cli -- -s /tmp/moat-bob
 
 ## Current State Analysis
 
-### What's Good
+### What's Already Done
 
 - **Synchronous operations** - `MoatSession` methods are already sync (no async), which simplifies FFI
-- **In-memory mode exists** - `MoatSession::in_memory()` provides a foundation for decoupled storage
+- **Pure in-memory model** - `MoatSession` is already purely in-memory with `new()` and `from_state()`. No file I/O in moat-core.
+- **Caller-managed persistence** - CLI already handles persistence via `export_state()`/`from_state()`, saving after every mutating operation
 - **Clean API surface** - Methods take `&[u8]` and return `Vec<u8>`, which maps well to FFI
 - **Pure crypto in moat-core** - No network IO, just MLS operations
 
@@ -129,12 +130,31 @@ cargo run -p moat-cli -- -s /tmp/moat-bob
 
 | Issue | Impact | Priority |
 |-------|--------|----------|
-| Auto-save on every operation | Blocking I/O causes UI jank/ANRs on mobile | High |
-| `Vec<u8>` everywhere | Extra allocations; fixed-size arrays preferred where possible | Medium |
-| Error types use `String` | Not FFI-friendly; need error codes | Medium |
-| No state export/import | Can't serialize state for native-managed storage | High |
-| `RwLock` in FileStorage | Potential issues with FFI threading model | Medium |
-| No group enumeration | Can't list all groups without external tracking | Low |
+| Error types use `String` | Not FFI-friendly; need error codes | High |
+| No `api.rs` module | Public API surface not explicitly defined | Medium |
+| `std::sync::RwLock` in MlsStorage | Poisoning issues at FFI boundary; switch to `parking_lot` | Medium |
+| No state format versioning | Can't migrate state when format changes | Medium |
+| No device ID in state | Blocks future multi-device sync | Low |
+
+---
+
+## Decisions Log
+
+Decisions made during specification review:
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Storage model | Pure in-memory only | Remove any remaining FileStorage. Callers use `export_state()`/`from_state()` for all persistence. |
+| CLI save frequency | After every mutation | Safest against crashes; matches current behavior but explicit. |
+| Batch API | Dropped | Not needed with pure in-memory model. Callers control persistence timing naturally. |
+| UniFFI dependency | Not yet | Make types FFI-compatible now, add UniFFI as dependency when we start mobile. |
+| State versioning | Magic bytes + version | `b"MOAT"` + `u16` version prefix (6 bytes) on exported state. Cheap insurance for future migration. |
+| api.rs role | Future binding home | Dedicated module for public API surface; will also contain UniFFI annotations later. |
+| RwLock implementation | `parking_lot` | Better FFI story (no poisoning), faster, smaller. |
+| Cancellation/interruptibility | Not needed | MLS operations are fast (sub-millisecond). Defer entirely. |
+| Phase 6 (group enum, state inspection) | Deferred to mobile | Skip in preparation phase. Add when mobile actually needs them. |
+| Multi-device | Add device_id field | Include device_id in exported state as minimal future-proofing. Don't implement sync logic. |
+| UniFFI style | Proc macros | Simpler than UDL files for our case. Confirmed decision. |
 
 ---
 
@@ -142,77 +162,77 @@ cargo run -p moat-cli -- -s /tmp/moat-bob
 
 ### Phase 1: Storage Decoupling (High Priority)
 
-The current `MoatSession` writes to disk on every operation via `FileStorage::save_to_file()`. This is problematic for mobile:
+**Status: Already Complete**
 
-1. **Blocking I/O on main thread** - Mobile platforms are sensitive; can cause UI jank or ANRs
-2. **No control over persistence timing** - Native apps often want to batch writes or persist on app suspend
-3. **Platform storage expectations** - iOS/Android have specific locations (app sandbox, `getFilesDir()`)
+The codebase already implements the target design:
+- `MoatSession::new()` creates a fresh in-memory session
+- `MoatSession::from_state(state: &[u8])` restores from bytes
+- `MoatSession::export_state()` serializes state to bytes
+- CLI handles all file I/O via `save_mls_state()` after every mutation
+- No auto-save, no `FileStorage` with disk I/O in moat-core
 
-#### Task 1.1: Add Explicit Save API
-
-**Status:** Not Started
-
-Add methods to `MoatSession` for explicit state management:
-
-```rust
-impl MoatSession {
-    /// Create session from serialized state (for native-managed storage)
-    pub fn from_state(state: &[u8]) -> Result<Self>;
-
-    /// Export full state as bytes (for native-managed storage)
-    pub fn export_state(&self) -> Result<Vec<u8>>;
-
-    /// Explicit save - native side calls when appropriate
-    pub fn save(&self) -> Result<()>;
-
-    /// Check if there are unsaved changes
-    pub fn has_pending_changes(&self) -> bool;
-}
-```
-
-**Implementation notes:**
-- Refactor `FileStorage` to track dirty state instead of auto-saving
-- Add a `dirty` flag that operations set
-- `save()` only writes if dirty
-- `export_state()` serializes the in-memory HashMap
-
-**CLI migration:**
-- Update CLI to use new storage API
-- This validates the API design is practical
-
-#### Task 1.2: Remove Auto-Save
-
-**Status:** Not Started
-
-**Decision:** Go all-in on explicit save. No auto-save mode.
-
-- Remove auto-save from `FileStorage` entirely
-- All callers must call `save()` when they want to persist
-- Simpler API, predictable behavior, one code path
-
-The CLI will need to add `save()` calls after operations that modify state.
-
-#### Task 1.3: Batch Operations
-
-**Status:** Not Started
-
-Consider adding batch operation support to reduce state churn:
-
-```rust
-impl MoatSession {
-    /// Execute multiple operations, saving state once at the end
-    pub fn batch<F, T>(&self, f: F) -> Result<T>
-    where F: FnOnce(&mut BatchContext) -> Result<T>;
-}
-```
+~~Task 1.1: Add Explicit Save API~~ - Already implemented
+~~Task 1.2: Remove Auto-Save~~ - Already implemented (never had auto-save in current design)
+~~Task 1.3: Batch Operations~~ - Dropped (unnecessary with pure in-memory model)
 
 ---
 
-### Phase 2: FFI-Friendly Error Types (Medium Priority)
+### Phase 2: State Format Versioning (Medium Priority)
+
+#### Task 2.1: Add Version Header to Exported State
+
+**Status:** Not Started
+
+Add a 6-byte prefix to the output of `export_state()`:
+
+```rust
+const STATE_MAGIC: &[u8; 4] = b"MOAT";
+const STATE_VERSION: u16 = 1;
+
+impl MoatSession {
+    pub fn export_state(&self) -> Result<Vec<u8>> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(STATE_MAGIC);
+        buf.extend_from_slice(&STATE_VERSION.to_le_bytes());
+        buf.extend_from_slice(&self.provider.export_raw_state()?);
+        Ok(buf)
+    }
+
+    pub fn from_state(state: &[u8]) -> Result<Self> {
+        if state.len() < 6 || &state[0..4] != STATE_MAGIC {
+            return Err(Error::Deserialization("invalid state header".into()));
+        }
+        let version = u16::from_le_bytes([state[4], state[5]]);
+        match version {
+            1 => { /* current format */ }
+            _ => return Err(Error::Deserialization(format!("unsupported state version: {version}"))),
+        }
+        let provider = MoatProvider::from_state(&state[6..])?;
+        Ok(Self { provider })
+    }
+}
+```
+
+#### Task 2.2: Add Device ID to State
+
+**Status:** Not Started
+
+Include an optional `device_id` field in the serialized state for future multi-device support:
+
+```rust
+/// Generated once per device, persisted in state
+pub fn device_id(&self) -> &[u8; 16];
+```
+
+Generate a random 16-byte device ID on first `MoatSession::new()`, persist it through `export_state()`/`from_state()`.
+
+---
+
+### Phase 3: FFI-Friendly Error Types (High Priority)
 
 Current errors use `String` for details, which doesn't map cleanly to FFI.
 
-#### Task 2.1: Add Error Codes
+#### Task 3.1: Add Error Codes
 
 **Status:** Not Started
 
@@ -245,40 +265,13 @@ impl Error {
 }
 ```
 
-#### Task 2.2: Consider Result Type for FFI
+No UniFFI dependency yet — just ensure the types are compatible with future `#[derive(uniffi::Error)]`.
+
+#### Task 3.2: Result Type for FFI
 
 **Status:** Not Started
 
-Evaluate whether to use a C-compatible result type:
-
-```rust
-#[repr(C)]
-pub struct FfiResult<T> {
-    pub value: Option<T>,
-    pub error_code: u32,
-    pub error_message: *const c_char,
-}
-```
-
-Or rely on UniFFI's error handling (likely the better choice).
-
----
-
-### Phase 3: Fixed-Size Types (Medium Priority)
-
-Where sizes are known, prefer fixed-size arrays over `Vec<u8>`.
-
-#### Task 3.1: Audit Return Types
-
-**Status:** Not Started
-
-Current types that could use fixed sizes:
-- `tag: [u8; 16]` - Already fixed, good
-- `group_id` - Variable length (OpenMLS generates), keep as `Vec<u8>`
-- Stealth keys - Already `[u8; 32]`, good
-- Key packages - Variable length, keep as `Vec<u8>`
-
-**Conclusion:** Most variable-length types are genuinely variable. Low priority.
+**Decision:** Rely on UniFFI's error handling when we add bindings. No custom `FfiResult<T>` type. Just ensure `Error` has `code()` and `message()` accessors.
 
 ---
 
@@ -286,19 +279,20 @@ Current types that could use fixed sizes:
 
 **Note:** We won't implement actual FFI bindings in this preparation phase. The goal is to ensure the Rust API is ready for FFI when we start mobile development.
 
-#### Task 4.1: Design FFI-Safe Public API
+#### Task 4.1: Create Dedicated api.rs Module
 
 **Status:** Not Started
 
-Create a dedicated `api` module that exposes only FFI-safe types:
+Create `src/api.rs` as the explicit public API surface and future home for UniFFI annotations:
 
 ```rust
 // src/api.rs - Public API surface for FFI
 //
 // This module defines what gets exposed via FFI.
 // All types here must be FFI-friendly.
+// UniFFI proc macro annotations will be added here when we start mobile.
 
-pub use crate::{MoatSession, Error, Event, EventKind};
+pub use crate::{MoatSession, Error, ErrorCode, Event, EventKind};
 pub use crate::{EncryptResult, DecryptResult, WelcomeResult};
 pub use crate::stealth::{generate_stealth_keypair, encrypt_for_stealth, try_decrypt_stealth};
 ```
@@ -308,21 +302,15 @@ Review each type for FFI compatibility:
 - No generic parameters that leak internal types
 - Simple data types (primitives, `Vec<u8>`, structs of these)
 
+Make internal modules `pub(crate)` and only expose through `api.rs`.
+
 #### Task 4.2: Handle Opaque Types
 
 **Status:** Not Started
 
-`MoatSession` contains `RwLock` and can't cross FFI directly. Options:
+`MoatSession` contains `RwLock` and can't cross FFI directly. For UniFFI, this is handled via `#[uniffi::export]` on impl blocks (proc macro approach).
 
-1. **Opaque pointer** - FFI sees it as an opaque handle
-2. **Arc wrapper** - `Arc<MoatSession>` for safe sharing across FFI
-
-```rust
-// MoatSession becomes an opaque handle in generated bindings
-// Callers get a pointer/handle, not the actual struct
-```
-
-For UniFFI, this is handled via `[Object]` in UDL or `#[uniffi::export]` on impl blocks.
+For now, just ensure `MoatSession` is `Send + Sync` (required by UniFFI `[Object]` types).
 
 #### Task 4.3: Avoid FFI Anti-Patterns
 
@@ -338,20 +326,33 @@ Review API for patterns that complicate FFI:
 
 ---
 
-### Phase 5: Thread Safety Audit (Medium Priority)
+### Phase 5: Thread Safety (Medium Priority)
 
-#### Task 5.1: Review Lock Usage
+#### Task 5.1: Switch to parking_lot::RwLock
 
 **Status:** Not Started
 
-Current `FileStorage` uses `RwLock<HashMap<...>>`. Consider:
-- Is this compatible with FFI threading models?
-- Should we use `parking_lot` instead of `std::sync`?
-- Do we need `Send + Sync` bounds explicitly?
+Replace `std::sync::RwLock` with `parking_lot::RwLock` in `MlsStorage`:
 
-UniFFI requires `Send + Sync` for `[Object]` types. Verify `MoatSession` satisfies this.
+- No poisoning (cleaner FFI boundary — panics don't leave locks in broken state)
+- Better performance on contended workloads
+- Smaller memory footprint
+- Simpler API (`.read()` / `.write()` return guards directly, no `Result`)
 
-#### Task 5.2: Document Thread Safety
+#### Task 5.2: Verify Send + Sync
+
+**Status:** Not Started
+
+Add compile-time assertions that `MoatSession` is `Send + Sync`:
+
+```rust
+const _: () = {
+    fn assert_send_sync<T: Send + Sync>() {}
+    fn check() { assert_send_sync::<MoatSession>(); }
+};
+```
+
+#### Task 5.3: Document Thread Safety
 
 **Status:** Not Started
 
@@ -359,42 +360,16 @@ Add documentation about which methods are safe to call from which threads.
 
 ---
 
-### Phase 6: Additional APIs for Mobile (Low Priority)
+### Phase 6: Additional APIs for Mobile (Deferred)
 
-#### Task 6.1: Group Enumeration
+**Deferred to when mobile development starts.** Not in scope for this preparation phase.
 
-**Status:** Not Started
-
-Mobile apps need to know which groups exist:
-
-```rust
-impl MoatSession {
-    /// List all group IDs in storage
-    pub fn list_groups(&self) -> Result<Vec<Vec<u8>>>;
-
-    /// Delete a group and all its state
-    pub fn delete_group(&self, group_id: &[u8]) -> Result<()>;
-}
-```
-
-#### Task 6.2: State Inspection
-
-**Status:** Not Started
-
-For debugging and UI display:
-
-```rust
-impl MoatSession {
-    /// Get epoch for a group
-    pub fn get_group_epoch(&self, group_id: &[u8]) -> Result<u64>;
-
-    /// Get member count for a group
-    pub fn get_group_member_count(&self, group_id: &[u8]) -> Result<usize>;
-
-    /// Get storage size in bytes
-    pub fn storage_size(&self) -> usize;
-}
-```
+Will include when needed:
+- `list_groups()` - enumerate all group IDs
+- `delete_group()` - remove a group and its state
+- `get_group_epoch()` - epoch for a group
+- `get_group_member_count()` - member count
+- `storage_size()` - total storage size in bytes
 
 ---
 
@@ -402,19 +377,21 @@ impl MoatSession {
 
 Recommended order based on dependencies and impact:
 
-1. **Task 1.1: Add Explicit Save API** - Foundation for everything else
-2. **Task 1.2: Remove Auto-Save** - Single mode, simpler API
-3. **Task 2.1: Add Error Codes** - Important for UniFFI error mapping
-4. **Task 4.1: Design FFI-Safe Public API** - Define the API surface
-5. **Task 4.2: Handle Opaque Types** - Make MoatSession FFI-compatible
-6. **Task 4.3: Avoid FFI Anti-Patterns** - Clean up any problematic patterns
-7. **Task 5.1: Review Lock Usage** - Ensure thread safety for FFI
-8. Remaining tasks as needed
+1. **Task 2.1: Add Version Header** - Foundation for state format evolution
+2. **Task 2.2: Add Device ID** - Small change, do alongside versioning
+3. **Task 3.1: Add Error Codes** - Important for UniFFI error mapping
+4. **Task 5.1: Switch to parking_lot** - Independent, can be done early
+5. **Task 5.2: Verify Send + Sync** - Quick check after parking_lot switch
+6. **Task 4.1: Create api.rs Module** - Define the API surface
+7. **Task 4.2: Handle Opaque Types** - Ensure MoatSession is FFI-compatible
+8. **Task 4.3: Avoid FFI Anti-Patterns** - Clean up any problematic patterns
+9. **Task 5.3: Document Thread Safety** - Final documentation pass
 
 **What we're NOT doing in this phase:**
-- Actually implementing UniFFI bindings
+- Actually implementing UniFFI bindings (no `uniffi` dependency yet)
 - Generating Swift/Kotlin/Dart code
 - Building the Flutter app
+- Phase 6 APIs (group enumeration, state inspection)
 
 The goal is a clean, FFI-ready Rust API. Bindings come when we start mobile development.
 
@@ -423,9 +400,10 @@ The goal is a clean, FFI-ready Rust API. Bindings come when we start mobile deve
 ## Testing Strategy
 
 ### Unit Tests (moat-core)
-- Test `export_state()` / `from_state()` round-trip
-- Test explicit save doesn't write until `save()` is called
+- Test versioned `export_state()` / `from_state()` round-trip
+- Test rejection of invalid/unsupported version headers
 - Test error codes match expected values
+- Test device_id persists through export/import
 - All 46+ existing tests must continue passing
 
 ### CLI Integration Tests
@@ -450,15 +428,15 @@ The goal is a clean, FFI-ready Rust API. Bindings come when we start mobile deve
 
 ---
 
-## Open Questions
+## Resolved Questions
 
-1. **State migration?** - When storage format changes, how do we handle migration? Should we version the state format?
+1. **State migration?** -> **Resolved:** Add `b"MOAT"` + u16 version prefix to exported state. Migration logic added per-version as needed.
 
-2. **Multi-device sync?** - Not in scope for MVP, but the storage design should consider future sync needs.
+2. **Multi-device sync?** -> **Resolved:** Not in scope for MVP. Add a 16-byte device_id to state as minimal future-proofing. No sync logic.
 
-3. **Background operation limits?** - iOS limits background execution. Should crypto operations be interruptible?
+3. **Background operation limits?** -> **Resolved:** Not needed. MLS operations are sub-millisecond. No cancellation/interruptibility support.
 
-4. **UniFFI vs UDL?** - UniFFI supports both proc macros and UDL files. Proc macros are simpler for our case.
+4. **UniFFI proc macros vs UDL?** -> **Resolved:** Proc macros. Simpler for our case.
 
 ---
 
@@ -467,7 +445,7 @@ The goal is a clean, FFI-ready Rust API. Bindings come when we start mobile deve
 The existing documentation already identified key FFI considerations:
 
 > **Design implications for moat-core:**
-> - Keep operations synchronous (no async) — much simpler FFI story ✓ Already done
+> - Keep operations synchronous (no async) — much simpler FFI story -> Already done
 > - Prefer fixed-size arrays (`[u8; 32]`) over `Vec<u8>` where possible
 > - Error types should be FFI-friendly (consider error codes + message accessors)
 > - Storage should be controllable by the native side (see FFI Storage Considerations)
@@ -490,7 +468,7 @@ impl MoatSession {
 }
 ```
 
-This aligns with our Task 1.1.
+This is already implemented (using `from_state()` instead of `import_state()`).
 
 ---
 
