@@ -239,27 +239,6 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .style(style);
 
-    let items: Vec<ListItem> = app
-        .messages
-        .iter()
-        .map(|msg| {
-            let style = if msg.is_own {
-                Style::default().fg(Color::Green)
-            } else {
-                Style::default().fg(Color::White)
-            };
-
-            let time = msg.timestamp.format("%H:%M").to_string();
-            let line = Line::from(vec![
-                Span::styled(format!("[{}] ", time), Style::default().fg(Color::Gray)),
-                Span::styled(format!("{}: ", msg.from), style.add_modifier(Modifier::BOLD)),
-                Span::raw(&msg.content),
-            ]);
-
-            ListItem::new(line)
-        })
-        .collect();
-
     // Show help if no active conversation
     if app.active_conversation.is_none() {
         let inner = block.inner(area);
@@ -268,17 +247,50 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
             .style(Style::default().fg(Color::Gray));
         frame.render_widget(help, inner);
     } else {
-        // Calculate how many messages can fit in the visible area
-        // Each message takes 1 line, area height minus 2 for borders
+        let inner_width = area.width.saturating_sub(2) as usize; // subtract borders
         let visible_height = area.height.saturating_sub(2) as usize;
 
-        // message_scroll is offset from the bottom (0 = showing latest)
-        let end = items.len().saturating_sub(app.message_scroll);
-        let start = end.saturating_sub(visible_height);
-        let items_to_show: Vec<ListItem> = items.into_iter().skip(start).take(end - start).collect();
+        // Build styled lines for each message
+        let mut lines: Vec<Line> = Vec::new();
+        for msg in &app.messages {
+            let msg_style = if msg.is_own {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::White)
+            };
 
-        let list = List::new(items_to_show).block(block);
-        frame.render_widget(list, area);
+            let time = msg.timestamp.format("%H:%M").to_string();
+            let prefix = format!("[{}] {}: ", time, msg.from);
+            let content = &msg.content;
+
+            // First visual line has the styled prefix
+            if inner_width > 0 {
+                let first_content_len = inner_width.saturating_sub(prefix.len());
+                let first_chunk: String = content.chars().take(first_content_len).collect();
+                lines.push(Line::from(vec![
+                    Span::styled(format!("[{}] ", time), Style::default().fg(Color::Gray)),
+                    Span::styled(format!("{}: ", msg.from), msg_style.add_modifier(Modifier::BOLD)),
+                    Span::styled(first_chunk, msg_style),
+                ]));
+
+                // Remaining content wraps onto continuation lines
+                let remaining: String = content.chars().skip(first_content_len).collect();
+                for chunk in remaining.chars().collect::<Vec<_>>().chunks(inner_width) {
+                    let s: String = chunk.iter().collect();
+                    lines.push(Line::from(Span::styled(s, msg_style)));
+                }
+            }
+        }
+
+        let total_lines = lines.len();
+        // message_scroll is offset from the bottom (0 = showing latest)
+        let scroll_to_bottom = total_lines.saturating_sub(visible_height);
+        let scroll_y = scroll_to_bottom.saturating_sub(app.message_scroll) as u16;
+
+        let paragraph = Paragraph::new(lines)
+            .block(block)
+            .scroll((scroll_y, 0));
+        frame.render_widget(paragraph, area);
     }
 }
 
