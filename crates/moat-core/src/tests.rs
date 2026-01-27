@@ -1,43 +1,38 @@
 //! Integration tests for moat-core
 
-use crate::{derive_tag_from_group_id, pad_to_bucket, unpad, Event, EventKind, MoatCore, Error, ErrorCode};
+use crate::{derive_tag_from_group_id, pad_to_bucket, unpad, Event, EventKind, Error, ErrorCode, MoatSession};
 
 #[test]
 fn test_key_package_generation() {
+    let session = MoatSession::new();
     let identity = b"alice@example.com";
 
-    let result = MoatCore::generate_key_package(identity);
-    assert!(result.is_ok(), "Key package generation should succeed");
-
-    let (key_package, key_bundle) = result.unwrap();
+    let (key_package, key_bundle) = session.generate_key_package(identity).unwrap();
 
     // Key package should be non-empty
     assert!(!key_package.is_empty());
     assert!(!key_bundle.is_empty());
 
     // Generating again should produce different results (due to randomness)
-    let (key_package2, key_bundle2) = MoatCore::generate_key_package(identity).unwrap();
+    let (key_package2, key_bundle2) = session.generate_key_package(identity).unwrap();
     assert_ne!(key_package, key_package2);
     assert_ne!(key_bundle, key_bundle2);
 }
 
 #[test]
 fn test_create_group() {
+    let session = MoatSession::new();
     let identity = b"alice@example.com";
-    let (_key_package, key_bundle) = MoatCore::generate_key_package(identity).unwrap();
+    let (_key_package, key_bundle) = session.generate_key_package(identity).unwrap();
 
-    let group_state = MoatCore::create_group(identity, &key_bundle).unwrap();
+    let group_id = session.create_group(identity, &key_bundle).unwrap();
 
-    // Group state should be non-empty
-    assert!(!group_state.is_empty());
+    // Group ID should be non-empty
+    assert!(!group_id.is_empty());
 
     // Should be able to get epoch (starts at 0)
-    let epoch = MoatCore::get_epoch(&group_state).unwrap();
-    assert_eq!(epoch, 0);
-
-    // Should be able to get group ID
-    let group_id = MoatCore::get_group_id(&group_state).unwrap();
-    assert!(!group_id.is_empty());
+    let epoch = session.get_group_epoch(&group_id).unwrap();
+    assert_eq!(epoch, Some(0));
 }
 
 #[test]
@@ -164,28 +159,34 @@ fn test_event_with_device_id() {
 }
 
 #[test]
-fn test_get_current_tag() {
+fn test_tag_from_group() {
+    let session = MoatSession::new();
     let identity = b"alice@example.com";
-    let (_key_package, key_bundle) = MoatCore::generate_key_package(identity).unwrap();
-    let group_state = MoatCore::create_group(identity, &key_bundle).unwrap();
+    let (_key_package, key_bundle) = session.generate_key_package(identity).unwrap();
+    let group_id = session.create_group(identity, &key_bundle).unwrap();
 
-    // Should be able to derive tag
-    let tag = MoatCore::get_current_tag(&group_state).unwrap();
+    // Derive tag from group_id and epoch
+    let epoch = session.get_group_epoch(&group_id).unwrap().unwrap();
+    let tag = derive_tag_from_group_id(&group_id, epoch).unwrap();
     assert_eq!(tag.len(), 16);
 
     // Tag should be consistent
-    let tag2 = MoatCore::get_current_tag(&group_state).unwrap();
+    let tag2 = derive_tag_from_group_id(&group_id, epoch).unwrap();
     assert_eq!(tag, tag2);
 }
 
 #[test]
-fn test_get_tags_for_epochs() {
+fn test_tags_differ_across_epochs() {
+    let session = MoatSession::new();
     let identity = b"alice@example.com";
-    let (_key_package, key_bundle) = MoatCore::generate_key_package(identity).unwrap();
-    let group_state = MoatCore::create_group(identity, &key_bundle).unwrap();
+    let (_key_package, key_bundle) = session.generate_key_package(identity).unwrap();
+    let group_id = session.create_group(identity, &key_bundle).unwrap();
 
     let epochs = vec![0, 1, 2, 3];
-    let tags = MoatCore::get_tags_for_epochs(&group_state, &epochs).unwrap();
+    let tags: Vec<[u8; 16]> = epochs
+        .iter()
+        .map(|&ep| derive_tag_from_group_id(&group_id, ep).unwrap())
+        .collect();
 
     assert_eq!(tags.len(), 4);
 
@@ -195,25 +196,6 @@ fn test_get_tags_for_epochs() {
             assert_ne!(tags[i], tags[j], "Tags for different epochs should differ");
         }
     }
-}
-
-#[test]
-fn test_tag_derived_from_group_state() {
-    // Create a group
-    let identity = b"alice@example.com";
-    let (_key_package, key_bundle) = MoatCore::generate_key_package(identity).unwrap();
-    let group_state = MoatCore::create_group(identity, &key_bundle).unwrap();
-
-    // Get tag from group state
-    let tag_from_state = MoatCore::get_current_tag(&group_state).unwrap();
-
-    // Get tag directly from group ID and epoch
-    let group_id = MoatCore::get_group_id(&group_state).unwrap();
-    let epoch = MoatCore::get_epoch(&group_state).unwrap();
-    let tag_direct = derive_tag_from_group_id(&group_id, epoch).unwrap();
-
-    // Should match
-    assert_eq!(tag_from_state, tag_direct);
 }
 
 #[test]
@@ -242,8 +224,6 @@ fn test_event_serialization_with_padding() {
 
 #[test]
 fn test_moat_session_in_memory() {
-    use crate::MoatSession;
-
     let session = MoatSession::new();
 
     // Generate key package
@@ -257,15 +237,13 @@ fn test_moat_session_in_memory() {
     let group_id = session.create_group(identity, &key_bundle).unwrap();
     assert!(!group_id.is_empty());
 
-    // Should be able to load the group back
-    let loaded_group = session.load_group(&group_id).unwrap();
-    assert!(loaded_group.is_some());
+    // Should be able to get epoch
+    let epoch = session.get_group_epoch(&group_id).unwrap();
+    assert_eq!(epoch, Some(0));
 }
 
 #[test]
 fn test_moat_session_persistence() {
-    use crate::MoatSession;
-
     let group_id: Vec<u8>;
     let identity = b"alice@example.com";
     let state: Vec<u8>;
@@ -278,8 +256,8 @@ fn test_moat_session_persistence() {
         group_id = session.create_group(identity, &key_bundle).unwrap();
 
         // Verify group is accessible
-        let loaded = session.load_group(&group_id).unwrap();
-        assert!(loaded.is_some(), "Group should be loadable in same session");
+        let epoch = session.get_group_epoch(&group_id).unwrap();
+        assert!(epoch.is_some(), "Group should be loadable in same session");
 
         // Export state (like writing to a file)
         state = session.export_state().unwrap();
@@ -290,15 +268,13 @@ fn test_moat_session_persistence() {
         let session = MoatSession::from_state(&state).unwrap();
 
         // Group should still be accessible
-        let loaded = session.load_group(&group_id).unwrap();
-        assert!(loaded.is_some(), "Group should be loadable after restore");
+        let epoch = session.get_group_epoch(&group_id).unwrap();
+        assert!(epoch.is_some(), "Group should be loadable after restore");
     }
 }
 
 #[test]
 fn test_encrypt_event() {
-    use crate::{MoatSession, Event};
-
     let session = MoatSession::new();
 
     // Create Alice
@@ -320,8 +296,6 @@ fn test_encrypt_event() {
 
 #[test]
 fn test_two_party_messaging() {
-    use crate::{MoatSession, Event};
-
     // Create separate sessions for Alice and Bob
     let alice_session = MoatSession::new();
     let bob_session = MoatSession::new();
@@ -367,8 +341,6 @@ fn test_two_party_messaging() {
 
 #[test]
 fn test_state_version_header() {
-    use crate::MoatSession;
-
     let session = MoatSession::new();
     let state = session.export_state().unwrap();
 
@@ -385,8 +357,6 @@ fn test_state_version_header() {
 
 #[test]
 fn test_state_rejects_invalid_magic() {
-    use crate::MoatSession;
-
     let bad_state = b"BADXsome data here plus padding!";
     let result = MoatSession::from_state(bad_state);
     assert!(result.is_err());
@@ -394,8 +364,6 @@ fn test_state_rejects_invalid_magic() {
 
 #[test]
 fn test_state_rejects_unsupported_version() {
-    use crate::MoatSession;
-
     let mut state = vec![0u8; 30];
     state[0..4].copy_from_slice(b"MOAT");
     state[4..6].copy_from_slice(&99u16.to_le_bytes()); // unsupported version
@@ -405,16 +373,12 @@ fn test_state_rejects_unsupported_version() {
 
 #[test]
 fn test_state_rejects_too_short() {
-    use crate::MoatSession;
-
     let result = MoatSession::from_state(b"MOAT");
     assert!(result.is_err());
 }
 
 #[test]
 fn test_device_id_persists() {
-    use crate::MoatSession;
-
     let session = MoatSession::new();
     let device_id = *session.device_id();
 
@@ -430,8 +394,6 @@ fn test_device_id_persists() {
 
 #[test]
 fn test_device_id_unique_per_session() {
-    use crate::MoatSession;
-
     let session1 = MoatSession::new();
     let session2 = MoatSession::new();
 
@@ -474,8 +436,6 @@ fn test_error_code_and_message_accessors() {
 
 #[test]
 fn test_error_code_from_real_failure() {
-    use crate::MoatSession;
-
     // from_state with invalid data should produce a Deserialization error
     let result = MoatSession::from_state(b"BADXsome data here plus padding!");
     let err = match result {

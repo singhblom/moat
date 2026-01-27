@@ -218,8 +218,7 @@ async fn cmd_fetch(storage_dir: Option<PathBuf>, repository: &str) -> anyhow::Re
     let group_ids = keys.list_groups().unwrap_or_default();
     for gid in &group_ids {
         let group_id_bytes = hex::decode(gid).unwrap_or_default();
-        if let Ok(Some(group)) = mls.load_group(&group_id_bytes) {
-            let epoch = group.epoch().as_u64();
+        if let Ok(Some(epoch)) = mls.get_group_epoch(&group_id_bytes) {
             for ep in 0..=epoch {
                 if let Ok(tag) = moat_core::derive_tag_from_group_id(&group_id_bytes, ep) {
                     tag_map.insert(tag, group_id_bytes.clone());
@@ -376,8 +375,7 @@ async fn cmd_send_test(
 
     for gid in &group_ids {
         let group_id_bytes = hex::decode(gid).unwrap_or_default();
-        if let Ok(Some(group)) = mls.load_group(&group_id_bytes) {
-            let epoch = group.epoch().as_u64();
+        if let Ok(Some(epoch)) = mls.get_group_epoch(&group_id_bytes) {
             if let Ok(current_tag) = moat_core::derive_tag_from_group_id(&group_id_bytes, epoch) {
                 if current_tag == tag {
                     found_group = Some(group_id_bytes);
@@ -398,8 +396,7 @@ async fn cmd_send_test(
 
     // Get current epoch
     let epoch = mls
-        .load_group(&group_id)?
-        .map(|g| g.epoch().as_u64())
+        .get_group_epoch(&group_id)?
         .unwrap_or(1);
 
     // Create and encrypt message

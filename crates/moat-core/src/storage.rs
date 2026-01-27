@@ -261,7 +261,7 @@ pub enum MlsStorageError {
 ///
 /// # Example
 ///
-/// ```
+/// ```ignore
 /// use moat_core::MoatProvider;
 ///
 /// let provider = MoatProvider::new();

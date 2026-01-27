@@ -10,27 +10,12 @@
 use hkdf::Hkdf;
 use sha2::Sha256;
 
-use crate::{MoatCore, Result};
+use crate::Result;
 
 /// Domain separation label for tag derivation
 const TAG_LABEL: &[u8] = b"moat-conversation-tag-v1";
 
-/// Derive a 16-byte conversation tag from group state and epoch.
-///
-/// Tags rotate with each epoch, so messages from different epochs will have
-/// different tags even within the same conversation. This prevents traffic
-/// analysis from trivially grouping messages by conversation.
-///
-/// Both conversation participants derive the same tag, allowing them to
-/// query for messages in their conversation.
-pub fn derive_conversation_tag(group_state: &[u8], epoch: u64) -> Result<[u8; 16]> {
-    // Get group ID from state
-    let group_id = MoatCore::get_group_id(group_state)?;
-
-    derive_tag_from_group_id(&group_id, epoch)
-}
-
-/// Derive tag directly from group ID (for cases where we have the ID but not full state)
+/// Derive a 16-byte conversation tag from a group ID and epoch.
 pub fn derive_tag_from_group_id(group_id: &[u8], epoch: u64) -> Result<[u8; 16]> {
     // Use HKDF-SHA256 to derive tag
     // IKM = group_id

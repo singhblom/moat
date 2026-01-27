@@ -11,6 +11,7 @@ This document tracks work to prepare moat-core for mobile (iOS/Android) before s
 3. **Decouple storage from operations** - Let callers control persistence timing
 4. **Keep all cryptography in Rust** - Security and single-implementation benefits
 5. **Keep moat-cli working** - CLI remains a working reference implementation and integration test
+6. **Remove unused code aggressively** - Keep the API surface and codebase as lean as possible. Dead code is a liability: it adds maintenance burden, confuses contributors, and bloats the FFI surface. If code isn't used by moat-cli or tests, remove it.
 
 **Note:** This preparation phase focuses on making the Rust API clean and FFI-friendly. We won't implement actual bindings yet - that comes when we start the mobile app.
 
@@ -130,11 +131,7 @@ cargo run -p moat-cli -- -s /tmp/moat-bob
 
 | Issue | Impact | Priority |
 |-------|--------|----------|
-| Error types use `String` | Not FFI-friendly; need error codes | High |
-| No `api.rs` module | Public API surface not explicitly defined | Medium |
 | `std::sync::RwLock` in MlsStorage | Poisoning issues at FFI boundary; switch to `parking_lot` | Medium |
-| No state format versioning | Can't migrate state when format changes | Medium |
-| No device ID in state | Blocks future multi-device sync | Low |
 
 ---
 
@@ -258,52 +255,52 @@ No UniFFI dependency yet — just ensure the types are compatible with future `#
 
 ### Phase 4: FFI-Ready API Design (Medium Priority)
 
-**Note:** We won't implement actual FFI bindings in this preparation phase. The goal is to ensure the Rust API is ready for FFI when we start mobile development.
+**Status: Complete**
 
 #### Task 4.1: Create Dedicated api.rs Module
 
-**Status:** Not Started
+**Status:** Complete
 
-Create `src/api.rs` as the explicit public API surface and future home for UniFFI annotations:
+Created `src/api.rs` as the explicit public API surface. All internal modules (`error`, `event`, `padding`, `stealth`, `storage`, `tag`) are `pub(crate)`. Only types re-exported through `api.rs` and `lib.rs` are accessible to downstream crates.
 
+Public API surface:
 ```rust
-// src/api.rs - Public API surface for FFI
-//
-// This module defines what gets exposed via FFI.
-// All types here must be FFI-friendly.
-// UniFFI proc macro annotations will be added here when we start mobile.
+// Types
+MoatSession, Error, ErrorCode, Event, EventKind,
+EncryptResult, DecryptResult, WelcomeResult, KeyBundle,
+Bucket, CIPHERSUITE
 
-pub use crate::{MoatSession, Error, ErrorCode, Event, EventKind};
-pub use crate::{EncryptResult, DecryptResult, WelcomeResult};
-pub use crate::stealth::{generate_stealth_keypair, encrypt_for_stealth, try_decrypt_stealth};
+// Functions
+generate_stealth_keypair, encrypt_for_stealth, try_decrypt_stealth,
+derive_tag_from_group_id, pad_to_bucket, unpad
 ```
 
-Review each type for FFI compatibility:
-- No lifetimes in public types
-- No generic parameters that leak internal types
-- Simple data types (primitives, `Vec<u8>`, structs of these)
+Internal-only types (not FFI-exposed):
+- `MoatProvider`, `MlsStorage`, `MlsStorageError` — OpenMLS storage internals
 
-Make internal modules `pub(crate)` and only expose through `api.rs`.
+**Removed dead code:**
+- `MoatCore` struct (~150 lines) — stateless duplicate of `MoatSession` that created throwaway providers per call. Only used by tests (rewritten to use `MoatSession`).
+- `GroupState` struct — only used by `MoatCore` to serialize minimal state.
+- `derive_conversation_tag` — unused wrapper; all callers use `derive_tag_from_group_id` directly.
 
 #### Task 4.2: Handle Opaque Types
 
-**Status:** Not Started
+**Status:** Complete
 
-`MoatSession` contains `RwLock` and can't cross FFI directly. For UniFFI, this is handled via `#[uniffi::export]` on impl blocks (proc macro approach).
-
-For now, just ensure `MoatSession` is `Send + Sync` (required by UniFFI `[Object]` types).
+- `load_group()` leaked `MlsGroup` (an OpenMLS internal type) through the public API. Replaced with `get_group_epoch(&self, group_id: &[u8]) -> Result<Option<u64>>`. `load_group()` is now `pub(crate)`.
+- CLI updated to use `get_group_epoch()` at all 4 call sites.
+- `MoatSession` is `Send + Sync` verification deferred to Phase 5.
 
 #### Task 4.3: Avoid FFI Anti-Patterns
 
-**Status:** Not Started
+**Status:** Complete (verified)
 
-Review API for patterns that complicate FFI:
-
-- **Callbacks** - Avoid. Keep request/response style.
-- **Iterators** - Return `Vec` instead of iterators.
-- **Lifetimes in return types** - Return owned data.
-- **Complex generics** - Use concrete types in public API.
-- **Async** - Keep sync. Caller can wrap in async if needed.
+- No callbacks — request/response style throughout
+- No iterators in public API — returns `Vec`
+- No lifetimes in return types — returns owned data
+- No complex generics in public API
+- No async in moat-core
+- CLI uses only the public API surface (validated: no `pub(crate)` APIs used by moat-cli)
 
 ---
 
@@ -348,9 +345,10 @@ Add documentation about which methods are safe to call from which threads.
 Will include when needed:
 - `list_groups()` - enumerate all group IDs
 - `delete_group()` - remove a group and its state
-- `get_group_epoch()` - epoch for a group
 - `get_group_member_count()` - member count
 - `storage_size()` - total storage size in bytes
+
+Note: `get_group_epoch()` was added in Phase 4 as it was needed to replace the leaky `load_group()` API.
 
 ---
 
@@ -360,12 +358,12 @@ Recommended order based on dependencies and impact:
 
 1. ~~**Task 2.1: Add Version Header**~~ - Done
 2. ~~**Task 2.2: Add Device ID**~~ - Done
-3. **Task 3.1: Add Error Codes** - Important for UniFFI error mapping
-4. **Task 5.1: Switch to parking_lot** - Independent, can be done early
-5. **Task 5.2: Verify Send + Sync** - Quick check after parking_lot switch
-6. **Task 4.1: Create api.rs Module** - Define the API surface
-7. **Task 4.2: Handle Opaque Types** - Ensure MoatSession is FFI-compatible
-8. **Task 4.3: Avoid FFI Anti-Patterns** - Clean up any problematic patterns
+3. ~~**Task 3.1: Add Error Codes**~~ - Done
+4. ~~**Task 4.1: Create api.rs Module**~~ - Done
+5. ~~**Task 4.2: Handle Opaque Types**~~ - Done
+6. ~~**Task 4.3: Avoid FFI Anti-Patterns**~~ - Done
+7. **Task 5.1: Switch to parking_lot** - Independent, can be done early
+8. **Task 5.2: Verify Send + Sync** - Quick check after parking_lot switch
 9. **Task 5.3: Document Thread Safety** - Final documentation pass
 
 **What we're NOT doing in this phase:**
@@ -385,7 +383,7 @@ The goal is a clean, FFI-ready Rust API. Bindings come when we start mobile deve
 - Test rejection of invalid/unsupported version headers
 - Test error codes match expected values
 - Test device_id persists through export/import
-- All 46+ existing tests must continue passing
+- All 66 existing tests must continue passing
 
 ### CLI Integration Tests
 - **After every moat-core change**, verify CLI still works:

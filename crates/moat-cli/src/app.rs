@@ -3,7 +3,10 @@
 use crate::keystore::{hex, GroupMetadata, KeyStore};
 use crossterm::event::{KeyCode, KeyEvent};
 use moat_atproto::MoatAtprotoClient;
-use moat_core::{stealth, Event, EventKind, MoatSession, CIPHERSUITE};
+use moat_core::{
+    encrypt_for_stealth, generate_stealth_keypair, try_decrypt_stealth, Event, EventKind,
+    MoatSession, CIPHERSUITE,
+};
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
@@ -360,7 +363,7 @@ impl App {
         if !self.keys.has_stealth_key() {
             self.set_status("Generating stealth address...".to_string());
 
-            let (stealth_privkey, stealth_pubkey) = stealth::generate_stealth_keypair();
+            let (stealth_privkey, stealth_pubkey) = generate_stealth_keypair();
 
             // Store private key locally
             self.keys.store_stealth_key(&stealth_privkey)?;
@@ -416,8 +419,8 @@ impl App {
             let group_id_bytes = hex::decode(&group_id)
                 .unwrap_or_default();
 
-            let current_epoch = if let Ok(Some(group)) = self.mls.load_group(&group_id_bytes) {
-                group.epoch().as_u64()
+            let current_epoch = if let Ok(Some(epoch)) = self.mls.get_group_epoch(&group_id_bytes) {
+                epoch
             } else {
                 1 // Default to epoch 1 if group can't be loaded
             };
@@ -641,7 +644,7 @@ impl App {
         // This allows the recipient to decrypt without being in the group yet,
         // while hiding from observers that this invite is for them.
         let stealth_ciphertext =
-            stealth::encrypt_for_stealth(&recipient_stealth_pubkey, &welcome_result.welcome)?;
+            encrypt_for_stealth(&recipient_stealth_pubkey, &welcome_result.welcome)?;
 
         // 8. Publish with random tag (not group-derived, since recipient doesn't know group yet)
         let random_tag: [u8; 16] = rand::random();
@@ -1243,7 +1246,7 @@ impl App {
         };
 
         // Try stealth decryption first
-        let welcome_bytes = match stealth::try_decrypt_stealth(&stealth_privkey, ciphertext) {
+        let welcome_bytes = match try_decrypt_stealth(&stealth_privkey, ciphertext) {
             Some(bytes) => {
                 self.debug_log.log(&format!(
                     "try_process_welcome: stealth decrypted {} bytes from {}",
