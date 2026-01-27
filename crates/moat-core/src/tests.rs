@@ -244,7 +244,7 @@ fn test_event_serialization_with_padding() {
 fn test_moat_session_in_memory() {
     use crate::MoatSession;
 
-    let session = MoatSession::in_memory();
+    let session = MoatSession::new();
 
     // Generate key package
     let identity = b"alice@example.com";
@@ -266,15 +266,13 @@ fn test_moat_session_in_memory() {
 fn test_moat_session_persistence() {
     use crate::MoatSession;
 
-    let temp_dir = tempfile::tempdir().unwrap();
-    let storage_path = temp_dir.path().join("test_mls.bin");
-
     let group_id: Vec<u8>;
     let identity = b"alice@example.com";
+    let state: Vec<u8>;
 
-    // First session: create group
+    // First session: create group, export state
     {
-        let session = MoatSession::new(storage_path.clone()).unwrap();
+        let session = MoatSession::new();
 
         let (_key_package, key_bundle) = session.generate_key_package(identity).unwrap();
         group_id = session.create_group(identity, &key_bundle).unwrap();
@@ -282,15 +280,18 @@ fn test_moat_session_persistence() {
         // Verify group is accessible
         let loaded = session.load_group(&group_id).unwrap();
         assert!(loaded.is_some(), "Group should be loadable in same session");
+
+        // Export state (like writing to a file)
+        state = session.export_state().unwrap();
     }
 
-    // Second session: reload and verify
+    // Second session: restore from exported state
     {
-        let session = MoatSession::new(storage_path.clone()).unwrap();
+        let session = MoatSession::from_state(&state).unwrap();
 
         // Group should still be accessible
         let loaded = session.load_group(&group_id).unwrap();
-        assert!(loaded.is_some(), "Group should be loadable after restart");
+        assert!(loaded.is_some(), "Group should be loadable after restore");
     }
 }
 
@@ -298,7 +299,7 @@ fn test_moat_session_persistence() {
 fn test_encrypt_event() {
     use crate::{MoatSession, Event};
 
-    let session = MoatSession::in_memory();
+    let session = MoatSession::new();
 
     // Create Alice
     let alice_identity = b"alice@example.com";
@@ -322,8 +323,8 @@ fn test_two_party_messaging() {
     use crate::{MoatSession, Event};
 
     // Create separate sessions for Alice and Bob
-    let alice_session = MoatSession::in_memory();
-    let bob_session = MoatSession::in_memory();
+    let alice_session = MoatSession::new();
+    let bob_session = MoatSession::new();
 
     // Alice creates her identity
     let alice_identity = b"alice@example.com";

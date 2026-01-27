@@ -6,23 +6,21 @@
 //!
 //! - [`MoatSession`] - Holds a persistent provider for MLS operations
 //! - [`MoatCore`] - Static utility methods for simple operations
-//! - [`MoatProvider`] - OpenMLS provider with file-backed storage
+//! - [`MoatProvider`] - OpenMLS provider with MLS state storage
 //!
 //! # Example
 //!
-//! ```no_run
+//! ```
 //! use moat_core::MoatSession;
-//! use std::path::PathBuf;
 //!
-//! // Create a session with persistent storage
-//! let session = MoatSession::new(PathBuf::from("~/.moat/mls.bin")).unwrap();
+//! let session = MoatSession::new();
 //!
-//! // Generate a key package (persisted to storage)
 //! let identity = b"alice@example.com";
 //! let (key_package, key_bundle) = session.generate_key_package(identity).unwrap();
-//!
-//! // Create a group (persisted to storage)
 //! let group_id = session.create_group(identity, &key_bundle).unwrap();
+//!
+//! // Caller persists state however they choose
+//! let state = session.export_state().unwrap();
 //! ```
 
 mod error;
@@ -35,7 +33,7 @@ mod tag;
 pub use error::{Error, Result};
 pub use event::{Event, EventKind};
 pub use padding::{pad_to_bucket, unpad, Bucket};
-pub use storage::{FileStorage, FileStorageError, MoatProvider};
+pub use storage::{MlsStorage, MlsStorageError, MoatProvider};
 pub use tag::{derive_conversation_tag, derive_tag_from_group_id};
 
 use openmls::prelude::tls_codec::{Deserialize, Serialize as TlsSerialize};
@@ -45,7 +43,6 @@ use openmls_basic_credential::SignatureKeyPair;
 use openmls_rust_crypto::OpenMlsRustCrypto;
 use openmls_traits::OpenMlsProvider;
 use serde::{Deserialize as SerdeDeserialize, Serialize as SerdeSerialize};
-use std::path::PathBuf;
 
 /// The ciphersuite used by Moat
 pub const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
@@ -92,46 +89,65 @@ pub struct DecryptResult {
 
 /// A persistent MLS session.
 ///
-/// MoatSession holds a [`MoatProvider`] that persists MLS state to disk.
-/// All operations (key generation, group creation, encryption) automatically
-/// persist state, allowing the session to be reloaded later.
+/// MoatSession holds a [`MoatProvider`] for MLS operations.
+///
+/// No built-in file I/O — callers manage persistence via `export_state()` /
+/// `from_state()`. This ensures every caller (CLI, mobile, tests) exercises
+/// the same API.
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```
 /// use moat_core::MoatSession;
-/// use std::path::PathBuf;
 ///
-/// // Create or reload a session
-/// let session = MoatSession::new(PathBuf::from("~/.moat/mls.bin")).unwrap();
-///
-/// // Operations persist automatically
+/// // Create a new session
+/// let session = MoatSession::new();
 /// let (key_package, key_bundle) = session.generate_key_package(b"alice").unwrap();
 /// let group_id = session.create_group(b"alice", &key_bundle).unwrap();
 ///
-/// // Later, reload from the same path to continue
-/// let session2 = MoatSession::new(PathBuf::from("~/.moat/mls.bin")).unwrap();
-/// // session2 has access to the previously created groups
+/// // Persist: caller chooses how (file, SQLite, etc.)
+/// let state = session.export_state().unwrap();
+/// // ... write state bytes somewhere ...
+///
+/// // Restore later
+/// let session2 = MoatSession::from_state(&state).unwrap();
 /// ```
 pub struct MoatSession {
     provider: MoatProvider,
 }
 
 impl MoatSession {
-    /// Create a new session with file-backed storage.
+    /// Create a new session with empty storage.
+    pub fn new() -> Self {
+        Self {
+            provider: MoatProvider::new(),
+        }
+    }
+
+    /// Create a session from previously exported state bytes.
     ///
-    /// If the file exists, existing state will be loaded.
-    pub fn new(storage_path: PathBuf) -> Result<Self> {
-        let provider = MoatProvider::new(storage_path)
+    /// The returned session contains all MLS state from the export.
+    /// Use `export_state()` to persist again after operations.
+    pub fn from_state(state: &[u8]) -> Result<Self> {
+        let provider = MoatProvider::from_state(state)
             .map_err(|e| Error::Storage(e.to_string()))?;
         Ok(Self { provider })
     }
 
-    /// Create an in-memory session (for testing).
-    pub fn in_memory() -> Self {
-        Self {
-            provider: MoatProvider::in_memory(),
-        }
+    /// Export the full session state as bytes.
+    ///
+    /// The returned bytes can be passed to `from_state()` to restore the session.
+    /// Also clears the dirty flag.
+    pub fn export_state(&self) -> Result<Vec<u8>> {
+        let state = self.provider.export_state()
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        self.provider.clear_pending_changes();
+        Ok(state)
+    }
+
+    /// Check if there are unsaved changes.
+    pub fn has_pending_changes(&self) -> bool {
+        self.provider.has_pending_changes()
     }
 
     /// Generate a new key package for the given identity.

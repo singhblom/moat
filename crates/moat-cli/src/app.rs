@@ -107,6 +107,7 @@ pub struct App {
     pub keys: KeyStore,
     pub client: Option<MoatAtprotoClient>,
     pub mls: MoatSession,
+    mls_path: std::path::PathBuf,
     debug_log: DebugLog,
 
     // UI state
@@ -157,7 +158,7 @@ impl App {
 
         let keys = KeyStore::with_path(base_dir.join("keys"))?;
 
-        // Initialize MoatSession with persistent storage
+        // Initialize MoatSession - load from file if it exists, otherwise start fresh
         let mls_path = base_dir.join("mls.bin");
 
         // Ensure parent directory exists
@@ -166,7 +167,13 @@ impl App {
                 .map_err(|e| AppError::Other(format!("Failed to create .moat directory: {e}")))?;
         }
 
-        let mls = MoatSession::new(mls_path)?;
+        let mls = if mls_path.exists() {
+            let bytes = std::fs::read(&mls_path)
+                .map_err(|e| AppError::Other(format!("Failed to read MLS state: {e}")))?;
+            MoatSession::from_state(&bytes)?
+        } else {
+            MoatSession::new()
+        };
 
         let debug_log = DebugLog::new(&base_dir);
 
@@ -180,6 +187,7 @@ impl App {
             keys,
             client: None,
             mls,
+            mls_path,
             debug_log,
             focus,
             login_form: LoginForm::default(),
@@ -198,6 +206,17 @@ impl App {
             watched_dids: std::collections::HashSet::new(),
             watch_handle_input: String::new(),
         })
+    }
+
+    /// Save MLS state to disk by exporting and writing to file.
+    fn save_mls_state(&self) -> Result<()> {
+        let state = self.mls.export_state()?;
+        let temp_path = self.mls_path.with_extension("tmp");
+        std::fs::write(&temp_path, &state)
+            .map_err(|e| AppError::Other(format!("Failed to write MLS state: {e}")))?;
+        std::fs::rename(&temp_path, &self.mls_path)
+            .map_err(|e| AppError::Other(format!("Failed to rename MLS state: {e}")))?;
+        Ok(())
     }
 
     /// Set an error message to display
@@ -328,6 +347,7 @@ impl App {
 
             // Use MoatSession for persistent key generation
             let (key_package, key_bundle) = self.mls.generate_key_package(identity)?;
+            self.save_mls_state()?;
 
             // Store key bundle locally (needed for encryption operations)
             self.keys.store_identity_key(&key_bundle)?;
@@ -614,6 +634,7 @@ impl App {
         let welcome_result = self
             .mls
             .add_member(&group_id, &key_bundle, &recipient_kp_bytes)?;
+        self.save_mls_state()?;
 
         self.set_status("Publishing welcome message...".to_string());
 
@@ -803,6 +824,11 @@ impl App {
             }
         }
 
+        // Save MLS state after decrypting messages
+        if self.mls.has_pending_changes() {
+            self.save_mls_state()?;
+        }
+
         // Sort by rkey (chronological order since rkeys are TIDs)
         all_messages.sort_by(|a, b| a.0.cmp(&b.0));
 
@@ -919,6 +945,7 @@ impl App {
 
         // Encrypt with MLS (handles padding internally)
         let encrypted = self.mls.encrypt_event(&group_id, &key_bundle, &event)?;
+        self.save_mls_state()?;
 
         self.debug_log.log(&format!(
             "send_message: encrypted, tag={:02x?}",
@@ -1179,6 +1206,11 @@ impl App {
                 // Remove from watched list - they're now a conversation participant
                 self.watched_dids.remove(&did);
             }
+        }
+
+        // Save MLS state if any decrypt/welcome operations modified it
+        if self.mls.has_pending_changes() {
+            self.save_mls_state()?;
         }
 
         // Persist new rkeys for all DIDs we fetched from
