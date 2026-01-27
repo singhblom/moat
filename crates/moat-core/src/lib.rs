@@ -87,13 +87,30 @@ pub struct DecryptResult {
     pub event: Event,
 }
 
+/// Magic bytes for versioned state format.
+const STATE_MAGIC: &[u8; 4] = b"MOAT";
+
+/// Current state format version.
+const STATE_VERSION: u16 = 1;
+
+/// Size of the state header: 4 (magic) + 2 (version) + 16 (device_id) = 22 bytes.
+const STATE_HEADER_SIZE: usize = 4 + 2 + 16;
+
 /// A persistent MLS session.
 ///
-/// MoatSession holds a [`MoatProvider`] for MLS operations.
+/// MoatSession holds a [`MoatProvider`] for MLS operations and a unique device ID.
 ///
 /// No built-in file I/O — callers manage persistence via `export_state()` /
 /// `from_state()`. This ensures every caller (CLI, mobile, tests) exercises
 /// the same API.
+///
+/// # State format
+///
+/// The exported state has the following layout:
+/// - `b"MOAT"` (4 bytes) — magic identifier
+/// - Version (2 bytes, little-endian u16) — currently `1`
+/// - Device ID (16 bytes) — random, generated once per device
+/// - MLS state (remaining bytes) — raw storage data
 ///
 /// # Example
 ///
@@ -111,38 +128,72 @@ pub struct DecryptResult {
 ///
 /// // Restore later
 /// let session2 = MoatSession::from_state(&state).unwrap();
+/// assert_eq!(session.device_id(), session2.device_id());
 /// ```
 pub struct MoatSession {
     provider: MoatProvider,
+    device_id: [u8; 16],
 }
 
 impl MoatSession {
-    /// Create a new session with empty storage.
+    /// Create a new session with empty storage and a random device ID.
     pub fn new() -> Self {
+        use rand::RngCore;
+        let mut device_id = [0u8; 16];
+        rand::thread_rng().fill_bytes(&mut device_id);
         Self {
             provider: MoatProvider::new(),
+            device_id,
         }
     }
 
     /// Create a session from previously exported state bytes.
     ///
-    /// The returned session contains all MLS state from the export.
+    /// The state must start with a valid version header (`b"MOAT"` + version).
+    /// The returned session contains all MLS state and device ID from the export.
     /// Use `export_state()` to persist again after operations.
     pub fn from_state(state: &[u8]) -> Result<Self> {
-        let provider = MoatProvider::from_state(state)
+        if state.len() < STATE_HEADER_SIZE {
+            return Err(Error::Deserialization("state too short".into()));
+        }
+        if &state[0..4] != STATE_MAGIC {
+            return Err(Error::Deserialization("invalid state header".into()));
+        }
+        let version = u16::from_le_bytes([state[4], state[5]]);
+        match version {
+            1 => {}
+            _ => return Err(Error::Deserialization(format!("unsupported state version: {version}"))),
+        }
+        let mut device_id = [0u8; 16];
+        device_id.copy_from_slice(&state[6..22]);
+        let provider = MoatProvider::from_state(&state[STATE_HEADER_SIZE..])
             .map_err(|e| Error::Storage(e.to_string()))?;
-        Ok(Self { provider })
+        Ok(Self { provider, device_id })
     }
 
     /// Export the full session state as bytes.
     ///
-    /// The returned bytes can be passed to `from_state()` to restore the session.
+    /// The returned bytes include a version header and device ID, followed by
+    /// raw MLS state. Pass to `from_state()` to restore the session.
     /// Also clears the dirty flag.
     pub fn export_state(&self) -> Result<Vec<u8>> {
-        let state = self.provider.export_state()
+        let raw_state = self.provider.export_state()
             .map_err(|e| Error::Storage(e.to_string()))?;
         self.provider.clear_pending_changes();
-        Ok(state)
+        let mut buf = Vec::with_capacity(STATE_HEADER_SIZE + raw_state.len());
+        buf.extend_from_slice(STATE_MAGIC);
+        buf.extend_from_slice(&STATE_VERSION.to_le_bytes());
+        buf.extend_from_slice(&self.device_id);
+        buf.extend_from_slice(&raw_state);
+        Ok(buf)
+    }
+
+    /// Get the device ID for this session.
+    ///
+    /// The device ID is a random 16-byte identifier generated once when the
+    /// session is first created, and persisted through `export_state()`/`from_state()`.
+    pub fn device_id(&self) -> &[u8; 16] {
+        &self.device_id
     }
 
     /// Check if there are unsaved changes.

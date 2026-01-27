@@ -179,52 +179,31 @@ The codebase already implements the target design:
 
 ### Phase 2: State Format Versioning (Medium Priority)
 
+**Status: Complete**
+
 #### Task 2.1: Add Version Header to Exported State
 
-**Status:** Not Started
+**Status:** Complete
 
-Add a 6-byte prefix to the output of `export_state()`:
+`export_state()` now writes a 22-byte header before the raw MLS state:
 
-```rust
-const STATE_MAGIC: &[u8; 4] = b"MOAT";
-const STATE_VERSION: u16 = 1;
-
-impl MoatSession {
-    pub fn export_state(&self) -> Result<Vec<u8>> {
-        let mut buf = Vec::new();
-        buf.extend_from_slice(STATE_MAGIC);
-        buf.extend_from_slice(&STATE_VERSION.to_le_bytes());
-        buf.extend_from_slice(&self.provider.export_raw_state()?);
-        Ok(buf)
-    }
-
-    pub fn from_state(state: &[u8]) -> Result<Self> {
-        if state.len() < 6 || &state[0..4] != STATE_MAGIC {
-            return Err(Error::Deserialization("invalid state header".into()));
-        }
-        let version = u16::from_le_bytes([state[4], state[5]]);
-        match version {
-            1 => { /* current format */ }
-            _ => return Err(Error::Deserialization(format!("unsupported state version: {version}"))),
-        }
-        let provider = MoatProvider::from_state(&state[6..])?;
-        Ok(Self { provider })
-    }
-}
 ```
+[M][O][A][T][version:u16 LE][device_id:16 bytes][...raw MLS state...]
+```
+
+`from_state()` validates the magic bytes and version, rejecting invalid or unsupported formats. See `lib.rs:90-97` for constants and `lib.rs:155-172` for parsing.
 
 #### Task 2.2: Add Device ID to State
 
-**Status:** Not Started
+**Status:** Complete
 
-Include an optional `device_id` field in the serialized state for future multi-device support:
+`MoatSession` now holds a `device_id: [u8; 16]` field:
+- Generated randomly via `rand::thread_rng()` on `MoatSession::new()`
+- Serialized in the state header between version and MLS data
+- Accessible via `session.device_id() -> &[u8; 16]`
+- Persists through `export_state()`/`from_state()` round-trips
 
-```rust
-/// Generated once per device, persisted in state
-pub fn device_id(&self) -> &[u8; 16];
-```
-
-Generate a random 16-byte device ID on first `MoatSession::new()`, persist it through `export_state()`/`from_state()`.
+6 new tests added in `tests.rs:368-439`: header validation, invalid magic rejection, unsupported version rejection, too-short rejection, device ID persistence, device ID uniqueness.
 
 ---
 
@@ -377,8 +356,8 @@ Will include when needed:
 
 Recommended order based on dependencies and impact:
 
-1. **Task 2.1: Add Version Header** - Foundation for state format evolution
-2. **Task 2.2: Add Device ID** - Small change, do alongside versioning
+1. ~~**Task 2.1: Add Version Header**~~ - Done
+2. ~~**Task 2.2: Add Device ID**~~ - Done
 3. **Task 3.1: Add Error Codes** - Important for UniFFI error mapping
 4. **Task 5.1: Switch to parking_lot** - Independent, can be done early
 5. **Task 5.2: Verify Send + Sync** - Quick check after parking_lot switch

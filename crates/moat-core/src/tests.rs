@@ -364,3 +364,77 @@ fn test_two_party_messaging() {
     assert_eq!(decrypted_reply.event.kind, EventKind::Message);
     assert_eq!(decrypted_reply.event.payload, b"Hello Alice!");
 }
+
+#[test]
+fn test_state_version_header() {
+    use crate::MoatSession;
+
+    let session = MoatSession::new();
+    let state = session.export_state().unwrap();
+
+    // Check magic bytes
+    assert_eq!(&state[0..4], b"MOAT");
+
+    // Check version (little-endian u16 = 1)
+    assert_eq!(state[4], 1);
+    assert_eq!(state[5], 0);
+
+    // Header is at least 22 bytes (4 magic + 2 version + 16 device_id)
+    assert!(state.len() >= 22);
+}
+
+#[test]
+fn test_state_rejects_invalid_magic() {
+    use crate::MoatSession;
+
+    let bad_state = b"BADXsome data here plus padding!";
+    let result = MoatSession::from_state(bad_state);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_state_rejects_unsupported_version() {
+    use crate::MoatSession;
+
+    let mut state = vec![0u8; 30];
+    state[0..4].copy_from_slice(b"MOAT");
+    state[4..6].copy_from_slice(&99u16.to_le_bytes()); // unsupported version
+    let result = MoatSession::from_state(&state);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_state_rejects_too_short() {
+    use crate::MoatSession;
+
+    let result = MoatSession::from_state(b"MOAT");
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_device_id_persists() {
+    use crate::MoatSession;
+
+    let session = MoatSession::new();
+    let device_id = *session.device_id();
+
+    // Device ID should be non-zero (extremely unlikely to be all zeros)
+    assert_ne!(device_id, [0u8; 16]);
+
+    // Export and restore
+    let state = session.export_state().unwrap();
+    let session2 = MoatSession::from_state(&state).unwrap();
+
+    assert_eq!(*session2.device_id(), device_id);
+}
+
+#[test]
+fn test_device_id_unique_per_session() {
+    use crate::MoatSession;
+
+    let session1 = MoatSession::new();
+    let session2 = MoatSession::new();
+
+    // Two sessions should have different device IDs
+    assert_ne!(session1.device_id(), session2.device_id());
+}
