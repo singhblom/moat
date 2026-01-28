@@ -1570,6 +1570,7 @@ dependencies = [
  "openmls_basic_credential",
  "openmls_rust_crypto",
  "openmls_traits",
+ "parking_lot",
  "rand",
  "serde",
  "serde_json",

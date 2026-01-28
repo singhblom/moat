@@ -95,6 +95,21 @@ const STATE_HEADER_SIZE: usize = 4 + 2 + 16;
 /// `from_state()`. This ensures every caller (CLI, mobile, tests) exercises
 /// the same API.
 ///
+/// # Thread Safety
+///
+/// `MoatSession` is `Send + Sync`. The internal storage uses `parking_lot::RwLock`
+/// for lock-free reads and safe concurrent access.
+///
+/// However, MLS operations that load-modify-save a group (e.g., `encrypt_event`,
+/// `decrypt_event`, `add_member`) are **not atomic** at the session level. If
+/// multiple threads call mutating operations on the same group concurrently,
+/// results are undefined. Callers should ensure exclusive access to the session
+/// during mutating operations — for example, by wrapping it in a `Mutex` on the
+/// mobile side.
+///
+/// Read-only methods (`export_state`, `get_group_epoch`, `has_pending_changes`,
+/// `device_id`) are safe to call concurrently.
+///
 /// # State format
 ///
 /// The exported state has the following layout:
@@ -495,6 +510,15 @@ impl MoatSession {
         })
     }
 }
+
+// Compile-time assertions: MoatSession must be Send + Sync for safe FFI usage.
+#[allow(dead_code)]
+const _: () = {
+    fn assert_send_sync<T: Send + Sync>() {}
+    fn check() {
+        assert_send_sync::<MoatSession>();
+    }
+};
 
 #[cfg(test)]
 mod tests;

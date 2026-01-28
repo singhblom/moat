@@ -308,20 +308,22 @@ Internal-only types (not FFI-exposed):
 
 #### Task 5.1: Switch to parking_lot::RwLock
 
-**Status:** Not Started
+**Status:** Complete
 
-Replace `std::sync::RwLock` with `parking_lot::RwLock` in `MlsStorage`:
+Replaced `std::sync::RwLock` with `parking_lot::RwLock` in `MlsStorage`:
 
 - No poisoning (cleaner FFI boundary — panics don't leave locks in broken state)
 - Better performance on contended workloads
 - Smaller memory footprint
 - Simpler API (`.read()` / `.write()` return guards directly, no `Result`)
 
+All `.unwrap()` calls on lock acquisition removed since `parking_lot` returns guards directly.
+
 #### Task 5.2: Verify Send + Sync
 
-**Status:** Not Started
+**Status:** Complete
 
-Add compile-time assertions that `MoatSession` is `Send + Sync`:
+Added compile-time assertions in `lib.rs` that `MoatSession` is `Send + Sync`:
 
 ```rust
 const _: () = {
@@ -330,11 +332,17 @@ const _: () = {
 };
 ```
 
+If `MoatSession` ever loses `Send` or `Sync` (e.g., by adding a non-Send field), the build will fail immediately.
+
 #### Task 5.3: Document Thread Safety
 
-**Status:** Not Started
+**Status:** Complete
 
-Add documentation about which methods are safe to call from which threads.
+Added thread safety documentation to both `MlsStorage` and `MoatSession`:
+
+- `MoatSession` is `Send + Sync`
+- Read-only methods (`export_state`, `get_group_epoch`, `has_pending_changes`, `device_id`) are safe to call concurrently
+- Mutating MLS operations (`encrypt_event`, `decrypt_event`, `add_member`) are not atomic at the session level — callers should ensure exclusive access (e.g., via `Mutex` on mobile side)
 
 ---
 
