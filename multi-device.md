@@ -80,111 +80,117 @@ Multiple members might try to add the new device simultaneously. Resolution:
 
 ---
 
-## Implementation Plan
+## Implementation Status
 
-### Phase 1: moat-core Changes
+### Phase 1: moat-core Changes ✅ COMPLETE
 
-1. **Add device name to MLS credentials**
-   - Extend credential structure to include device name field
-   - Update key package generation to embed device name
-   - Add helper to extract device name from credentials
+1. **Add device name to MLS credentials** ✅
+   - `MoatCredential` struct with `did` and `device_name` fields (`credential.rs`)
+   - Key package generation embeds device name via credential
+   - `MoatCredential::try_from_bytes()` for parsing credentials
 
-2. **Track device metadata in conversations**
-   - Store which device (credential) sent each message
-   - Add device info to decrypted message output
+2. **Track device metadata in conversations** ✅
+   - `SenderInfo` struct with `did`, `device_name`, and `leaf_index` (`event.rs`)
+   - `Event::with_device_id()` for attaching sender device to messages
+   - Decrypted messages include sender credential info
 
-3. **Detect new key packages for existing DIDs**
-   - When fetching key packages, identify if a DID has multiple packages
-   - Return list of key packages per DID (not just one)
+3. **Detect new key packages for existing DIDs** ✅
+   - `get_group_members()` returns all members with credentials
+   - `get_group_dids()` returns unique DIDs in a group
+   - `is_did_in_group()` checks if a DID is already a member
 
-4. **Add "add device" operation**
-   - Create MLS Add commit for a new key package belonging to an existing group member's DID
-   - Include random delay (0-30s) before committing
+4. **Add "add device" operation** ✅
+   - `add_device()` method adds a key package for an existing member's DID
+   - Validates that the DID is already in the group before adding
+   - Random delay not yet implemented (deferred to CLI layer)
 
-5. **Add device removal operations**
-   - Self-remove: remove own device from group
-   - Kick user: remove all devices for a DID from group
-   - Detect "last device removed" = user left group
+5. **Add device removal operations** ✅
+   - `remove_member()` - remove a specific member by leaf index
+   - `kick_user()` - remove all devices for a DID from group
+   - `leave_group()` - remove own device from group
 
-### Phase 2: moat-cli Changes
+### Phase 2: moat-cli Changes ✅ COMPLETE
 
-1. **Device setup flow**
-   - Prompt for device name during first-time setup
-   - Store device name locally in KeyStore
-   - Include device name when generating key packages
+1. **Device setup flow** ✅
+   - `get_or_create_device_name()` auto-generates device name from hostname
+   - Device name stored in `~/.moat/keys/device_name`
+   - Device name included when generating key packages via `MoatCredential`
 
-2. **Auto-add new devices**
-   - When polling events, check for new key packages from group members' DIDs
-   - If new key package found for existing member, trigger add-device flow with random delay
+2. **Auto-add new devices** ✅
+   - `poll_for_new_devices()` runs every 30s, checks key packages for group members
+   - Random delay (0-5s) before adding to reduce race conditions
+   - Publishes commit to group and welcome via stealth encryption
 
-3. **UI: Collapsed identity display**
-   - Group messages by DID, not by credential/device
-   - Show single name per user in conversation view
+3. **UI: Collapsed identity display** ✅
+   - `DisplayMessage` now tracks `sender_did` and `sender_device` separately
+   - Messages displayed by user name (collapsed by DID)
+   - Device info available via Message Info feature
 
-4. **UI: New device alerts**
-   - Track known devices per DID
-   - Show alert when a new device appears: "Alice added a new device: Work Laptop"
+4. **UI: New device alerts** ✅
+   - `DeviceAlert` struct tracks new device join events
+   - Alert popup shown when new device joins a conversation
+   - Dismissable with any key press
 
-5. **UI: Message Info feature**
-   - Add keybinding to show message details
-   - Display which device sent the message
+5. **UI: Message Info feature** ✅
+   - Press 'i' in Messages view to show message info popup
+   - Shows sender DID, device name, timestamp, and content preview
+   - Press 'i' or Esc to close
 
-6. **Device management commands**
-   - List own devices
-   - Remove own device from a conversation
-   - Kick user (remove all their devices) from conversation
+6. **Device management commands** ✅
+   - `moat devices --conversation <id>` - List all devices in a conversation
+   - `moat devices --conversation list` - List all conversations
+   - `moat remove-device --conversation <id> --leaf-index <n>` - Remove specific device
+   - `moat kick --conversation <id> --did <did>` - Kick user (all devices)
+   - `moat leave --conversation <id>` - Leave a conversation
 
-7. **Handle epoch conflicts gracefully**
-   - Detect when a commit fails due to epoch mismatch
-   - Re-fetch events and retry or abandon if already done
+7. **Handle epoch conflicts gracefully** ✅
+   - Retry with state refresh when encryption fails due to stale epoch
+   - Random delay + re-check pattern for adding devices reduces conflicts
+   - Silent skip of decryption failures (may be from different epochs)
 
-### Phase 3: moat-flutter Implementation
+### Phase 3: moat-flutter Implementation 🟡 PARTIAL
 
-1. **Device setup screen**
-   - Screen to enter device name on first launch
-   - ATProto login flow (reuse credentials if stored, or prompt)
-   - Generate MLS keys and publish key package
+1. **Device setup screen** ❌ NOT STARTED
+   - Currently uses DID as identity, no device name prompt
 
-2. **Waiting for group invites**
-   - New device has no groups initially
-   - Poll for Welcome messages
-   - Display "Waiting to be added to conversations..." state
+2. **Waiting for group invites** ❌ NOT STARTED
 
-3. **Conversation list and messages**
-   - Fetch and display conversations once Welcome received
-   - Show messages from join point forward
-   - Collapsed identity view (same as CLI)
+3. **Conversation list and messages** ✅
+   - Basic conversation list UI implemented
+   - Login screen implemented
 
-4. **New device notifications**
-   - Show banner/toast when a group member adds a new device
+4. **New device notifications** ❌ NOT STARTED
 
-5. **Message Info view**
-   - Tap on message to see details including sending device
+5. **Message Info view** ❌ NOT STARTED
 
-6. **History boundary indicator**
-   - When scrolling to top, show "Messages before [date] are on your other devices"
+6. **History boundary indicator** ❌ NOT STARTED
 
-7. **Device management UI**
-   - Settings screen showing own devices
-   - Remove device option
-   - Kick user option in conversation settings
+7. **Device management UI** ❌ NOT STARTED
 
-### Phase 4: Testing
+### Phase 4: Testing 🟡 PARTIAL
 
-1. **Multi-device scenarios**
-   - Two CLI instances for same user joining same conversation
-   - CLI + Flutter for same user
-   - Messages sent from one device appear on the other
+1. **Multi-device scenarios** ✅
+   - Unit tests for multi-device same DID (`test_multi_device_same_did`)
+   - Unit tests for add device (`test_add_device_for_existing_did`)
+   - Manual testing possible with `-s` flag: `cargo run -p moat-cli -- -s /tmp/moat-alice`
 
-2. **Race condition testing**
-   - Multiple members online when new device publishes key package
-   - Verify only one Add commit succeeds
+2. **Race condition testing** ❌ NOT STARTED
 
-3. **Device removal testing**
-   - Remove own device, verify can't decrypt new messages
-   - Kick user, verify all their devices removed
-   - Remove last device, verify requires re-invite
+3. **Device removal testing** ✅
+   - Unit tests for remove member (`test_remove_member`)
+   - Unit tests for kick user (`test_kick_user`)
+   - Unit tests for add device fails for non-member (`test_add_device_fails_for_non_member`)
 
-4. **Edge cases**
-   - Device added while offline, syncs when back online
-   - Conflicting commits during high activity
+4. **Edge cases** ❌ NOT STARTED
+
+---
+
+## Next Steps
+
+Priority order for completing multi-device support:
+
+1. ~~**moat-cli: Auto-add new devices**~~ ✅ DONE - Poll for new key packages and add them
+2. ~~**moat-cli: Collapsed identity display**~~ ✅ DONE - Group messages by DID
+3. **moat-flutter: Device name setup** - Prompt for device name on first launch
+4. ~~**moat-cli: Device management commands**~~ ✅ DONE - CLI interface for remove/kick operations
+5. ~~**Race condition handling**~~ ✅ DONE - Random delay + conflict detection (included in auto-add)

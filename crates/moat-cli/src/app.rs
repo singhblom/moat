@@ -103,6 +103,19 @@ pub struct DisplayMessage {
     pub content: String,
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub is_own: bool,
+    /// The sender's DID (for collapsed identity display)
+    pub sender_did: Option<String>,
+    /// The sender's device name (for message info feature)
+    pub sender_device: Option<String>,
+}
+
+/// A notification about a new device joining a conversation
+#[derive(Debug, Clone)]
+pub struct DeviceAlert {
+    pub conversation_name: String,
+    pub user_name: String,
+    pub device_name: String,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
 }
 
 /// Main application state
@@ -126,6 +139,11 @@ pub struct App {
     // Messages for active conversation
     pub messages: Vec<DisplayMessage>,
     pub message_scroll: usize,
+    pub selected_message: Option<usize>,  // For message info feature
+    pub show_message_info: bool,          // Toggle message info popup
+
+    // Device alerts (new devices joining conversations)
+    pub device_alerts: Vec<DeviceAlert>,
 
     // Input
     pub input_buffer: String,
@@ -139,6 +157,7 @@ pub struct App {
 
     // Polling state
     last_poll: Option<Instant>,
+    last_device_poll: Option<Instant>,
 
     // DIDs to watch for incoming invites
     watched_dids: std::collections::HashSet<String>,
@@ -199,11 +218,15 @@ impl App {
             active_conversation: None,
             messages: Vec::new(),
             message_scroll: 0,
+            selected_message: None,
+            show_message_info: false,
+            device_alerts: Vec::new(),
             input_buffer: String::new(),
             cursor_position: 0,
             new_conv_handle: String::new(),
             tag_map: HashMap::new(),
             last_poll: None,
+            last_device_poll: None,
             watched_dids: std::collections::HashSet::new(),
             watch_handle_input: String::new(),
         })
@@ -240,6 +263,12 @@ impl App {
         // Clear error on any key press
         self.clear_error();
 
+        // Dismiss device alert on any key press if one is showing
+        if !self.device_alerts.is_empty() {
+            self.dismiss_device_alert();
+            return Ok(false);
+        }
+
         match self.focus {
             Focus::Login => self.handle_login_key(key).await,
             Focus::Conversations => self.handle_conversations_key(key).await,
@@ -269,6 +298,19 @@ impl App {
                 if let Err(e) = self.poll_messages().await {
                     // Log error but don't fail the tick
                     self.set_error(format!("Poll error: {e}"));
+                }
+            }
+
+            // Poll for new devices from group members (every 30 seconds)
+            let should_poll_devices = self
+                .last_device_poll
+                .map(|t| t.elapsed().as_secs() >= 30)
+                .unwrap_or(true);
+
+            if should_poll_devices {
+                self.last_device_poll = Some(Instant::now());
+                if let Err(e) = self.poll_for_new_devices().await {
+                    self.debug_log.log(&format!("Device poll error: {e}"));
                 }
             }
         }
@@ -762,6 +804,8 @@ impl App {
             ),
             timestamp: chrono::Utc::now(),
             is_own: false,
+            sender_did: None,
+            sender_device: None,
         });
 
         Ok(())
@@ -851,6 +895,8 @@ impl App {
                     content: stored.content.clone(),
                     timestamp: stored.timestamp,
                     is_own: true,
+                    sender_did: Some(my_did.clone()),
+                    sender_device: self.keys.get_or_create_device_name().ok(),
                 },
             ));
         }
@@ -867,6 +913,11 @@ impl App {
                     if let EventKind::Message = decrypted.event.kind {
                         let content = String::from_utf8_lossy(&decrypted.event.payload).to_string();
 
+                        // Extract sender info for collapsed identity and message info
+                        let (sender_did, sender_device) = decrypted.sender
+                            .map(|s| (Some(s.did), Some(s.device_name)))
+                            .unwrap_or((Some(participant_did.clone()), None));
+
                         all_messages.push((
                             event_record.rkey.clone(),
                             DisplayMessage {
@@ -874,6 +925,8 @@ impl App {
                                 content,
                                 timestamp: event_record.created_at,
                                 is_own: false,
+                                sender_did,
+                                sender_device,
                             },
                         ));
                     }
@@ -926,13 +979,27 @@ impl App {
                 if self.message_scroll < max_scroll {
                     self.message_scroll += 1;
                 }
+                // Update selected message index (from bottom)
+                self.selected_message = Some(self.message_scroll);
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 // Scroll down (decrease offset from bottom)
                 self.message_scroll = self.message_scroll.saturating_sub(1);
+                // Update selected message index (from bottom)
+                self.selected_message = Some(self.message_scroll);
+            }
+            KeyCode::Char('i') => {
+                // Toggle message info popup for selected message
+                if self.selected_message.is_some() && !self.messages.is_empty() {
+                    self.show_message_info = !self.show_message_info;
+                }
             }
             KeyCode::Esc => {
-                self.focus = Focus::Conversations;
+                if self.show_message_info {
+                    self.show_message_info = false;
+                } else {
+                    self.focus = Focus::Conversations;
+                }
             }
             _ => {}
         }
@@ -987,14 +1054,15 @@ impl App {
     }
 
     async fn send_message(&mut self) -> Result<()> {
-        let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
+        if self.client.is_none() {
+            return Err(AppError::NotLoggedIn);
+        }
         let conv_idx = self.active_conversation.ok_or(AppError::NoConversation)?;
-        let conv = &self.conversations[conv_idx];
+        let conv_id = self.conversations[conv_idx].id.clone();
 
         self.debug_log.log(&format!(
-            "send_message: conv_id={}, epoch={}, msg_len={}",
-            &conv.id[..16],
-            conv.current_epoch,
+            "send_message: conv_id={}, msg_len={}",
+            &conv_id[..16],
             self.input_buffer.len()
         ));
 
@@ -1002,18 +1070,40 @@ impl App {
         let key_bundle = self.keys.load_identity_key()?;
 
         // Parse group_id from hex
-        let group_id = hex::decode(&conv.id)
+        let group_id = hex::decode(&conv_id)
             .map_err(|e| AppError::Other(format!("Invalid group ID: {}", e)))?;
 
         // Create message event
+        let current_epoch = self.mls.get_group_epoch(&group_id)?.unwrap_or(1);
+        let message_bytes = self.input_buffer.as_bytes().to_vec();
         let event = Event::message(
             group_id.clone(),
-            conv.current_epoch,
-            self.input_buffer.as_bytes(),
+            current_epoch,
+            &message_bytes,
         );
 
         // Encrypt with MLS (handles padding internally)
-        let encrypted = self.mls.encrypt_event(&group_id, &key_bundle, &event)?;
+        // If encryption fails (e.g., stale epoch), try to refresh state first
+        let encrypted = match self.mls.encrypt_event(&group_id, &key_bundle, &event) {
+            Ok(enc) => enc,
+            Err(e) => {
+                self.debug_log.log(&format!(
+                    "send_message: encryption failed ({}), attempting refresh",
+                    e
+                ));
+                // Try to poll for updates before failing
+                self.poll_messages().await?;
+
+                // Retry encryption with potentially updated state
+                let new_epoch = self.mls.get_group_epoch(&group_id)?.unwrap_or(1);
+                let new_event = Event::message(
+                    group_id.clone(),
+                    new_epoch,
+                    &message_bytes,
+                );
+                self.mls.encrypt_event(&group_id, &key_bundle, &new_event)?
+            }
+        };
         self.save_mls_state()?;
 
         self.debug_log.log(&format!(
@@ -1022,9 +1112,10 @@ impl App {
         ));
 
         // Update stored group state (epoch may have advanced)
-        self.keys.store_group_state(&conv.id, &encrypted.new_group_state)?;
+        self.keys.store_group_state(&conv_id, &encrypted.new_group_state)?;
 
         // Publish encrypted event to PDS
+        let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
         let uri = client.publish_event(&encrypted.tag, &encrypted.ciphertext).await?;
 
         // Extract rkey from URI: at://did:plc:xxx/social.moat.event/rkey
@@ -1034,7 +1125,7 @@ impl App {
         self.debug_log.log(&format!("send_message: published to PDS, rkey={}", rkey));
 
         // Update tag mapping with new tag
-        self.tag_map.insert(encrypted.tag, conv.id.clone());
+        self.tag_map.insert(encrypted.tag, conv_id.clone());
 
         // Store message locally (MLS can't decrypt our own messages)
         let stored_msg = crate::keystore::StoredMessage {
@@ -1043,16 +1134,19 @@ impl App {
             timestamp,
             is_own: true,
         };
-        if let Err(e) = self.keys.append_message(&conv.id, stored_msg) {
+        if let Err(e) = self.keys.append_message(&conv_id, stored_msg) {
             self.debug_log.log(&format!("send_message: failed to store locally: {}", e));
         }
 
         // Add to messages display
+        let my_did = client.did().to_string();
         self.messages.push(DisplayMessage {
             from: "You".to_string(),
             content: self.input_buffer.clone(),
             timestamp,
             is_own: true,
+            sender_did: Some(my_did),
+            sender_device: self.keys.get_or_create_device_name().ok(),
         });
 
         // Clear input
@@ -1225,6 +1319,11 @@ impl App {
                                     .map(|c| c.name.clone())
                                     .unwrap_or_else(|| "Unknown".to_string());
 
+                                // Extract sender info for collapsed identity and message info
+                                let (sender_did, sender_device) = decrypted.sender
+                                    .map(|s| (Some(s.did), Some(s.device_name)))
+                                    .unwrap_or((None, None));
+
                                 // Only add to display if this is the active conversation
                                 if self.active_conversation == conv_idx {
                                     self.messages.push(DisplayMessage {
@@ -1232,6 +1331,8 @@ impl App {
                                         content,
                                         timestamp: event_record.created_at,
                                         is_own: false,
+                                        sender_did,
+                                        sender_device,
                                     });
                                 } else if let Some(idx) = conv_idx {
                                     // Increment unread count
@@ -1367,5 +1468,282 @@ impl App {
 
         self.debug_log.log("process_welcome: successfully joined group");
         Ok(true)
+    }
+
+    /// Poll for new devices from existing group members and auto-add them.
+    ///
+    /// For each conversation:
+    /// 1. Get all DIDs currently in the group
+    /// 2. Fetch key packages for each DID
+    /// 3. Check if any key packages represent new devices (not already in group)
+    /// 4. Add new devices with a random delay to reduce race conditions
+    async fn poll_for_new_devices(&mut self) -> Result<()> {
+        let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
+        let my_did = client.did().to_string();
+
+        // Collect group info for all conversations
+        let mut groups_to_check: Vec<(Vec<u8>, String)> = Vec::new(); // (group_id, conv_id)
+        for conv in &self.conversations {
+            if let Ok(group_id) = hex::decode(&conv.id) {
+                groups_to_check.push((group_id, conv.id.clone()));
+            }
+        }
+
+        for (group_id, conv_id) in groups_to_check {
+            // Get all DIDs in this group
+            let group_dids = match self.mls.get_group_dids(&group_id) {
+                Ok(dids) => dids,
+                Err(e) => {
+                    self.debug_log.log(&format!(
+                        "poll_devices: failed to get DIDs for group {}: {}",
+                        &conv_id[..16.min(conv_id.len())],
+                        e
+                    ));
+                    continue;
+                }
+            };
+
+            // Get current members with their device names
+            let current_members = match self.mls.get_group_members(&group_id) {
+                Ok(m) => m,
+                Err(e) => {
+                    self.debug_log.log(&format!(
+                        "poll_devices: failed to get members for group {}: {}",
+                        &conv_id[..16.min(conv_id.len())],
+                        e
+                    ));
+                    continue;
+                }
+            };
+
+            // Build a set of (DID, device_name) pairs for existing members
+            let existing_devices: std::collections::HashSet<(String, String)> = current_members
+                .iter()
+                .filter_map(|(_, cred)| {
+                    cred.as_ref().map(|c| (c.did().to_string(), c.device_name().to_string()))
+                })
+                .collect();
+
+            self.debug_log.log(&format!(
+                "poll_devices: group {} has {} DIDs, {} device entries",
+                &conv_id[..16.min(conv_id.len())],
+                group_dids.len(),
+                existing_devices.len()
+            ));
+
+            // For each DID in the group, fetch their key packages
+            for did in &group_dids {
+                // Skip our own DID - we don't add our own other devices automatically
+                if did == &my_did {
+                    continue;
+                }
+
+                let key_packages = match client.fetch_key_packages(did).await {
+                    Ok(kps) => kps,
+                    Err(e) => {
+                        self.debug_log.log(&format!(
+                            "poll_devices: failed to fetch key packages for {}: {}",
+                            &did[..20.min(did.len())],
+                            e
+                        ));
+                        continue;
+                    }
+                };
+
+                // Check each key package to see if it's a new device
+                for kp_record in key_packages {
+                    // Extract credential from the key package
+                    let credential = match self.mls.extract_credential_from_key_package(&kp_record.key_package) {
+                        Ok(Some(c)) => c,
+                        Ok(None) => {
+                            self.debug_log.log("poll_devices: key package has no credential");
+                            continue;
+                        }
+                        Err(e) => {
+                            self.debug_log.log(&format!(
+                                "poll_devices: failed to extract credential: {}",
+                                e
+                            ));
+                            continue;
+                        }
+                    };
+
+                    let device_key = (credential.did().to_string(), credential.device_name().to_string());
+
+                    // Skip if this device is already in the group
+                    if existing_devices.contains(&device_key) {
+                        continue;
+                    }
+
+                    self.debug_log.log(&format!(
+                        "poll_devices: found new device '{}' for DID {}",
+                        credential.device_name(),
+                        &credential.did()[..20.min(credential.did().len())]
+                    ));
+
+                    // Add random delay (0-5 seconds) to reduce race conditions
+                    // when multiple group members try to add the same device
+                    let delay_ms = rand::random::<u64>() % 5000;
+                    self.debug_log.log(&format!(
+                        "poll_devices: waiting {}ms before adding device",
+                        delay_ms
+                    ));
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+
+                    // Re-check if device was added by someone else during our delay
+                    let members_after_delay = match self.mls.get_group_members(&group_id) {
+                        Ok(m) => m,
+                        Err(_) => continue,
+                    };
+                    let devices_after_delay: std::collections::HashSet<(String, String)> = members_after_delay
+                        .iter()
+                        .filter_map(|(_, cred)| {
+                            cred.as_ref().map(|c| (c.did().to_string(), c.device_name().to_string()))
+                        })
+                        .collect();
+
+                    if devices_after_delay.contains(&device_key) {
+                        self.debug_log.log(&format!(
+                            "poll_devices: device '{}' was added by someone else",
+                            credential.device_name()
+                        ));
+                        continue;
+                    }
+
+                    // Load our key bundle to perform the add
+                    let key_bundle = match self.keys.load_identity_key() {
+                        Ok(kb) => kb,
+                        Err(e) => {
+                            self.debug_log.log(&format!(
+                                "poll_devices: failed to load key bundle: {}",
+                                e
+                            ));
+                            continue;
+                        }
+                    };
+
+                    // Add the new device
+                    match self.mls.add_device(&group_id, &key_bundle, &kp_record.key_package) {
+                        Ok(welcome_result) => {
+                            self.debug_log.log(&format!(
+                                "poll_devices: successfully added device '{}' to group",
+                                credential.device_name()
+                            ));
+
+                            // Save MLS state
+                            if let Err(e) = self.save_mls_state() {
+                                self.debug_log.log(&format!(
+                                    "poll_devices: failed to save MLS state: {}",
+                                    e
+                                ));
+                            }
+
+                            // Get current epoch for the tag
+                            let epoch = self.mls.get_group_epoch(&group_id)
+                                .ok()
+                                .flatten()
+                                .unwrap_or(1);
+                            let tag = match moat_core::derive_tag_from_group_id(&group_id, epoch) {
+                                Ok(t) => t,
+                                Err(e) => {
+                                    self.debug_log.log(&format!(
+                                        "poll_devices: failed to derive tag: {}",
+                                        e
+                                    ));
+                                    continue;
+                                }
+                            };
+
+                            // Update tag map with new epoch
+                            self.tag_map.insert(tag, conv_id.clone());
+
+                            // Publish the commit (so other members see the change)
+                            if let Err(e) = client.publish_event(&tag, &welcome_result.commit).await {
+                                self.debug_log.log(&format!(
+                                    "poll_devices: failed to publish commit: {}",
+                                    e
+                                ));
+                            }
+
+                            // Encrypt and publish welcome for the new device using stealth address
+                            // First, try to get the DID's stealth address
+                            match client.fetch_stealth_address(did).await {
+                                Ok(Some(stealth_pubkey)) => {
+                                    match moat_core::encrypt_for_stealth(&stealth_pubkey, &welcome_result.welcome) {
+                                        Ok(stealth_ciphertext) => {
+                                            // Publish with random tag (recipient finds it via stealth decryption)
+                                            let random_tag: [u8; 16] = rand::random();
+                                            if let Err(e) = client.publish_event(&random_tag, &stealth_ciphertext).await {
+                                                self.debug_log.log(&format!(
+                                                    "poll_devices: failed to publish welcome: {}",
+                                                    e
+                                                ));
+                                            } else {
+                                                self.debug_log.log(&format!(
+                                                    "poll_devices: published welcome for device '{}'",
+                                                    credential.device_name()
+                                                ));
+                                            }
+                                        }
+                                        Err(e) => {
+                                            self.debug_log.log(&format!(
+                                                "poll_devices: failed to encrypt welcome: {}",
+                                                e
+                                            ));
+                                        }
+                                    }
+                                }
+                                Ok(None) => {
+                                    self.debug_log.log(&format!(
+                                        "poll_devices: no stealth address for {}, cannot send welcome",
+                                        &did[..20.min(did.len())]
+                                    ));
+                                }
+                                Err(e) => {
+                                    self.debug_log.log(&format!(
+                                        "poll_devices: failed to fetch stealth address: {}",
+                                        e
+                                    ));
+                                }
+                            }
+
+                            // Update conversation epoch in UI and add device alert
+                            let conv_name = self.conversations.iter()
+                                .find(|c| c.id == conv_id)
+                                .map(|c| c.name.clone())
+                                .unwrap_or_else(|| "Unknown".to_string());
+
+                            if let Some(conv) = self.conversations.iter_mut().find(|c| c.id == conv_id) {
+                                conv.current_epoch = epoch;
+                            }
+
+                            // Add device alert for UI notification
+                            self.device_alerts.push(DeviceAlert {
+                                conversation_name: conv_name,
+                                user_name: credential.did().to_string(),
+                                device_name: credential.device_name().to_string(),
+                                timestamp: chrono::Utc::now(),
+                            });
+                        }
+                        Err(e) => {
+                            self.debug_log.log(&format!(
+                                "poll_devices: failed to add device '{}': {}",
+                                credential.device_name(),
+                                e
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Dismiss the oldest device alert
+    pub fn dismiss_device_alert(&mut self) {
+        if !self.device_alerts.is_empty() {
+            self.device_alerts.remove(0);
+        }
     }
 }

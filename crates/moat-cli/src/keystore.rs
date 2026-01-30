@@ -180,6 +180,24 @@ impl KeyStore {
         Ok(metadata)
     }
 
+    /// Delete group metadata (used when leaving a conversation)
+    pub fn delete_group_metadata(&self, group_id: &str) -> Result<()> {
+        let meta_path = self.base_path.join(format!("group_{group_id}.meta"));
+        let state_path = self.base_path.join(format!("group_{group_id}.state"));
+        let messages_path = self.base_path.join(format!("group_{group_id}.messages"));
+
+        if meta_path.exists() {
+            fs::remove_file(&meta_path)?;
+        }
+        if state_path.exists() {
+            fs::remove_file(&state_path)?;
+        }
+        if messages_path.exists() {
+            fs::remove_file(&messages_path)?;
+        }
+        Ok(())
+    }
+
     /// Load pagination state
     pub fn load_pagination_state(&self) -> Result<PaginationState> {
         let path = self.base_path.join("pagination.json");

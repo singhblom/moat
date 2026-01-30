@@ -1,6 +1,6 @@
 //! Terminal UI rendering with Ratatui
 
-use crate::app::{App, Focus, LoginField};
+use crate::app::{App, DeviceAlert, Focus, LoginField};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -34,6 +34,16 @@ pub fn draw(frame: &mut Frame, app: &App) {
         draw_handle_input_popup(frame, "New Conversation", "Enter handle:", &app.new_conv_handle);
     } else if app.focus == Focus::WatchHandle {
         draw_handle_input_popup(frame, "Watch for Invites", "Enter handle to watch:", &app.watch_handle_input);
+    }
+
+    // Draw message info popup if toggled
+    if app.show_message_info {
+        draw_message_info_popup(frame, app);
+    }
+
+    // Draw device alerts if any
+    if let Some(alert) = app.device_alerts.first() {
+        draw_device_alert(frame, alert);
     }
 
     // Draw error popup if present
@@ -400,4 +410,107 @@ fn draw_handle_input_popup(frame: &mut Frame, title: &str, label: &str, input: &
 
     // Cursor
     frame.set_cursor_position((chunks[1].x + 1 + input.len() as u16, chunks[1].y + 1));
+}
+
+fn draw_message_info_popup(frame: &mut Frame, app: &App) {
+    // Get the selected message (from bottom offset)
+    let msg_index = if let Some(offset) = app.selected_message {
+        app.messages.len().saturating_sub(1).saturating_sub(offset)
+    } else {
+        return;
+    };
+
+    let msg = match app.messages.get(msg_index) {
+        Some(m) => m,
+        None => return,
+    };
+
+    let area = frame.area();
+
+    // Center popup
+    let popup_width = 50.min(area.width.saturating_sub(4));
+    let popup_height = 10;
+    let popup_x = (area.width - popup_width) / 2;
+    let popup_y = (area.height - popup_height) / 2;
+
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+    frame.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .title(" Message Info (press 'i' or Esc to close) ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    // Build info lines
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("From: ", Style::default().fg(Color::Yellow)),
+            Span::raw(&msg.from),
+        ]),
+        Line::from(vec![
+            Span::styled("Time: ", Style::default().fg(Color::Yellow)),
+            Span::raw(msg.timestamp.format("%Y-%m-%d %H:%M:%S UTC").to_string()),
+        ]),
+    ];
+
+    if let Some(ref did) = msg.sender_did {
+        lines.push(Line::from(vec![
+            Span::styled("DID: ", Style::default().fg(Color::Yellow)),
+            Span::raw(did),
+        ]));
+    }
+
+    if let Some(ref device) = msg.sender_device {
+        lines.push(Line::from(vec![
+            Span::styled("Device: ", Style::default().fg(Color::Yellow)),
+            Span::raw(device),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("Content: ", Style::default().fg(Color::Yellow)),
+    ]));
+
+    // Truncate content if too long
+    let max_content_len = (popup_width as usize).saturating_sub(4);
+    let content_preview: String = msg.content.chars().take(max_content_len).collect();
+    lines.push(Line::from(Span::raw(content_preview)));
+
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, inner);
+}
+
+fn draw_device_alert(frame: &mut Frame, alert: &DeviceAlert) {
+    let area = frame.area();
+
+    // Top notification bar
+    let alert_width = area.width.saturating_sub(4);
+    let alert_height = 3;
+    let alert_x = 2;
+    let alert_y = 1;
+
+    let alert_area = Rect::new(alert_x, alert_y, alert_width, alert_height);
+
+    frame.render_widget(Clear, alert_area);
+
+    let block = Block::default()
+        .title(" New Device Alert ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Magenta));
+
+    let text = format!(
+        "New device '{}' joined conversation '{}' (press any key to dismiss)",
+        alert.device_name, alert.conversation_name
+    );
+
+    let paragraph = Paragraph::new(text)
+        .block(block)
+        .style(Style::default().fg(Color::Magenta));
+
+    frame.render_widget(paragraph, alert_area);
 }

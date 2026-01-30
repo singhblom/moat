@@ -65,6 +65,42 @@ enum Command {
         #[arg(long)]
         repository: Option<String>,
     },
+
+    /// List devices in a conversation
+    Devices {
+        /// Conversation ID (hex-encoded group_id, or "list" to show all)
+        #[arg(long)]
+        conversation: String,
+    },
+
+    /// Remove a specific device from a conversation
+    RemoveDevice {
+        /// Conversation ID (hex-encoded group_id)
+        #[arg(long)]
+        conversation: String,
+
+        /// Leaf index of the device to remove
+        #[arg(long)]
+        leaf_index: u32,
+    },
+
+    /// Kick a user (remove all their devices) from a conversation
+    Kick {
+        /// Conversation ID (hex-encoded group_id)
+        #[arg(long)]
+        conversation: String,
+
+        /// DID of the user to kick
+        #[arg(long)]
+        did: String,
+    },
+
+    /// Leave a conversation (remove your own device)
+    Leave {
+        /// Conversation ID (hex-encoded group_id)
+        #[arg(long)]
+        conversation: String,
+    },
 }
 
 #[tokio::main]
@@ -83,6 +119,19 @@ async fn main() -> anyhow::Result<()> {
             events,
             repository,
         }) => cmd_export(args.storage_dir, log, events, repository).await,
+        Some(Command::Devices { conversation }) => {
+            cmd_devices(args.storage_dir, &conversation).await
+        }
+        Some(Command::RemoveDevice {
+            conversation,
+            leaf_index,
+        }) => cmd_remove_device(args.storage_dir, &conversation, leaf_index).await,
+        Some(Command::Kick { conversation, did }) => {
+            cmd_kick(args.storage_dir, &conversation, &did).await
+        }
+        Some(Command::Leave { conversation }) => {
+            cmd_leave(args.storage_dir, &conversation).await
+        }
     }
 }
 
@@ -479,6 +528,207 @@ async fn cmd_export(
         std::fs::write(dest, &json)?;
         println!("Exported {} events to {}", json_events.len(), dest.display());
     }
+
+    Ok(())
+}
+
+// ── devices ─────────────────────────────────────────────────────────
+
+async fn cmd_devices(storage_dir: Option<PathBuf>, conversation: &str) -> anyhow::Result<()> {
+    let base_dir = resolve_storage_dir(storage_dir)?;
+    let keys = keystore::KeyStore::with_path(base_dir.join("keys"))?;
+
+    // Load MLS state
+    let mls_path = base_dir.join("mls.bin");
+    let mls = if mls_path.exists() {
+        let bytes = std::fs::read(&mls_path)?;
+        moat_core::MoatSession::from_state(&bytes)?
+    } else {
+        anyhow::bail!("No MLS state found. Start a conversation in the TUI first.");
+    };
+
+    // List all conversations if requested
+    if conversation == "list" {
+        let groups = keys.list_groups().unwrap_or_default();
+        println!("Conversations:");
+        for gid in groups {
+            let meta = keys.load_group_metadata(&gid).ok();
+            let name = meta
+                .map(|m| m.participant_handle)
+                .unwrap_or_else(|| "(unknown)".to_string());
+            println!("  {} - {}", &gid[..16], name);
+        }
+        return Ok(());
+    }
+
+    // Decode group_id
+    let group_id = hex::decode(conversation)
+        .map_err(|e| anyhow::anyhow!("Invalid conversation ID: {}", e))?;
+
+    // Get members
+    let members = mls.get_group_members(&group_id)?;
+
+    println!("Devices in conversation {}:", &conversation[..16.min(conversation.len())]);
+    println!();
+    println!("{:<6} {:<20} {}", "Index", "Device Name", "DID");
+    println!("{}", "-".repeat(70));
+
+    for (leaf_index, credential) in members {
+        let (did, device) = credential
+            .map(|c| (c.did().to_string(), c.device_name().to_string()))
+            .unwrap_or_else(|| ("(unknown)".to_string(), "(unknown)".to_string()));
+
+        println!("{:<6} {:<20} {}", leaf_index, device, did);
+    }
+
+    Ok(())
+}
+
+// ── remove-device ───────────────────────────────────────────────────
+
+async fn cmd_remove_device(
+    storage_dir: Option<PathBuf>,
+    conversation: &str,
+    leaf_index: u32,
+) -> anyhow::Result<()> {
+    let base_dir = resolve_storage_dir(storage_dir)?;
+    let keys = keystore::KeyStore::with_path(base_dir.join("keys"))?;
+    let client = login_from_keystore(&keys).await?;
+
+    // Load MLS state
+    let mls_path = base_dir.join("mls.bin");
+    let mls = if mls_path.exists() {
+        let bytes = std::fs::read(&mls_path)?;
+        moat_core::MoatSession::from_state(&bytes)?
+    } else {
+        anyhow::bail!("No MLS state found.");
+    };
+
+    // Decode group_id
+    let group_id = hex::decode(conversation)
+        .map_err(|e| anyhow::anyhow!("Invalid conversation ID: {}", e))?;
+
+    // Load key bundle
+    let key_bundle = keys
+        .load_identity_key()
+        .map_err(|e| anyhow::anyhow!("Failed to load identity key: {}", e))?;
+
+    // Remove the member
+    let result = mls.remove_member(&group_id, &key_bundle, leaf_index)?;
+
+    // Save MLS state
+    let state = mls.export_state()?;
+    let temp_path = mls_path.with_extension("tmp");
+    std::fs::write(&temp_path, &state)?;
+    std::fs::rename(&temp_path, &mls_path)?;
+
+    // Get current epoch for tag
+    let epoch = mls.get_group_epoch(&group_id)?.unwrap_or(1);
+    let tag = moat_core::derive_tag_from_group_id(&group_id, epoch)?;
+
+    // Publish the commit
+    let uri = client.publish_event(&tag, &result.commit).await?;
+    println!("Removed device at leaf index {}", leaf_index);
+    println!("Published commit: {}", uri);
+
+    Ok(())
+}
+
+// ── kick ────────────────────────────────────────────────────────────
+
+async fn cmd_kick(
+    storage_dir: Option<PathBuf>,
+    conversation: &str,
+    did_to_kick: &str,
+) -> anyhow::Result<()> {
+    let base_dir = resolve_storage_dir(storage_dir)?;
+    let keys = keystore::KeyStore::with_path(base_dir.join("keys"))?;
+    let client = login_from_keystore(&keys).await?;
+
+    // Load MLS state
+    let mls_path = base_dir.join("mls.bin");
+    let mls = if mls_path.exists() {
+        let bytes = std::fs::read(&mls_path)?;
+        moat_core::MoatSession::from_state(&bytes)?
+    } else {
+        anyhow::bail!("No MLS state found.");
+    };
+
+    // Decode group_id
+    let group_id = hex::decode(conversation)
+        .map_err(|e| anyhow::anyhow!("Invalid conversation ID: {}", e))?;
+
+    // Load key bundle
+    let key_bundle = keys
+        .load_identity_key()
+        .map_err(|e| anyhow::anyhow!("Failed to load identity key: {}", e))?;
+
+    // Kick the user (removes all their devices)
+    let result = mls.kick_user(&group_id, &key_bundle, did_to_kick)?;
+
+    // Save MLS state
+    let state = mls.export_state()?;
+    let temp_path = mls_path.with_extension("tmp");
+    std::fs::write(&temp_path, &state)?;
+    std::fs::rename(&temp_path, &mls_path)?;
+
+    // Get current epoch for tag
+    let epoch = mls.get_group_epoch(&group_id)?.unwrap_or(1);
+    let tag = moat_core::derive_tag_from_group_id(&group_id, epoch)?;
+
+    // Publish the commit
+    let uri = client.publish_event(&tag, &result.commit).await?;
+    println!("Kicked user {}", did_to_kick);
+    println!("Published commit: {}", uri);
+
+    Ok(())
+}
+
+// ── leave ───────────────────────────────────────────────────────────
+
+async fn cmd_leave(storage_dir: Option<PathBuf>, conversation: &str) -> anyhow::Result<()> {
+    let base_dir = resolve_storage_dir(storage_dir)?;
+    let keys = keystore::KeyStore::with_path(base_dir.join("keys"))?;
+    let client = login_from_keystore(&keys).await?;
+
+    // Load MLS state
+    let mls_path = base_dir.join("mls.bin");
+    let mls = if mls_path.exists() {
+        let bytes = std::fs::read(&mls_path)?;
+        moat_core::MoatSession::from_state(&bytes)?
+    } else {
+        anyhow::bail!("No MLS state found.");
+    };
+
+    // Decode group_id
+    let group_id = hex::decode(conversation)
+        .map_err(|e| anyhow::anyhow!("Invalid conversation ID: {}", e))?;
+
+    // Load key bundle
+    let key_bundle = keys
+        .load_identity_key()
+        .map_err(|e| anyhow::anyhow!("Failed to load identity key: {}", e))?;
+
+    // Leave the group
+    let result = mls.leave_group(&group_id, &key_bundle)?;
+
+    // Save MLS state
+    let state = mls.export_state()?;
+    let temp_path = mls_path.with_extension("tmp");
+    std::fs::write(&temp_path, &state)?;
+    std::fs::rename(&temp_path, &mls_path)?;
+
+    // Get current epoch for tag
+    let epoch = mls.get_group_epoch(&group_id)?.unwrap_or(1);
+    let tag = moat_core::derive_tag_from_group_id(&group_id, epoch)?;
+
+    // Publish the commit
+    let uri = client.publish_event(&tag, &result.commit).await?;
+    println!("Left conversation {}", &conversation[..16.min(conversation.len())]);
+    println!("Published commit: {}", uri);
+
+    // Clean up local metadata
+    let _ = keys.delete_group_metadata(conversation);
 
     Ok(())
 }
