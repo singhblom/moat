@@ -6,8 +6,10 @@ import 'package:integration_test/integration_test.dart';
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(() async => await RustLib.init());
-  testWidgets('Can call rust function', (WidgetTester tester) async {
-    await tester.pumpWidget(const MyApp());
-    expect(find.textContaining('Result: `Hello, Tom!`'), findsOneWidget);
+  testWidgets('App starts', (WidgetTester tester) async {
+    await tester.pumpWidget(const MoatApp());
+    // App should show loading initially, then login screen
+    await tester.pumpAndSettle();
+    expect(find.text('Moat'), findsOneWidget);
   });
 }

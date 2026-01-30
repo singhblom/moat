@@ -38,6 +38,18 @@ dependencies:
     path: rust_builder
   flutter_rust_bridge: 2.11.1
 
+  # Secure storage for credentials and keys
+  flutter_secure_storage: ^9.2.2
+
+  # HTTP client for ATProto
+  http: ^1.2.2
+
+  # State management
+  provider: ^6.1.2
+
+  # Path utilities
+  path_provider: ^2.1.5
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
