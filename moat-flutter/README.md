@@ -1,16 +1,40 @@
-# moat_flutter
+# Moat Flutter
 
-A new Flutter project.
+Flutter app for Moat encrypted messenger. Uses flutter_rust_bridge to call moat-core for MLS cryptography.
 
-## Getting Started
+## Requirements
 
-This project is a starting point for a Flutter application.
+- Flutter 3.x
+- Rust toolchain with Android targets
+- Android SDK (API 29+)
 
-A few resources to get you started if this is your first Flutter project:
+## Setup
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+Install the flutter_rust_bridge codegen tool:
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+```bash
+cargo install flutter_rust_bridge_codegen
+```
+
+## Running
+
+Start an Android emulator, then:
+
+```bash
+cd moat-flutter
+flutter run
+```
+
+## Development
+
+After modifying Rust code in `rust/src/api/`, regenerate Dart bindings:
+
+```bash
+flutter_rust_bridge_codegen generate
+```
+
+## Architecture
+
+- `rust/` — Thin Rust wrapper that re-exports moat-core's API for FRB
+- `lib/src/rust/` — Auto-generated Dart bindings (do not edit)
+- `lib/main.dart` — Flutter app entry point
