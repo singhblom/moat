@@ -24,6 +24,7 @@ chrono = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 rand = { workspace = true }
+hostname = "0.4"
 
 [dev-dependencies]
 tempfile = { workspace = true }

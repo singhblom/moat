@@ -1,11 +1,11 @@
 //! Application state and logic
 
-use crate::keystore::{hex, GroupMetadata, KeyStore};
+use crate::keystore::{hex, GroupMetadata, KeyStore, StoredSession};
 use crossterm::event::{KeyCode, KeyEvent};
 use moat_atproto::MoatAtprotoClient;
 use moat_core::{
     encrypt_for_stealth, generate_stealth_keypair, try_decrypt_stealth, Event, EventKind,
-    MoatSession, CIPHERSUITE,
+    MoatCredential, MoatSession, CIPHERSUITE,
 };
 use std::collections::HashMap;
 use std::io::Write;
@@ -277,17 +277,67 @@ impl App {
     }
 
     async fn auto_login(&mut self) -> Result<()> {
+        // First, try to resume from stored session tokens (avoids rate limiting)
+        if self.keys.has_session() {
+            if let Ok(stored_session) = self.keys.load_session() {
+                self.set_status("Resuming session...".to_string());
+
+                match MoatAtprotoClient::resume_session(
+                    &stored_session.did,
+                    &stored_session.access_jwt,
+                    &stored_session.refresh_jwt,
+                )
+                .await
+                {
+                    Ok(client) => {
+                        // Update stored tokens (may have been refreshed)
+                        if let Some((access_jwt, refresh_jwt)) = client.get_session_tokens().await {
+                            let _ = self.keys.store_session(&StoredSession {
+                                did: stored_session.did.clone(),
+                                access_jwt,
+                                refresh_jwt,
+                            });
+                        }
+
+                        self.client = Some(client);
+                        self.status_message = None;
+                        self.load_conversations().await?;
+                        return Ok(());
+                    }
+                    Err(_) => {
+                        // Session expired or invalid, clear it and fall through to login
+                        let _ = self.keys.clear_session();
+                        self.debug_log
+                            .log("auto_login: stored session invalid, will try fresh login");
+                    }
+                }
+            }
+        }
+
+        // Fall back to fresh login with credentials
         if let Ok((handle, password)) = self.keys.load_credentials() {
             self.set_status("Logging in...".to_string());
 
             match MoatAtprotoClient::login(&handle, &password).await {
                 Ok(client) => {
+                    // Store session tokens for future use
+                    if let Some((access_jwt, refresh_jwt)) = client.get_session_tokens().await {
+                        let _ = self.keys.store_session(&StoredSession {
+                            did: client.did().to_string(),
+                            access_jwt,
+                            refresh_jwt,
+                        });
+                    }
+
                     self.client = Some(client);
                     self.status_message = None;
                     self.load_conversations().await?;
                 }
                 Err(e) => {
-                    self.set_error(format!("Auto-login failed: {e}"));
+                    // Don't retry automatically - show warning and go to login screen
+                    self.set_error(format!(
+                        "Login failed: {e}\n\nIf you hit rate limits, wait before trying again.\nCheck your app password if credentials are outdated."
+                    ));
                     self.focus = Focus::Login;
                 }
             }
@@ -341,13 +391,25 @@ impl App {
         // Store credentials
         self.keys.store_credentials(&handle, &password)?;
 
+        // Store session tokens to avoid future logins (prevents rate limiting)
+        if let Some((access_jwt, refresh_jwt)) = client.get_session_tokens().await {
+            let _ = self.keys.store_session(&StoredSession {
+                did: client.did().to_string(),
+                access_jwt,
+                refresh_jwt,
+            });
+        }
+
         // Generate identity key if needed (using MoatSession for persistence)
         if !self.keys.has_identity_key() {
             self.set_status("Generating identity key...".to_string());
-            let identity = client.did().as_bytes();
+
+            // Get or create device name for multi-device support
+            let device_name = self.keys.get_or_create_device_name()?;
+            let credential = MoatCredential::new(client.did(), &device_name);
 
             // Use MoatSession for persistent key generation
-            let (key_package, key_bundle) = self.mls.generate_key_package(identity)?;
+            let (key_package, key_bundle) = self.mls.generate_key_package(&credential)?;
             self.save_mls_state()?;
 
             // Store key bundle locally (needed for encryption operations)
@@ -623,14 +685,16 @@ impl App {
             .key_package
             .clone();
 
-        // 4. Load our key bundle and get identity
+        // 4. Load our key bundle and create credential
         let key_bundle = self.keys.load_identity_key()?;
-        let identity = self.client.as_ref().unwrap().did().as_bytes().to_vec();
+        let did = self.client.as_ref().unwrap().did().to_string();
+        let device_name = self.keys.get_or_create_device_name()?;
+        let credential = MoatCredential::new(&did, &device_name);
 
         self.set_status("Creating encrypted group...".to_string());
 
         // 5. Create MLS group
-        let group_id = self.mls.create_group(&identity, &key_bundle)?;
+        let group_id = self.mls.create_group(&credential, &key_bundle)?;
 
         // 6. Add recipient to group (generates MLS Welcome)
         let welcome_result = self

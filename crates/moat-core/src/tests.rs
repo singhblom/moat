@@ -1,20 +1,20 @@
 //! Integration tests for moat-core
 
-use crate::{derive_tag_from_group_id, pad_to_bucket, unpad, Event, EventKind, Error, ErrorCode, MoatSession};
+use crate::{derive_tag_from_group_id, pad_to_bucket, unpad, Event, EventKind, Error, ErrorCode, MoatCredential, MoatSession};
 
 #[test]
 fn test_key_package_generation() {
     let session = MoatSession::new();
-    let identity = b"alice@example.com";
+    let credential = MoatCredential::new("did:plc:alice123", "Test Device");
 
-    let (key_package, key_bundle) = session.generate_key_package(identity).unwrap();
+    let (key_package, key_bundle) = session.generate_key_package(&credential).unwrap();
 
     // Key package should be non-empty
     assert!(!key_package.is_empty());
     assert!(!key_bundle.is_empty());
 
     // Generating again should produce different results (due to randomness)
-    let (key_package2, key_bundle2) = session.generate_key_package(identity).unwrap();
+    let (key_package2, key_bundle2) = session.generate_key_package(&credential).unwrap();
     assert_ne!(key_package, key_package2);
     assert_ne!(key_bundle, key_bundle2);
 }
@@ -22,10 +22,10 @@ fn test_key_package_generation() {
 #[test]
 fn test_create_group() {
     let session = MoatSession::new();
-    let identity = b"alice@example.com";
-    let (_key_package, key_bundle) = session.generate_key_package(identity).unwrap();
+    let credential = MoatCredential::new("did:plc:alice123", "Test Device");
+    let (_key_package, key_bundle) = session.generate_key_package(&credential).unwrap();
 
-    let group_id = session.create_group(identity, &key_bundle).unwrap();
+    let group_id = session.create_group(&credential, &key_bundle).unwrap();
 
     // Group ID should be non-empty
     assert!(!group_id.is_empty());
@@ -161,9 +161,9 @@ fn test_event_with_device_id() {
 #[test]
 fn test_tag_from_group() {
     let session = MoatSession::new();
-    let identity = b"alice@example.com";
-    let (_key_package, key_bundle) = session.generate_key_package(identity).unwrap();
-    let group_id = session.create_group(identity, &key_bundle).unwrap();
+    let credential = MoatCredential::new("did:plc:alice123", "Test Device");
+    let (_key_package, key_bundle) = session.generate_key_package(&credential).unwrap();
+    let group_id = session.create_group(&credential, &key_bundle).unwrap();
 
     // Derive tag from group_id and epoch
     let epoch = session.get_group_epoch(&group_id).unwrap().unwrap();
@@ -178,9 +178,9 @@ fn test_tag_from_group() {
 #[test]
 fn test_tags_differ_across_epochs() {
     let session = MoatSession::new();
-    let identity = b"alice@example.com";
-    let (_key_package, key_bundle) = session.generate_key_package(identity).unwrap();
-    let group_id = session.create_group(identity, &key_bundle).unwrap();
+    let credential = MoatCredential::new("did:plc:alice123", "Test Device");
+    let (_key_package, key_bundle) = session.generate_key_package(&credential).unwrap();
+    let group_id = session.create_group(&credential, &key_bundle).unwrap();
 
     let epochs = vec![0, 1, 2, 3];
     let tags: Vec<[u8; 16]> = epochs
@@ -227,14 +227,14 @@ fn test_moat_session_in_memory() {
     let session = MoatSession::new();
 
     // Generate key package
-    let identity = b"alice@example.com";
-    let (key_package, key_bundle) = session.generate_key_package(identity).unwrap();
+    let credential = MoatCredential::new("did:plc:alice123", "Test Device");
+    let (key_package, key_bundle) = session.generate_key_package(&credential).unwrap();
 
     assert!(!key_package.is_empty());
     assert!(!key_bundle.is_empty());
 
     // Create a group
-    let group_id = session.create_group(identity, &key_bundle).unwrap();
+    let group_id = session.create_group(&credential, &key_bundle).unwrap();
     assert!(!group_id.is_empty());
 
     // Should be able to get epoch
@@ -245,15 +245,15 @@ fn test_moat_session_in_memory() {
 #[test]
 fn test_moat_session_persistence() {
     let group_id: Vec<u8>;
-    let identity = b"alice@example.com";
+    let credential = MoatCredential::new("did:plc:alice123", "Test Device");
     let state: Vec<u8>;
 
     // First session: create group, export state
     {
         let session = MoatSession::new();
 
-        let (_key_package, key_bundle) = session.generate_key_package(identity).unwrap();
-        group_id = session.create_group(identity, &key_bundle).unwrap();
+        let (_key_package, key_bundle) = session.generate_key_package(&credential).unwrap();
+        group_id = session.create_group(&credential, &key_bundle).unwrap();
 
         // Verify group is accessible
         let epoch = session.get_group_epoch(&group_id).unwrap();
@@ -278,9 +278,9 @@ fn test_encrypt_event() {
     let session = MoatSession::new();
 
     // Create Alice
-    let alice_identity = b"alice@example.com";
-    let (_alice_kp, alice_bundle) = session.generate_key_package(alice_identity).unwrap();
-    let group_id = session.create_group(alice_identity, &alice_bundle).unwrap();
+    let alice_credential = MoatCredential::new("did:plc:alice123", "Alice Phone");
+    let (_alice_kp, alice_bundle) = session.generate_key_package(&alice_credential).unwrap();
+    let group_id = session.create_group(&alice_credential, &alice_bundle).unwrap();
 
     // Create an event
     let original_event = Event::message(group_id.clone(), 0, b"Hello, world!");
@@ -300,16 +300,16 @@ fn test_two_party_messaging() {
     let alice_session = MoatSession::new();
     let bob_session = MoatSession::new();
 
-    // Alice creates her identity
-    let alice_identity = b"alice@example.com";
-    let (_alice_kp, alice_bundle) = alice_session.generate_key_package(alice_identity).unwrap();
+    // Alice creates her identity with device name
+    let alice_credential = MoatCredential::new("did:plc:alice123", "Alice Phone");
+    let (_alice_kp, alice_bundle) = alice_session.generate_key_package(&alice_credential).unwrap();
 
-    // Bob creates his identity
-    let bob_identity = b"bob@example.com";
-    let (bob_kp, bob_bundle) = bob_session.generate_key_package(bob_identity).unwrap();
+    // Bob creates his identity with device name
+    let bob_credential = MoatCredential::new("did:plc:bob456", "Bob Laptop");
+    let (bob_kp, bob_bundle) = bob_session.generate_key_package(&bob_credential).unwrap();
 
     // Alice creates a group
-    let group_id = alice_session.create_group(alice_identity, &alice_bundle).unwrap();
+    let group_id = alice_session.create_group(&alice_credential, &alice_bundle).unwrap();
 
     // Alice adds Bob to the group
     let welcome_result = alice_session.add_member(&group_id, &alice_bundle, &bob_kp).unwrap();
@@ -324,19 +324,29 @@ fn test_two_party_messaging() {
     let message = Event::message(group_id.clone(), 0, b"Hello Bob!");
     let encrypted = alice_session.encrypt_event(&group_id, &alice_bundle, &message).unwrap();
 
-    // Bob decrypts the message
+    // Bob decrypts the message and gets sender info
     let decrypted = bob_session.decrypt_event(&bob_group_id, &encrypted.ciphertext).unwrap();
     assert_eq!(decrypted.event.kind, EventKind::Message);
     assert_eq!(decrypted.event.payload, b"Hello Bob!");
+
+    // Verify sender info is extracted
+    let sender = decrypted.sender.expect("Should have sender info");
+    assert_eq!(sender.did, "did:plc:alice123");
+    assert_eq!(sender.device_name, "Alice Phone");
 
     // Bob replies
     let reply = Event::message(group_id.clone(), 0, b"Hello Alice!");
     let encrypted_reply = bob_session.encrypt_event(&bob_group_id, &bob_bundle, &reply).unwrap();
 
-    // Alice decrypts Bob's reply
+    // Alice decrypts Bob's reply and gets sender info
     let decrypted_reply = alice_session.decrypt_event(&group_id, &encrypted_reply.ciphertext).unwrap();
     assert_eq!(decrypted_reply.event.kind, EventKind::Message);
     assert_eq!(decrypted_reply.event.payload, b"Hello Alice!");
+
+    // Verify sender info
+    let sender = decrypted_reply.sender.expect("Should have sender info");
+    assert_eq!(sender.did, "did:plc:bob456");
+    assert_eq!(sender.device_name, "Bob Laptop");
 }
 
 #[test]
@@ -421,6 +431,7 @@ fn test_error_code_values() {
     assert_eq!(ErrorCode::ProcessCommit as u32, 15);
     assert_eq!(ErrorCode::TagDerivation as u32, 16);
     assert_eq!(ErrorCode::StealthEncryption as u32, 17);
+    assert_eq!(ErrorCode::RemoveMember as u32, 18);
 }
 
 #[test]
@@ -444,4 +455,271 @@ fn test_error_code_from_real_failure() {
     };
     assert_eq!(err.code(), ErrorCode::Deserialization);
     assert!(!err.message().is_empty());
+}
+
+// Multi-device support tests
+
+#[test]
+fn test_moat_credential_creation() {
+    let cred = MoatCredential::new("did:plc:test123", "My Phone");
+    assert_eq!(cred.did(), "did:plc:test123");
+    assert_eq!(cred.device_name(), "My Phone");
+}
+
+#[test]
+fn test_moat_credential_serialization() {
+    let cred = MoatCredential::new("did:plc:abc", "Work Laptop");
+    let bytes = cred.to_bytes().unwrap();
+    let recovered = MoatCredential::from_bytes(&bytes).unwrap();
+    assert_eq!(cred.did(), recovered.did());
+    assert_eq!(cred.device_name(), recovered.device_name());
+}
+
+#[test]
+fn test_extract_credential_from_key_package() {
+    let session = MoatSession::new();
+    let credential = MoatCredential::new("did:plc:xyz789", "Test Device");
+
+    let (key_package_bytes, _key_bundle) = session.generate_key_package(&credential).unwrap();
+
+    // Extract credential from key package
+    let extracted = session.extract_credential_from_key_package(&key_package_bytes).unwrap();
+    let extracted = extracted.expect("Should be able to extract credential");
+
+    assert_eq!(extracted.did(), "did:plc:xyz789");
+    assert_eq!(extracted.device_name(), "Test Device");
+}
+
+#[test]
+fn test_get_group_members() {
+    let alice_session = MoatSession::new();
+    let bob_session = MoatSession::new();
+
+    let alice_credential = MoatCredential::new("did:plc:alice123", "Alice Phone");
+    let bob_credential = MoatCredential::new("did:plc:bob456", "Bob Laptop");
+
+    let (_alice_kp, alice_bundle) = alice_session.generate_key_package(&alice_credential).unwrap();
+    let (bob_kp, _bob_bundle) = bob_session.generate_key_package(&bob_credential).unwrap();
+
+    // Alice creates a group
+    let group_id = alice_session.create_group(&alice_credential, &alice_bundle).unwrap();
+
+    // Check members before adding Bob
+    let members = alice_session.get_group_members(&group_id).unwrap();
+    assert_eq!(members.len(), 1);
+    let (_, alice_cred) = &members[0];
+    let alice_cred = alice_cred.as_ref().expect("Should have credential");
+    assert_eq!(alice_cred.did(), "did:plc:alice123");
+
+    // Add Bob
+    let _welcome = alice_session.add_member(&group_id, &alice_bundle, &bob_kp).unwrap();
+
+    // Check members after adding Bob
+    let members = alice_session.get_group_members(&group_id).unwrap();
+    assert_eq!(members.len(), 2);
+
+    // Find Bob's credential
+    let bob_found = members.iter().any(|(_, cred)| {
+        cred.as_ref().map_or(false, |c| c.did() == "did:plc:bob456")
+    });
+    assert!(bob_found, "Bob should be in the group");
+}
+
+#[test]
+fn test_multi_device_same_did() {
+    // Test that the same DID can have multiple devices (key packages)
+    let session = MoatSession::new();
+
+    let did = "did:plc:user123";
+    let device1 = MoatCredential::new(did, "Phone");
+    let device2 = MoatCredential::new(did, "Laptop");
+
+    let (kp1, _) = session.generate_key_package(&device1).unwrap();
+    let (kp2, _) = session.generate_key_package(&device2).unwrap();
+
+    // Extract and verify credentials
+    let cred1 = session.extract_credential_from_key_package(&kp1).unwrap().unwrap();
+    let cred2 = session.extract_credential_from_key_package(&kp2).unwrap().unwrap();
+
+    // Same DID, different device names
+    assert_eq!(cred1.did(), cred2.did());
+    assert_ne!(cred1.device_name(), cred2.device_name());
+}
+
+#[test]
+fn test_get_group_dids() {
+    let alice_session = MoatSession::new();
+    let bob_session = MoatSession::new();
+
+    let alice_credential = MoatCredential::new("did:plc:alice123", "Alice Phone");
+    let bob_credential = MoatCredential::new("did:plc:bob456", "Bob Laptop");
+
+    let (_alice_kp, alice_bundle) = alice_session.generate_key_package(&alice_credential).unwrap();
+    let (bob_kp, _bob_bundle) = bob_session.generate_key_package(&bob_credential).unwrap();
+
+    let group_id = alice_session.create_group(&alice_credential, &alice_bundle).unwrap();
+    let _welcome = alice_session.add_member(&group_id, &alice_bundle, &bob_kp).unwrap();
+
+    let dids = alice_session.get_group_dids(&group_id).unwrap();
+    assert_eq!(dids.len(), 2);
+    assert!(dids.contains(&"did:plc:alice123".to_string()));
+    assert!(dids.contains(&"did:plc:bob456".to_string()));
+}
+
+#[test]
+fn test_is_did_in_group() {
+    let alice_session = MoatSession::new();
+    let bob_session = MoatSession::new();
+
+    let alice_credential = MoatCredential::new("did:plc:alice123", "Alice Phone");
+    let bob_credential = MoatCredential::new("did:plc:bob456", "Bob Laptop");
+
+    let (_alice_kp, alice_bundle) = alice_session.generate_key_package(&alice_credential).unwrap();
+    let (bob_kp, _bob_bundle) = bob_session.generate_key_package(&bob_credential).unwrap();
+
+    let group_id = alice_session.create_group(&alice_credential, &alice_bundle).unwrap();
+
+    // Before adding Bob
+    assert!(alice_session.is_did_in_group(&group_id, "did:plc:alice123").unwrap());
+    assert!(!alice_session.is_did_in_group(&group_id, "did:plc:bob456").unwrap());
+
+    // After adding Bob
+    let _welcome = alice_session.add_member(&group_id, &alice_bundle, &bob_kp).unwrap();
+    assert!(alice_session.is_did_in_group(&group_id, "did:plc:alice123").unwrap());
+    assert!(alice_session.is_did_in_group(&group_id, "did:plc:bob456").unwrap());
+}
+
+#[test]
+fn test_add_device_for_existing_did() {
+    // Create sessions for Alice's two devices
+    let alice_device1_session = MoatSession::new();
+    let alice_device2_session = MoatSession::new();
+    let bob_session = MoatSession::new();
+
+    let alice_device1_cred = MoatCredential::new("did:plc:alice123", "Alice Phone");
+    let alice_device2_cred = MoatCredential::new("did:plc:alice123", "Alice Laptop");
+    let bob_cred = MoatCredential::new("did:plc:bob456", "Bob Laptop");
+
+    let (_kp1, alice_bundle1) = alice_device1_session.generate_key_package(&alice_device1_cred).unwrap();
+    let (kp2, _) = alice_device2_session.generate_key_package(&alice_device2_cred).unwrap();
+    let (bob_kp, bob_bundle) = bob_session.generate_key_package(&bob_cred).unwrap();
+
+    // Alice device 1 creates group and adds Bob
+    let group_id = alice_device1_session.create_group(&alice_device1_cred, &alice_bundle1).unwrap();
+    let welcome_result = alice_device1_session.add_member(&group_id, &alice_bundle1, &bob_kp).unwrap();
+
+    // Bob joins
+    let bob_group_id = bob_session.process_welcome(&welcome_result.welcome).unwrap();
+    assert_eq!(bob_group_id, group_id);
+
+    // Bob adds Alice's second device (same DID as Alice device 1)
+    let device2_welcome = bob_session.add_device(&bob_group_id, &bob_bundle, &kp2).unwrap();
+
+    // Alice device 2 joins via welcome
+    let device2_group_id = alice_device2_session.process_welcome(&device2_welcome.welcome).unwrap();
+    assert_eq!(device2_group_id, group_id);
+
+    // Verify group now has 3 members (2 DIDs: Alice with 2 devices, Bob with 1)
+    let members = bob_session.get_group_members(&bob_group_id).unwrap();
+    assert_eq!(members.len(), 3);
+
+    // But only 2 unique DIDs
+    let dids = bob_session.get_group_dids(&bob_group_id).unwrap();
+    assert_eq!(dids.len(), 2);
+}
+
+#[test]
+fn test_add_device_fails_for_non_member() {
+    let alice_session = MoatSession::new();
+    let bob_session = MoatSession::new();
+    let charlie_session = MoatSession::new();
+
+    let alice_cred = MoatCredential::new("did:plc:alice123", "Alice Phone");
+    let bob_cred = MoatCredential::new("did:plc:bob456", "Bob Laptop");
+    let charlie_cred = MoatCredential::new("did:plc:charlie789", "Charlie Tablet");
+
+    let (_kp, alice_bundle) = alice_session.generate_key_package(&alice_cred).unwrap();
+    let (bob_kp, _) = bob_session.generate_key_package(&bob_cred).unwrap();
+    let (charlie_kp, _) = charlie_session.generate_key_package(&charlie_cred).unwrap();
+
+    // Alice creates group and adds Bob
+    let group_id = alice_session.create_group(&alice_cred, &alice_bundle).unwrap();
+    let _welcome = alice_session.add_member(&group_id, &alice_bundle, &bob_kp).unwrap();
+
+    // Try to add Charlie as a "device" - should fail because Charlie's DID isn't in the group
+    let result = alice_session.add_device(&group_id, &alice_bundle, &charlie_kp);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("not a member"));
+}
+
+#[test]
+fn test_remove_member() {
+    let alice_session = MoatSession::new();
+    let bob_session = MoatSession::new();
+
+    let alice_cred = MoatCredential::new("did:plc:alice123", "Alice Phone");
+    let bob_cred = MoatCredential::new("did:plc:bob456", "Bob Laptop");
+
+    let (_kp, alice_bundle) = alice_session.generate_key_package(&alice_cred).unwrap();
+    let (bob_kp, _) = bob_session.generate_key_package(&bob_cred).unwrap();
+
+    // Create group with Alice and Bob
+    let group_id = alice_session.create_group(&alice_cred, &alice_bundle).unwrap();
+    let _welcome = alice_session.add_member(&group_id, &alice_bundle, &bob_kp).unwrap();
+
+    // Verify 2 members
+    let members = alice_session.get_group_members(&group_id).unwrap();
+    assert_eq!(members.len(), 2);
+
+    // Find Bob's leaf index
+    let bob_leaf_idx = members.iter()
+        .find(|(_, cred)| cred.as_ref().map_or(false, |c| c.did() == "did:plc:bob456"))
+        .map(|(idx, _)| *idx)
+        .unwrap();
+
+    // Remove Bob
+    let remove_result = alice_session.remove_member(&group_id, &alice_bundle, bob_leaf_idx).unwrap();
+    assert!(!remove_result.commit.is_empty());
+
+    // Verify only 1 member remains
+    let members = alice_session.get_group_members(&group_id).unwrap();
+    assert_eq!(members.len(), 1);
+}
+
+#[test]
+fn test_kick_user() {
+    // Setup: Alice and two of Bob's devices
+    let alice_session = MoatSession::new();
+    let bob_device1_session = MoatSession::new();
+    let bob_device2_session = MoatSession::new();
+
+    let alice_cred = MoatCredential::new("did:plc:alice123", "Alice Phone");
+    let bob_device1_cred = MoatCredential::new("did:plc:bob456", "Bob Phone");
+    let bob_device2_cred = MoatCredential::new("did:plc:bob456", "Bob Laptop");
+
+    let (_kp, alice_bundle) = alice_session.generate_key_package(&alice_cred).unwrap();
+    let (bob_kp1, _bob_bundle1) = bob_device1_session.generate_key_package(&bob_device1_cred).unwrap();
+    let (bob_kp2, _) = bob_device2_session.generate_key_package(&bob_device2_cred).unwrap();
+
+    // Create group
+    let group_id = alice_session.create_group(&alice_cred, &alice_bundle).unwrap();
+
+    // Alice adds both of Bob's devices (simpler test - Alice does all adding)
+    let _welcome1 = alice_session.add_member(&group_id, &alice_bundle, &bob_kp1).unwrap();
+    let _welcome2 = alice_session.add_device(&group_id, &alice_bundle, &bob_kp2).unwrap();
+
+    // Verify 3 members (Alice + Bob's 2 devices)
+    let members = alice_session.get_group_members(&group_id).unwrap();
+    assert_eq!(members.len(), 3);
+
+    // Alice kicks Bob (all devices)
+    let kick_result = alice_session.kick_user(&group_id, &alice_bundle, "did:plc:bob456").unwrap();
+    assert!(!kick_result.commit.is_empty());
+
+    // Verify only Alice remains
+    let members = alice_session.get_group_members(&group_id).unwrap();
+    assert_eq!(members.len(), 1);
+    let dids = alice_session.get_group_dids(&group_id).unwrap();
+    assert_eq!(dids, vec!["did:plc:alice123"]);
 }

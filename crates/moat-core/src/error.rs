@@ -29,6 +29,7 @@ pub enum ErrorCode {
     ProcessCommit = 15,
     TagDerivation = 16,
     StealthEncryption = 17,
+    RemoveMember = 18,
 }
 
 /// Errors that can occur during MLS operations
@@ -84,6 +85,9 @@ pub enum Error {
 
     #[error("stealth encryption failed: {0}")]
     StealthEncryption(String),
+
+    #[error("failed to remove member: {0}")]
+    RemoveMember(String),
 }
 
 impl Error {
@@ -107,6 +111,7 @@ impl Error {
             Error::ProcessCommit(_) => ErrorCode::ProcessCommit,
             Error::TagDerivation(_) => ErrorCode::TagDerivation,
             Error::StealthEncryption(_) => ErrorCode::StealthEncryption,
+            Error::RemoveMember(_) => ErrorCode::RemoveMember,
         }
     }
 
@@ -129,7 +134,8 @@ impl Error {
             | Error::Decryption(msg)
             | Error::ProcessCommit(msg)
             | Error::TagDerivation(msg)
-            | Error::StealthEncryption(msg) => msg,
+            | Error::StealthEncryption(msg)
+            | Error::RemoveMember(msg) => msg,
         }
     }
 }

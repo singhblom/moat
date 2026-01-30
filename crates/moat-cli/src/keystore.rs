@@ -37,6 +37,14 @@ pub struct PaginationState {
     pub last_rkeys: std::collections::HashMap<String, String>,
 }
 
+/// Stored ATProto session tokens for avoiding repeated logins
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredSession {
+    pub did: String,
+    pub access_jwt: String,
+    pub refresh_jwt: String,
+}
+
 /// A locally stored message (for sent messages we can't decrypt from PDS)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredMessage {
@@ -253,6 +261,74 @@ impl KeyStore {
     /// Check if credentials are stored
     pub fn has_credentials(&self) -> bool {
         self.base_path.join("credentials").exists()
+    }
+
+    /// Store device name
+    pub fn store_device_name(&self, name: &str) -> Result<()> {
+        let path = self.base_path.join("device_name");
+        self.write_key_file(&path, name.as_bytes())
+    }
+
+    /// Load device name
+    pub fn load_device_name(&self) -> Result<String> {
+        let path = self.base_path.join("device_name");
+        let data = self.read_key_file(&path)?;
+        String::from_utf8(data).map_err(|_| KeyStoreError::InvalidData)
+    }
+
+    /// Check if device name is stored
+    pub fn has_device_name(&self) -> bool {
+        self.base_path.join("device_name").exists()
+    }
+
+    /// Store session tokens (for reusing sessions without re-login)
+    pub fn store_session(&self, session: &StoredSession) -> Result<()> {
+        let path = self.base_path.join("session.json");
+        let json = serde_json::to_vec_pretty(session)?;
+        self.write_key_file(&path, &json)
+    }
+
+    /// Load stored session tokens
+    pub fn load_session(&self) -> Result<StoredSession> {
+        let path = self.base_path.join("session.json");
+        let data = self.read_key_file(&path)?;
+        let session: StoredSession = serde_json::from_slice(&data)?;
+        Ok(session)
+    }
+
+    /// Check if session is stored
+    pub fn has_session(&self) -> bool {
+        self.base_path.join("session.json").exists()
+    }
+
+    /// Clear stored session (e.g., on auth failure)
+    pub fn clear_session(&self) -> Result<()> {
+        let path = self.base_path.join("session.json");
+        if path.exists() {
+            fs::remove_file(&path)?;
+        }
+        Ok(())
+    }
+
+    /// Get or generate a default device name
+    pub fn get_or_create_device_name(&self) -> Result<String> {
+        if self.has_device_name() {
+            return self.load_device_name();
+        }
+
+        // Generate a default device name based on hostname or a random identifier
+        let device_name = if let Ok(hostname) = std::env::var("HOSTNAME") {
+            format!("CLI ({})", hostname)
+        } else if let Ok(hostname) = hostname::get() {
+            format!("CLI ({})", hostname.to_string_lossy())
+        } else {
+            // Fall back to a random suffix
+            let suffix: u32 = rand::random::<u32>() % 10000;
+            format!("CLI Device {}", suffix)
+        };
+
+        self.store_device_name(&device_name)?;
+        Ok(device_name)
     }
 
     // Internal helpers

@@ -7,6 +7,7 @@ use crate::records::{
 };
 use atrium_api::agent::{store::MemorySessionStore, AtpAgent};
 use atrium_api::com::atproto::repo::{create_record, list_records};
+use atrium_api::com::atproto::server::create_session::OutputData as SessionData;
 use atrium_api::types::string::{AtIdentifier, Nsid};
 use atrium_xrpc_client::reqwest::{ReqwestClient, ReqwestClientBuilder};
 use chrono::{Duration, Utc};
@@ -73,6 +74,67 @@ impl MoatAtprotoClient {
             http_client,
             did: session.did.to_string(),
         })
+    }
+
+    /// Resume a session from stored tokens.
+    ///
+    /// This avoids counting against the login rate limit by reusing existing tokens.
+    /// If the access token is expired, the agent will automatically refresh it.
+    pub async fn resume_session(
+        did: &str,
+        access_jwt: &str,
+        refresh_jwt: &str,
+    ) -> Result<Self> {
+        Self::resume_session_with_pds(did, access_jwt, refresh_jwt, DEFAULT_PDS_URL).await
+    }
+
+    /// Resume a session from stored tokens with a custom PDS URL.
+    pub async fn resume_session_with_pds(
+        did: &str,
+        access_jwt: &str,
+        refresh_jwt: &str,
+        pds_url: &str,
+    ) -> Result<Self> {
+        let http_client = reqwest::Client::builder()
+            .timeout(HTTP_TIMEOUT)
+            .build()
+            .map_err(|e| Error::Pds(format!("Failed to create HTTP client: {}", e)))?;
+
+        let xrpc_client = ReqwestClientBuilder::new(pds_url).client(http_client.clone()).build();
+        let agent = AtpAgent::new(xrpc_client, MemorySessionStore::default());
+
+        // Create a minimal session with the stored tokens
+        let session_data = SessionData {
+            access_jwt: access_jwt.to_string(),
+            refresh_jwt: refresh_jwt.to_string(),
+            did: did.parse().map_err(|_| Error::InvalidDid(did.to_string()))?,
+            handle: "unknown.invalid".parse().expect("valid handle"), // Will be updated by resume_session
+            active: None,
+            did_doc: None,
+            email: None,
+            email_auth_factor: None,
+            email_confirmed: None,
+            status: None,
+        };
+
+        agent
+            .resume_session(session_data.into())
+            .await
+            .map_err(|_| Error::SessionExpired)?;
+
+        Ok(Self {
+            agent,
+            http_client,
+            did: did.to_string(),
+        })
+    }
+
+    /// Get the current session tokens for persistence.
+    ///
+    /// Returns (access_jwt, refresh_jwt) if a session is active.
+    pub async fn get_session_tokens(&self) -> Option<(String, String)> {
+        let session = self.agent.get_session().await?;
+        Some((session.access_jwt.clone(), session.refresh_jwt.clone()))
     }
 
     /// Resolve a DID's PDS endpoint from the PLC directory.

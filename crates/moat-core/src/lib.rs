@@ -5,22 +5,24 @@
 //! # Main Types
 //!
 //! - [`MoatSession`] - Holds a persistent provider for MLS operations
+//! - [`MoatCredential`] - Structured credential containing DID and device name
 //!
 //! # Example
 //!
 //! ```
-//! use moat_core::MoatSession;
+//! use moat_core::{MoatSession, MoatCredential};
 //!
 //! let session = MoatSession::new();
 //!
-//! let identity = b"alice@example.com";
-//! let (key_package, key_bundle) = session.generate_key_package(identity).unwrap();
-//! let group_id = session.create_group(identity, &key_bundle).unwrap();
+//! let credential = MoatCredential::new("did:plc:alice123", "My Laptop");
+//! let (key_package, key_bundle) = session.generate_key_package(&credential).unwrap();
+//! let group_id = session.create_group(&credential, &key_bundle).unwrap();
 //!
 //! // Caller persists state however they choose
 //! let state = session.export_state().unwrap();
 //! ```
 
+pub(crate) mod credential;
 pub(crate) mod error;
 pub(crate) mod event;
 pub(crate) mod padding;
@@ -38,8 +40,9 @@ use openmls_traits::OpenMlsProvider;
 use serde::{Deserialize as SerdeDeserialize, Serialize as SerdeSerialize};
 
 // Disambiguate from openmls::prelude::* and make accessible as moat_core::X
+pub use crate::credential::MoatCredential;
 pub use crate::error::{Error, ErrorCode, Result};
-pub use crate::event::{Event, EventKind};
+pub use crate::event::{Event, EventKind, SenderInfo};
 pub use crate::padding::{pad_to_bucket, unpad, Bucket};
 pub use crate::stealth::{encrypt_for_stealth, generate_stealth_keypair, try_decrypt_stealth};
 pub(crate) use crate::storage::MoatProvider;
@@ -58,6 +61,7 @@ pub struct KeyBundle {
 }
 
 /// Result of creating a welcome message for a new member
+#[derive(Debug)]
 pub struct WelcomeResult {
     pub new_group_state: Vec<u8>,
     pub welcome: Vec<u8>,
@@ -76,6 +80,16 @@ pub struct EncryptResult {
 pub struct DecryptResult {
     pub new_group_state: Vec<u8>,
     pub event: Event,
+    /// Information about the sender (extracted from their MLS credential)
+    pub sender: Option<SenderInfo>,
+}
+
+/// Result of removing a member from a group
+pub struct RemoveResult {
+    /// The commit message to broadcast to other members
+    pub commit: Vec<u8>,
+    /// The group ID
+    pub group_id: Vec<u8>,
 }
 
 /// Magic bytes for versioned state format.
@@ -121,12 +135,13 @@ const STATE_HEADER_SIZE: usize = 4 + 2 + 16;
 /// # Example
 ///
 /// ```
-/// use moat_core::MoatSession;
+/// use moat_core::{MoatSession, MoatCredential};
 ///
 /// // Create a new session
 /// let session = MoatSession::new();
-/// let (key_package, key_bundle) = session.generate_key_package(b"alice").unwrap();
-/// let group_id = session.create_group(b"alice", &key_bundle).unwrap();
+/// let credential = MoatCredential::new("did:plc:alice123", "My Laptop");
+/// let (key_package, key_bundle) = session.generate_key_package(&credential).unwrap();
+/// let group_id = session.create_group(&credential, &key_bundle).unwrap();
 ///
 /// // Persist: caller chooses how (file, SQLite, etc.)
 /// let state = session.export_state().unwrap();
@@ -207,11 +222,20 @@ impl MoatSession {
         self.provider.has_pending_changes()
     }
 
-    /// Generate a new key package for the given identity.
+    /// Generate a new key package for the given credential.
     ///
     /// The key package and signature keys are persisted to storage.
     /// Returns (key_package_bytes, key_bundle_bytes).
-    pub fn generate_key_package(&self, identity: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+    ///
+    /// # Arguments
+    ///
+    /// * `credential` - The MoatCredential containing DID and device name
+    pub fn generate_key_package(&self, credential: &MoatCredential) -> Result<(Vec<u8>, Vec<u8>)> {
+        // Serialize the credential to bytes for embedding in BasicCredential
+        let credential_bytes = credential
+            .to_bytes()
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+
         // Generate signature keypair
         let signature_keys = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm())
             .map_err(|e| Error::KeyGeneration(e.to_string()))?;
@@ -221,10 +245,10 @@ impl MoatSession {
             .store(self.provider.storage())
             .map_err(|e| Error::KeyGeneration(e.to_string()))?;
 
-        // Create basic credential
-        let credential = BasicCredential::new(identity.to_vec());
+        // Create basic credential with our structured format
+        let basic_credential = BasicCredential::new(credential_bytes);
         let credential_with_key = CredentialWithKey {
-            credential: credential.into(),
+            credential: basic_credential.into(),
             signature_key: signature_keys.to_public_vec().into(),
         };
 
@@ -270,7 +294,17 @@ impl MoatSession {
     ///
     /// The group state is persisted to storage.
     /// Returns the group ID as bytes.
-    pub fn create_group(&self, identity: &[u8], key_bundle: &[u8]) -> Result<Vec<u8>> {
+    ///
+    /// # Arguments
+    ///
+    /// * `credential` - The MoatCredential for the group creator
+    /// * `key_bundle` - The serialized key bundle from generate_key_package
+    pub fn create_group(&self, credential: &MoatCredential, key_bundle: &[u8]) -> Result<Vec<u8>> {
+        // Serialize the credential to bytes
+        let credential_bytes = credential
+            .to_bytes()
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+
         // Deserialize key bundle
         let bundle: KeyBundle =
             serde_json::from_slice(key_bundle).map_err(|e| Error::Deserialization(e.to_string()))?;
@@ -284,10 +318,10 @@ impl MoatSession {
             .store(self.provider.storage())
             .map_err(|e| Error::KeyGeneration(e.to_string()))?;
 
-        // Create credential
-        let credential = BasicCredential::new(identity.to_vec());
+        // Create credential with our structured format
+        let basic_credential = BasicCredential::new(credential_bytes);
         let credential_with_key = CredentialWithKey {
-            credential: credential.into(),
+            credential: basic_credential.into(),
             signature_key: signature_keys.to_public_vec().into(),
         };
 
@@ -461,7 +495,7 @@ impl MoatSession {
     /// Decrypt a ciphertext for a group.
     ///
     /// The ciphertext is decrypted, unpadded, and deserialized.
-    /// Returns the decrypted event.
+    /// Returns the decrypted event along with sender information.
     pub fn decrypt_event(
         &self,
         group_id: &[u8],
@@ -485,6 +519,9 @@ impl MoatSession {
             .process_message(&self.provider, protocol_message)
             .map_err(|e| Error::Decryption(e.to_string()))?;
 
+        // Extract sender info from the credential
+        let sender = self.extract_sender_info(&group, &processed);
+
         // Extract the application message
         let padded_bytes = match processed.into_content() {
             ProcessedMessageContent::ApplicationMessage(app_msg) => app_msg.into_bytes(),
@@ -507,6 +544,276 @@ impl MoatSession {
         Ok(DecryptResult {
             new_group_state: Vec::new(), // State is managed by provider
             event,
+            sender,
+        })
+    }
+
+    /// Extract sender information from a processed message.
+    fn extract_sender_info(&self, group: &MlsGroup, processed: &ProcessedMessage) -> Option<SenderInfo> {
+        // Get the sender's leaf index
+        let sender = processed.sender();
+        let leaf_index = match sender {
+            Sender::Member(leaf) => leaf.u32(),
+            _ => return None,
+        };
+
+        // Get the member at that leaf index
+        let members: Vec<_> = group.members().collect();
+        let member = members.iter().find(|m| m.index.u32() == leaf_index)?;
+
+        // Extract the credential bytes from the member's credential
+        // OpenMLS Credential stores serialized content that we can access directly
+        let credential_bytes = member.credential.serialized_content();
+
+        // Try to parse as MoatCredential
+        let moat_credential = MoatCredential::try_from_bytes(credential_bytes)?;
+
+        Some(SenderInfo::from_credential(&moat_credential).with_leaf_index(leaf_index))
+    }
+
+    /// Extract credential information from a key package.
+    ///
+    /// Returns the MoatCredential if the key package contains a valid structured credential.
+    pub fn extract_credential_from_key_package(&self, key_package_bytes: &[u8]) -> Result<Option<MoatCredential>> {
+        let key_package = KeyPackageIn::tls_deserialize_exact(key_package_bytes)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
+
+        let validated = key_package
+            .validate(self.provider.crypto(), ProtocolVersion::Mls10)
+            .map_err(|e| Error::KeyPackageValidation(e.to_string()))?;
+
+        let credential = validated.leaf_node().credential();
+        let credential_bytes = credential.serialized_content();
+
+        Ok(MoatCredential::try_from_bytes(credential_bytes))
+    }
+
+    /// Get all members of a group with their credentials.
+    ///
+    /// Returns a list of (leaf_index, credential) pairs for all group members.
+    pub fn get_group_members(&self, group_id: &[u8]) -> Result<Vec<(u32, Option<MoatCredential>)>> {
+        let group = self.load_group(group_id)?
+            .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
+
+        let members: Vec<_> = group.members().map(|m| {
+            let leaf_index = m.index.u32();
+            let credential_bytes = m.credential.serialized_content();
+            let moat_credential = MoatCredential::try_from_bytes(credential_bytes);
+            (leaf_index, moat_credential)
+        }).collect();
+
+        Ok(members)
+    }
+
+    /// Get all DIDs currently in a group.
+    ///
+    /// Returns a deduplicated list of DIDs (a single DID may have multiple devices).
+    pub fn get_group_dids(&self, group_id: &[u8]) -> Result<Vec<String>> {
+        let members = self.get_group_members(group_id)?;
+        let mut dids: Vec<String> = members
+            .into_iter()
+            .filter_map(|(_, cred)| cred.map(|c| c.did().to_string()))
+            .collect();
+        dids.sort();
+        dids.dedup();
+        Ok(dids)
+    }
+
+    /// Check if a DID already has a device in a group.
+    ///
+    /// Returns true if any member of the group has the same DID.
+    pub fn is_did_in_group(&self, group_id: &[u8], did: &str) -> Result<bool> {
+        let members = self.get_group_members(group_id)?;
+        Ok(members.iter().any(|(_, cred)| {
+            cred.as_ref().map_or(false, |c| c.did() == did)
+        }))
+    }
+
+    /// Add a new device (key package) to a group for an existing member's DID.
+    ///
+    /// This is used when a user adds a new device. The new device must have the same
+    /// DID as an existing group member. Returns (commit_bytes, welcome_bytes).
+    ///
+    /// # Arguments
+    ///
+    /// * `group_id` - The group to add the device to
+    /// * `key_bundle` - The caller's key bundle (must be a group member)
+    /// * `new_device_key_package` - The new device's key package
+    ///
+    /// # Returns
+    ///
+    /// A `WelcomeResult` containing the commit and welcome messages.
+    pub fn add_device(
+        &self,
+        group_id: &[u8],
+        key_bundle: &[u8],
+        new_device_key_package: &[u8],
+    ) -> Result<WelcomeResult> {
+        // Extract credential from new device's key package
+        let new_device_credential = self.extract_credential_from_key_package(new_device_key_package)?
+            .ok_or_else(|| Error::KeyPackageValidation(
+                "Cannot extract credential from key package".to_string()
+            ))?;
+
+        // Verify the DID is already in the group (this is an add-device, not add-member)
+        if !self.is_did_in_group(group_id, new_device_credential.did())? {
+            return Err(Error::AddMember(format!(
+                "DID {} is not a member of this group; use add_member instead",
+                new_device_credential.did()
+            )));
+        }
+
+        // Use the existing add_member method - MLS treats all members equally
+        self.add_member(group_id, key_bundle, new_device_key_package)
+    }
+
+    /// Remove a member from a group by their leaf index.
+    ///
+    /// Returns the commit message to broadcast to other members.
+    pub fn remove_member(
+        &self,
+        group_id: &[u8],
+        key_bundle: &[u8],
+        leaf_index: u32,
+    ) -> Result<RemoveResult> {
+        // Load the group
+        let mut group = self.load_group(group_id)?
+            .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
+
+        // Deserialize our key bundle to get signature keys
+        let bundle: KeyBundle =
+            serde_json::from_slice(key_bundle).map_err(|e| Error::Deserialization(e.to_string()))?;
+        let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
+
+        // Create the remove proposal
+        let leaf_node_index = LeafNodeIndex::new(leaf_index);
+        let (commit, _welcome, _group_info) = group
+            .remove_members(&self.provider, &signature_keys, &[leaf_node_index])
+            .map_err(|e| Error::RemoveMember(e.to_string()))?;
+
+        // Merge the pending commit
+        group
+            .merge_pending_commit(&self.provider)
+            .map_err(|e| Error::MergeCommit(e.to_string()))?;
+
+        // Serialize the commit
+        let commit_bytes = commit
+            .tls_serialize_detached()
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+
+        Ok(RemoveResult {
+            commit: commit_bytes,
+            group_id: group_id.to_vec(),
+        })
+    }
+
+    /// Remove all devices for a specific DID from a group (kick user).
+    ///
+    /// Returns the commit message. This removes all members whose credential
+    /// matches the specified DID.
+    pub fn kick_user(
+        &self,
+        group_id: &[u8],
+        key_bundle: &[u8],
+        did_to_kick: &str,
+    ) -> Result<RemoveResult> {
+        // Find all leaf indices for this DID
+        let members = self.get_group_members(group_id)?;
+        let leaf_indices: Vec<u32> = members
+            .into_iter()
+            .filter_map(|(idx, cred)| {
+                cred.filter(|c| c.did() == did_to_kick).map(|_| idx)
+            })
+            .collect();
+
+        if leaf_indices.is_empty() {
+            return Err(Error::RemoveMember(format!(
+                "DID {} is not a member of this group",
+                did_to_kick
+            )));
+        }
+
+        // Load the group
+        let mut group = self.load_group(group_id)?
+            .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
+
+        // Deserialize our key bundle to get signature keys
+        let bundle: KeyBundle =
+            serde_json::from_slice(key_bundle).map_err(|e| Error::Deserialization(e.to_string()))?;
+        let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
+
+        // Create leaf node indices
+        let leaf_node_indices: Vec<LeafNodeIndex> = leaf_indices
+            .iter()
+            .map(|&idx| LeafNodeIndex::new(idx))
+            .collect();
+
+        // Remove all members with this DID
+        let (commit, _welcome, _group_info) = group
+            .remove_members(&self.provider, &signature_keys, &leaf_node_indices)
+            .map_err(|e| Error::RemoveMember(e.to_string()))?;
+
+        // Merge the pending commit
+        group
+            .merge_pending_commit(&self.provider)
+            .map_err(|e| Error::MergeCommit(e.to_string()))?;
+
+        // Serialize the commit
+        let commit_bytes = commit
+            .tls_serialize_detached()
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+
+        Ok(RemoveResult {
+            commit: commit_bytes,
+            group_id: group_id.to_vec(),
+        })
+    }
+
+    /// Leave a group (remove self).
+    ///
+    /// Returns the commit message to broadcast. After calling this, the caller
+    /// will no longer be able to decrypt messages in this group.
+    pub fn leave_group(
+        &self,
+        group_id: &[u8],
+        key_bundle: &[u8],
+    ) -> Result<RemoveResult> {
+        // Load the group
+        let mut group = self.load_group(group_id)?
+            .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
+
+        // Deserialize our key bundle to get signature keys
+        let bundle: KeyBundle =
+            serde_json::from_slice(key_bundle).map_err(|e| Error::Deserialization(e.to_string()))?;
+        let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
+
+        // Find our own leaf index
+        let our_pubkey = signature_keys.to_public_vec();
+        let members: Vec<_> = group.members().collect();
+        let our_leaf = members.iter().find(|m| m.signature_key == our_pubkey)
+            .ok_or_else(|| Error::RemoveMember("Cannot find self in group".to_string()))?;
+
+        // Create remove proposal for ourselves
+        let (commit, _welcome, _group_info) = group
+            .remove_members(&self.provider, &signature_keys, &[our_leaf.index])
+            .map_err(|e| Error::RemoveMember(e.to_string()))?;
+
+        // Merge the pending commit
+        group
+            .merge_pending_commit(&self.provider)
+            .map_err(|e| Error::MergeCommit(e.to_string()))?;
+
+        // Serialize the commit
+        let commit_bytes = commit
+            .tls_serialize_detached()
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+
+        Ok(RemoveResult {
+            commit: commit_bytes,
+            group_id: group_id.to_vec(),
         })
     }
 }

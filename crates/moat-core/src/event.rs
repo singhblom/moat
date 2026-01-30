@@ -4,6 +4,7 @@
 //! as a single Event type. This hides the type of communication from observers
 //! who only see encrypted blobs with opaque tags.
 
+use crate::credential::MoatCredential;
 use serde::{Deserialize, Serialize};
 
 /// The kind of event being sent
@@ -18,6 +19,38 @@ pub enum EventKind {
     Welcome,
     /// A group state checkpoint for faster sync
     Checkpoint,
+}
+
+/// Information about the sender of a message.
+///
+/// Extracted from the MLS credential of the message sender, this provides
+/// both user identity (DID) and device information for multi-device support.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SenderInfo {
+    /// The sender's decentralized identifier
+    pub did: String,
+    /// The name of the device that sent the message
+    pub device_name: String,
+    /// The MLS leaf index of the sender (for internal use)
+    #[serde(default)]
+    pub leaf_index: Option<u32>,
+}
+
+impl SenderInfo {
+    /// Create sender info from a MoatCredential
+    pub fn from_credential(credential: &MoatCredential) -> Self {
+        Self {
+            did: credential.did().to_string(),
+            device_name: credential.device_name().to_string(),
+            leaf_index: None,
+        }
+    }
+
+    /// Create sender info with a leaf index
+    pub fn with_leaf_index(mut self, index: u32) -> Self {
+        self.leaf_index = Some(index);
+        self
+    }
 }
 
 /// An event to be encrypted and published
