@@ -12,10 +12,11 @@ A neat and simple messenger app built on top of the Moat APIs.
 ## Architecture
 
 ### FFI Layer (moat-core)
-- Add **UniFFI** proc macro annotations to moat-core's `api.rs` types and functions
-- Use **`uniffi-bindgen-dart`** (community codegen) to generate Dart bindings
-- UniFFI also generates Swift and Kotlin bindings, laying groundwork for native iOS/Android targets later
-- Compile Rust to Android native libraries (`.so`) via cargo-ndk
+- Use **flutter_rust_bridge (FRB) v2** to generate Dart bindings from moat-core's public API
+- FRB reads Rust source directly — no annotations needed on moat-core types
+- A thin `rust/src/api.rs` wrapper in the Flutter project re-exports moat-core's API for FRB codegen
+- Compile Rust to Android native libraries (`.so`) via Cargokit (bundled with FRB)
+- **UniFFI deferred**: Add UniFFI proc macro annotations later when Swift/Kotlin native targets are needed; FRB and UniFFI are non-conflicting
 
 ### State Ownership
 - **Dart owns bytes**: Dart reads/writes persistent storage, passes byte buffers across FFI for crypto operations
@@ -34,10 +35,14 @@ A neat and simple messenger app built on top of the Moat APIs.
 Each step produces a working, testable app.
 
 ### Step 0: Foundation
-- Add UniFFI proc macro annotations to moat-core's `api.rs` and relevant types
-- Configure `uniffi-bindgen-dart` to generate Dart bindings
-- Create `moat-flutter/` Flutter project
-- Integrate generated Dart bindings and verify a trivial Rust call works on Android
+- Install FRB codegen: `cargo install flutter_rust_bridge_codegen`
+- Scaffold Flutter project: `flutter_rust_bridge_codegen create moat_flutter --template plugin`, then move to `moat-flutter/` at repo root
+- Replace generated `rust/` crate with a dependency on `moat-core` (path = `../crates/moat-core`)
+- Create thin `rust/src/api.rs` re-exporting moat-core's public API (MoatSession methods, free functions, types)
+- Run FRB codegen: `flutter_rust_bridge_codegen generate` to produce Dart bindings in `lib/src/rust/`
+- Write minimal Dart test calling `MoatSession.new()` and printing device ID
+- Verify on Android emulator: `flutter run`
+- Optionally add `moat-flutter/rust` to workspace `Cargo.toml` members
 
 ### Step 1: Login + Conversations List
 - Implement ATProto login (handle + app password) in Dart HTTP

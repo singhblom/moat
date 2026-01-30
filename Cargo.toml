@@ -5,6 +5,9 @@ members = [
     "crates/moat-atproto",
     "crates/moat-cli",
 ]
+exclude = [
+    "moat-flutter/rust",
+]
 
 [workspace.package]
 version = "0.1.0"
