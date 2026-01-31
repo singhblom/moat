@@ -22,6 +22,7 @@ class AuthProvider extends ChangeNotifier {
   AuthState _state = AuthState.loading;
   String? _did;
   String? _handle;
+  String? _deviceName;
 
   AuthProvider({
     AtprotoClient? atprotoClient,
@@ -34,6 +35,7 @@ class AuthProvider extends ChangeNotifier {
   bool get isLoading => _state == AuthState.loading;
   String? get did => _did;
   String? get handle => _handle;
+  String? get deviceName => _deviceName;
   AtprotoClient get atprotoClient => _atprotoClient;
   MoatSessionHandle? get moatSession => _moatSession;
 
@@ -49,6 +51,7 @@ class AuthProvider extends ChangeNotifier {
         _atprotoClient.restoreSession(session);
         _did = session.did;
         _handle = session.handle;
+        _deviceName = await _secureStorage.loadDeviceName();
 
         // Restore MLS state
         await _restoreMlsState();
@@ -65,14 +68,19 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Login with handle and app password
-  Future<void> login(String handle, String password) async {
+  /// Login with handle, app password, and device name
+  Future<void> login(String handle, String password,
+      {required String deviceName}) async {
     // Authenticate with ATProto
     final session = await _atprotoClient.login(handle, password);
     await _secureStorage.saveSession(session);
 
     _did = session.did;
     _handle = session.handle;
+    _deviceName = deviceName;
+
+    // Save device name
+    await _secureStorage.saveDeviceName(deviceName);
 
     // Initialize MLS session
     await _initializeMlsSession();
@@ -92,6 +100,7 @@ class AuthProvider extends ChangeNotifier {
     _moatSession = null;
     _did = null;
     _handle = null;
+    _deviceName = null;
     _state = AuthState.unauthenticated;
 
     notifyListeners();
@@ -153,13 +162,15 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<void> _generateAndPublishKeyPackage() async {
-    if (_moatSession == null || _did == null) {
-      throw StateError('MLS session not initialized');
+    if (_moatSession == null || _did == null || _deviceName == null) {
+      throw StateError('MLS session or device name not initialized');
     }
 
-    // Generate key package with DID as identity
-    final identity = Uint8List.fromList(_did!.codeUnits);
-    final result = await _moatSession!.generateKeyPackage(identity: identity);
+    // Generate key package with DID and device name (MoatCredential)
+    final result = await _moatSession!.generateKeyPackage(
+      did: _did!,
+      deviceName: _deviceName!,
+    );
 
     // Save key bundle locally (private keys)
     await _secureStorage.saveKeyBundle(result.keyBundle);

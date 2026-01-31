@@ -46,10 +46,13 @@ Each step produces a working, testable app.
 
 ### Step 1: Login + Conversations List
 - Implement ATProto login (handle + app password) in Dart HTTP
+- **Device name setup**: Prompt for device name on first launch (or auto-generate from device model)
 - Generate identity key and stealth key via FFI to moat-core
+- **Embed device name in key package**: Use `MoatCredential` with DID + device name when generating key package
 - Publish key package and stealth address to PDS
-- Display list of conversations from local storage
-- Secure storage for credentials and keys
+- Display list of conversations from local storage (initially empty for new devices)
+- Secure storage for credentials, keys, and device name
+- **Note**: New devices start with no conversation history — they'll be added to groups by existing devices
 
 ### Step 2: Read Messages
 - Fetch events from PDS for conversation participants

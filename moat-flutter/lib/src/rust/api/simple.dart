@@ -56,9 +56,10 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
     required List<int> newMemberKeyPackage,
   });
 
-  /// Create a new MLS group. Returns the group ID.
+  /// Create a new MLS group with DID and device name. Returns the group ID.
   Future<Uint8List> createGroup({
-    required List<int> identity,
+    required String did,
+    required String deviceName,
     required List<int> keyBundle,
   });
 
@@ -87,8 +88,12 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
         state: state,
       );
 
-  /// Generate a new key package. Returns (key_package_bytes, key_bundle_bytes).
-  Future<KeyPackageResult> generateKeyPackage({required List<int> identity});
+  /// Generate a new key package with DID and device name.
+  /// Returns (key_package_bytes, key_bundle_bytes).
+  Future<KeyPackageResult> generateKeyPackage({
+    required String did,
+    required String deviceName,
+  });
 
   /// Get the current epoch of a group. Returns null if group doesn't exist.
   Future<BigInt?> getGroupEpoch({required List<int> groupId});

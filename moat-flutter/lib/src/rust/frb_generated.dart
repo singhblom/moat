@@ -86,7 +86,8 @@ abstract class RustLibApi extends BaseApi {
 
   Future<Uint8List> crateApiSimpleMoatSessionHandleCreateGroup({
     required MoatSessionHandle that,
-    required List<int> identity,
+    required String did,
+    required String deviceName,
     required List<int> keyBundle,
   });
 
@@ -117,7 +118,8 @@ abstract class RustLibApi extends BaseApi {
 
   Future<KeyPackageResult> crateApiSimpleMoatSessionHandleGenerateKeyPackage({
     required MoatSessionHandle that,
-    required List<int> identity,
+    required String did,
+    required String deviceName,
   });
 
   Future<BigInt?> crateApiSimpleMoatSessionHandleGetGroupEpoch({
@@ -222,7 +224,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @override
   Future<Uint8List> crateApiSimpleMoatSessionHandleCreateGroup({
     required MoatSessionHandle that,
-    required List<int> identity,
+    required String did,
+    required String deviceName,
     required List<int> keyBundle,
   }) {
     return handler.executeNormal(
@@ -233,7 +236,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          sse_encode_list_prim_u_8_loose(identity, serializer);
+          sse_encode_String(did, serializer);
+          sse_encode_String(deviceName, serializer);
           sse_encode_list_prim_u_8_loose(keyBundle, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
@@ -247,7 +251,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_String,
         ),
         constMeta: kCrateApiSimpleMoatSessionHandleCreateGroupConstMeta,
-        argValues: [that, identity, keyBundle],
+        argValues: [that, did, deviceName, keyBundle],
         apiImpl: this,
       ),
     );
@@ -256,7 +260,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiSimpleMoatSessionHandleCreateGroupConstMeta =>
       const TaskConstMeta(
         debugName: "MoatSessionHandle_create_group",
-        argNames: ["that", "identity", "keyBundle"],
+        argNames: ["that", "did", "deviceName", "keyBundle"],
       );
 
   @override
@@ -445,7 +449,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @override
   Future<KeyPackageResult> crateApiSimpleMoatSessionHandleGenerateKeyPackage({
     required MoatSessionHandle that,
-    required List<int> identity,
+    required String did,
+    required String deviceName,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -455,7 +460,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          sse_encode_list_prim_u_8_loose(identity, serializer);
+          sse_encode_String(did, serializer);
+          sse_encode_String(deviceName, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -468,7 +474,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_String,
         ),
         constMeta: kCrateApiSimpleMoatSessionHandleGenerateKeyPackageConstMeta,
-        argValues: [that, identity],
+        argValues: [that, did, deviceName],
         apiImpl: this,
       ),
     );
@@ -478,7 +484,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   get kCrateApiSimpleMoatSessionHandleGenerateKeyPackageConstMeta =>
       const TaskConstMeta(
         debugName: "MoatSessionHandle_generate_key_package",
-        argNames: ["that", "identity"],
+        argNames: ["that", "did", "deviceName"],
       );
 
   @override
@@ -1478,13 +1484,15 @@ class MoatSessionHandleImpl extends RustOpaque implements MoatSessionHandle {
     newMemberKeyPackage: newMemberKeyPackage,
   );
 
-  /// Create a new MLS group. Returns the group ID.
+  /// Create a new MLS group with DID and device name. Returns the group ID.
   Future<Uint8List> createGroup({
-    required List<int> identity,
+    required String did,
+    required String deviceName,
     required List<int> keyBundle,
   }) => RustLib.instance.api.crateApiSimpleMoatSessionHandleCreateGroup(
     that: this,
-    identity: identity,
+    did: did,
+    deviceName: deviceName,
     keyBundle: keyBundle,
   );
 
@@ -1518,12 +1526,16 @@ class MoatSessionHandleImpl extends RustOpaque implements MoatSessionHandle {
   Future<Uint8List> exportState() => RustLib.instance.api
       .crateApiSimpleMoatSessionHandleExportState(that: this);
 
-  /// Generate a new key package. Returns (key_package_bytes, key_bundle_bytes).
-  Future<KeyPackageResult> generateKeyPackage({required List<int> identity}) =>
-      RustLib.instance.api.crateApiSimpleMoatSessionHandleGenerateKeyPackage(
-        that: this,
-        identity: identity,
-      );
+  /// Generate a new key package with DID and device name.
+  /// Returns (key_package_bytes, key_bundle_bytes).
+  Future<KeyPackageResult> generateKeyPackage({
+    required String did,
+    required String deviceName,
+  }) => RustLib.instance.api.crateApiSimpleMoatSessionHandleGenerateKeyPackage(
+    that: this,
+    did: did,
+    deviceName: deviceName,
+  );
 
   /// Get the current epoch of a group. Returns null if group doesn't exist.
   Future<BigInt?> getGroupEpoch({required List<int> groupId}) =>

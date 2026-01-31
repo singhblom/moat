@@ -9,6 +9,7 @@ const _stealthPrivateKeyKey = 'moat_stealth_private_key';
 const _stealthPublicKeyKey = 'moat_stealth_public_key';
 const _keyBundleKey = 'moat_key_bundle';
 const _mlsStateKey = 'moat_mls_state';
+const _deviceNameKey = 'moat_device_name';
 
 /// Secure storage service for credentials and cryptographic keys
 class SecureStorageService {
@@ -118,6 +119,29 @@ class SecureStorageService {
   /// Delete key bundle
   Future<void> deleteKeyBundle() async {
     await _storage.delete(key: _keyBundleKey);
+  }
+
+  // --- Device name management ---
+
+  /// Save device name
+  Future<void> saveDeviceName(String deviceName) async {
+    await _storage.write(key: _deviceNameKey, value: deviceName);
+  }
+
+  /// Load device name
+  Future<String?> loadDeviceName() async {
+    return await _storage.read(key: _deviceNameKey);
+  }
+
+  /// Check if device name exists
+  Future<bool> hasDeviceName() async {
+    final name = await _storage.read(key: _deviceNameKey);
+    return name != null;
+  }
+
+  /// Delete device name
+  Future<void> deleteDeviceName() async {
+    await _storage.delete(key: _deviceNameKey);
   }
 
   // --- MLS state management ---

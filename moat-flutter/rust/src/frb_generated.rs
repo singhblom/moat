@@ -128,7 +128,8 @@ fn wire__crate__api__simple__MoatSessionHandle_create_group_impl(
             let api_that = <RustOpaqueMoi<
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MoatSessionHandle>,
             >>::sse_decode(&mut deserializer);
-            let api_identity = <Vec<u8>>::sse_decode(&mut deserializer);
+            let api_did = <String>::sse_decode(&mut deserializer);
+            let api_device_name = <String>::sse_decode(&mut deserializer);
             let api_key_bundle = <Vec<u8>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
@@ -149,7 +150,8 @@ fn wire__crate__api__simple__MoatSessionHandle_create_group_impl(
                     let api_that_guard = api_that_guard.unwrap();
                     let output_ok = crate::api::simple::MoatSessionHandle::create_group(
                         &*api_that_guard,
-                        api_identity,
+                        api_did,
+                        api_device_name,
                         api_key_bundle,
                     )?;
                     Ok(output_ok)
@@ -426,7 +428,8 @@ fn wire__crate__api__simple__MoatSessionHandle_generate_key_package_impl(
             let api_that = <RustOpaqueMoi<
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MoatSessionHandle>,
             >>::sse_decode(&mut deserializer);
-            let api_identity = <Vec<u8>>::sse_decode(&mut deserializer);
+            let api_did = <String>::sse_decode(&mut deserializer);
+            let api_device_name = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, String>((move || {
@@ -446,7 +449,8 @@ fn wire__crate__api__simple__MoatSessionHandle_generate_key_package_impl(
                     let api_that_guard = api_that_guard.unwrap();
                     let output_ok = crate::api::simple::MoatSessionHandle::generate_key_package(
                         &*api_that_guard,
-                        api_identity,
+                        api_did,
+                        api_device_name,
                     )?;
                     Ok(output_ok)
                 })())

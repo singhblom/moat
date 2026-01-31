@@ -1,6 +1,7 @@
 use flutter_rust_bridge::frb;
 use moat_core::{
-    self, DecryptResult, EncryptResult, Event, EventKind, MoatSession, WelcomeResult,
+    self, DecryptResult, EncryptResult, Event, EventKind, MoatCredential, MoatSession,
+    WelcomeResult,
 };
 use std::sync::Mutex;
 
@@ -67,13 +68,19 @@ impl MoatSessionHandle {
         self.inner.lock().unwrap().has_pending_changes()
     }
 
-    /// Generate a new key package. Returns (key_package_bytes, key_bundle_bytes).
-    pub fn generate_key_package(&self, identity: Vec<u8>) -> Result<KeyPackageResult, String> {
+    /// Generate a new key package with DID and device name.
+    /// Returns (key_package_bytes, key_bundle_bytes).
+    pub fn generate_key_package(
+        &self,
+        did: String,
+        device_name: String,
+    ) -> Result<KeyPackageResult, String> {
+        let credential = MoatCredential::new(&did, &device_name);
         let (kp, kb) = self
             .inner
             .lock()
             .unwrap()
-            .generate_key_package(&identity)
+            .generate_key_package(&credential)
             .map_err(|e| e.to_string())?;
         Ok(KeyPackageResult {
             key_package: kp,
@@ -81,12 +88,18 @@ impl MoatSessionHandle {
         })
     }
 
-    /// Create a new MLS group. Returns the group ID.
-    pub fn create_group(&self, identity: Vec<u8>, key_bundle: Vec<u8>) -> Result<Vec<u8>, String> {
+    /// Create a new MLS group with DID and device name. Returns the group ID.
+    pub fn create_group(
+        &self,
+        did: String,
+        device_name: String,
+        key_bundle: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        let credential = MoatCredential::new(&did, &device_name);
         self.inner
             .lock()
             .unwrap()
-            .create_group(&identity, &key_bundle)
+            .create_group(&credential, &key_bundle)
             .map_err(|e| e.to_string())
     }
 

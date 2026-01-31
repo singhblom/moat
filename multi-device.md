@@ -150,14 +150,19 @@ Multiple members might try to add the new device simultaneously. Resolution:
 
 ### Phase 3: moat-flutter Implementation 🟡 PARTIAL
 
-1. **Device setup screen** ❌ NOT STARTED
-   - Currently uses DID as identity, no device name prompt
+1. **Device setup screen** ✅ COMPLETE
+   - Device name field on login screen (with default "Flutter App")
+   - Device name stored in secure storage
+   - Device name embedded in key package via `MoatCredential`
+   - FFI updated to accept DID + device_name for `generateKeyPackage` and `createGroup`
 
 2. **Waiting for group invites** ❌ NOT STARTED
+   - New devices won't have conversations until existing devices add them to groups
 
 3. **Conversation list and messages** ✅
    - Basic conversation list UI implemented
    - Login screen implemented
+   - Key package and stealth address publishing implemented
 
 4. **New device notifications** ❌ NOT STARTED
 
@@ -191,6 +196,6 @@ Priority order for completing multi-device support:
 
 1. ~~**moat-cli: Auto-add new devices**~~ ✅ DONE - Poll for new key packages and add them
 2. ~~**moat-cli: Collapsed identity display**~~ ✅ DONE - Group messages by DID
-3. **moat-flutter: Device name setup** - Prompt for device name on first launch
+3. ~~**moat-flutter: Device name setup**~~ ✅ DONE - Device name on login, embedded in key package
 4. ~~**moat-cli: Device management commands**~~ ✅ DONE - CLI interface for remove/kick operations
 5. ~~**Race condition handling**~~ ✅ DONE - Random delay + conflict detection (included in auto-add)

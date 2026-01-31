@@ -13,13 +13,26 @@ class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final _handleController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _deviceNameController = TextEditingController();
   bool _isLoading = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _initDeviceName();
+  }
+
+  Future<void> _initDeviceName() async {
+    // Auto-generate a default device name
+    _deviceNameController.text = 'Flutter App';
+  }
 
   @override
   void dispose() {
     _handleController.dispose();
     _passwordController.dispose();
+    _deviceNameController.dispose();
     super.dispose();
   }
 
@@ -36,6 +49,7 @@ class _LoginScreenState extends State<LoginScreen> {
       await auth.login(
         _handleController.text.trim(),
         _passwordController.text,
+        deviceName: _deviceNameController.text.trim(),
       );
     } catch (e) {
       setState(() {
@@ -118,6 +132,31 @@ class _LoginScreenState extends State<LoginScreen> {
                   const SizedBox(height: 8),
                   Text(
                     'Use an App Password from Bluesky settings',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: _deviceNameController,
+                    decoration: const InputDecoration(
+                      labelText: 'Device Name',
+                      hintText: 'My Phone',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.smartphone),
+                    ),
+                    textInputAction: TextInputAction.done,
+                    onFieldSubmitted: (_) => _login(),
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return 'Please enter a device name';
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'A name to identify this device (e.g., "My iPhone")',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: Theme.of(context).colorScheme.onSurfaceVariant,
                         ),
