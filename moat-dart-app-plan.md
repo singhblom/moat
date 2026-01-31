@@ -54,34 +54,57 @@ Each step produces a working, testable app.
 - Secure storage for credentials, keys, and device name ✅
 - **Note**: New devices start with no conversation history — they'll be added to groups by existing devices
 
-### Step 2: Read Messages
-- Fetch events from PDS for conversation participants
-- Tag-based routing to match events to conversations
+### Step 2: Create & Join Conversations (Invites + Watch List)
+
+This step must come before messaging because you need a conversation to test with. The invite system involves:
+
+1. **Watch list** - Track DIDs you're expecting invites from
+2. **Stealth decryption** - Invites are encrypted with your stealth address (not MLS), so only you can decrypt
+3. **Random tags** - Invites use random tags (not group-derived), requiring special handling
+
+**Creating a conversation (as initiator):**
+- New conversation flow: enter recipient handle
+- Resolve handle to DID, fetch stealth address + key package from PDS
+- Create MLS group via FFI, add recipient (generates Welcome message)
+- Encrypt Welcome with recipient's stealth address (`encrypt_for_stealth`)
+- Publish to PDS with **random 16-byte tag** (recipient doesn't know group yet)
+- Store conversation metadata, register epoch 1 tag for future messages
+
+**Receiving an invite (as recipient):**
+- **Watch list UI**: Add DIDs to watch for incoming invites (resolve handle → DID)
+- Poll events from watched DIDs (separate from conversation participant polling)
+- For each event: attempt stealth decryption with local stealth key
+- On success: process MLS Welcome via FFI, join group
+- Add new conversation to list, register epoch 1 tag
+- **Remove DID from watch list** after successful join
+
+**Testing flow:**
+1. Device A creates conversation with Device B
+2. Device B adds Device A's handle to watch list
+3. Device B polls → receives and decrypts invite → joins conversation
+4. Both devices now share a conversation for testing Steps 3-4
+
+### Step 3: Read Messages
+- Poll events from all conversation participant DIDs
+- **Tag-based routing**: Match event tags to known tags in tag_map → find conversation
+- For unknown tags from watched DIDs: try as welcome (handled in Step 2)
 - Decrypt messages via FFI (MLS decrypt)
 - Display messages in a conversation view
 - **Collapsed identity display**: Group messages by DID, not by device (show "Alice" not "Alice-phone")
 - **Message Info**: Track sender device per message, viewable via long-press or info button
-- Background polling for new messages
+- Background polling (every few seconds)
 - **History boundary**: Show indicator when scrolling to top: "Messages before [date] are on your other devices"
 
-### Step 3: Send Messages
+### Step 4: Send Messages
 - Text input and message composition
 - Encrypt via FFI (MLS encrypt), pad to buckets
-- Derive conversation tag, publish to PDS
+- Derive conversation tag from group_id + epoch
+- Publish to PDS with derived tag
 - Store sent messages locally (MLS can't decrypt own ciphertexts)
+- Update tag_map if epoch advances
 - **Multi-device sync**: Your other devices receive your sent messages as normal group messages
 
-### Step 4: Create Conversations
-- New conversation flow: enter recipient handle
-- Resolve handle to DID, fetch stealth address + key package
-- Create MLS group via FFI (pass DID + device name), add recipient
-- Encrypt Welcome with stealth address, publish to PDS
+### Step 5: Multi-Device Support
 - **Auto-add own devices**: Poll for own new key packages and add them to groups you create
-
-### Step 5: Handle Invites
-- Watch for incoming invites (stealth-encrypted Welcomes)
-- Try decryption with local stealth key
-- Process MLS Welcome, join group
-- Add new conversation to list
 - **New device alerts**: Show notification when a new device joins a conversation
-- **Auto-add new devices for existing members**: When polling, detect new key packages for group members and add them (with random delay to reduce race conditions)
+- **Auto-add new devices for existing members**: When polling, detect new key packages for group members and add them (with stealth-encrypted welcome, random delay to reduce race conditions)
