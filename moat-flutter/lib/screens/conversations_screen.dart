@@ -3,6 +3,9 @@ import 'package:provider/provider.dart';
 import '../models/conversation.dart';
 import '../providers/auth_provider.dart';
 import '../providers/conversations_provider.dart';
+import '../providers/watch_list_provider.dart';
+import 'new_conversation_screen.dart';
+import 'watch_list_screen.dart';
 
 class ConversationsScreen extends StatelessWidget {
   const ConversationsScreen({super.key});
@@ -16,6 +19,8 @@ class ConversationsScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Moat'),
         actions: [
+          // Watch list button with badge
+          _WatchListButton(),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: conversations.isLoading
@@ -58,10 +63,9 @@ class ConversationsScreen extends StatelessWidget {
       body: _buildBody(context, conversations),
       floatingActionButton: FloatingActionButton(
         onPressed: () {
-          // TODO: Navigate to new conversation screen (Step 4)
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('New conversation - coming in Step 4'),
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => const NewConversationScreen(),
             ),
           );
         },
@@ -185,10 +189,10 @@ class _ConversationTile extends StatelessWidget {
         ],
       ),
       onTap: () {
-        // TODO: Navigate to conversation detail (Step 2)
+        // TODO: Navigate to conversation detail (Step 3)
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Conversation view - coming in Step 2'),
+            content: Text('Conversation view - coming in Step 3'),
           ),
         );
       },
@@ -210,5 +214,29 @@ class _ConversationTile extends StatelessWidget {
     } else {
       return 'now';
     }
+  }
+}
+
+class _WatchListButton extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final watchList = context.watch<WatchListProvider>();
+    final count = watchList.entries.length;
+
+    return IconButton(
+      icon: Badge(
+        isLabelVisible: count > 0,
+        label: Text(count.toString()),
+        child: const Icon(Icons.visibility_outlined),
+      ),
+      onPressed: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => const WatchListScreen(),
+          ),
+        );
+      },
+      tooltip: 'Watch List',
+    );
   }
 }

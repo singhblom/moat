@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 /// ATProto lexicon NSIDs
@@ -87,6 +87,37 @@ class KeyPackageRecord {
   }
 
   bool get isExpired => DateTime.now().isAfter(expiresAt);
+}
+
+/// Event record fetched from PDS
+class EventRecord {
+  final String uri;
+  final String rkey;
+  final Uint8List tag;
+  final Uint8List ciphertext;
+  final DateTime createdAt;
+
+  EventRecord({
+    required this.uri,
+    required this.rkey,
+    required this.tag,
+    required this.ciphertext,
+    required this.createdAt,
+  });
+
+  factory EventRecord.fromJson(Map<String, dynamic> json) {
+    final uri = json['uri'] as String;
+    // Extract rkey from URI (last path segment)
+    final rkey = uri.split('/').last;
+    final value = json['value'] as Map<String, dynamic>;
+    return EventRecord(
+      uri: uri,
+      rkey: rkey,
+      tag: base64Decode(value['tag'] as String),
+      ciphertext: base64Decode(value['ciphertext'] as String),
+      createdAt: DateTime.parse(value['createdAt'] as String),
+    );
+  }
 }
 
 /// ATProto client for Moat operations
@@ -352,6 +383,62 @@ class AtprotoClient {
     );
 
     return response['uri'] as String;
+  }
+
+  /// Fetch events from a DID, optionally after a given rkey (for pagination)
+  /// Returns events sorted by rkey (oldest first for processing order)
+  Future<List<EventRecord>> fetchEvents(String did, {String? afterRkey}) async {
+    final pdsUrl = await resolvePdsEndpoint(did);
+
+    final allRecords = <EventRecord>[];
+    String? cursor;
+
+    // Paginate through all records
+    do {
+      final queryParams = <String, String>{
+        'repo': did,
+        'collection': eventNsid,
+        'limit': '100',
+      };
+
+      // Use rkeyStart for filtering to records after a given rkey
+      if (afterRkey != null) {
+        queryParams['rkeyStart'] = afterRkey;
+      }
+
+      // Use cursor for pagination within results
+      if (cursor != null) {
+        queryParams['cursor'] = cursor;
+      }
+
+      final response = await _get(
+        '$pdsUrl/xrpc/com.atproto.repo.listRecords',
+        queryParams: queryParams,
+      );
+
+      final items = response['records'] as List<dynamic>? ?? [];
+
+      for (final item in items) {
+        try {
+          final record = EventRecord.fromJson(item as Map<String, dynamic>);
+          // Skip records at or before the start rkey (rkeyStart is inclusive)
+          if (afterRkey != null && record.rkey.compareTo(afterRkey) <= 0) {
+            continue;
+          }
+          allRecords.add(record);
+        } catch (e) {
+          // Skip malformed records but log for debugging
+          debugPrint('Failed to parse event record: $e');
+        }
+      }
+
+      // Get cursor for next page
+      cursor = response['cursor'] as String?;
+    } while (cursor != null);
+
+    // Sort by rkey (lexicographic, which matches TID order)
+    allRecords.sort((a, b) => a.rkey.compareTo(b.rkey));
+    return allRecords;
   }
 
   void _requireSession() {

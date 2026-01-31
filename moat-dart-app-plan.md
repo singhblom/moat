@@ -54,29 +54,29 @@ Each step produces a working, testable app.
 - Secure storage for credentials, keys, and device name ✅
 - **Note**: New devices start with no conversation history — they'll be added to groups by existing devices
 
-### Step 2: Create & Join Conversations (Invites + Watch List)
+### Step 2: Create & Join Conversations (Invites + Watch List) ✅ COMPLETE
 
 This step must come before messaging because you need a conversation to test with. The invite system involves:
 
-1. **Watch list** - Track DIDs you're expecting invites from
-2. **Stealth decryption** - Invites are encrypted with your stealth address (not MLS), so only you can decrypt
-3. **Random tags** - Invites use random tags (not group-derived), requiring special handling
+1. **Watch list** - Track DIDs you're expecting invites from ✅
+2. **Stealth decryption** - Invites are encrypted with your stealth address (not MLS), so only you can decrypt ✅
+3. **Random tags** - Invites use random tags (not group-derived), requiring special handling ✅
 
 **Creating a conversation (as initiator):**
-- New conversation flow: enter recipient handle
-- Resolve handle to DID, fetch stealth address + key package from PDS
-- Create MLS group via FFI, add recipient (generates Welcome message)
-- Encrypt Welcome with recipient's stealth address (`encrypt_for_stealth`)
-- Publish to PDS with **random 16-byte tag** (recipient doesn't know group yet)
-- Store conversation metadata, register epoch 1 tag for future messages
+- New conversation flow: enter recipient handle ✅
+- Resolve handle to DID, fetch stealth address + key package from PDS ✅
+- Create MLS group via FFI, add recipient (generates Welcome message) ✅
+- Encrypt Welcome with recipient's stealth address (`encrypt_for_stealth`) ✅
+- Publish to PDS with **random 16-byte tag** (recipient doesn't know group yet) ✅
+- Store conversation metadata, register epoch 1 tag for future messages ✅
 
 **Receiving an invite (as recipient):**
-- **Watch list UI**: Add DIDs to watch for incoming invites (resolve handle → DID)
-- Poll events from watched DIDs (separate from conversation participant polling)
-- For each event: attempt stealth decryption with local stealth key
-- On success: process MLS Welcome via FFI, join group
-- Add new conversation to list, register epoch 1 tag
-- **Remove DID from watch list** after successful join
+- **Watch list UI**: Add DIDs to watch for incoming invites (resolve handle → DID) ✅
+- Poll events from watched DIDs (separate from conversation participant polling) ✅
+- For each event: attempt stealth decryption with local stealth key ✅
+- On success: process MLS Welcome via FFI, join group ✅
+- Add new conversation to list, register epoch 1 tag ✅
+- **Remove DID from watch list** after successful join ✅
 
 **Testing flow:**
 1. Device A creates conversation with Device B

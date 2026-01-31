@@ -10,6 +10,9 @@ const _stealthPublicKeyKey = 'moat_stealth_public_key';
 const _keyBundleKey = 'moat_key_bundle';
 const _mlsStateKey = 'moat_mls_state';
 const _deviceNameKey = 'moat_device_name';
+const _watchListKey = 'moat_watch_list';
+const _lastRkeysKey = 'moat_last_rkeys';
+const _tagMapKey = 'moat_tag_map';
 
 /// Secure storage service for credentials and cryptographic keys
 class SecureStorageService {
@@ -164,6 +167,121 @@ class SecureStorageService {
   /// Delete MLS state
   Future<void> deleteMlsState() async {
     await _storage.delete(key: _mlsStateKey);
+  }
+
+  // --- Watch list management ---
+
+  /// Save list of DIDs to watch for incoming invites
+  Future<void> saveWatchList(List<String> dids) async {
+    await _storage.write(
+      key: _watchListKey,
+      value: jsonEncode(dids),
+    );
+  }
+
+  /// Load watch list
+  Future<List<String>> loadWatchList() async {
+    final json = await _storage.read(key: _watchListKey);
+    if (json == null) return [];
+    try {
+      return (jsonDecode(json) as List<dynamic>).cast<String>();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Add a DID to watch list
+  Future<void> addToWatchList(String did) async {
+    final list = await loadWatchList();
+    if (!list.contains(did)) {
+      list.add(did);
+      await saveWatchList(list);
+    }
+  }
+
+  /// Remove a DID from watch list
+  Future<void> removeFromWatchList(String did) async {
+    final list = await loadWatchList();
+    list.remove(did);
+    await saveWatchList(list);
+  }
+
+  /// Delete watch list
+  Future<void> deleteWatchList() async {
+    await _storage.delete(key: _watchListKey);
+  }
+
+  // --- Last rkeys management (for polling pagination) ---
+
+  /// Save last seen rkey for a DID
+  Future<void> saveLastRkey(String did, String rkey) async {
+    final map = await loadLastRkeys();
+    map[did] = rkey;
+    await _storage.write(
+      key: _lastRkeysKey,
+      value: jsonEncode(map),
+    );
+  }
+
+  /// Load all last rkeys
+  Future<Map<String, String>> loadLastRkeys() async {
+    final json = await _storage.read(key: _lastRkeysKey);
+    if (json == null) return {};
+    try {
+      return (jsonDecode(json) as Map<String, dynamic>).cast<String, String>();
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /// Get last rkey for a specific DID
+  Future<String?> getLastRkey(String did) async {
+    final map = await loadLastRkeys();
+    return map[did];
+  }
+
+  /// Delete all last rkeys
+  Future<void> deleteLastRkeys() async {
+    await _storage.delete(key: _lastRkeysKey);
+  }
+
+  // --- Tag map management (tag -> groupIdHex) ---
+
+  /// Save tag map
+  Future<void> saveTagMap(Map<String, String> tagMap) async {
+    await _storage.write(
+      key: _tagMapKey,
+      value: jsonEncode(tagMap),
+    );
+  }
+
+  /// Load tag map
+  Future<Map<String, String>> loadTagMap() async {
+    final json = await _storage.read(key: _tagMapKey);
+    if (json == null) return {};
+    try {
+      return (jsonDecode(json) as Map<String, dynamic>).cast<String, String>();
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /// Register a tag for a conversation
+  Future<void> registerTag(String tagHex, String groupIdHex) async {
+    final map = await loadTagMap();
+    map[tagHex] = groupIdHex;
+    await saveTagMap(map);
+  }
+
+  /// Look up conversation by tag
+  Future<String?> lookupByTag(String tagHex) async {
+    final map = await loadTagMap();
+    return map[tagHex];
+  }
+
+  /// Delete tag map
+  Future<void> deleteTagMap() async {
+    await _storage.delete(key: _tagMapKey);
   }
 
   // --- Full clear ---
