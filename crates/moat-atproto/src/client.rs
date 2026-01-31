@@ -6,7 +6,7 @@ use crate::records::{
     StealthAddressRecord,
 };
 use atrium_api::agent::{store::MemorySessionStore, AtpAgent};
-use atrium_api::com::atproto::repo::{create_record, list_records};
+use atrium_api::com::atproto::repo::{create_record, list_records, put_record};
 use atrium_api::com::atproto::server::create_session::OutputData as SessionData;
 use atrium_api::types::string::{AtIdentifier, Nsid};
 use atrium_xrpc_client::reqwest::{ReqwestClient, ReqwestClientBuilder};
@@ -507,15 +507,16 @@ impl MoatAtprotoClient {
             _ => return Err(Error::Serialization("expected object".to_string())),
         };
 
-        let input = create_record::InputData {
+        let input = put_record::InputData {
             collection: Nsid::new(STEALTH_ADDRESS_NSID.to_string())
                 .map_err(|e| Error::InvalidRecord(e.to_string()))?,
             record,
             repo: AtIdentifier::Did(
                 self.did.parse().map_err(|_| Error::InvalidDid(self.did.clone()))?,
             ),
-            rkey: Some("self".to_string()), // Singleton record
+            rkey: "self".to_string(), // Singleton record
             swap_commit: None,
+            swap_record: None,
             validate: None,
         };
 
@@ -525,7 +526,7 @@ impl MoatAtprotoClient {
             .com
             .atproto
             .repo
-            .create_record(input.into())
+            .put_record(input.into())
             .await
             .map_err(|e| Error::Pds(e.to_string()))?;
 

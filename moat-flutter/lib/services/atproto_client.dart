@@ -269,6 +269,7 @@ class AtprotoClient {
   }
 
   /// Publish a stealth address to the PDS (singleton record with rkey "self")
+  /// Uses putRecord for upsert semantics (creates or replaces existing record)
   Future<String> publishStealthAddress(Uint8List scanPubkey) async {
     _requireSession();
 
@@ -284,7 +285,7 @@ class AtprotoClient {
     };
 
     final response = await _post(
-      '${_session!.pdsUrl}/xrpc/com.atproto.repo.createRecord',
+      '${_session!.pdsUrl}/xrpc/com.atproto.repo.putRecord',
       body: {
         'repo': _session!.did,
         'collection': stealthAddressNsid,
