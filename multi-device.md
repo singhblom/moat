@@ -199,3 +199,53 @@ Priority order for completing multi-device support:
 3. ~~**moat-flutter: Device name setup**~~ ✅ DONE - Device name on login, embedded in key package
 4. ~~**moat-cli: Device management commands**~~ ✅ DONE - CLI interface for remove/kick operations
 5. ~~**Race condition handling**~~ ✅ DONE - Random delay + conflict detection (included in auto-add)
+
+---
+
+## Recovery and Backup Considerations
+
+### Why Not a Password-Protected Backup Blob?
+
+We considered storing an encrypted blob on the PDS containing conversation metadata (group IDs, epochs) that could be decrypted with a user-provided passphrase. This approach was rejected for security reasons:
+
+1. **Network-wide attack surface:** The ATProto network is open and federated. An attacker could crawl all PDSes, collect every encrypted metadata blob, and run offline brute-force attacks against all of them simultaneously.
+
+2. **Weak passwords compromise the network:** Even if only a fraction of users choose weak passwords, an attacker solving those passwords would reveal social graph connections across many users. The weak passwords aren't independent failures—they become a network-wide vulnerability.
+
+3. **No rate limiting:** Unlike Signal's server-stored encrypted backups where a single trusted operator can apply rate limiting, ATProto's open federation means anyone can mirror the entire network and attack offline without restrictions.
+
+4. **Tag derivation enables correlation:** Tags can be derived from just group ID + epoch (no MLS secrets needed). If an attacker cracks the passphrase and obtains group IDs, they can derive all tags and correlate which events belong to which conversations—even without decrypting message content.
+
+### Current Recovery Model
+
+**Device loss = conversation loss** (similar to Signal without backup):
+
+- If you lose your only device, your conversations are gone
+- Multi-device sync requires at least one existing device to be online to send welcomes to the new device
+- New devices cannot decrypt historical messages (MLS forward secrecy)
+
+### Practical Mitigation: Web Client as Backup Device
+
+Unlike Signal's painful QR-code pairing flow, ATProto's app password model makes adding a second device trivial:
+
+1. Log into a Moat web client in any browser
+2. Web client publishes stealth address + key package
+3. Existing device (phone/CLI) detects the new device and sends welcomes
+4. Browser session persists as a "backup device"
+
+**Recommended user guidance:** "Set up Moat in a browser before switching phones to ensure your conversations sync to your new device."
+
+This approach:
+- Requires no additional passwords or recovery phrases
+- Maintains full cryptographic security (no weak-password attack surface)
+- Leverages ATProto's existing authentication model
+- Provides a reasonable UX for device continuity
+
+### Future Considerations
+
+If recovery becomes a priority, more secure approaches could include:
+- **High-entropy recovery codes:** System-generated 30+ character codes (like Signal's PIN but enforced strong)
+- **Social recovery:** Trusted contacts hold Shamir key shares
+- **Hardware security keys:** Store recovery material on a physical device
+
+These would need to be evaluated against the network-wide attack surface that ATProto's open federation creates.
