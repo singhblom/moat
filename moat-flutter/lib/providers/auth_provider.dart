@@ -149,6 +149,10 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<void> _generateAndPublishStealthAddress() async {
+    if (_deviceName == null) {
+      throw StateError('Device name not set');
+    }
+
     // Generate stealth keypair using moat-core via FFI
     final keypair = generateStealthKeypair();
 
@@ -158,8 +162,8 @@ class AuthProvider extends ChangeNotifier {
       publicKey: keypair.publicKey,
     );
 
-    // Publish to PDS
-    await _atprotoClient.publishStealthAddress(keypair.publicKey);
+    // Publish to PDS with device name (v2: multi-device)
+    await _atprotoClient.publishStealthAddress(keypair.publicKey, _deviceName!);
   }
 
   Future<void> _generateAndPublishKeyPackage() async {
@@ -199,10 +203,10 @@ class AuthProvider extends ChangeNotifier {
   }
 
   /// Create a new conversation with a recipient
-  /// Returns the group ID and welcome ciphertext (stealth-encrypted)
+  /// Returns the group ID and welcome ciphertext (stealth-encrypted for all devices)
   Future<CreateConversationResult> createConversation({
     required String recipientDid,
-    required Uint8List recipientStealthPubkey,
+    required List<Uint8List> recipientStealthPubkeys,
     required Uint8List recipientKeyPackage,
   }) async {
     if (_moatSession == null || _did == null || _deviceName == null) {
@@ -228,9 +232,10 @@ class AuthProvider extends ChangeNotifier {
       newMemberKeyPackage: recipientKeyPackage,
     );
 
-    // Encrypt Welcome with recipient's stealth address
+    // Encrypt Welcome for ALL of recipient's devices using key encapsulation
+    // This allows any of their devices to decrypt and join the conversation
     final stealthCiphertext = await encryptForStealth(
-      recipientScanPubkey: recipientStealthPubkey,
+      recipientScanPubkeys: recipientStealthPubkeys,
       welcomeBytes: welcomeResult.welcome,
     );
 
@@ -290,6 +295,14 @@ class AuthProvider extends ChangeNotifier {
   Future<String?> lookupByTag(Uint8List tag) async {
     final tagHex = _bytesToHex(tag);
     return await _secureStorage.lookupByTag(tagHex);
+  }
+
+  /// Get all DIDs in a group (deduplicated)
+  Future<List<String>> getGroupDids(Uint8List groupId) async {
+    if (_moatSession == null) {
+      throw StateError('MLS session not initialized');
+    }
+    return await _moatSession!.getGroupDids(groupId: groupId);
   }
 
   String _bytesToHex(Uint8List bytes) {

@@ -82,17 +82,17 @@ class AuthGate extends StatefulWidget {
 
 class _AuthGateState extends State<AuthGate> {
   PollingService? _pollingService;
+  bool _pollingStarted = false;
 
   @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _updatePollingService();
+  void dispose() {
+    _pollingService?.dispose();
+    super.dispose();
   }
 
-  void _updatePollingService() {
-    final auth = context.read<AuthProvider>();
-
-    if (auth.isAuthenticated && _pollingService == null) {
+  void _startPollingIfNeeded(AuthProvider auth) {
+    if (auth.isAuthenticated && !_pollingStarted) {
+      _pollingStarted = true;
       // Start polling when authenticated
       _pollingService = PollingService(
         authProvider: auth,
@@ -104,22 +104,25 @@ class _AuthGateState extends State<AuthGate> {
         context.read<ConversationsProvider>().refresh();
       };
       _pollingService!.startPolling();
-    } else if (!auth.isAuthenticated && _pollingService != null) {
+      debugPrint('PollingService started');
+    } else if (!auth.isAuthenticated && _pollingStarted) {
       // Stop polling when logged out
-      _pollingService!.dispose();
+      _pollingService?.dispose();
       _pollingService = null;
+      _pollingStarted = false;
+      debugPrint('PollingService stopped');
     }
-  }
-
-  @override
-  void dispose() {
-    _pollingService?.dispose();
-    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
+
+    // Start/stop polling based on auth state
+    // Use addPostFrameCallback to avoid calling during build
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _startPollingIfNeeded(auth);
+    });
 
     if (auth.isLoading) {
       return const Scaffold(

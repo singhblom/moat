@@ -89,6 +89,17 @@ class KeyPackageRecord {
   bool get isExpired => DateTime.now().isAfter(expiresAt);
 }
 
+/// Stealth address record fetched from PDS (v2: multi-device)
+class StealthAddressRecord {
+  final Uint8List scanPubkey;
+  final String deviceName;
+
+  StealthAddressRecord({
+    required this.scanPubkey,
+    required this.deviceName,
+  });
+}
+
 /// Event record fetched from PDS
 class EventRecord {
   final String uri;
@@ -299,9 +310,9 @@ class AtprotoClient {
     return records;
   }
 
-  /// Publish a stealth address to the PDS (singleton record with rkey "self")
-  /// Uses putRecord for upsert semantics (creates or replaces existing record)
-  Future<String> publishStealthAddress(Uint8List scanPubkey) async {
+  /// Publish a stealth address to the PDS for this device (v2: multi-device).
+  /// Each device publishes its own stealth address with a unique TID.
+  Future<String> publishStealthAddress(Uint8List scanPubkey, String deviceName) async {
     _requireSession();
 
     if (scanPubkey.length != 32) {
@@ -310,17 +321,17 @@ class AtprotoClient {
 
     final now = DateTime.now().toUtc();
     final record = {
-      'v': 1,
+      'v': 2,
       'scanPubkey': base64Encode(scanPubkey),
+      'deviceName': deviceName,
       'createdAt': now.toIso8601String(),
     };
 
     final response = await _post(
-      '${_session!.pdsUrl}/xrpc/com.atproto.repo.putRecord',
+      '${_session!.pdsUrl}/xrpc/com.atproto.repo.createRecord',
       body: {
         'repo': _session!.did,
         'collection': stealthAddressNsid,
-        'rkey': 'self',
         'record': record,
       },
       authToken: _session!.accessJwt,
@@ -329,8 +340,10 @@ class AtprotoClient {
     return response['uri'] as String;
   }
 
-  /// Fetch a user's stealth address
-  Future<Uint8List?> fetchStealthAddress(String did) async {
+  /// Fetch all stealth addresses for a user (one per device, v2: multi-device).
+  /// Returns a list of (public_key, device_name) records.
+  /// Returns an empty list if the user hasn't published any stealth addresses.
+  Future<List<StealthAddressRecord>> fetchStealthAddresses(String did) async {
     final pdsUrl = await resolvePdsEndpoint(did);
 
     final response = await _get(
@@ -338,22 +351,32 @@ class AtprotoClient {
       queryParams: {
         'repo': did,
         'collection': stealthAddressNsid,
-        'limit': '1',
+        'limit': '100', // Get all devices
       },
     );
 
-    final records = response['records'] as List<dynamic>? ?? [];
-    if (records.isEmpty) {
-      return null;
+    final records = <StealthAddressRecord>[];
+    final items = response['records'] as List<dynamic>? ?? [];
+
+    for (final item in items) {
+      try {
+        final value = item['value'] as Map<String, dynamic>;
+        final v = value['v'] as int?;
+        // Only accept v2 records (multi-device)
+        if (v == 2) {
+          final scanPubkey = base64Decode(value['scanPubkey'] as String);
+          final deviceName = value['deviceName'] as String? ?? 'Unknown';
+          records.add(StealthAddressRecord(
+            scanPubkey: scanPubkey,
+            deviceName: deviceName,
+          ));
+        }
+      } catch (_) {
+        // Skip malformed records
+      }
     }
 
-    try {
-      final value = records.first['value'] as Map<String, dynamic>;
-      final scanPubkey = value['scanPubkey'] as String;
-      return base64Decode(scanPubkey);
-    } catch (_) {
-      return null;
-    }
+    return records;
   }
 
   /// Publish an encrypted event to the PDS

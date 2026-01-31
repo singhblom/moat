@@ -51,11 +51,66 @@ class PollingService {
     _isPolling = true;
 
     try {
+      // Poll our own DID for incoming welcome messages from other devices
+      await _pollOwnDid();
+      // Poll watched DIDs for invites
       await _pollWatchedDids();
     } catch (e) {
       debugPrint('Polling error: $e');
     } finally {
       _isPolling = false;
+    }
+  }
+
+  /// Poll our own DID for incoming welcome messages (multi-device sync)
+  Future<void> _pollOwnDid() async {
+    final myDid = _authProvider.did;
+    if (myDid == null) return;
+
+    final client = _authProvider.atprotoClient;
+
+    try {
+      // Get last seen rkey for our own DID
+      final lastRkey = await _secureStorage.getLastRkey(myDid);
+
+      // Fetch new events from our own PDS
+      final events = await client.fetchEvents(myDid, afterRkey: lastRkey);
+
+      if (events.isEmpty) return;
+
+      debugPrint('PollingService: Found ${events.length} events from own DID');
+
+      // Track max rkey for pagination
+      String? maxRkey = lastRkey;
+
+      for (final event in events) {
+        // Update max rkey
+        if (maxRkey == null || event.rkey.compareTo(maxRkey) > 0) {
+          maxRkey = event.rkey;
+        }
+
+        // Try to decrypt as stealth-encrypted welcome
+        final welcomeBytes =
+            await _authProvider.tryDecryptStealthPayload(event.ciphertext);
+
+        if (welcomeBytes != null) {
+          debugPrint('PollingService: Decrypted welcome from own DID (multi-device sync)');
+          // This is a welcome from another device in the same account,
+          // or from someone who invited us
+          await _processWelcome(welcomeBytes, myDid);
+
+          // Notify listeners
+          onNewConversation?.call();
+        }
+      }
+
+      // Save last rkey for pagination
+      if (maxRkey != null) {
+        await _secureStorage.saveLastRkey(myDid, maxRkey);
+      }
+    } catch (e, stack) {
+      debugPrint('PollingService: Error polling own DID: $e');
+      debugPrint('PollingService: Stack trace: $stack');
     }
   }
 
@@ -136,13 +191,25 @@ class PollingService {
     final tag = _authProvider.deriveConversationTag(groupId, 1);
     await _authProvider.registerTag(tag, groupId);
 
-    // Resolve sender handle
+    // Get all DIDs in the group to find the other participant(s)
+    final groupDids = await _authProvider.getGroupDids(groupId);
+    final myDid = _authProvider.did;
+
+    // Filter out our own DID to get the other participant(s)
+    final otherDids = groupDids.where((did) => did != myDid).toList();
+
+    // Use the first other participant as the display name, or fall back to sender
+    final participantDid = otherDids.isNotEmpty ? otherDids.first : senderDid;
+
+    // Resolve participant handle
     String displayName;
     try {
-      displayName = await _authProvider.atprotoClient.resolveHandle(senderDid);
+      displayName = await _authProvider.atprotoClient.resolveHandle(participantDid);
     } catch (_) {
-      displayName = senderDid;
+      displayName = participantDid;
     }
+
+    debugPrint('PollingService: Joined group with participants: $groupDids, display: $displayName');
 
     // Create conversation
     final groupIdHex =
@@ -151,7 +218,7 @@ class PollingService {
     final conversation = Conversation(
       groupId: groupId,
       displayName: displayName,
-      participants: [senderDid],
+      participants: otherDids.isNotEmpty ? otherDids : [senderDid],
       epoch: 1,
       keyBundleRef: 'key_bundle_$groupIdHex',
       createdAt: DateTime.now(),

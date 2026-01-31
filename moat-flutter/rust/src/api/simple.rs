@@ -112,6 +112,15 @@ impl MoatSessionHandle {
             .map_err(|e| e.to_string())
     }
 
+    /// Get the DIDs of all members in a group (deduplicated).
+    pub fn get_group_dids(&self, group_id: Vec<u8>) -> Result<Vec<String>, String> {
+        self.inner
+            .lock()
+            .unwrap()
+            .get_group_dids(&group_id)
+            .map_err(|e| e.to_string())
+    }
+
     /// Add a member to a group. Returns welcome result.
     pub fn add_member(
         &self,
@@ -284,15 +293,20 @@ pub struct StealthKeypair {
     pub public_key: Vec<u8>,
 }
 
-/// Encrypt a Welcome for a recipient's stealth address.
+/// Encrypt a Welcome for one or more recipients' stealth addresses (multi-device support).
+/// Each recipient pubkey must be 32 bytes.
 pub fn encrypt_for_stealth(
-    recipient_scan_pubkey: Vec<u8>,
+    recipient_scan_pubkeys: Vec<Vec<u8>>,
     welcome_bytes: Vec<u8>,
 ) -> Result<Vec<u8>, String> {
-    let pubkey: [u8; 32] = recipient_scan_pubkey
-        .try_into()
-        .map_err(|_| "recipient_scan_pubkey must be 32 bytes".to_string())?;
-    moat_core::encrypt_for_stealth(&pubkey, &welcome_bytes).map_err(|e| e.to_string())
+    let pubkeys: Vec<[u8; 32]> = recipient_scan_pubkeys
+        .into_iter()
+        .map(|pk| {
+            pk.try_into()
+                .map_err(|_| "each recipient_scan_pubkey must be 32 bytes".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    moat_core::encrypt_for_stealth(&pubkeys, &welcome_bytes).map_err(|e| e.to_string())
 }
 
 /// Try to decrypt a stealth-encrypted payload. Returns None if not for us.

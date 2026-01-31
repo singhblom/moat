@@ -14,12 +14,13 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 StealthKeypair generateStealthKeypair() =>
     RustLib.instance.api.crateApiSimpleGenerateStealthKeypair();
 
-/// Encrypt a Welcome for a recipient's stealth address.
+/// Encrypt a Welcome for one or more recipients' stealth addresses (multi-device support).
+/// Each recipient pubkey must be 32 bytes.
 Future<Uint8List> encryptForStealth({
-  required List<int> recipientScanPubkey,
+  required List<Uint8List> recipientScanPubkeys,
   required List<int> welcomeBytes,
 }) => RustLib.instance.api.crateApiSimpleEncryptForStealth(
-  recipientScanPubkey: recipientScanPubkey,
+  recipientScanPubkeys: recipientScanPubkeys,
   welcomeBytes: welcomeBytes,
 );
 
@@ -94,6 +95,9 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
     required String did,
     required String deviceName,
   });
+
+  /// Get the DIDs of all members in a group (deduplicated).
+  Future<List<String>> getGroupDids({required List<int> groupId});
 
   /// Get the current epoch of a group. Returns null if group doesn't exist.
   Future<BigInt?> getGroupEpoch({required List<int> groupId});

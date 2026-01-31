@@ -48,14 +48,17 @@ class _NewConversationScreenState extends State<NewConversationScreen> {
       }
 
       setState(() {
-        _statusMessage = 'Fetching stealth address...';
+        _statusMessage = 'Fetching stealth addresses...';
       });
 
-      // 2. Fetch recipient's stealth address
-      final stealthPubkey = await client.fetchStealthAddress(recipientDid);
-      if (stealthPubkey == null) {
-        throw Exception('Recipient has no stealth address published');
+      // 2. Fetch all of the recipient's stealth addresses (one per device)
+      final stealthRecords = await client.fetchStealthAddresses(recipientDid);
+      if (stealthRecords.isEmpty) {
+        throw Exception('Recipient has no stealth address published. They may need to update their Moat client.');
       }
+
+      // Collect all device public keys for multi-recipient encryption
+      final stealthPubkeys = stealthRecords.map((r) => r.scanPubkey).toList();
 
       setState(() {
         _statusMessage = 'Fetching key packages...';
@@ -74,10 +77,10 @@ class _NewConversationScreenState extends State<NewConversationScreen> {
         _statusMessage = 'Creating encrypted group...';
       });
 
-      // 4. Create conversation via AuthProvider
+      // 4. Create conversation via AuthProvider (encrypts for all devices)
       final result = await auth.createConversation(
         recipientDid: recipientDid,
-        recipientStealthPubkey: stealthPubkey,
+        recipientStealthPubkeys: stealthPubkeys,
         recipientKeyPackage: recipientKeyPackage,
       );
 
