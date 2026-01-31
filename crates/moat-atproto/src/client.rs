@@ -6,7 +6,7 @@ use crate::records::{
     StealthAddressRecord,
 };
 use atrium_api::agent::{store::MemorySessionStore, AtpAgent};
-use atrium_api::com::atproto::repo::{create_record, list_records, put_record};
+use atrium_api::com::atproto::repo::{create_record, delete_record, list_records};
 use atrium_api::com::atproto::server::create_session::OutputData as SessionData;
 use atrium_api::types::string::{AtIdentifier, Nsid};
 use atrium_xrpc_client::reqwest::{ReqwestClient, ReqwestClientBuilder};
@@ -482,16 +482,21 @@ impl MoatAtprotoClient {
         Ok(did.to_string())
     }
 
-    /// Publish a stealth address to the PDS.
+    /// Publish a stealth address to the PDS for this device.
     ///
-    /// This is a singleton record (key: "self"), so calling this will
-    /// replace any existing stealth address.
+    /// Each device publishes its own stealth address with a unique TID.
+    /// Multiple devices can coexist under the same DID.
     ///
     /// Returns the AT-URI of the created record.
-    pub async fn publish_stealth_address(&self, scan_pubkey: &[u8; 32]) -> Result<String> {
+    pub async fn publish_stealth_address(
+        &self,
+        scan_pubkey: &[u8; 32],
+        device_name: &str,
+    ) -> Result<String> {
         let data = StealthAddressData {
-            v: 1,
+            v: 2,
             scan_pubkey: *scan_pubkey,
+            device_name: device_name.to_string(),
             created_at: Utc::now(),
         };
 
@@ -507,16 +512,15 @@ impl MoatAtprotoClient {
             _ => return Err(Error::Serialization("expected object".to_string())),
         };
 
-        let input = put_record::InputData {
+        let input = create_record::InputData {
             collection: Nsid::new(STEALTH_ADDRESS_NSID.to_string())
                 .map_err(|e| Error::InvalidRecord(e.to_string()))?,
             record,
             repo: AtIdentifier::Did(
                 self.did.parse().map_err(|_| Error::InvalidDid(self.did.clone()))?,
             ),
-            rkey: "self".to_string(), // Singleton record
+            rkey: None, // Let PDS generate TID
             swap_commit: None,
-            swap_record: None,
             validate: None,
         };
 
@@ -526,18 +530,19 @@ impl MoatAtprotoClient {
             .com
             .atproto
             .repo
-            .put_record(input.into())
+            .create_record(input.into())
             .await
             .map_err(|e| Error::Pds(e.to_string()))?;
 
         Ok(output.uri.to_string())
     }
 
-    /// Fetch a user's stealth address.
+    /// Fetch all stealth addresses for a user (one per device).
     ///
     /// Resolves the DID's PDS and queries it directly.
-    /// Returns `None` if the user hasn't published a stealth address.
-    pub async fn fetch_stealth_address(&self, did: &str) -> Result<Option<[u8; 32]>> {
+    /// Returns a list of (public_key, device_name) tuples, one for each device.
+    /// Returns an empty Vec if the user hasn't published any stealth addresses.
+    pub async fn fetch_stealth_addresses(&self, did: &str) -> Result<Vec<StealthAddressRecord>> {
         // Resolve the target user's PDS
         let pds_url = self.resolve_pds_endpoint(did).await?;
         let pds_agent = self.agent_for_pds(&pds_url);
@@ -546,7 +551,7 @@ impl MoatAtprotoClient {
             collection: Nsid::new(STEALTH_ADDRESS_NSID.to_string())
                 .map_err(|e| Error::InvalidRecord(e.to_string()))?,
             cursor: None,
-            limit: Some(1.try_into().unwrap()),
+            limit: Some(100.try_into().unwrap()), // Get all devices
             repo: AtIdentifier::Did(
                 did.parse().map_err(|_| Error::InvalidDid(did.to_string()))?,
             ),
@@ -564,17 +569,116 @@ impl MoatAtprotoClient {
             .await
             .map_err(|e| Error::Pds(e.to_string()))?;
 
-        // Look for the stealth address record
+        let mut records = Vec::new();
         for item in &output.records {
             let value = serde_json::to_value(&item.value)
                 .map_err(|e| Error::Serialization(e.to_string()))?;
 
-            if let Ok(record) = serde_json::from_value::<StealthAddressRecord>(value) {
-                return Ok(Some(record.scan_pubkey));
+            if let Ok(mut record) = serde_json::from_value::<StealthAddressRecord>(value) {
+                // Only accept v2 records (multi-device)
+                if record.v == 2 {
+                    // Extract rkey from URI
+                    if let Some(rkey) = item.uri.split('/').last() {
+                        record.rkey = rkey.to_string();
+                    }
+                    records.push(record);
+                }
             }
         }
 
-        Ok(None)
+        Ok(records)
+    }
+
+    /// Delete all Moat records from the user's PDS.
+    ///
+    /// This deletes all events, key packages, and stealth addresses.
+    /// Use with caution - this cannot be undone!
+    ///
+    /// Returns the number of records deleted.
+    pub async fn delete_all_records(&self) -> Result<usize> {
+        let collections = [EVENT_NSID, KEY_PACKAGE_NSID, STEALTH_ADDRESS_NSID];
+        let mut total_deleted = 0;
+
+        for collection in &collections {
+            let deleted = self.delete_all_records_in_collection(collection).await?;
+            total_deleted += deleted;
+        }
+
+        Ok(total_deleted)
+    }
+
+    /// Delete all records in a specific collection.
+    async fn delete_all_records_in_collection(&self, collection: &str) -> Result<usize> {
+        let mut deleted = 0;
+        let mut cursor: Option<String> = None;
+
+        loop {
+            // List records
+            let input = list_records::ParametersData {
+                collection: Nsid::new(collection.to_string())
+                    .map_err(|e| Error::InvalidRecord(e.to_string()))?,
+                cursor: cursor.clone(),
+                limit: Some(100.try_into().unwrap()),
+                repo: AtIdentifier::Did(
+                    self.did.parse().map_err(|_| Error::InvalidDid(self.did.clone()))?,
+                ),
+                reverse: None,
+                rkey_start: None,
+                rkey_end: None,
+            };
+
+            let output = self
+                .agent
+                .api
+                .com
+                .atproto
+                .repo
+                .list_records(input.into())
+                .await
+                .map_err(|e| Error::Pds(e.to_string()))?;
+
+            if output.records.is_empty() {
+                break;
+            }
+
+            // Delete each record
+            for item in &output.records {
+                // Extract rkey from URI
+                if let Some(rkey) = item.uri.split('/').last() {
+                    let delete_input = delete_record::InputData {
+                        collection: Nsid::new(collection.to_string())
+                            .map_err(|e| Error::InvalidRecord(e.to_string()))?,
+                        repo: AtIdentifier::Did(
+                            self.did.parse().map_err(|_| Error::InvalidDid(self.did.clone()))?,
+                        ),
+                        rkey: rkey.to_string(),
+                        swap_commit: None,
+                        swap_record: None,
+                    };
+
+                    self.agent
+                        .api
+                        .com
+                        .atproto
+                        .repo
+                        .delete_record(delete_input.into())
+                        .await
+                        .map_err(|e| Error::Pds(e.to_string()))?;
+
+                    deleted += 1;
+                }
+            }
+
+            // Continue pagination if there's more
+            match &output.cursor {
+                Some(next_cursor) if !output.records.is_empty() => {
+                    cursor = Some(next_cursor.clone());
+                }
+                _ => break,
+            }
+        }
+
+        Ok(deleted)
     }
 }
 

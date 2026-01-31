@@ -464,6 +464,7 @@ impl App {
         }
 
         // Generate stealth address if needed (for receiving private invites)
+        // Each device has its own stealth address
         if !self.keys.has_stealth_key() {
             self.set_status("Generating stealth address...".to_string());
 
@@ -472,9 +473,12 @@ impl App {
             // Store private key locally
             self.keys.store_stealth_key(&stealth_privkey)?;
 
-            // Publish public key to PDS
+            // Publish public key to PDS with device name
             self.set_status("Publishing stealth address...".to_string());
-            client.publish_stealth_address(&stealth_pubkey).await?;
+            let device_name = self.keys.get_or_create_device_name()?;
+            client
+                .publish_stealth_address(&stealth_pubkey, &device_name)
+                .await?;
         }
 
         self.client = Some(client);
@@ -694,21 +698,32 @@ impl App {
             return Ok(());
         }
 
-        self.set_status(format!("Fetching stealth address for {}...", recipient_handle));
+        self.set_status(format!("Fetching stealth addresses for {}...", recipient_handle));
 
-        // 2. Fetch recipient's stealth address (for encrypting the welcome)
-        let recipient_stealth_pubkey = self
+        // 2. Fetch all of the recipient's stealth addresses (one per device)
+        let stealth_records = self
             .client
             .as_ref()
             .unwrap()
-            .fetch_stealth_address(&recipient_did)
-            .await?
-            .ok_or_else(|| {
-                AppError::Other(format!(
-                    "No stealth address found for {}. They may need to update their Moat client.",
-                    recipient_handle
-                ))
-            })?;
+            .fetch_stealth_addresses(&recipient_did)
+            .await?;
+
+        if stealth_records.is_empty() {
+            return Err(AppError::Other(format!(
+                "No stealth address found for {}. They may need to update their Moat client.",
+                recipient_handle
+            )));
+        }
+
+        // Collect all device public keys for multi-recipient encryption
+        let recipient_stealth_pubkeys: Vec<[u8; 32]> =
+            stealth_records.iter().map(|r| r.scan_pubkey).collect();
+
+        self.debug_log.log(&format!(
+            "start_new_conversation: found {} stealth addresses for {}",
+            recipient_stealth_pubkeys.len(),
+            &recipient_did[..20.min(recipient_did.len())]
+        ));
 
         self.set_status(format!("Fetching key package for {}...", recipient_handle));
 
@@ -746,11 +761,10 @@ impl App {
 
         self.set_status("Publishing welcome message...".to_string());
 
-        // 7. Encrypt Welcome with recipient's stealth address (NOT MLS encryption!)
-        // This allows the recipient to decrypt without being in the group yet,
-        // while hiding from observers that this invite is for them.
+        // 7. Encrypt Welcome for ALL of recipient's devices using key encapsulation
+        // This allows any of their devices to decrypt and join the conversation
         let stealth_ciphertext =
-            encrypt_for_stealth(&recipient_stealth_pubkey, &welcome_result.welcome)?;
+            encrypt_for_stealth(&recipient_stealth_pubkeys, &welcome_result.welcome)?;
 
         // 8. Publish with random tag (not group-derived, since recipient doesn't know group yet)
         let random_tag: [u8; 16] = rand::random();
@@ -1360,7 +1374,7 @@ impl App {
             } else {
                 // Unknown tag - might be a welcome for a new conversation
                 self.debug_log.log("poll: tag not matched, trying as welcome");
-                self.try_process_welcome(&event_record.ciphertext, &event_record.author_did, event_record.tag)?;
+                self.try_process_welcome(&event_record.ciphertext, &event_record.author_did, event_record.tag).await?;
             }
         }
 
@@ -1372,7 +1386,7 @@ impl App {
             }
 
             // Try to process as welcome
-            if self.try_process_welcome(&event_record.ciphertext, &event_record.author_did, event_record.tag)? {
+            if self.try_process_welcome(&event_record.ciphertext, &event_record.author_did, event_record.tag).await? {
                 // Remove from watched list - they're now a conversation participant
                 self.watched_dids.remove(&did);
             }
@@ -1395,7 +1409,7 @@ impl App {
 
     /// Try to process ciphertext as a stealth-encrypted welcome message.
     /// Returns true if successful.
-    fn try_process_welcome(
+    async fn try_process_welcome(
         &mut self,
         ciphertext: &[u8],
         author_did: &str,
@@ -1438,19 +1452,26 @@ impl App {
         // Successfully joined a new group!
         let conv_id = hex::encode(&group_id);
 
-        // Store metadata (handle will be resolved in load_conversations)
+        // Try to resolve the sender's DID to a handle
+        let participant_handle = if let Some(client) = &self.client {
+            client.resolve_handle(author_did).await.unwrap_or_else(|_| author_did.to_string())
+        } else {
+            author_did.to_string()
+        };
+
+        // Store metadata with resolved handle
         self.keys.store_group_metadata(
             &conv_id,
             &GroupMetadata {
                 participant_did: author_did.to_string(),
-                participant_handle: author_did.to_string(),
+                participant_handle: participant_handle.clone(),
             },
         )?;
 
-        // Add to conversations list (handle will be resolved on next load)
+        // Add to conversations list
         self.conversations.push(Conversation {
             id: conv_id.clone(),
-            name: author_did.to_string(),
+            name: participant_handle,
             participant_did: author_did.to_string(),
             current_epoch: 1,
             unread: 1,
@@ -1665,11 +1686,13 @@ impl App {
                                 ));
                             }
 
-                            // Encrypt and publish welcome for the new device using stealth address
-                            // First, try to get the DID's stealth address
-                            match client.fetch_stealth_address(did).await {
-                                Ok(Some(stealth_pubkey)) => {
-                                    match moat_core::encrypt_for_stealth(&stealth_pubkey, &welcome_result.welcome) {
+                            // Encrypt and publish welcome for the new device using stealth addresses
+                            // Fetch all stealth addresses for this DID (one per device)
+                            match client.fetch_stealth_addresses(did).await {
+                                Ok(stealth_records) if !stealth_records.is_empty() => {
+                                    let stealth_pubkeys: Vec<[u8; 32]> =
+                                        stealth_records.iter().map(|r| r.scan_pubkey).collect();
+                                    match moat_core::encrypt_for_stealth(&stealth_pubkeys, &welcome_result.welcome) {
                                         Ok(stealth_ciphertext) => {
                                             // Publish with random tag (recipient finds it via stealth decryption)
                                             let random_tag: [u8; 16] = rand::random();
@@ -1680,8 +1703,9 @@ impl App {
                                                 ));
                                             } else {
                                                 self.debug_log.log(&format!(
-                                                    "poll_devices: published welcome for device '{}'",
-                                                    credential.device_name()
+                                                    "poll_devices: published welcome for device '{}' (encrypted for {} devices)",
+                                                    credential.device_name(),
+                                                    stealth_pubkeys.len()
                                                 ));
                                             }
                                         }
@@ -1693,15 +1717,15 @@ impl App {
                                         }
                                     }
                                 }
-                                Ok(None) => {
+                                Ok(_) => {
                                     self.debug_log.log(&format!(
-                                        "poll_devices: no stealth address for {}, cannot send welcome",
+                                        "poll_devices: no stealth addresses for {}, cannot send welcome",
                                         &did[..20.min(did.len())]
                                     ));
                                 }
                                 Err(e) => {
                                     self.debug_log.log(&format!(
-                                        "poll_devices: failed to fetch stealth address: {}",
+                                        "poll_devices: failed to fetch stealth addresses: {}",
                                         e
                                     ));
                                 }

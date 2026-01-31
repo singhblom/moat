@@ -101,6 +101,13 @@ enum Command {
         #[arg(long)]
         conversation: String,
     },
+
+    /// Delete all local data and PDS records for a fresh start
+    DeleteAll {
+        /// Skip confirmation prompt
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[tokio::main]
@@ -132,6 +139,7 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::Leave { conversation }) => {
             cmd_leave(args.storage_dir, &conversation).await
         }
+        Some(Command::DeleteAll { force }) => cmd_delete_all(args.storage_dir, force).await,
     }
 }
 
@@ -732,3 +740,57 @@ async fn cmd_leave(storage_dir: Option<PathBuf>, conversation: &str) -> anyhow::
 
     Ok(())
 }
+
+// ── delete-all ──────────────────────────────────────────────────────
+
+async fn cmd_delete_all(storage_dir: Option<PathBuf>, force: bool) -> anyhow::Result<()> {
+    let base_dir = resolve_storage_dir(storage_dir)?;
+
+    if !force {
+        eprintln!("WARNING: This will delete:");
+        eprintln!("  - All local conversations and messages");
+        eprintln!("  - All MLS state (you will need to be re-invited to groups)");
+        eprintln!("  - All key packages and stealth addresses from your PDS");
+        eprintln!("  - All events you have published");
+        eprintln!();
+        eprintln!("Storage directory: {}", base_dir.display());
+        eprintln!();
+        eprint!("Type 'DELETE' to confirm: ");
+        use std::io::Write;
+        std::io::stderr().flush()?;
+
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if input.trim() != "DELETE" {
+            eprintln!("Aborted.");
+            return Ok(());
+        }
+    }
+
+    // Try to delete PDS records if we can log in
+    let keys_path = base_dir.join("keys");
+    if keys_path.exists() {
+        let keys = keystore::KeyStore::with_path(keys_path)?;
+        match login_from_keystore(&keys).await {
+            Ok(client) => {
+                eprintln!("Deleting PDS records...");
+                let deleted = client.delete_all_records().await?;
+                eprintln!("Deleted {} records from PDS.", deleted);
+            }
+            Err(e) => {
+                eprintln!("Could not log in to delete PDS records: {}", e);
+                eprintln!("Continuing with local deletion only.");
+            }
+        }
+    }
+
+    // Delete local storage
+    eprintln!("Deleting local storage: {}", base_dir.display());
+    if base_dir.exists() {
+        std::fs::remove_dir_all(&base_dir)?;
+    }
+
+    eprintln!("Done. All data deleted.");
+    Ok(())
+}
+

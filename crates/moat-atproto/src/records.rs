@@ -80,28 +80,36 @@ pub struct EventData {
     pub created_at: DateTime<Utc>,
 }
 
-/// Stealth address record stored on PDS
+/// Stealth address record stored on PDS (v2: multi-device)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StealthAddressRecord {
-    /// Schema version
+    /// Record rkey (TID, populated after fetch)
+    #[serde(skip)]
+    pub rkey: String,
+
+    /// Schema version (must be 2)
     pub v: u32,
 
     /// X25519 public key for stealth address derivation (32 bytes)
     #[serde(with = "base64_pubkey")]
     pub scan_pubkey: [u8; 32],
 
+    /// Human-readable device name
+    pub device_name: String,
+
     /// Creation time
     pub created_at: DateTime<Utc>,
 }
 
-/// Record data for creating a new stealth address
+/// Record data for creating a new stealth address (v2: multi-device)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StealthAddressData {
     pub v: u32,
     #[serde(with = "base64_pubkey")]
     pub scan_pubkey: [u8; 32],
+    pub device_name: String,
     pub created_at: DateTime<Utc>,
 }
 
@@ -222,11 +230,12 @@ mod tests {
     #[test]
     fn test_stealth_address_data_serialization() {
         let data = StealthAddressData {
-            v: 1,
+            v: 2,
             scan_pubkey: [
                 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
                 24, 25, 26, 27, 28, 29, 30, 31, 32,
             ],
+            device_name: "Test Device".to_string(),
             created_at: Utc::now(),
         };
 
@@ -235,5 +244,6 @@ mod tests {
 
         assert_eq!(parsed.v, data.v);
         assert_eq!(parsed.scan_pubkey, data.scan_pubkey);
+        assert_eq!(parsed.device_name, data.device_name);
     }
 }

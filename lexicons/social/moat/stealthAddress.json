@@ -4,23 +4,28 @@
   "defs": {
     "main": {
       "type": "record",
-      "key": "self",
-      "description": "Stealth meta-address for receiving private conversation invites",
+      "key": "tid",
+      "description": "Stealth meta-address for receiving private conversation invites. Each device publishes its own stealth address, allowing any device to receive invites.",
       "record": {
         "type": "object",
-        "required": ["v", "scanPubkey", "createdAt"],
+        "required": ["v", "scanPubkey", "deviceName", "createdAt"],
         "properties": {
           "v": {
             "type": "integer",
             "description": "Schema version",
-            "minimum": 1,
-            "maximum": 1
+            "minimum": 2,
+            "maximum": 2
           },
           "scanPubkey": {
             "type": "bytes",
             "description": "X25519 public key for stealth address derivation",
             "maxLength": 32,
             "minLength": 32
+          },
+          "deviceName": {
+            "type": "string",
+            "description": "Human-readable device name for identification",
+            "maxLength": 64
           },
           "createdAt": {
             "type": "string",
