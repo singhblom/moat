@@ -112,6 +112,25 @@ class ConversationsProvider extends ChangeNotifier {
     await saveConversation(conversation);
   }
 
+  /// Update conversation properties
+  Future<void> updateConversation(
+    List<int> groupId, {
+    int? epoch,
+    String? displayName,
+  }) async {
+    final conversation = findByGroupId(groupId);
+    if (conversation == null) return;
+
+    if (epoch != null) {
+      conversation.epoch = epoch;
+    }
+    if (displayName != null) {
+      conversation.displayName = displayName;
+    }
+
+    await saveConversation(conversation);
+  }
+
   void _sortConversations() {
     _conversations.sort((a, b) {
       final aTime = a.lastMessageAt ?? a.createdAt;

@@ -3,7 +3,9 @@ import 'package:provider/provider.dart';
 import '../models/conversation.dart';
 import '../providers/auth_provider.dart';
 import '../providers/conversations_provider.dart';
+import '../providers/messages_provider.dart';
 import '../providers/watch_list_provider.dart';
+import 'conversation_screen.dart';
 import 'new_conversation_screen.dart';
 import 'watch_list_screen.dart';
 
@@ -189,12 +191,21 @@ class _ConversationTile extends StatelessWidget {
         ],
       ),
       onTap: () {
-        // TODO: Navigate to conversation detail (Step 3)
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Conversation view - coming in Step 3'),
+        // Navigate to conversation detail
+        final conversationsProvider = context.read<ConversationsProvider>();
+
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => ChangeNotifierProvider(
+              create: (_) =>
+                  MessagesProvider(conversation.groupIdHex)..loadMessages(),
+              child: ConversationScreen(conversation: conversation),
+            ),
           ),
         );
+
+        // Mark as read when opening
+        conversationsProvider.markAsRead(conversation.groupId);
       },
     );
   }

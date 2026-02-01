@@ -55,6 +55,20 @@ class AuthProvider extends ChangeNotifier {
         _handle = session.handle;
         _deviceName = await _secureStorage.loadDeviceName();
 
+        // Try to refresh the session token (it may have expired)
+        try {
+          await _atprotoClient.refreshSession();
+          // Save the refreshed session
+          await _secureStorage.saveSession(_atprotoClient.session!);
+          moatLog('AuthProvider: Session refreshed successfully');
+        } catch (e) {
+          moatLog('AuthProvider: Failed to refresh session: $e');
+          // If refresh fails, the session is truly invalid - user must log in again
+          _state = AuthState.unauthenticated;
+          notifyListeners();
+          return;
+        }
+
         // Restore MLS state
         await _restoreMlsState();
 
