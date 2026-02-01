@@ -496,6 +496,10 @@ impl MoatSession {
     ///
     /// The ciphertext is decrypted, unpadded, and deserialized.
     /// Returns the decrypted event along with sender information.
+    ///
+    /// For commit messages (e.g., adding/removing members), this function
+    /// merges the commit into the group state and returns an Event with
+    /// kind=Commit. The caller should update their epoch tags accordingly.
     pub fn decrypt_event(
         &self,
         group_id: &[u8],
@@ -522,30 +526,52 @@ impl MoatSession {
         // Extract sender info from the credential
         let sender = self.extract_sender_info(&group, &processed);
 
-        // Extract the application message
-        let padded_bytes = match processed.into_content() {
-            ProcessedMessageContent::ApplicationMessage(app_msg) => app_msg.into_bytes(),
-            ProcessedMessageContent::ProposalMessage(_) => {
-                return Err(Error::InvalidMessageType("Unexpected proposal message".to_string()));
+        // Handle the message content based on type
+        match processed.into_content() {
+            ProcessedMessageContent::ApplicationMessage(app_msg) => {
+                // Regular application message - unpad and deserialize
+                let padded_bytes = app_msg.into_bytes();
+                let event_bytes = unpad(&padded_bytes);
+                let event = Event::from_bytes(&event_bytes)
+                    .map_err(|e| Error::Deserialization(e.to_string()))?;
+
+                Ok(DecryptResult {
+                    new_group_state: Vec::new(), // State is managed by provider
+                    event,
+                    sender,
+                })
             }
-            ProcessedMessageContent::StagedCommitMessage(_) => {
-                return Err(Error::InvalidMessageType("Unexpected commit message".to_string()));
+            ProcessedMessageContent::StagedCommitMessage(staged_commit) => {
+                // Commit message - merge it into group state to advance the epoch
+                // This advances the epoch and the provider auto-saves the state
+                group.merge_staged_commit(&self.provider, *staged_commit)
+                    .map_err(|e| Error::MergeCommit(e.to_string()))?;
+
+                // Get the new epoch after merging
+                let new_epoch = group.epoch().as_u64();
+
+                // Return a commit event to signal the epoch has advanced
+                let event = Event {
+                    kind: EventKind::Commit,
+                    group_id: group_id.to_vec(),
+                    epoch: new_epoch,
+                    sender_device_id: sender.as_ref().map(|s| s.device_name.clone()),
+                    payload: Vec::new(),
+                };
+
+                Ok(DecryptResult {
+                    new_group_state: Vec::new(), // State is managed by provider
+                    event,
+                    sender,
+                })
+            }
+            ProcessedMessageContent::ProposalMessage(_) => {
+                Err(Error::InvalidMessageType("Unexpected proposal message".to_string()))
             }
             ProcessedMessageContent::ExternalJoinProposalMessage(_) => {
-                return Err(Error::InvalidMessageType("Unexpected external join".to_string()));
+                Err(Error::InvalidMessageType("Unexpected external join".to_string()))
             }
-        };
-
-        // Unpad and deserialize
-        let event_bytes = unpad(&padded_bytes);
-        let event = Event::from_bytes(&event_bytes)
-            .map_err(|e| Error::Deserialization(e.to_string()))?;
-
-        Ok(DecryptResult {
-            new_group_state: Vec::new(), // State is managed by provider
-            event,
-            sender,
-        })
+        }
     }
 
     /// Extract sender information from a processed message.
@@ -769,6 +795,28 @@ impl MoatSession {
             commit: commit_bytes,
             group_id: group_id.to_vec(),
         })
+    }
+
+    /// Get our own leaf index in a group.
+    ///
+    /// Returns the leaf index of the current device in the group, or None if not found.
+    pub fn get_own_leaf_index(&self, group_id: &[u8], key_bundle: &[u8]) -> Result<Option<u32>> {
+        let group = match self.load_group(group_id)? {
+            Some(g) => g,
+            None => return Ok(None),
+        };
+
+        let bundle: KeyBundle =
+            serde_json::from_slice(key_bundle).map_err(|e| Error::Deserialization(e.to_string()))?;
+        let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
+
+        let our_pubkey = signature_keys.to_public_vec();
+        let members: Vec<_> = group.members().collect();
+
+        Ok(members.iter()
+            .find(|m| m.signature_key == our_pubkey)
+            .map(|m| m.index.u32()))
     }
 
     /// Leave a group (remove self).

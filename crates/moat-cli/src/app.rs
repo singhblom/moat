@@ -878,7 +878,8 @@ impl App {
             current_epoch
         ));
 
-        // Fetch events from participant only (we have our own messages locally)
+        // Fetch ALL events from participant for display (we have our own messages locally)
+        // We fetch from the beginning to show full history, but track max rkey to update cursor
         let their_events = client.fetch_events_from_did(&participant_did, None).await.unwrap_or_default();
 
         self.debug_log.log(&format!(
@@ -886,10 +887,19 @@ impl App {
             their_events.len()
         ));
 
+        // Track max rkey to update cursor after loading (so poll_messages won't re-process)
+        let mut max_rkey: Option<String> = None;
+
         // Filter by valid tags for this conversation
         let their_events: Vec<_> = their_events
             .into_iter()
-            .filter(|e| valid_tags.contains(&e.tag))
+            .filter(|e| {
+                // Track max rkey across ALL events (not just filtered ones)
+                if max_rkey.as_ref().map_or(true, |m| e.rkey > *m) {
+                    max_rkey = Some(e.rkey.clone());
+                }
+                valid_tags.contains(&e.tag)
+            })
             .collect();
 
         self.debug_log.log(&format!(
@@ -977,6 +987,16 @@ impl App {
             "load_messages: loaded {} messages total",
             self.messages.len()
         ));
+
+        // Update the last_rkey cursor so poll_messages won't re-process these events
+        if let Some(rkey) = max_rkey {
+            if let Err(e) = self.keys.set_last_rkey(&participant_did, &rkey) {
+                self.debug_log.log(&format!(
+                    "load_messages: failed to save rkey cursor: {}",
+                    e
+                ));
+            }
+        }
 
         Ok(())
     }
@@ -1356,7 +1376,20 @@ impl App {
                                 }
                             }
                             EventKind::Commit => {
-                                // MLS commit - state already updated above
+                                // MLS commit was merged - update tag map for new epoch
+                                let new_epoch = decrypted.event.epoch;
+                                if let Ok(new_tag) = moat_core::derive_tag_from_group_id(&group_id, new_epoch) {
+                                    self.tag_map.insert(new_tag, conv_id.clone());
+                                    self.debug_log.log(&format!(
+                                        "poll: commit merged, registered tag for epoch {}",
+                                        new_epoch
+                                    ));
+
+                                    // Update conversation's current epoch
+                                    if let Some(conv) = self.conversations.iter_mut().find(|c| c.id == conv_id) {
+                                        conv.current_epoch = new_epoch;
+                                    }
+                                }
                             }
                             EventKind::Checkpoint => {
                                 // Checkpoint - could use for faster sync
@@ -1491,39 +1524,54 @@ impl App {
         Ok(true)
     }
 
-    /// Poll for new devices from existing group members and auto-add them.
+    /// Poll for new devices belonging to our own DID and auto-add them.
     ///
-    /// For each conversation:
-    /// 1. Get all DIDs currently in the group
-    /// 2. Fetch key packages for each DID
-    /// 3. Check if any key packages represent new devices (not already in group)
-    /// 4. Add new devices with a random delay to reduce race conditions
+    /// Each user is responsible for adding their own devices. This ensures:
+    /// - The welcome is published to our own PDS where our new device can find it
+    /// - No race conditions with other users trying to add the same device
+    /// - Simple, predictable behavior
     async fn poll_for_new_devices(&mut self) -> Result<()> {
         let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
         let my_did = client.did().to_string();
 
+        // Fetch key packages for our own DID
+        let key_packages = match client.fetch_key_packages(&my_did).await {
+            Ok(kps) => kps,
+            Err(e) => {
+                self.debug_log.log(&format!(
+                    "poll_devices: failed to fetch own key packages: {}",
+                    e
+                ));
+                return Ok(());
+            }
+        };
+
+        if key_packages.is_empty() {
+            return Ok(());
+        }
+
+        // Load key bundle for MLS operations
+        let key_bundle = match self.keys.load_identity_key() {
+            Ok(kb) => kb,
+            Err(e) => {
+                self.debug_log.log(&format!(
+                    "poll_devices: failed to load key bundle: {}",
+                    e
+                ));
+                return Ok(());
+            }
+        };
+
         // Collect group info for all conversations
-        let mut groups_to_check: Vec<(Vec<u8>, String)> = Vec::new(); // (group_id, conv_id)
+        let mut groups_to_check: Vec<(Vec<u8>, String)> = Vec::new();
         for conv in &self.conversations {
             if let Ok(group_id) = hex::decode(&conv.id) {
                 groups_to_check.push((group_id, conv.id.clone()));
             }
         }
 
+        // For each conversation, check if any of our key packages represent new devices
         for (group_id, conv_id) in groups_to_check {
-            // Get all DIDs in this group
-            let group_dids = match self.mls.get_group_dids(&group_id) {
-                Ok(dids) => dids,
-                Err(e) => {
-                    self.debug_log.log(&format!(
-                        "poll_devices: failed to get DIDs for group {}: {}",
-                        &conv_id[..16.min(conv_id.len())],
-                        e
-                    ));
-                    continue;
-                }
-            };
-
             // Get current members with their device names
             let current_members = match self.mls.get_group_members(&group_id) {
                 Ok(m) => m,
@@ -1546,228 +1594,179 @@ impl App {
                 .collect();
 
             self.debug_log.log(&format!(
-                "poll_devices: group {} has {} DIDs, {} device entries",
+                "poll_devices: group {} has {} devices",
                 &conv_id[..16.min(conv_id.len())],
-                group_dids.len(),
                 existing_devices.len()
             ));
 
-            // For each DID in the group, fetch their key packages
-            // This includes our own DID - we want to add our own new devices too
-            for did in &group_dids {
-                let key_packages = match client.fetch_key_packages(did).await {
-                    Ok(kps) => kps,
+            // Check each of our key packages to see if it's a new device
+            for kp_record in &key_packages {
+                let credential = match self.mls.extract_credential_from_key_package(&kp_record.key_package) {
+                    Ok(Some(c)) => c,
+                    Ok(None) => {
+                        self.debug_log.log("poll_devices: key package has no credential");
+                        continue;
+                    }
                     Err(e) => {
                         self.debug_log.log(&format!(
-                            "poll_devices: failed to fetch key packages for {}: {}",
-                            &did[..20.min(did.len())],
+                            "poll_devices: failed to extract credential: {}",
                             e
                         ));
                         continue;
                     }
                 };
 
+                let device_key = (credential.did().to_string(), credential.device_name().to_string());
+
                 self.debug_log.log(&format!(
-                    "poll_devices: fetched {} key packages for {}",
-                    key_packages.len(),
-                    &did[..20.min(did.len())]
+                    "poll_devices: key package device_name='{}' for did={}",
+                    credential.device_name(),
+                    &credential.did()[..20.min(credential.did().len())]
                 ));
 
-                // Check each key package to see if it's a new device
-                for kp_record in key_packages {
-                    // Extract credential from the key package
-                    let credential = match self.mls.extract_credential_from_key_package(&kp_record.key_package) {
-                        Ok(Some(c)) => c,
-                        Ok(None) => {
-                            self.debug_log.log("poll_devices: key package has no credential");
-                            continue;
-                        }
-                        Err(e) => {
-                            self.debug_log.log(&format!(
-                                "poll_devices: failed to extract credential: {}",
-                                e
-                            ));
-                            continue;
-                        }
-                    };
-
-                    let device_key = (credential.did().to_string(), credential.device_name().to_string());
-
+                // Skip if this device is already in the group
+                if existing_devices.contains(&device_key) {
                     self.debug_log.log(&format!(
-                        "poll_devices: key package device_name='{}' for did={}",
-                        credential.device_name(),
-                        &credential.did()[..20.min(credential.did().len())]
+                        "poll_devices: device '{}' already in group, skipping",
+                        credential.device_name()
                     ));
+                    continue;
+                }
 
-                    // Skip if this device is already in the group
-                    if existing_devices.contains(&device_key) {
+                self.debug_log.log(&format!(
+                    "poll_devices: found new device '{}' for our DID",
+                    credential.device_name()
+                ));
+
+                // Get epoch BEFORE adding device - commit must be published with pre-advance tag
+                // so other members (who haven't advanced yet) can see it
+                let epoch_before = self.mls.get_group_epoch(&group_id)
+                    .ok()
+                    .flatten()
+                    .unwrap_or(0);
+                let commit_tag = match moat_core::derive_tag_from_group_id(&group_id, epoch_before) {
+                    Ok(t) => t,
+                    Err(e) => {
                         self.debug_log.log(&format!(
-                            "poll_devices: device '{}' already in group, skipping",
-                            credential.device_name()
+                            "poll_devices: failed to derive pre-add tag: {}",
+                            e
                         ));
                         continue;
                     }
+                };
 
-                    self.debug_log.log(&format!(
-                        "poll_devices: found new device '{}' for DID {}",
-                        credential.device_name(),
-                        &credential.did()[..20.min(credential.did().len())]
-                    ));
-
-                    // Add random delay (0-5 seconds) to reduce race conditions
-                    // when multiple group members try to add the same device
-                    let delay_ms = rand::random::<u64>() % 5000;
-                    self.debug_log.log(&format!(
-                        "poll_devices: waiting {}ms before adding device",
-                        delay_ms
-                    ));
-                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
-
-                    // Re-check if device was added by someone else during our delay
-                    let members_after_delay = match self.mls.get_group_members(&group_id) {
-                        Ok(m) => m,
-                        Err(_) => continue,
-                    };
-                    let devices_after_delay: std::collections::HashSet<(String, String)> = members_after_delay
-                        .iter()
-                        .filter_map(|(_, cred)| {
-                            cred.as_ref().map(|c| (c.did().to_string(), c.device_name().to_string()))
-                        })
-                        .collect();
-
-                    if devices_after_delay.contains(&device_key) {
+                // Add the new device
+                match self.mls.add_device(&group_id, &key_bundle, &kp_record.key_package) {
+                    Ok(welcome_result) => {
                         self.debug_log.log(&format!(
-                            "poll_devices: device '{}' was added by someone else",
+                            "poll_devices: successfully added device '{}' to group",
                             credential.device_name()
                         ));
-                        continue;
-                    }
 
-                    // Load our key bundle to perform the add
-                    let key_bundle = match self.keys.load_identity_key() {
-                        Ok(kb) => kb,
-                        Err(e) => {
+                        // Save MLS state
+                        if let Err(e) = self.save_mls_state() {
                             self.debug_log.log(&format!(
-                                "poll_devices: failed to load key bundle: {}",
+                                "poll_devices: failed to save MLS state: {}",
                                 e
                             ));
-                            continue;
                         }
-                    };
 
-                    // Add the new device
-                    match self.mls.add_device(&group_id, &key_bundle, &kp_record.key_package) {
-                        Ok(welcome_result) => {
+                        // Get new epoch for updating tag map
+                        let epoch_after = self.mls.get_group_epoch(&group_id)
+                            .ok()
+                            .flatten()
+                            .unwrap_or(1);
+                        let new_tag = match moat_core::derive_tag_from_group_id(&group_id, epoch_after) {
+                            Ok(t) => t,
+                            Err(e) => {
+                                self.debug_log.log(&format!(
+                                    "poll_devices: failed to derive post-add tag: {}",
+                                    e
+                                ));
+                                continue;
+                            }
+                        };
+
+                        // Update tag map with new epoch's tag
+                        self.tag_map.insert(new_tag, conv_id.clone());
+
+                        // Publish the commit with PRE-advance epoch tag so others can see it
+                        if let Err(e) = client.publish_event(&commit_tag, &welcome_result.commit).await {
                             self.debug_log.log(&format!(
-                                "poll_devices: successfully added device '{}' to group",
-                                credential.device_name()
+                                "poll_devices: failed to publish commit: {}",
+                                e
                             ));
+                        } else {
+                            self.debug_log.log(&format!(
+                                "poll_devices: published commit with epoch {} tag",
+                                epoch_before
+                            ));
+                        }
 
-                            // Save MLS state
-                            if let Err(e) = self.save_mls_state() {
-                                self.debug_log.log(&format!(
-                                    "poll_devices: failed to save MLS state: {}",
-                                    e
-                                ));
-                            }
-
-                            // Get current epoch for the tag
-                            let epoch = self.mls.get_group_epoch(&group_id)
-                                .ok()
-                                .flatten()
-                                .unwrap_or(1);
-                            let tag = match moat_core::derive_tag_from_group_id(&group_id, epoch) {
-                                Ok(t) => t,
-                                Err(e) => {
-                                    self.debug_log.log(&format!(
-                                        "poll_devices: failed to derive tag: {}",
-                                        e
-                                    ));
-                                    continue;
-                                }
-                            };
-
-                            // Update tag map with new epoch
-                            self.tag_map.insert(tag, conv_id.clone());
-
-                            // Publish the commit (so other members see the change)
-                            if let Err(e) = client.publish_event(&tag, &welcome_result.commit).await {
-                                self.debug_log.log(&format!(
-                                    "poll_devices: failed to publish commit: {}",
-                                    e
-                                ));
-                            }
-
-                            // Encrypt and publish welcome for the new device using stealth addresses
-                            // Fetch all stealth addresses for this DID (one per device)
-                            match client.fetch_stealth_addresses(did).await {
-                                Ok(stealth_records) if !stealth_records.is_empty() => {
-                                    let stealth_pubkeys: Vec<[u8; 32]> =
-                                        stealth_records.iter().map(|r| r.scan_pubkey).collect();
-                                    match moat_core::encrypt_for_stealth(&stealth_pubkeys, &welcome_result.welcome) {
-                                        Ok(stealth_ciphertext) => {
-                                            // Publish with random tag (recipient finds it via stealth decryption)
-                                            let random_tag: [u8; 16] = rand::random();
-                                            if let Err(e) = client.publish_event(&random_tag, &stealth_ciphertext).await {
-                                                self.debug_log.log(&format!(
-                                                    "poll_devices: failed to publish welcome: {}",
-                                                    e
-                                                ));
-                                            } else {
-                                                self.debug_log.log(&format!(
-                                                    "poll_devices: published welcome for device '{}' (encrypted for {} devices)",
-                                                    credential.device_name(),
-                                                    stealth_pubkeys.len()
-                                                ));
-                                            }
-                                        }
-                                        Err(e) => {
+                        // Encrypt and publish welcome for the new device using our stealth addresses
+                        match client.fetch_stealth_addresses(&my_did).await {
+                            Ok(stealth_records) if !stealth_records.is_empty() => {
+                                let stealth_pubkeys: Vec<[u8; 32]> =
+                                    stealth_records.iter().map(|r| r.scan_pubkey).collect();
+                                match moat_core::encrypt_for_stealth(&stealth_pubkeys, &welcome_result.welcome) {
+                                    Ok(stealth_ciphertext) => {
+                                        let random_tag: [u8; 16] = rand::random();
+                                        if let Err(e) = client.publish_event(&random_tag, &stealth_ciphertext).await {
                                             self.debug_log.log(&format!(
-                                                "poll_devices: failed to encrypt welcome: {}",
+                                                "poll_devices: failed to publish welcome: {}",
                                                 e
+                                            ));
+                                        } else {
+                                            self.debug_log.log(&format!(
+                                                "poll_devices: published welcome for device '{}' (encrypted for {} stealth keys)",
+                                                credential.device_name(),
+                                                stealth_pubkeys.len()
                                             ));
                                         }
                                     }
-                                }
-                                Ok(_) => {
-                                    self.debug_log.log(&format!(
-                                        "poll_devices: no stealth addresses for {}, cannot send welcome",
-                                        &did[..20.min(did.len())]
-                                    ));
-                                }
-                                Err(e) => {
-                                    self.debug_log.log(&format!(
-                                        "poll_devices: failed to fetch stealth addresses: {}",
-                                        e
-                                    ));
+                                    Err(e) => {
+                                        self.debug_log.log(&format!(
+                                            "poll_devices: failed to encrypt welcome: {}",
+                                            e
+                                        ));
+                                    }
                                 }
                             }
-
-                            // Update conversation epoch in UI and add device alert
-                            let conv_name = self.conversations.iter()
-                                .find(|c| c.id == conv_id)
-                                .map(|c| c.name.clone())
-                                .unwrap_or_else(|| "Unknown".to_string());
-
-                            if let Some(conv) = self.conversations.iter_mut().find(|c| c.id == conv_id) {
-                                conv.current_epoch = epoch;
+                            Ok(_) => {
+                                self.debug_log.log("poll_devices: no stealth addresses for own DID, cannot send welcome");
                             }
+                            Err(e) => {
+                                self.debug_log.log(&format!(
+                                    "poll_devices: failed to fetch stealth addresses: {}",
+                                    e
+                                ));
+                            }
+                        }
 
-                            // Add device alert for UI notification
-                            self.device_alerts.push(DeviceAlert {
-                                conversation_name: conv_name,
-                                user_name: credential.did().to_string(),
-                                device_name: credential.device_name().to_string(),
-                                timestamp: chrono::Utc::now(),
-                            });
+                        // Update conversation epoch in UI and add device alert
+                        let conv_name = self.conversations.iter()
+                            .find(|c| c.id == conv_id)
+                            .map(|c| c.name.clone())
+                            .unwrap_or_else(|| "Unknown".to_string());
+
+                        if let Some(conv) = self.conversations.iter_mut().find(|c| c.id == conv_id) {
+                            conv.current_epoch = epoch_after;
                         }
-                        Err(e) => {
-                            self.debug_log.log(&format!(
-                                "poll_devices: failed to add device '{}': {}",
-                                credential.device_name(),
-                                e
-                            ));
-                        }
+
+                        // Add device alert for UI notification
+                        self.device_alerts.push(DeviceAlert {
+                            conversation_name: conv_name,
+                            user_name: my_did.clone(),
+                            device_name: credential.device_name().to_string(),
+                            timestamp: chrono::Utc::now(),
+                        });
+                    }
+                    Err(e) => {
+                        self.debug_log.log(&format!(
+                            "poll_devices: failed to add device '{}': {}",
+                            credential.device_name(),
+                            e
+                        ));
                     }
                 }
             }

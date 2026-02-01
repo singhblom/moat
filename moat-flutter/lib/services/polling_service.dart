@@ -300,9 +300,8 @@ class PollingService {
       // Handle by event kind
       switch (result.event.kind) {
         case EventKindDto.message:
-          // Unpad and decode text
-          final plaintext = unpad(padded: result.event.payload);
-          final text = utf8.decode(plaintext);
+          // Decode text (payload is already unpadded by decrypt_event)
+          final text = utf8.decode(result.event.payload);
 
           // Extract sender DID from device ID
           final messageSenderDid = _extractDidFromDeviceId(result.event.senderDeviceId);
@@ -376,8 +375,16 @@ class PollingService {
     // Join the group
     final groupId = await _authProvider.processWelcome(welcomeBytes);
 
-    // Derive and register epoch 1 tag
-    final tag = _authProvider.deriveConversationTag(groupId, 1);
+    // Get the actual epoch after joining (may be > 1 if devices were added)
+    final session = _authProvider.moatSession;
+    final epoch = session != null
+        ? (await session.getGroupEpoch(groupId: groupId))?.toInt() ?? 1
+        : 1;
+
+    moatLog('PollingService: Joined group at epoch $epoch');
+
+    // Derive and register tag for current epoch
+    final tag = _authProvider.deriveConversationTag(groupId, epoch);
     await _authProvider.registerTag(tag, groupId);
 
     // Get all DIDs in the group to find the other participant(s)
@@ -408,7 +415,7 @@ class PollingService {
       groupId: groupId,
       displayName: displayName,
       participants: otherDids.isNotEmpty ? otherDids : [senderDid],
-      epoch: 1,
+      epoch: epoch,
       keyBundleRef: 'key_bundle_$groupIdHex',
       createdAt: DateTime.now(),
     );

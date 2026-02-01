@@ -24,6 +24,8 @@ chrono = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 rand = { workspace = true }
+sha2 = { workspace = true }
+hex = "0.4"
 hostname = "0.4"
 
 [dev-dependencies]
