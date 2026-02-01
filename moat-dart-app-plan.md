@@ -104,7 +104,10 @@ This step must come before messaging because you need a conversation to test wit
 - Update tag_map if epoch advances
 - **Multi-device sync**: Your other devices receive your sent messages as normal group messages
 
-### Step 5: Multi-Device Support
-- **Auto-add own devices**: Poll for own new key packages and add them to groups you create
-- **New device alerts**: Show notification when a new device joins a conversation
-- **Auto-add new devices for existing members**: When polling, detect new key packages for group members and add them (with stealth-encrypted welcome, random delay to reduce race conditions)
+### Step 5: Multi-Device Support ✅ COMPLETE
+- **Auto-add own devices**: Poll for own new key packages and add them to groups you create ✅
+- **New device alerts**: Show notification when a new device joins a conversation ✅
+- **Auto-add new devices for existing members**: When polling, detect new key packages for group members and add them (with stealth-encrypted welcome, random delay to reduce race conditions) ✅
+- **Poll own DID for welcomes**: Flutter polls its own DID for stealth-encrypted welcomes from CLI/other devices ✅
+- **Ensure keys on PDS**: On startup, verify stealth address and key package are published (re-publish if missing) ✅
+- **File-based debug logging**: DebugLog service for troubleshooting multi-device sync ✅
