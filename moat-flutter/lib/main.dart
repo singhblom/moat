@@ -6,10 +6,12 @@ import 'providers/watch_list_provider.dart';
 import 'screens/login_screen.dart';
 import 'screens/conversations_screen.dart';
 import 'services/polling_service.dart';
+import 'services/debug_log.dart';
 import 'src/rust/frb_generated.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await DebugLog.instance.init();
   await RustLib.init();
   runApp(const MoatApp());
 }

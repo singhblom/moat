@@ -240,6 +240,16 @@ class SecureStorageService {
     return map[did];
   }
 
+  /// Delete last rkey for a specific DID
+  Future<void> deleteLastRkey(String did) async {
+    final map = await loadLastRkeys();
+    map.remove(did);
+    await _storage.write(
+      key: _lastRkeysKey,
+      value: jsonEncode(map),
+    );
+  }
+
   /// Delete all last rkeys
   Future<void> deleteLastRkeys() async {
     await _storage.delete(key: _lastRkeysKey);

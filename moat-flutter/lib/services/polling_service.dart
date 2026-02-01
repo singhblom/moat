@@ -5,6 +5,7 @@ import '../providers/auth_provider.dart';
 import '../providers/conversations_provider.dart';
 import '../providers/watch_list_provider.dart';
 import 'secure_storage.dart';
+import 'debug_log.dart';
 
 /// Service that polls for events from watched DIDs and processes invites
 class PollingService {
@@ -56,7 +57,7 @@ class PollingService {
       // Poll watched DIDs for invites
       await _pollWatchedDids();
     } catch (e) {
-      debugPrint('Polling error: $e');
+      moatLog('Polling error: $e');
     } finally {
       _isPolling = false;
     }
@@ -73,17 +74,21 @@ class PollingService {
       // Get last seen rkey for our own DID
       final lastRkey = await _secureStorage.getLastRkey(myDid);
 
+      moatLog('PollingService: Polling own DID $myDid (afterRkey: $lastRkey)');
+
       // Fetch new events from our own PDS
       final events = await client.fetchEvents(myDid, afterRkey: lastRkey);
 
-      if (events.isEmpty) return;
+      moatLog('PollingService: Found ${events.length} events from own DID');
 
-      debugPrint('PollingService: Found ${events.length} events from own DID');
+      if (events.isEmpty) return;
 
       // Track max rkey for pagination
       String? maxRkey = lastRkey;
 
       for (final event in events) {
+        moatLog('PollingService: Processing own DID event rkey=${event.rkey}, ${event.ciphertext.length} bytes');
+
         // Update max rkey
         if (maxRkey == null || event.rkey.compareTo(maxRkey) > 0) {
           maxRkey = event.rkey;
@@ -94,13 +99,15 @@ class PollingService {
             await _authProvider.tryDecryptStealthPayload(event.ciphertext);
 
         if (welcomeBytes != null) {
-          debugPrint('PollingService: Decrypted welcome from own DID (multi-device sync)');
+          moatLog('PollingService: Decrypted welcome from own DID (multi-device sync)');
           // This is a welcome from another device in the same account,
           // or from someone who invited us
           await _processWelcome(welcomeBytes, myDid);
 
           // Notify listeners
           onNewConversation?.call();
+        } else {
+          moatLog('PollingService: Could not decrypt own DID event ${event.rkey} as stealth welcome');
         }
       }
 
@@ -109,8 +116,8 @@ class PollingService {
         await _secureStorage.saveLastRkey(myDid, maxRkey);
       }
     } catch (e, stack) {
-      debugPrint('PollingService: Error polling own DID: $e');
-      debugPrint('PollingService: Stack trace: $stack');
+      moatLog('PollingService: Error polling own DID: $e');
+      moatLog('PollingService: Stack trace: $stack');
     }
   }
 
@@ -118,22 +125,22 @@ class PollingService {
   Future<void> _pollWatchedDids() async {
     final watchedDids = _watchListProvider.dids;
     if (watchedDids.isEmpty) {
-      debugPrint('PollingService: No watched DIDs');
+      moatLog('PollingService: No watched DIDs');
       return;
     }
 
-    debugPrint('PollingService: Polling ${watchedDids.length} watched DIDs');
+    moatLog('PollingService: Polling ${watchedDids.length} watched DIDs');
     final client = _authProvider.atprotoClient;
 
     for (final did in watchedDids) {
       try {
         // Get last seen rkey for this DID
         final lastRkey = await _secureStorage.getLastRkey(did);
-        debugPrint('PollingService: Fetching events from $did (afterRkey: $lastRkey)');
+        moatLog('PollingService: Fetching events from $did (afterRkey: $lastRkey)');
 
         // Fetch new events
         final events = await client.fetchEvents(did, afterRkey: lastRkey);
-        debugPrint('PollingService: Found ${events.length} events from $did');
+        moatLog('PollingService: Found ${events.length} events from $did');
 
         if (events.isEmpty) continue;
 
@@ -141,7 +148,7 @@ class PollingService {
         String? maxRkey = lastRkey;
 
         for (final event in events) {
-          debugPrint('PollingService: Processing event ${event.rkey}');
+          moatLog('PollingService: Processing event ${event.rkey}');
 
           // Update max rkey
           if (maxRkey == null || event.rkey.compareTo(maxRkey) > 0) {
@@ -153,7 +160,7 @@ class PollingService {
               await _authProvider.tryDecryptStealthPayload(event.ciphertext);
 
           if (welcomeBytes != null) {
-            debugPrint('PollingService: Successfully decrypted welcome from $did');
+            moatLog('PollingService: Successfully decrypted welcome from $did');
             // Success! This is an invite for us
             await _processWelcome(welcomeBytes, did);
 
@@ -166,7 +173,7 @@ class PollingService {
             // Don't process more events from this DID - we've joined
             break;
           } else {
-            debugPrint('PollingService: Could not decrypt event ${event.rkey} as welcome');
+            moatLog('PollingService: Could not decrypt event ${event.rkey} as welcome');
           }
         }
 
@@ -175,8 +182,8 @@ class PollingService {
           await _secureStorage.saveLastRkey(did, maxRkey);
         }
       } catch (e, stack) {
-        debugPrint('PollingService: Error polling DID $did: $e');
-        debugPrint('PollingService: Stack trace: $stack');
+        moatLog('PollingService: Error polling DID $did: $e');
+        moatLog('PollingService: Stack trace: $stack');
         // Continue with other DIDs
       }
     }
@@ -209,7 +216,7 @@ class PollingService {
       displayName = participantDid;
     }
 
-    debugPrint('PollingService: Joined group with participants: $groupDids, display: $displayName');
+    moatLog('PollingService: Joined group with participants: $groupDids, display: $displayName');
 
     // Create conversation
     final groupIdHex =

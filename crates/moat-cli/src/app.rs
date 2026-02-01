@@ -1553,12 +1553,8 @@ impl App {
             ));
 
             // For each DID in the group, fetch their key packages
+            // This includes our own DID - we want to add our own new devices too
             for did in &group_dids {
-                // Skip our own DID - we don't add our own other devices automatically
-                if did == &my_did {
-                    continue;
-                }
-
                 let key_packages = match client.fetch_key_packages(did).await {
                     Ok(kps) => kps,
                     Err(e) => {
@@ -1570,6 +1566,12 @@ impl App {
                         continue;
                     }
                 };
+
+                self.debug_log.log(&format!(
+                    "poll_devices: fetched {} key packages for {}",
+                    key_packages.len(),
+                    &did[..20.min(did.len())]
+                ));
 
                 // Check each key package to see if it's a new device
                 for kp_record in key_packages {
@@ -1591,8 +1593,18 @@ impl App {
 
                     let device_key = (credential.did().to_string(), credential.device_name().to_string());
 
+                    self.debug_log.log(&format!(
+                        "poll_devices: key package device_name='{}' for did={}",
+                        credential.device_name(),
+                        &credential.did()[..20.min(credential.did().len())]
+                    ));
+
                     // Skip if this device is already in the group
                     if existing_devices.contains(&device_key) {
+                        self.debug_log.log(&format!(
+                            "poll_devices: device '{}' already in group, skipping",
+                            credential.device_name()
+                        ));
                         continue;
                     }
 

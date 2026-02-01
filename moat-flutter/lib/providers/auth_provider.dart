@@ -2,6 +2,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import '../services/atproto_client.dart';
 import '../services/secure_storage.dart';
+import '../services/debug_log.dart';
 import '../src/rust/api/simple.dart';
 
 /// Authentication state
@@ -57,12 +58,15 @@ class AuthProvider extends ChangeNotifier {
         // Restore MLS state
         await _restoreMlsState();
 
+        // Verify keys are published (may need to re-publish if PDS was cleared)
+        await _ensureKeysPublished();
+
         _state = AuthState.authenticated;
       } else {
         _state = AuthState.unauthenticated;
       }
     } catch (e) {
-      debugPrint('Failed to restore session: $e');
+      moatLog('Failed to restore session: $e');
       _state = AuthState.unauthenticated;
     }
 
@@ -137,14 +141,45 @@ class AuthProvider extends ChangeNotifier {
   Future<void> _ensureKeysPublished() async {
     // Check if we already have stealth keys
     final hasStealthKeys = await _secureStorage.hasStealthKeypair();
+    moatLog('AuthProvider: hasStealthKeys=$hasStealthKeys');
     if (!hasStealthKeys) {
+      moatLog('AuthProvider: Generating and publishing stealth address...');
       await _generateAndPublishStealthAddress();
+      moatLog('AuthProvider: Stealth address published');
+    } else {
+      // We have local stealth keys, but ensure our address is published on PDS
+      await _ensureStealthAddressOnPds();
     }
 
     // Check if we have a key bundle (and thus published key package)
     final keyBundle = await _secureStorage.loadKeyBundle();
+    moatLog('AuthProvider: hasKeyBundle=${keyBundle != null}');
     if (keyBundle == null) {
+      moatLog('AuthProvider: Generating and publishing key package...');
       await _generateAndPublishKeyPackage();
+      moatLog('AuthProvider: Key package published');
+    } else {
+      // We have a local key bundle, but we need to ensure OUR key package is on the PDS.
+      // The existing key bundle might be from a previous session where publishing failed,
+      // or the PDS might only have key packages from other devices.
+      //
+      // Since we can't easily parse MLS credentials in Dart to check device names,
+      // we'll re-generate and publish a fresh key package. This ensures the Flutter
+      // device's key package is definitely on the PDS.
+      //
+      // Note: This will create a new key package each time the app starts, but that's
+      // acceptable for now - key packages are designed to be one-time-use anyway.
+      moatLog('AuthProvider: Re-generating key package to ensure it is on PDS...');
+      await _secureStorage.deleteKeyBundle();
+      await _generateAndPublishKeyPackage();
+      moatLog('AuthProvider: Key package published for device $_deviceName');
+
+      // Also reset our own DID's rkey cursor so we don't miss welcome messages
+      // that were published before we regenerated our key package
+      if (_did != null) {
+        moatLog('AuthProvider: Resetting own DID rkey cursor to catch any welcomes');
+        await _secureStorage.deleteLastRkey(_did!);
+      }
     }
   }
 
@@ -164,6 +199,34 @@ class AuthProvider extends ChangeNotifier {
 
     // Publish to PDS with device name (v2: multi-device)
     await _atprotoClient.publishStealthAddress(keypair.publicKey, _deviceName!);
+  }
+
+  /// Ensure our stealth address is published on PDS (re-publish if missing)
+  Future<void> _ensureStealthAddressOnPds() async {
+    if (_did == null || _deviceName == null) {
+      return;
+    }
+
+    // Fetch all stealth addresses for our DID
+    final stealthRecords = await _atprotoClient.fetchStealthAddresses(_did!);
+
+    // Check if our device's stealth address is already published
+    final hasOurAddress = stealthRecords.any((r) => r.deviceName == _deviceName);
+
+    if (!hasOurAddress) {
+      moatLog('AuthProvider: Our stealth address not on PDS, re-publishing...');
+
+      // Load our existing public key
+      final stealthPubkey = await _secureStorage.loadStealthPublicKey();
+      if (stealthPubkey != null) {
+        await _atprotoClient.publishStealthAddress(stealthPubkey, _deviceName!);
+        moatLog('AuthProvider: Stealth address re-published for device $_deviceName');
+      } else {
+        moatLog('AuthProvider: ERROR - have private key but no public key stored');
+      }
+    } else {
+      moatLog('AuthProvider: Stealth address already on PDS for device $_deviceName');
+    }
   }
 
   Future<void> _generateAndPublishKeyPackage() async {
