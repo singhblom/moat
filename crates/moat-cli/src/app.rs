@@ -1197,6 +1197,9 @@ impl App {
     async fn poll_messages(&mut self) -> Result<()> {
         use moat_atproto::EventRecord;
 
+        let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
+        let my_did = client.did().to_string();
+
         // Collect DIDs to poll (deduplicated)
         let mut dids_to_poll: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
         for (idx, conv) in self.conversations.iter().enumerate() {
@@ -1204,6 +1207,12 @@ impl App {
                 .entry(conv.participant_did.clone())
                 .or_default()
                 .push(idx);
+        }
+
+        // Also poll our own DID to receive messages from our other devices
+        if !self.conversations.is_empty() {
+            let all_conv_indices: Vec<usize> = (0..self.conversations.len()).collect();
+            dids_to_poll.entry(my_did.clone()).or_insert(all_conv_indices);
         }
 
         let watched: Vec<String> = self.watched_dids.iter().cloned().collect();
@@ -1358,13 +1367,16 @@ impl App {
                                     .map(|s| (Some(s.did), Some(s.device_name)))
                                     .unwrap_or((None, None));
 
+                                // Check if this message is from our own DID (multi-device)
+                                let is_own = sender_did.as_ref().map_or(false, |did| did == &my_did);
+
                                 // Only add to display if this is the active conversation
                                 if self.active_conversation == conv_idx {
                                     self.messages.push(DisplayMessage {
                                         from,
                                         content,
                                         timestamp: event_record.created_at,
-                                        is_own: false,
+                                        is_own,
                                         sender_did,
                                         sender_device,
                                     });
