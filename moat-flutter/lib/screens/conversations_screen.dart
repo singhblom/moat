@@ -198,7 +198,8 @@ class _ConversationTile extends StatelessWidget {
           MaterialPageRoute(
             builder: (context) => ChangeNotifierProvider(
               create: (_) =>
-                  MessagesProvider(conversation.groupIdHex)..loadMessages(),
+                  MessagesProvider(conversation.groupIdHex, conversation)
+                    ..loadMessages(),
               child: ConversationScreen(conversation: conversation),
             ),
           ),

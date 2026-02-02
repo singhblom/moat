@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/conversation.dart';
 import '../models/message.dart';
+import '../providers/auth_provider.dart';
 import '../providers/messages_provider.dart';
+import '../services/send_service.dart';
 import '../widgets/message_bubble.dart';
 
 /// Screen showing messages in a conversation
@@ -20,28 +22,97 @@ class ConversationScreen extends StatefulWidget {
 
 class _ConversationScreenState extends State<ConversationScreen> {
   final ScrollController _scrollController = ScrollController();
+  final TextEditingController _textController = TextEditingController();
+  final FocusNode _focusNode = FocusNode();
+
+  bool _isAtBottom = true;
+  int _previousMessageCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+
+    // Initialize send service after build
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initSendService();
+    });
+  }
+
+  void _initSendService() {
+    final authProvider = context.read<AuthProvider>();
+    final messagesProvider = context.read<MessagesProvider>();
+    final sendService = SendService(authProvider: authProvider);
+    messagesProvider.initSendService(sendService);
+  }
 
   @override
   void dispose() {
+    _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
+    _textController.dispose();
+    _focusNode.dispose();
     super.dispose();
   }
 
-  /// Scroll to the bottom of the message list (for use when sending messages)
-  // ignore: unused_element
-  void _scrollToBottom() {
-    if (_scrollController.hasClients) {
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+
+    final atBottom = _scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 50;
+
+    if (atBottom != _isAtBottom) {
+      setState(() {
+        _isAtBottom = atBottom;
+      });
+    }
+  }
+
+  void _scrollToBottom({bool animated = true}) {
+    if (!_scrollController.hasClients) return;
+
+    if (animated) {
       _scrollController.animateTo(
         _scrollController.position.maxScrollExtent,
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeOut,
       );
+    } else {
+      _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+    }
+  }
+
+  Future<void> _sendMessage() async {
+    final text = _textController.text.trim();
+    if (text.isEmpty) return;
+
+    // Clear input immediately
+    _textController.clear();
+
+    // Scroll to bottom to see the sending message
+    _scrollToBottom();
+
+    try {
+      final messagesProvider = context.read<MessagesProvider>();
+      await messagesProvider.sendMessage(text);
+      // Scroll again after send completes
+      _scrollToBottom();
+    } catch (e) {
+      // Error is handled by the provider and shown in UI via status
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final messagesProvider = context.watch<MessagesProvider>();
+
+    // Auto-scroll when new messages arrive and we're at the bottom
+    if (messagesProvider.messages.length > _previousMessageCount && _isAtBottom) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _scrollToBottom();
+      });
+    }
+    _previousMessageCount = messagesProvider.messages.length;
 
     return Scaffold(
       appBar: AppBar(
@@ -59,7 +130,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
           Expanded(
             child: _buildMessageList(context, messagesProvider),
           ),
-          _buildInputPlaceholder(context),
+          _buildMessageInput(context, messagesProvider),
         ],
       ),
     );
@@ -117,7 +188,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              'Messages will appear here when received',
+              'Send a message to start the conversation',
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
@@ -151,6 +222,9 @@ class _ConversationScreenState extends State<ConversationScreen> {
           message: message,
           showSender: showSender,
           onLongPress: () => _showMessageInfo(context, message),
+          onRetry: message.status == MessageStatus.failed
+              ? () => provider.retryMessage(message.localId ?? message.id)
+              : null,
         );
       },
     );
@@ -182,9 +256,11 @@ class _ConversationScreenState extends State<ConversationScreen> {
     );
   }
 
-  Widget _buildInputPlaceholder(BuildContext context) {
+  Widget _buildMessageInput(BuildContext context, MessagesProvider provider) {
+    final hasText = _textController.text.trim().isNotEmpty;
+
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
         border: Border(
@@ -193,31 +269,68 @@ class _ConversationScreenState extends State<ConversationScreen> {
           ),
         ),
       ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(24),
-              ),
-              child: Text(
-                'Sending messages coming in Step 4',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+      child: SafeArea(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Expanded(
+              child: Container(
+                constraints: const BoxConstraints(maxHeight: 120),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                child: TextField(
+                  controller: _textController,
+                  focusNode: _focusNode,
+                  maxLines: null,
+                  textInputAction: TextInputAction.newline,
+                  keyboardType: TextInputType.multiline,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: const InputDecoration(
+                    hintText: 'Message',
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
                     ),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                  onSubmitted: (_) {
+                    // Don't send on Enter for multiline - use button
+                  },
+                ),
               ),
             ),
-          ),
-          const SizedBox(width: 8),
-          IconButton(
-            icon: const Icon(Icons.send),
-            onPressed: null, // Disabled for now
-            color: Theme.of(context).colorScheme.primary,
-          ),
-        ],
+            const SizedBox(width: 8),
+            _buildSendButton(context, hasText, provider.isSending),
+          ],
+        ),
       ),
+    );
+  }
+
+  Widget _buildSendButton(BuildContext context, bool hasText, bool isSending) {
+    final canSend = hasText && !isSending;
+
+    return IconButton(
+      icon: isSending
+          ? SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            )
+          : Icon(
+              Icons.send,
+              color: canSend
+                  ? Theme.of(context).colorScheme.primary
+                  : Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+      onPressed: canSend ? _sendMessage : null,
+      tooltip: 'Send message',
     );
   }
 
@@ -279,6 +392,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
               _buildInfoRow(context, 'Device', message.senderDeviceId!),
             _buildInfoRow(context, 'Time', _formatDateTime(message.timestamp)),
             _buildInfoRow(context, 'Epoch', message.epoch.toString()),
+            _buildInfoRow(context, 'Status', message.status.name),
             _buildInfoRow(context, 'Message ID', message.id, isMonospace: true),
             const SizedBox(height: 16),
           ],

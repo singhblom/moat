@@ -86,270 +86,173 @@ This step must come before messaging because you need a conversation to test wit
 
 ### Step 3: Read Messages ✅ COMPLETE
 
-**Goal**: Fetch, decrypt, and display messages from existing conversations.
+**Implemented**: Fetch, decrypt, and display messages from existing conversations.
 
-#### 3.1 Message Model
+**Files created**:
+- [message.dart](moat-flutter/lib/models/message.dart) - Message data model
+- [message_storage.dart](moat-flutter/lib/services/message_storage.dart) - JSON file-based message persistence
+- [message_service.dart](moat-flutter/lib/services/message_service.dart) - Decryption and message processing
+- [messages_provider.dart](moat-flutter/lib/providers/messages_provider.dart) - State management for messages
+- [conversation_screen.dart](moat-flutter/lib/screens/conversation_screen.dart) - Conversation detail UI with message list
+- [message_bubble.dart](moat-flutter/lib/widgets/message_bubble.dart) - Message display widget (aligned left/right for sender)
 
-Create `lib/models/message.dart`:
+**Key features**:
+- Tag-based routing: Events matched to conversations via tag map lookup
+- Per-DID rkey tracking for pagination across all conversation participants
+- Commit handling: Epoch updates trigger new tag registration
+- Duplicate detection via message ID (groupIdHex + rkey)
+- Messages sorted by timestamp, displayed in chat-style UI
+
+### Step 4: Send Messages ✅ COMPLETE
+
+**Implemented**: Users can compose and send encrypted messages from the Flutter app.
+
+#### 4.1 Message Model Updates
+
+Update `lib/models/message.dart` to add status tracking:
+
 ```dart
+enum MessageStatus {
+  sending,  // In flight to PDS
+  sent,     // Confirmed published
+  failed,   // PDS publish failed
+}
+
 class Message {
-  final String id;              // Unique ID (groupIdHex + rkey)
-  final Uint8List groupId;      // Which conversation
-  final String senderDid;       // DID of sender (for display grouping)
-  final String? senderDeviceId; // Device that sent (for message info)
-  final String content;         // Decrypted text
-  final DateTime timestamp;     // From EventRecord.createdAt
-  final bool isOwn;             // Sent by us (for styling)
-  final int epoch;              // MLS epoch when sent
+  // ... existing fields ...
+  final MessageStatus status;  // New field
+  final String? localId;       // Temporary ID for pending messages (before rkey assigned)
 }
 ```
 
-#### 3.2 Message Storage
+#### 4.2 Send Service
 
-Add to `SecureStorageService` (`lib/services/secure_storage.dart`):
-- `saveMessages(String groupIdHex, List<Message>)` - Persist message list per conversation
-- `loadMessages(String groupIdHex) -> List<Message>` - Load messages for a conversation
-- `appendMessage(String groupIdHex, Message)` - Add single message efficiently
+Create `lib/services/send_service.dart`:
 
-Use standard file storage (not secure storage) for message content since it's just decrypted text. Keep keys only in secure storage.
+**Core responsibilities**:
+1. Encrypt message via FFI (`encryptEvent`)
+2. Pad plaintext to bucket size (`padToBucket`)
+3. Publish to PDS (`publishEvent`)
+4. Persist sent message locally (MLS can't decrypt own ciphertexts)
+5. Update MLS group state after encryption
 
-Consider: SQLite via `sqflite` package for efficient querying and large message histories. Start with JSON file for simplicity, migrate later if needed.
-
-#### 3.3 Message Polling Infrastructure
-
-**Extend `PollingService`** with new method `_pollConversationMessages()`:
-
-1. **Get all participant DIDs**: For each conversation, collect all participant DIDs
-2. **Per-DID polling**: Fetch events from each DID using existing `fetchEvents()` with rkey pagination
-3. **Tag-based routing**: For each event:
-   - Convert tag to hex: `tagHex = event.tag.map(...).join()`
-   - Look up in tag map: `groupIdHex = await _secureStorage.lookupByTag(tagHex)`
-   - If found → route to that conversation for decryption
-   - If not found → skip (could be stealth invite, old epoch, or not for us)
-
-**Per-conversation last rkey tracking**: Store `Map<groupIdHex, Map<did, lastRkey>>` to track pagination per participant per conversation. Add to `SecureStorageService`:
-- `saveConversationLastRkeys(String groupIdHex, Map<String, String> didToRkey)`
-- `loadConversationLastRkeys(String groupIdHex) -> Map<String, String>`
-
-#### 3.4 Message Decryption Pipeline
-
-Create `lib/services/message_service.dart`:
-
+**Key flow**:
 ```dart
-class MessageService {
-  Future<Message?> decryptEvent(EventRecord record, Conversation conversation) async {
-    // 1. Get current MLS state
-    final mlsState = await _secureStorage.loadMlsState();
-    final session = await MoatSessionHandle.fromState(mlsState);
+Future<Message> sendMessage(Conversation conv, String text) async {
+  // 1. Auto-refresh epoch if needed (poll for commits, process them)
+  await _ensureEpochCurrent(conv);
 
-    // 2. Decrypt
-    final result = await session.decryptEvent(
-      groupId: conversation.groupId,
-      ciphertext: record.ciphertext,
-    );
+  // 2. Load keyBundle from secure storage (per-send, not cached)
+  final keyBundle = await _secureStorage.loadKeyBundle();
 
-    // 3. Persist updated MLS state (CRITICAL - must happen after each decrypt)
-    await _secureStorage.saveMlsState(result.newGroupState);
+  // 3. Pad plaintext to bucket
+  final plaintext = utf8.encode(text);
+  final padded = padToBucket(plaintext: plaintext);
 
-    // 4. Handle by event kind
-    switch (result.event.kind) {
-      case EventKindDto.message:
-        // Unpad and decode text
-        final padded = result.event.payload;
-        final plaintext = unpad(padded: padded);
-        final text = utf8.decode(plaintext);
-
-        return Message(
-          id: '${conversation.groupIdHex}_${record.rkey}',
-          groupId: conversation.groupId,
-          senderDid: _extractDidFromDeviceId(result.event.senderDeviceId),
-          senderDeviceId: result.event.senderDeviceId,
-          content: text,
-          timestamp: record.createdAt,
-          isOwn: _isSenderMe(result.event.senderDeviceId),
-          epoch: result.event.epoch,
-        );
-
-      case EventKindDto.commit:
-        // Epoch advanced - update conversation and tag map
-        await _handleCommit(conversation, result.event);
-        return null; // No message to display
-
-      case EventKindDto.welcome:
-      case EventKindDto.checkpoint:
-        return null; // Not displayable messages
-    }
-  }
-
-  Future<void> _handleCommit(Conversation conv, EventDto event) async {
-    // Update conversation epoch
-    conv.epoch = event.epoch;
-    await _conversationsProvider.updateConversation(conv);
-
-    // Derive and register new tag for this epoch
-    final newTag = deriveTag(groupId: conv.groupId, epoch: BigInt.from(event.epoch));
-    final tagHex = newTag.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-    await _secureStorage.registerTag(tagHex, conv.groupIdHex);
-  }
-}
-```
-
-**Error handling considerations**:
-- Decryption can fail if: wrong group, already processed, epoch mismatch
-- On failure: log error, skip event, continue with next
-- Track failed rkeys to avoid re-processing in future polls
-
-#### 3.5 Messages Provider
-
-Create `lib/providers/messages_provider.dart`:
-
-```dart
-class MessagesProvider extends ChangeNotifier {
-  final String groupIdHex;
-  List<Message> _messages = [];
-  bool _isLoading = false;
-
-  List<Message> get messages => _messages;
-  bool get isLoading => _isLoading;
-
-  Future<void> loadMessages() async {
-    _isLoading = true;
-    notifyListeners();
-
-    _messages = await _storage.loadMessages(groupIdHex);
-
-    _isLoading = false;
-    notifyListeners();
-  }
-
-  void addMessage(Message message) {
-    _messages.add(message);
-    _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-    notifyListeners();
-  }
-
-  void markAsRead() {
-    // Update conversation unread count
-  }
-}
-```
-
-#### 3.6 Conversation Detail Screen
-
-Create `lib/screens/conversation_screen.dart`:
-
-**Layout**:
-- AppBar: Conversation display name, menu with info option
-- Body: `ListView.builder` with messages, reversed for chat UI
-- Bottom: Placeholder text "Sending messages coming in Step 4"
-
-**Message bubble widget**:
-```dart
-class MessageBubble extends StatelessWidget {
-  final Message message;
-
-  // Align right for own messages, left for others
-  // Show sender name for first message in a group from same DID
-  // Long-press shows message info (device ID, timestamp, epoch)
-}
-```
-
-**Collapsed identity display**:
-- Group consecutive messages from same DID
-- Show sender handle/name only on first message of group
-- Don't show individual device names unless user taps for info
-
-**History boundary**:
-- When at top of list, show: "Messages before [date] are on your other devices"
-- This acknowledges new devices don't get history
-
-#### 3.7 Navigation Wiring
-
-Update `ConversationsScreen._ConversationTile.onTap`:
-```dart
-onTap: () {
-  Navigator.of(context).push(
-    MaterialPageRoute(
-      builder: (context) => ChangeNotifierProvider(
-        create: (_) => MessagesProvider(conversation.groupIdHex)..loadMessages(),
-        child: ConversationScreen(conversation: conversation),
-      ),
-    ),
+  // 4. Create event DTO
+  final event = EventDto(
+    kind: EventKindDto.message,
+    groupId: conv.groupId,
+    epoch: BigInt.from(conv.epoch),
+    senderDeviceId: '$myDid/$deviceName',
+    payload: padded,
   );
-  // Mark as read when opening
-  conversationsProvider.markAsRead(conversation);
+
+  // 5. Encrypt via FFI - returns (newGroupState, tag, ciphertext)
+  final result = await session.encryptEvent(
+    groupId: conv.groupId,
+    keyBundle: keyBundle,
+    event: event,
+  );
+
+  // 6. Persist updated MLS state
+  await _secureStorage.saveMlsState(result.newGroupState);
+
+  // 7. Publish to PDS with returned tag
+  final uri = await _atproto.publishEvent(result.tag, result.ciphertext);
+
+  // 8. Create and store message locally
+  final message = Message(
+    id: '${conv.groupIdHex}_${extractRkey(uri)}',
+    localId: null,
+    groupId: conv.groupId,
+    senderDid: myDid,
+    senderDeviceId: '$myDid/$deviceName',
+    content: text,
+    timestamp: DateTime.now(),
+    isOwn: true,
+    epoch: conv.epoch,
+    status: MessageStatus.sent,
+  );
+
+  return message;
 }
 ```
 
-#### 3.8 Background Polling Integration
+**Epoch refresh logic** (`_ensureEpochCurrent`):
+- Poll for new events from conversation participants
+- Process any commits to update local epoch
+- If refresh fails (network error), block send with error message
 
-Modify `PollingService`:
+#### 4.3 Send Queue
 
-1. Add `_pollConversationMessages()` to `poll()` method
-2. Call after welcome polling completes
-3. Use `ConversationsProvider` to get list of conversations to poll
-4. For each new message decrypted:
-   - Add to appropriate `MessagesProvider` (if screen is open)
-   - Update conversation's `lastMessagePreview` and `lastMessageAt`
-   - Increment `unreadCount` if conversation screen not open
+Implement ordered message queue in `MessagesProvider` or separate `SendQueue`:
 
-**Callback pattern**:
+- User can type and tap send multiple times rapidly
+- Messages queue and send in order
+- If message N fails, messages N+1, N+2 etc wait until N succeeds or user cancels
+- Failed messages show inline retry button
+- Each message tracks its own `MessageStatus`
+
+**Queue state**:
 ```dart
-/// Callback when new messages arrive
-void Function(String groupIdHex, List<Message> messages)? onNewMessages;
+class SendQueue {
+  final List<PendingMessage> _queue = [];
+  bool _isProcessing = false;
+
+  void enqueue(PendingMessage msg);
+  Future<void> _processNext();
+  void retry(String localId);
+  void cancel(String localId);
+}
 ```
 
-#### 3.9 Testing Flow
+#### 4.4 UI Changes
 
-1. **Setup**: Device A and Device B both have a shared conversation (from Step 2)
-2. **Send from CLI**: Use `cargo run -p moat-cli -- send-test --tag <tag> --message "Hello"`
-3. **Poll on Flutter**: App polls, decrypts message, displays in conversation view
-4. **Verify epoch tracking**: Send multiple messages, confirm tag updates work
-5. **Cross-device**: Open conversation on both Flutter devices, verify both receive messages
+**Text input** (`conversation_screen.dart`):
+- Replace placeholder with real `TextField`
+- Expanding multi-line: grows as user types, up to ~4 lines, then scrolls
+- Enter key sends message, Shift+Enter adds newline
+- 200-300ms debounce on send button to prevent double-taps
+- Send button enabled/disabled based on text content (not empty)
 
-#### 3.10 Files to Create/Modify
+**Message bubble updates** (`message_bubble.dart`):
+- Add status indicator for own messages:
+  - `sending`: Single gray checkmark
+  - `sent`: Double gray checkmarks
+  - `failed`: Red error icon, tap to retry
+- Checkmark style like WhatsApp
 
-**New files**:
-- `lib/models/message.dart` - Message data model
-- `lib/services/message_service.dart` - Decryption and message processing
-- `lib/providers/messages_provider.dart` - State management for messages
-- `lib/screens/conversation_screen.dart` - Conversation detail UI
-- `lib/widgets/message_bubble.dart` - Message display widget
+**Live updates**:
+- When conversation screen is open and new messages arrive via polling
+- If user is scrolled to bottom: auto-scroll to show new messages
+- If user has scrolled up: show "New messages" indicator at bottom
 
-**Modified files**:
-- `lib/services/secure_storage.dart` - Add message persistence methods
-- `lib/services/polling_service.dart` - Add message polling logic
-- `lib/screens/conversations_screen.dart` - Wire up navigation
-- `lib/providers/conversations_provider.dart` - Add `markAsRead()`, `updateConversation()`
-- `lib/models/conversation.dart` - Add `lastSyncedRkeys` field (optional)
+**Files created/modified**:
+- [send_service.dart](moat-flutter/lib/services/send_service.dart) - Encryption and publishing logic
+- [message.dart](moat-flutter/lib/models/message.dart) - Added `MessageStatus` enum, `status` and `localId` fields, `copyWith` method
+- [conversation_screen.dart](moat-flutter/lib/screens/conversation_screen.dart) - Real TextField input with send button
+- [message_bubble.dart](moat-flutter/lib/widgets/message_bubble.dart) - Status indicators (clock, checkmarks, error) and retry on tap
+- [messages_provider.dart](moat-flutter/lib/providers/messages_provider.dart) - Send queue, optimistic UI, retry/cancel
 
-#### 3.11 Implementation Order
-
-1. **Message model** - Define the data structure
-2. **Secure storage extensions** - Persistence layer
-3. **Message service** - Core decryption logic
-4. **Messages provider** - State management
-5. **Conversation screen + message bubble** - UI
-6. **Navigation wiring** - Connect screens
-7. **Polling integration** - Background updates
-8. **Testing** - End-to-end verification
-
-#### 3.12 Edge Cases
-
-- **Epoch mismatch**: If we miss a commit, decryption fails. Log and skip; user may need to re-sync.
-- **Duplicate processing**: Use message ID (groupId + rkey) to deduplicate.
-- **Out-of-order messages**: Sort by timestamp after loading.
-- **Large histories**: Implement pagination/virtualization if needed (defer to later).
-- **Network failures**: Retry with exponential backoff; show error toast if persistent.
-
-### Step 4: Send Messages
-- Text input and message composition
-- Encrypt via FFI (MLS encrypt), pad to buckets
-- Derive conversation tag from group_id + epoch
-- Publish to PDS with derived tag
-- Store sent messages locally (MLS can't decrypt own ciphertexts)
-- Update tag_map if epoch advances
-- **Multi-device sync**: Your other devices receive your sent messages as normal group messages
+**Key features**:
+- Optimistic UI: Message appears immediately with "sending" status
+- Send queue: Messages sent in order, queue blocks on failure
+- Status indicators: Clock (sending), double checkmarks (sent), error icon (failed)
+- Retry mechanism: Tap failed message to retry, or cancel via provider
+- Auto-scroll: Automatically scroll to bottom when new messages arrive (if already at bottom)
+- Multiline input: TextField expands up to ~4 lines, then scrolls internally
+- MLS state persistence: Updated after each encryption operation
 
 ### Step 5: Multi-Device Support ✅ COMPLETE
 - **Auto-add own devices**: Poll for own new key packages and add them to groups you create ✅

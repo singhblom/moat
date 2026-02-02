@@ -173,27 +173,12 @@ class AuthProvider extends ChangeNotifier {
       await _generateAndPublishKeyPackage();
       moatLog('AuthProvider: Key package published');
     } else {
-      // We have a local key bundle, but we need to ensure OUR key package is on the PDS.
-      // The existing key bundle might be from a previous session where publishing failed,
-      // or the PDS might only have key packages from other devices.
+      // We have a local key bundle. DO NOT regenerate - this would break existing
+      // group memberships because the signing key would change.
       //
-      // Since we can't easily parse MLS credentials in Dart to check device names,
-      // we'll re-generate and publish a fresh key package. This ensures the Flutter
-      // device's key package is definitely on the PDS.
-      //
-      // Note: This will create a new key package each time the app starts, but that's
-      // acceptable for now - key packages are designed to be one-time-use anyway.
-      moatLog('AuthProvider: Re-generating key package to ensure it is on PDS...');
-      await _secureStorage.deleteKeyBundle();
-      await _generateAndPublishKeyPackage();
-      moatLog('AuthProvider: Key package published for device $_deviceName');
-
-      // Also reset our own DID's rkey cursor so we don't miss welcome messages
-      // that were published before we regenerated our key package
-      if (_did != null) {
-        moatLog('AuthProvider: Resetting own DID rkey cursor to catch any welcomes');
-        await _secureStorage.deleteLastRkey(_did!);
-      }
+      // The key package was published when we created the bundle. If the PDS
+      // somehow lost it, users can manually trigger re-publish via settings.
+      moatLog('AuthProvider: Using existing key bundle (not regenerating to preserve group memberships)');
     }
   }
 
