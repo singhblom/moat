@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../models/conversation.dart';
 import '../models/message.dart';
 import '../services/message_storage.dart';
+import '../services/message_notifier.dart';
 import '../services/send_service.dart';
 import '../services/debug_log.dart';
 
@@ -39,7 +40,16 @@ class MessagesProvider extends ChangeNotifier {
     this.groupIdHex,
     this._conversation, {
     MessageStorage? storage,
-  }) : _storage = storage ?? MessageStorage();
+  }) : _storage = storage ?? MessageStorage() {
+    // Register to receive live message updates from polling
+    MessageNotifier.instance.register(groupIdHex, addMessages);
+  }
+
+  @override
+  void dispose() {
+    MessageNotifier.instance.unregister(groupIdHex);
+    super.dispose();
+  }
 
   List<Message> get messages => _messages;
   bool get isLoading => _isLoading;
