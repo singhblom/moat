@@ -28,15 +28,52 @@ class _ConversationScreenState extends State<ConversationScreen> {
   bool _isAtBottom = true;
   int _previousMessageCount = 0;
 
+  /// Cache of DID -> handle for displaying sender names
+  final Map<String, String> _handleCache = {};
+
   @override
   void initState() {
     super.initState();
     _scrollController.addListener(_onScroll);
 
-    // Initialize send service after build
+    // Initialize send service and resolve handles after build
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initSendService();
+      _resolveParticipantHandles();
     });
+  }
+
+  /// Resolve handles for all participants in the conversation
+  Future<void> _resolveParticipantHandles() async {
+    final authProvider = context.read<AuthProvider>();
+    final client = authProvider.atprotoClient;
+
+    for (final did in widget.conversation.participants) {
+      if (_handleCache.containsKey(did)) continue;
+      try {
+        final handle = await client.resolveHandle(did);
+        if (mounted) {
+          setState(() {
+            _handleCache[did] = handle;
+          });
+        }
+      } catch (_) {
+        // Failed to resolve, will fall back to truncated DID
+      }
+    }
+  }
+
+  /// Get display name for a sender DID
+  String _getSenderDisplayName(String did) {
+    if (_handleCache.containsKey(did)) {
+      return _handleCache[did]!;
+    }
+    // Fallback: truncate DID
+    if (did.startsWith('did:plc:')) {
+      final shortId = did.substring(8);
+      return shortId.length > 8 ? shortId.substring(0, 8) : shortId;
+    }
+    return did.isNotEmpty ? did : 'unknown';
   }
 
   void _initSendService() {
@@ -221,6 +258,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
         return MessageBubble(
           message: message,
           showSender: showSender,
+          senderName: showSender ? _getSenderDisplayName(message.senderDid) : null,
           onLongPress: () => _showMessageInfo(context, message),
           onRetry: message.status == MessageStatus.failed
               ? () => provider.retryMessage(message.localId ?? message.id)

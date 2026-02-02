@@ -303,15 +303,16 @@ class PollingService {
           // Decode text (payload is already unpadded by decrypt_event)
           final text = utf8.decode(result.event.payload);
 
-          // Extract sender DID from device ID
-          final messageSenderDid = _extractDidFromDeviceId(result.event.senderDeviceId);
-          final isOwn = messageSenderDid == _authProvider.did;
+          // Get sender info from MLS credential (extracted during decryption)
+          final senderDid = result.sender?.did ?? 'unknown';
+          final senderDeviceName = result.sender?.deviceName;
+          final isOwn = senderDid == _authProvider.did;
 
           final message = Message(
             id: '${conversation.groupIdHex}_${event.rkey}',
             groupId: conversation.groupId,
-            senderDid: messageSenderDid,
-            senderDeviceId: result.event.senderDeviceId,
+            senderDid: senderDid,
+            senderDeviceId: senderDeviceName,
             content: text,
             timestamp: event.createdAt,
             isOwn: isOwn,
@@ -358,16 +359,6 @@ class PollingService {
       moatLog('PollingService: Failed to decrypt event ${event.rkey} for ${conversation.groupIdHex}: $e');
       // Continue with other events - this could be a duplicate or epoch mismatch
     }
-  }
-
-  /// Extract DID from device ID (format: "did:plc:xxx/device-name")
-  String _extractDidFromDeviceId(String? deviceId) {
-    if (deviceId == null) return 'unknown';
-    final slashIndex = deviceId.indexOf('/');
-    if (slashIndex > 0) {
-      return deviceId.substring(0, slashIndex);
-    }
-    return deviceId;
   }
 
   /// Process a decrypted Welcome message

@@ -8,7 +8,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `from_core`, `into_core`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `MoatError`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`, `from`, `from`
 
 /// Generate a stealth keypair. Returns (private_key, public_key) each 32 bytes.
 StealthKeypair generateStealthKeypair() =>
@@ -116,11 +116,16 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
 class DecryptResultDto {
   final Uint8List newGroupState;
   final EventDto event;
+  final SenderInfoDto? sender;
 
-  const DecryptResultDto({required this.newGroupState, required this.event});
+  const DecryptResultDto({
+    required this.newGroupState,
+    required this.event,
+    this.sender,
+  });
 
   @override
-  int get hashCode => newGroupState.hashCode ^ event.hashCode;
+  int get hashCode => newGroupState.hashCode ^ event.hashCode ^ sender.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -128,7 +133,8 @@ class DecryptResultDto {
       other is DecryptResultDto &&
           runtimeType == other.runtimeType &&
           newGroupState == other.newGroupState &&
-          event == other.event;
+          event == other.event &&
+          sender == other.sender;
 }
 
 class EncryptResultDto {
@@ -160,24 +166,18 @@ class EventDto {
   final EventKindDto kind;
   final Uint8List groupId;
   final BigInt epoch;
-  final String? senderDeviceId;
   final Uint8List payload;
 
   const EventDto({
     required this.kind,
     required this.groupId,
     required this.epoch,
-    this.senderDeviceId,
     required this.payload,
   });
 
   @override
   int get hashCode =>
-      kind.hashCode ^
-      groupId.hashCode ^
-      epoch.hashCode ^
-      senderDeviceId.hashCode ^
-      payload.hashCode;
+      kind.hashCode ^ groupId.hashCode ^ epoch.hashCode ^ payload.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -187,7 +187,6 @@ class EventDto {
           kind == other.kind &&
           groupId == other.groupId &&
           epoch == other.epoch &&
-          senderDeviceId == other.senderDeviceId &&
           payload == other.payload;
 }
 
@@ -209,6 +208,28 @@ class KeyPackageResult {
           runtimeType == other.runtimeType &&
           keyPackage == other.keyPackage &&
           keyBundle == other.keyBundle;
+}
+
+/// Information about the sender of a message, extracted from MLS credentials.
+class SenderInfoDto {
+  /// The sender's DID (e.g., "did:plc:abc123")
+  final String did;
+
+  /// The sender's device name (format: "did:plc:xxx/Device Name")
+  final String deviceName;
+
+  const SenderInfoDto({required this.did, required this.deviceName});
+
+  @override
+  int get hashCode => did.hashCode ^ deviceName.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SenderInfoDto &&
+          runtimeType == other.runtimeType &&
+          did == other.did &&
+          deviceName == other.deviceName;
 }
 
 class StealthKeypair {

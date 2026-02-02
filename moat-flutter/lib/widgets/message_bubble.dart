@@ -5,6 +5,7 @@ import '../models/message.dart';
 class MessageBubble extends StatelessWidget {
   final Message message;
   final bool showSender;
+  final String? senderName;
   final VoidCallback? onLongPress;
   final VoidCallback? onRetry;
 
@@ -12,6 +13,7 @@ class MessageBubble extends StatelessWidget {
     super.key,
     required this.message,
     this.showSender = false,
+    this.senderName,
     this.onLongPress,
     this.onRetry,
   });
@@ -32,11 +34,11 @@ class MessageBubble extends StatelessWidget {
         crossAxisAlignment:
             isOwn ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         children: [
-          if (showSender)
+          if (showSender && senderName != null)
             Padding(
               padding: const EdgeInsets.only(left: 12, bottom: 4),
               child: Text(
-                _formatSenderName(message.senderDid),
+                senderName!,
                 style: theme.textTheme.labelSmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
@@ -147,20 +149,6 @@ class MessageBubble extends StatelessWidget {
           ],
         );
     }
-  }
-
-  /// Format sender name from DID (show last part or handle if available)
-  String _formatSenderName(String did) {
-    // For now, just show a truncated version of the DID
-    // In the future, we could resolve this to a handle
-    if (did.startsWith('did:plc:')) {
-      final shortId = did.substring(8);
-      if (shortId.length > 8) {
-        return shortId.substring(0, 8);
-      }
-      return shortId;
-    }
-    return did;
   }
 
   String _formatTime(DateTime time) {

@@ -551,13 +551,7 @@ impl MoatSession {
                 let new_epoch = group.epoch().as_u64();
 
                 // Return a commit event to signal the epoch has advanced
-                let event = Event {
-                    kind: EventKind::Commit,
-                    group_id: group_id.to_vec(),
-                    epoch: new_epoch,
-                    sender_device_id: sender.as_ref().map(|s| s.device_name.clone()),
-                    payload: Vec::new(),
-                };
+                let event = Event::commit(group_id.to_vec(), new_epoch, Vec::new());
 
                 Ok(DecryptResult {
                     new_group_state: Vec::new(), // State is managed by provider

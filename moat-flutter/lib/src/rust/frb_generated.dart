@@ -910,6 +910,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SenderInfoDto dco_decode_box_autoadd_sender_info_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_sender_info_dto(raw);
+  }
+
+  @protected
   BigInt dco_decode_box_autoadd_u_64(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_u_64(raw);
@@ -919,11 +925,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   DecryptResultDto dco_decode_decrypt_result_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
     return DecryptResultDto(
       newGroupState: dco_decode_list_prim_u_8_strict(arr[0]),
       event: dco_decode_event_dto(arr[1]),
+      sender: dco_decode_opt_box_autoadd_sender_info_dto(arr[2]),
     );
   }
 
@@ -944,14 +951,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   EventDto dco_decode_event_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 5)
-      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
     return EventDto(
       kind: dco_decode_event_kind_dto(arr[0]),
       groupId: dco_decode_list_prim_u_8_strict(arr[1]),
       epoch: dco_decode_u_64(arr[2]),
-      senderDeviceId: dco_decode_opt_String(arr[3]),
-      payload: dco_decode_list_prim_u_8_strict(arr[4]),
+      payload: dco_decode_list_prim_u_8_strict(arr[3]),
     );
   }
 
@@ -1004,9 +1010,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  String? dco_decode_opt_String(dynamic raw) {
+  SenderInfoDto? dco_decode_opt_box_autoadd_sender_info_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return raw == null ? null : dco_decode_String(raw);
+    return raw == null ? null : dco_decode_box_autoadd_sender_info_dto(raw);
   }
 
   @protected
@@ -1019,6 +1025,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_list_prim_u_8_strict(raw);
+  }
+
+  @protected
+  SenderInfoDto dco_decode_sender_info_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return SenderInfoDto(
+      did: dco_decode_String(arr[0]),
+      deviceName: dco_decode_String(arr[1]),
+    );
   }
 
   @protected
@@ -1127,6 +1145,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SenderInfoDto sse_decode_box_autoadd_sender_info_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_sender_info_dto(deserializer));
+  }
+
+  @protected
   BigInt sse_decode_box_autoadd_u_64(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_u_64(deserializer));
@@ -1137,7 +1163,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_newGroupState = sse_decode_list_prim_u_8_strict(deserializer);
     var var_event = sse_decode_event_dto(deserializer);
-    return DecryptResultDto(newGroupState: var_newGroupState, event: var_event);
+    var var_sender = sse_decode_opt_box_autoadd_sender_info_dto(deserializer);
+    return DecryptResultDto(
+      newGroupState: var_newGroupState,
+      event: var_event,
+      sender: var_sender,
+    );
   }
 
   @protected
@@ -1159,13 +1190,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_kind = sse_decode_event_kind_dto(deserializer);
     var var_groupId = sse_decode_list_prim_u_8_strict(deserializer);
     var var_epoch = sse_decode_u_64(deserializer);
-    var var_senderDeviceId = sse_decode_opt_String(deserializer);
     var var_payload = sse_decode_list_prim_u_8_strict(deserializer);
     return EventDto(
       kind: var_kind,
       groupId: var_groupId,
       epoch: var_epoch,
-      senderDeviceId: var_senderDeviceId,
       payload: var_payload,
     );
   }
@@ -1235,11 +1264,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  String? sse_decode_opt_String(SseDeserializer deserializer) {
+  SenderInfoDto? sse_decode_opt_box_autoadd_sender_info_dto(
+    SseDeserializer deserializer,
+  ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     if (sse_decode_bool(deserializer)) {
-      return (sse_decode_String(deserializer));
+      return (sse_decode_box_autoadd_sender_info_dto(deserializer));
     } else {
       return null;
     }
@@ -1265,6 +1296,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     } else {
       return null;
     }
+  }
+
+  @protected
+  SenderInfoDto sse_decode_sender_info_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_did = sse_decode_String(deserializer);
+    var var_deviceName = sse_decode_String(deserializer);
+    return SenderInfoDto(did: var_did, deviceName: var_deviceName);
   }
 
   @protected
@@ -1374,6 +1413,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_sender_info_dto(
+    SenderInfoDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_sender_info_dto(self, serializer);
+  }
+
+  @protected
   void sse_encode_box_autoadd_u_64(BigInt self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_u_64(self, serializer);
@@ -1387,6 +1435,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_prim_u_8_strict(self.newGroupState, serializer);
     sse_encode_event_dto(self.event, serializer);
+    sse_encode_opt_box_autoadd_sender_info_dto(self.sender, serializer);
   }
 
   @protected
@@ -1406,7 +1455,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_event_kind_dto(self.kind, serializer);
     sse_encode_list_prim_u_8_strict(self.groupId, serializer);
     sse_encode_u_64(self.epoch, serializer);
-    sse_encode_opt_String(self.senderDeviceId, serializer);
     sse_encode_list_prim_u_8_strict(self.payload, serializer);
   }
 
@@ -1476,12 +1524,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_opt_String(String? self, SseSerializer serializer) {
+  void sse_encode_opt_box_autoadd_sender_info_dto(
+    SenderInfoDto? self,
+    SseSerializer serializer,
+  ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     sse_encode_bool(self != null, serializer);
     if (self != null) {
-      sse_encode_String(self, serializer);
+      sse_encode_box_autoadd_sender_info_dto(self, serializer);
     }
   }
 
@@ -1506,6 +1557,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     if (self != null) {
       sse_encode_list_prim_u_8_strict(self, serializer);
     }
+  }
+
+  @protected
+  void sse_encode_sender_info_dto(
+    SenderInfoDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.did, serializer);
+    sse_encode_String(self.deviceName, serializer);
   }
 
   @protected

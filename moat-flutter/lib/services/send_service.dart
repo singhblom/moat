@@ -52,7 +52,6 @@ class SendService {
       kind: EventKindDto.message,
       groupId: conversation.groupId,
       epoch: BigInt.from(conversation.epoch),
-      senderDeviceId: '$myDid/$deviceName',
       payload: plaintext,
     );
 

@@ -971,9 +971,11 @@ impl SseDecode for crate::api::simple::DecryptResultDto {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_newGroupState = <Vec<u8>>::sse_decode(deserializer);
         let mut var_event = <crate::api::simple::EventDto>::sse_decode(deserializer);
+        let mut var_sender = <Option<crate::api::simple::SenderInfoDto>>::sse_decode(deserializer);
         return crate::api::simple::DecryptResultDto {
             new_group_state: var_newGroupState,
             event: var_event,
+            sender: var_sender,
         };
     }
 }
@@ -998,13 +1000,11 @@ impl SseDecode for crate::api::simple::EventDto {
         let mut var_kind = <crate::api::simple::EventKindDto>::sse_decode(deserializer);
         let mut var_groupId = <Vec<u8>>::sse_decode(deserializer);
         let mut var_epoch = <u64>::sse_decode(deserializer);
-        let mut var_senderDeviceId = <Option<String>>::sse_decode(deserializer);
         let mut var_payload = <Vec<u8>>::sse_decode(deserializer);
         return crate::api::simple::EventDto {
             kind: var_kind,
             group_id: var_groupId,
             epoch: var_epoch,
-            sender_device_id: var_senderDeviceId,
             payload: var_payload,
         };
     }
@@ -1079,11 +1079,13 @@ impl SseDecode for Vec<u8> {
     }
 }
 
-impl SseDecode for Option<String> {
+impl SseDecode for Option<crate::api::simple::SenderInfoDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
-            return Some(<String>::sse_decode(deserializer));
+            return Some(<crate::api::simple::SenderInfoDto>::sse_decode(
+                deserializer,
+            ));
         } else {
             return None;
         }
@@ -1109,6 +1111,18 @@ impl SseDecode for Option<Vec<u8>> {
         } else {
             return None;
         }
+    }
+}
+
+impl SseDecode for crate::api::simple::SenderInfoDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_did = <String>::sse_decode(deserializer);
+        let mut var_deviceName = <String>::sse_decode(deserializer);
+        return crate::api::simple::SenderInfoDto {
+            did: var_did,
+            device_name: var_deviceName,
+        };
     }
 }
 
@@ -1294,6 +1308,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::simple::DecryptResultDto {
         [
             self.new_group_state.into_into_dart().into_dart(),
             self.event.into_into_dart().into_dart(),
+            self.sender.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -1338,7 +1353,6 @@ impl flutter_rust_bridge::IntoDart for crate::api::simple::EventDto {
             self.kind.into_into_dart().into_dart(),
             self.group_id.into_into_dart().into_dart(),
             self.epoch.into_into_dart().into_dart(),
-            self.sender_device_id.into_into_dart().into_dart(),
             self.payload.into_into_dart().into_dart(),
         ]
         .into_dart()
@@ -1393,6 +1407,27 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::simple::KeyPackageResult>
     for crate::api::simple::KeyPackageResult
 {
     fn into_into_dart(self) -> crate::api::simple::KeyPackageResult {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::simple::SenderInfoDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.did.into_into_dart().into_dart(),
+            self.device_name.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::simple::SenderInfoDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::simple::SenderInfoDto>
+    for crate::api::simple::SenderInfoDto
+{
+    fn into_into_dart(self) -> crate::api::simple::SenderInfoDto {
         self
     }
 }
@@ -1478,6 +1513,7 @@ impl SseEncode for crate::api::simple::DecryptResultDto {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <Vec<u8>>::sse_encode(self.new_group_state, serializer);
         <crate::api::simple::EventDto>::sse_encode(self.event, serializer);
+        <Option<crate::api::simple::SenderInfoDto>>::sse_encode(self.sender, serializer);
     }
 }
 
@@ -1496,7 +1532,6 @@ impl SseEncode for crate::api::simple::EventDto {
         <crate::api::simple::EventKindDto>::sse_encode(self.kind, serializer);
         <Vec<u8>>::sse_encode(self.group_id, serializer);
         <u64>::sse_encode(self.epoch, serializer);
-        <Option<String>>::sse_encode(self.sender_device_id, serializer);
         <Vec<u8>>::sse_encode(self.payload, serializer);
     }
 }
@@ -1564,12 +1599,12 @@ impl SseEncode for Vec<u8> {
     }
 }
 
-impl SseEncode for Option<String> {
+impl SseEncode for Option<crate::api::simple::SenderInfoDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
-            <String>::sse_encode(value, serializer);
+            <crate::api::simple::SenderInfoDto>::sse_encode(value, serializer);
         }
     }
 }
@@ -1591,6 +1626,14 @@ impl SseEncode for Option<Vec<u8>> {
         if let Some(value) = self {
             <Vec<u8>>::sse_encode(value, serializer);
         }
+    }
+}
+
+impl SseEncode for crate::api::simple::SenderInfoDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.did, serializer);
+        <String>::sse_encode(self.device_name, serializer);
     }
 }
 

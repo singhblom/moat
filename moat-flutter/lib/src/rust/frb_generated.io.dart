@@ -50,6 +50,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   EventDto dco_decode_box_autoadd_event_dto(dynamic raw);
 
   @protected
+  SenderInfoDto dco_decode_box_autoadd_sender_info_dto(dynamic raw);
+
+  @protected
   BigInt dco_decode_box_autoadd_u_64(dynamic raw);
 
   @protected
@@ -83,13 +86,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
-  String? dco_decode_opt_String(dynamic raw);
+  SenderInfoDto? dco_decode_opt_box_autoadd_sender_info_dto(dynamic raw);
 
   @protected
   BigInt? dco_decode_opt_box_autoadd_u_64(dynamic raw);
 
   @protected
   Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw);
+
+  @protected
+  SenderInfoDto dco_decode_sender_info_dto(dynamic raw);
 
   @protected
   StealthKeypair dco_decode_stealth_keypair(dynamic raw);
@@ -137,6 +143,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   EventDto sse_decode_box_autoadd_event_dto(SseDeserializer deserializer);
 
   @protected
+  SenderInfoDto sse_decode_box_autoadd_sender_info_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   BigInt sse_decode_box_autoadd_u_64(SseDeserializer deserializer);
 
   @protected
@@ -172,13 +183,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
-  String? sse_decode_opt_String(SseDeserializer deserializer);
+  SenderInfoDto? sse_decode_opt_box_autoadd_sender_info_dto(
+    SseDeserializer deserializer,
+  );
 
   @protected
   BigInt? sse_decode_opt_box_autoadd_u_64(SseDeserializer deserializer);
 
   @protected
   Uint8List? sse_decode_opt_list_prim_u_8_strict(SseDeserializer deserializer);
+
+  @protected
+  SenderInfoDto sse_decode_sender_info_dto(SseDeserializer deserializer);
 
   @protected
   StealthKeypair sse_decode_stealth_keypair(SseDeserializer deserializer);
@@ -232,6 +248,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_sender_info_dto(
+    SenderInfoDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_u_64(BigInt self, SseSerializer serializer);
 
   @protected
@@ -280,7 +302,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  void sse_encode_opt_String(String? self, SseSerializer serializer);
+  void sse_encode_opt_box_autoadd_sender_info_dto(
+    SenderInfoDto? self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_opt_box_autoadd_u_64(BigInt? self, SseSerializer serializer);
@@ -290,6 +315,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     Uint8List? self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_sender_info_dto(SenderInfoDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_stealth_keypair(

@@ -153,12 +153,6 @@ fn test_event_kinds() {
 }
 
 #[test]
-fn test_event_with_device_id() {
-    let event = Event::message(vec![], 0, b"test").with_device_id("device-1".to_string());
-    assert_eq!(event.sender_device_id, Some("device-1".to_string()));
-}
-
-#[test]
 fn test_tag_from_group() {
     let session = MoatSession::new();
     let credential = MoatCredential::new("did:plc:alice123", "Test Device");

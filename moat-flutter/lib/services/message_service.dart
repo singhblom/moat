@@ -48,15 +48,16 @@ class MessageService {
           final plaintext = unpad(padded: result.event.payload);
           final text = utf8.decode(plaintext);
 
-          // Extract sender DID from device ID (format: "did:plc:xxx/device-name")
-          final senderDid = _extractDidFromDeviceId(result.event.senderDeviceId);
+          // Get sender info from MLS credential (extracted during decryption)
+          final senderDid = result.sender?.did ?? 'unknown';
+          final senderDeviceName = result.sender?.deviceName;
           final isOwn = senderDid == _myDid;
 
           final message = Message(
             id: '${conversation.groupIdHex}_${record.rkey}',
             groupId: conversation.groupId,
             senderDid: senderDid,
-            senderDeviceId: result.event.senderDeviceId,
+            senderDeviceId: senderDeviceName,
             content: text,
             timestamp: record.createdAt,
             isOwn: isOwn,
@@ -93,18 +94,6 @@ class MessageService {
       moatLog('MessageService: Failed to decrypt event ${record.rkey}: $e');
       return null;
     }
-  }
-
-  /// Extract DID from device ID (format: "did:plc:xxx/device-name" or just "did:plc:xxx")
-  String _extractDidFromDeviceId(String? deviceId) {
-    if (deviceId == null) return 'unknown';
-
-    // Device ID format is "did:plc:xxx/device-name"
-    final slashIndex = deviceId.indexOf('/');
-    if (slashIndex > 0) {
-      return deviceId.substring(0, slashIndex);
-    }
-    return deviceId;
   }
 
   /// Load messages for a conversation

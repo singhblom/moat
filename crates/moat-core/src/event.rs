@@ -23,13 +23,15 @@ pub enum EventKind {
 
 /// Information about the sender of a message.
 ///
-/// Extracted from the MLS credential of the message sender, this provides
-/// both user identity (DID) and device information for multi-device support.
+/// Extracted from the MLS credential of the message sender during decryption.
+/// This provides both user identity (DID) and device information for multi-device support.
+///
+/// Note: This is receiver-side metadata extracted from MLS, not part of the encrypted Event.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SenderInfo {
     /// The sender's decentralized identifier
     pub did: String,
-    /// The name of the device that sent the message
+    /// The name of the device that sent the message (format: "did:plc:xxx/Device Name")
     pub device_name: String,
     /// The MLS leaf index of the sender (for internal use)
     #[serde(default)]
@@ -57,6 +59,9 @@ impl SenderInfo {
 ///
 /// This is the plaintext structure that gets encrypted before publishing.
 /// The encrypted form only exposes a rotating tag and ciphertext.
+///
+/// Note: Sender identity is NOT stored here. It's extracted from MLS credentials
+/// during decryption and returned separately in DecryptResult.sender.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
     /// The type of event
@@ -67,10 +72,6 @@ pub struct Event {
 
     /// The MLS epoch this event was created in
     pub epoch: u64,
-
-    /// Device identifier of the sender (for multi-device support)
-    #[serde(default)]
-    pub sender_device_id: Option<String>,
 
     /// The actual payload (message text, commit bytes, welcome bytes, etc.)
     pub payload: Vec<u8>,
@@ -83,7 +84,6 @@ impl Event {
             kind: EventKind::Message,
             group_id,
             epoch,
-            sender_device_id: None,
             payload: content.to_vec(),
         }
     }
@@ -94,7 +94,6 @@ impl Event {
             kind: EventKind::Commit,
             group_id,
             epoch,
-            sender_device_id: None,
             payload: commit_bytes,
         }
     }
@@ -105,7 +104,6 @@ impl Event {
             kind: EventKind::Welcome,
             group_id,
             epoch,
-            sender_device_id: None,
             payload: welcome_bytes,
         }
     }
@@ -116,15 +114,8 @@ impl Event {
             kind: EventKind::Checkpoint,
             group_id,
             epoch,
-            sender_device_id: None,
             payload: state_bytes,
         }
-    }
-
-    /// Set the sender device ID
-    pub fn with_device_id(mut self, device_id: String) -> Self {
-        self.sender_device_id = Some(device_id);
-        self
     }
 
     /// Serialize this event to bytes for encryption
@@ -168,12 +159,5 @@ mod tests {
 
         let checkpoint = Event::checkpoint(vec![], 0, vec![7, 8, 9]);
         assert_eq!(checkpoint.kind, EventKind::Checkpoint);
-    }
-
-    #[test]
-    fn test_event_with_device_id() {
-        let event = Event::message(vec![], 0, b"test").with_device_id("device-1".to_string());
-
-        assert_eq!(event.sender_device_id, Some("device-1".to_string()));
     }
 }

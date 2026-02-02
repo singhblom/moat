@@ -1,7 +1,7 @@
 use flutter_rust_bridge::frb;
 use moat_core::{
     self, DecryptResult, EncryptResult, Event, EventKind, MoatCredential, MoatSession,
-    WelcomeResult,
+    SenderInfo, WelcomeResult,
 };
 use std::sync::Mutex;
 
@@ -220,6 +220,7 @@ impl From<EncryptResult> for EncryptResultDto {
 pub struct DecryptResultDto {
     pub new_group_state: Vec<u8>,
     pub event: EventDto,
+    pub sender: Option<SenderInfoDto>,
 }
 
 impl From<DecryptResult> for DecryptResultDto {
@@ -227,6 +228,24 @@ impl From<DecryptResult> for DecryptResultDto {
         DecryptResultDto {
             new_group_state: r.new_group_state,
             event: EventDto::from_core(r.event),
+            sender: r.sender.map(SenderInfoDto::from),
+        }
+    }
+}
+
+/// Information about the sender of a message, extracted from MLS credentials.
+pub struct SenderInfoDto {
+    /// The sender's DID (e.g., "did:plc:abc123")
+    pub did: String,
+    /// The sender's device name (format: "did:plc:xxx/Device Name")
+    pub device_name: String,
+}
+
+impl From<SenderInfo> for SenderInfoDto {
+    fn from(s: SenderInfo) -> Self {
+        SenderInfoDto {
+            did: s.did,
+            device_name: s.device_name,
         }
     }
 }
@@ -242,22 +261,17 @@ pub struct EventDto {
     pub kind: EventKindDto,
     pub group_id: Vec<u8>,
     pub epoch: u64,
-    pub sender_device_id: Option<String>,
     pub payload: Vec<u8>,
 }
 
 impl EventDto {
     fn into_core(self) -> Event {
-        let mut event = match self.kind {
+        match self.kind {
             EventKindDto::Message => Event::message(self.group_id, self.epoch, &self.payload),
             EventKindDto::Commit => Event::commit(self.group_id, self.epoch, self.payload),
             EventKindDto::Welcome => Event::welcome(self.group_id, self.epoch, self.payload),
             EventKindDto::Checkpoint => Event::checkpoint(self.group_id, self.epoch, self.payload),
-        };
-        if let Some(did) = self.sender_device_id {
-            event = event.with_device_id(did);
         }
-        event
     }
 
     fn from_core(e: Event) -> Self {
@@ -270,7 +284,6 @@ impl EventDto {
             },
             group_id: e.group_id,
             epoch: e.epoch,
-            sender_device_id: e.sender_device_id,
             payload: e.payload,
         }
     }
