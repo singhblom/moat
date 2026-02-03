@@ -5,6 +5,7 @@ import '../providers/auth_provider.dart';
 import '../providers/conversations_provider.dart';
 import '../providers/messages_provider.dart';
 import '../providers/watch_list_provider.dart';
+import '../widgets/avatar_widget.dart';
 import 'conversation_screen.dart';
 import 'new_conversation_screen.dart';
 import 'watch_list_screen.dart';
@@ -133,8 +134,18 @@ class _ConversationTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      leading: CircleAvatar(
+    // Use avatar for 1:1 chats, initials for group chats
+    final Widget leadingWidget;
+    if (conversation.participants.length == 1) {
+      leadingWidget = AvatarWidget(
+        did: conversation.participants.first,
+        size: 48,
+        fallbackText: conversation.displayName.isNotEmpty
+            ? conversation.displayName[0].toUpperCase()
+            : '?',
+      );
+    } else {
+      leadingWidget = CircleAvatar(
         backgroundColor: Theme.of(context).colorScheme.primaryContainer,
         child: Text(
           conversation.displayName.isNotEmpty
@@ -144,7 +155,11 @@ class _ConversationTile extends StatelessWidget {
             color: Theme.of(context).colorScheme.onPrimaryContainer,
           ),
         ),
-      ),
+      );
+    }
+
+    return ListTile(
+      leading: leadingWidget,
       title: Text(
         conversation.displayName,
         maxLines: 1,

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/conversations_provider.dart';
+import 'providers/profile_provider.dart';
 import 'providers/watch_list_provider.dart';
 import 'screens/login_screen.dart';
 import 'screens/conversations_screen.dart';
@@ -47,6 +48,21 @@ class MoatApp extends StatelessWidget {
             // Re-initialize when auth state changes
             if (auth.isAuthenticated && previous.entries.isEmpty) {
               previous.init();
+            }
+            return previous;
+          },
+        ),
+        ChangeNotifierProxyProvider<AuthProvider, ProfileProvider>(
+          create: (context) => ProfileProvider(
+            atprotoClient: authProvider.atprotoClient,
+          ),
+          update: (context, auth, previous) {
+            if (previous == null) {
+              final provider = ProfileProvider(
+                atprotoClient: auth.atprotoClient,
+              );
+              provider.init();
+              return provider;
             }
             return previous;
           },

@@ -4,6 +4,7 @@ import '../models/conversation.dart';
 import '../models/message.dart';
 import '../providers/auth_provider.dart';
 import '../providers/messages_provider.dart';
+import '../providers/profile_provider.dart';
 import '../services/send_service.dart';
 import '../widgets/message_bubble.dart';
 
@@ -28,45 +29,30 @@ class _ConversationScreenState extends State<ConversationScreen> {
   bool _isAtBottom = true;
   int _previousMessageCount = 0;
 
-  /// Cache of DID -> handle for displaying sender names
-  final Map<String, String> _handleCache = {};
-
   @override
   void initState() {
     super.initState();
     _scrollController.addListener(_onScroll);
 
-    // Initialize send service and resolve handles after build
+    // Initialize send service and preload profiles after build
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initSendService();
-      _resolveParticipantHandles();
+      _preloadParticipantProfiles();
     });
   }
 
-  /// Resolve handles for all participants in the conversation
-  Future<void> _resolveParticipantHandles() async {
-    final authProvider = context.read<AuthProvider>();
-    final client = authProvider.atprotoClient;
-
-    for (final did in widget.conversation.participants) {
-      if (_handleCache.containsKey(did)) continue;
-      try {
-        final handle = await client.resolveHandle(did);
-        if (mounted) {
-          setState(() {
-            _handleCache[did] = handle;
-          });
-        }
-      } catch (_) {
-        // Failed to resolve, will fall back to truncated DID
-      }
-    }
+  /// Preload profiles for all participants in the conversation
+  void _preloadParticipantProfiles() {
+    final profileProvider = context.read<ProfileProvider>();
+    profileProvider.preloadProfiles(widget.conversation.participants);
   }
 
   /// Get display name for a sender DID
   String _getSenderDisplayName(String did) {
-    if (_handleCache.containsKey(did)) {
-      return _handleCache[did]!;
+    final profileProvider = context.read<ProfileProvider>();
+    final profile = profileProvider.getCachedProfile(did);
+    if (profile != null) {
+      return profile.displayName ?? profile.handle;
     }
     // Fallback: truncate DID
     if (did.startsWith('did:plc:')) {
@@ -259,6 +245,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
           message: message,
           showSender: showSender,
           senderName: showSender ? _getSenderDisplayName(message.senderDid) : null,
+          senderDid: showSender ? message.senderDid : null,
           onLongPress: () => _showMessageInfo(context, message),
           onRetry: message.status == MessageStatus.failed
               ? () => provider.retryMessage(message.localId ?? message.id)

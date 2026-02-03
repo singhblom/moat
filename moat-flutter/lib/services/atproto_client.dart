@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import '../models/bluesky_profile.dart';
+
 /// ATProto lexicon NSIDs
 const keyPackageNsid = 'social.moat.keyPackage';
 const eventNsid = 'social.moat.event';
@@ -15,6 +17,9 @@ const defaultPdsUrl = 'https://bsky.social';
 
 /// PLC Directory URL for DID resolution
 const plcDirectoryUrl = 'https://plc.directory';
+
+/// Bluesky public API URL (for profile fetching, no auth required)
+const blueskyPublicApiUrl = 'https://public.api.bsky.app';
 
 /// HTTP timeout duration
 const httpTimeout = Duration(seconds: 30);
@@ -462,6 +467,59 @@ class AtprotoClient {
     // Sort by rkey (lexicographic, which matches TID order)
     allRecords.sort((a, b) => a.rkey.compareTo(b.rkey));
     return allRecords;
+  }
+
+  /// Fetch a single profile from Bluesky public API (no auth required)
+  Future<BlueskyProfile?> getProfile(String actorDidOrHandle) async {
+    try {
+      final response = await _get(
+        '$blueskyPublicApiUrl/xrpc/app.bsky.actor.getProfile',
+        queryParams: {'actor': actorDidOrHandle},
+      );
+      return BlueskyProfile.fromApiResponse(response);
+    } catch (e) {
+      debugPrint('Failed to fetch profile for $actorDidOrHandle: $e');
+      return null;
+    }
+  }
+
+  /// Fetch multiple profiles from Bluesky public API (max 25 per request)
+  Future<List<BlueskyProfile>> getProfiles(List<String> actors) async {
+    if (actors.isEmpty) return [];
+
+    final results = <BlueskyProfile>[];
+
+    // API allows max 25 actors per request
+    for (var i = 0; i < actors.length; i += 25) {
+      final batch = actors.skip(i).take(25).toList();
+
+      try {
+        // Build URI with multiple 'actors' query params
+        final uri = Uri.parse('$blueskyPublicApiUrl/xrpc/app.bsky.actor.getProfiles');
+        final queryUri = uri.replace(queryParameters: {
+          'actors': batch,
+        });
+
+        final response = await _httpClient
+            .get(queryUri, headers: {'Accept': 'application/json'})
+            .timeout(httpTimeout);
+
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          final json = jsonDecode(response.body) as Map<String, dynamic>;
+          final profiles = json['profiles'] as List<dynamic>? ?? [];
+
+          for (final profileJson in profiles) {
+            results.add(BlueskyProfile.fromApiResponse(
+              profileJson as Map<String, dynamic>,
+            ));
+          }
+        }
+      } catch (e) {
+        debugPrint('Failed to fetch profiles batch: $e');
+      }
+    }
+
+    return results;
   }
 
   void _requireSession() {

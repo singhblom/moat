@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import '../models/message.dart';
+import 'avatar_widget.dart';
 
 /// A message bubble widget for displaying a single message
 class MessageBubble extends StatelessWidget {
   final Message message;
   final bool showSender;
   final String? senderName;
+  final String? senderDid;
   final VoidCallback? onLongPress;
   final VoidCallback? onRetry;
 
@@ -14,6 +16,7 @@ class MessageBubble extends StatelessWidget {
     required this.message,
     this.showSender = false,
     this.senderName,
+    this.senderDid,
     this.onLongPress,
     this.onRetry,
   });
@@ -37,11 +40,23 @@ class MessageBubble extends StatelessWidget {
           if (showSender && senderName != null)
             Padding(
               padding: const EdgeInsets.only(left: 12, bottom: 4),
-              child: Text(
-                senderName!,
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (senderDid != null) ...[
+                    AvatarWidget(
+                      did: senderDid!,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 6),
+                  ],
+                  Text(
+                    senderName!,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
               ),
             ),
           GestureDetector(
