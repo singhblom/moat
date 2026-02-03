@@ -58,8 +58,11 @@ class MessageBubble extends StatelessWidget {
                   bottomRight: Radius.circular(isOwn ? 4 : 18),
                 ),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              child: Wrap(
+                alignment: WrapAlignment.end,
+                crossAxisAlignment: WrapCrossAlignment.end,
+                spacing: 8,
+                runSpacing: 4,
                 children: [
                   Text(
                     message.content,
@@ -69,7 +72,6 @@ class MessageBubble extends StatelessWidget {
                           : theme.colorScheme.onSurface,
                     ),
                   ),
-                  const SizedBox(height: 4),
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
