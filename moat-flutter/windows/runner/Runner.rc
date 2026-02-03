@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.example" "\0"
-            VALUE "FileDescription", "moat_flutter" "\0"
+            VALUE "CompanyName", "moat.social" "\0"
+            VALUE "FileDescription", "Moat" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "moat_flutter" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.example. All rights reserved." "\0"
-            VALUE "OriginalFilename", "moat_flutter.exe" "\0"
-            VALUE "ProductName", "moat_flutter" "\0"
+            VALUE "InternalName", "moat" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 moat.social. All rights reserved." "\0"
+            VALUE "OriginalFilename", "moat.exe" "\0"
+            VALUE "ProductName", "Moat" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

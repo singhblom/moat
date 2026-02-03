@@ -1,4 +1,4 @@
-package com.example.moat_flutter
+package social.moat.app
 
 import io.flutter.embedding.android.FlutterActivity
 
