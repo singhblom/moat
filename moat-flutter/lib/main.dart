@@ -73,15 +73,15 @@ class MoatApp extends StatelessWidget {
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
           colorScheme: ColorScheme.fromSeed(
-            seedColor: Colors.blue,
-            brightness: Brightness.light,
+            seedColor: Color.fromRGBO(74, 232, 205, 255),
+            brightness: Brightness.dark,
           ),
           useMaterial3: true,
         ),
         darkTheme: ThemeData(
           colorScheme: ColorScheme.fromSeed(
-            seedColor: Colors.blue,
-            brightness: Brightness.dark,
+            seedColor: Color.fromRGBO(19, 144, 123, 255),
+            brightness: Brightness.light,
           ),
           useMaterial3: true,
         ),

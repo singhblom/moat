@@ -148,12 +148,32 @@ class _ConversationScreenState extends State<ConversationScreen> {
           ),
         ],
       ),
-      body: Column(
+      body: Stack(
         children: [
-          Expanded(
-            child: _buildMessageList(context, messagesProvider),
+          // Layer 1: The Tiled Background
+          Container(
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surface, // The base color under the pattern
+              image: DecorationImage(
+                image: AssetImage('assets/tile_pattern.png'),
+                repeat: ImageRepeat.repeat,
+                opacity: 0.1, // Keeps the pattern subtle so text is readable
+                colorFilter: ColorFilter.mode(Theme.of(context).colorScheme.primary, BlendMode.srcIn)
+              ),
+            ),
           ),
-          _buildMessageInput(context, messagesProvider),
+          
+          // Layer 2: Your UI Content
+          SafeArea(
+            child: Column(
+              children: [
+                Expanded(
+                  child: _buildMessageList(context, messagesProvider),
+                ),
+                _buildMessageInput(context, messagesProvider),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -286,9 +306,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
     return Container(
       padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-      ),
       child: SafeArea(
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
