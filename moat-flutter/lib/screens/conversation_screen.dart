@@ -288,11 +288,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
-        border: Border(
-          top: BorderSide(
-            color: Theme.of(context).colorScheme.outlineVariant,
-          ),
-        ),
       ),
       child: SafeArea(
         child: Row(
@@ -337,25 +332,60 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
   Widget _buildSendButton(BuildContext context, bool hasText, bool isSending) {
     final canSend = hasText && !isSending;
+    final colorScheme = Theme.of(context).colorScheme;
 
-    return IconButton(
-      icon: isSending
-          ? SizedBox(
+    // 1. Define visual states using modern withValues API
+    final bgColor = canSend 
+        ? colorScheme.primary 
+        : colorScheme.onSurfaceVariant.withValues(alpha: 0.12);
+    
+    final contentColor = canSend 
+        ? colorScheme.onPrimary 
+        : colorScheme.onSurfaceVariant;
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeInOutCubic, // A slightly more premium "Material" curve
+      decoration: BoxDecoration(
+        color: bgColor,
+        shape: BoxShape.circle,
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: canSend ? _sendMessage : null,
+          customBorder: const CircleBorder(),
+          child: Padding(
+            padding: const EdgeInsets.all(12.0),
+            child: SizedBox(
               width: 24,
               height: 24,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: Theme.of(context).colorScheme.primary,
+              // 2. AnimatedSwitcher handles the Icon <-> Progress transition
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 200),
+                transitionBuilder: (Widget child, Animation<double> animation) {
+                  // Combines a fade with a slight scale-up for the entering widget
+                  return FadeTransition(
+                    opacity: animation,
+                    child: ScaleTransition(scale: animation, child: child),
+                  );
+                },
+                child: isSending
+                    ? CircularProgressIndicator(
+                        key: const ValueKey('loading'), // Key is vital for Switcher
+                        strokeWidth: 2.5,
+                        color: contentColor,
+                      )
+                    : Icon(
+                        Icons.send,
+                        key: const ValueKey('send_icon'),
+                        color: contentColor,
+                      ),
               ),
-            )
-          : Icon(
-              Icons.send,
-              color: canSend
-                  ? Theme.of(context).colorScheme.primary
-                  : Theme.of(context).colorScheme.onSurfaceVariant,
             ),
-      onPressed: canSend ? _sendMessage : null,
-      tooltip: 'Send message',
+          ),
+        ),
+      ),
     );
   }
 
