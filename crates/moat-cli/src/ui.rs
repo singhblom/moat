@@ -504,8 +504,8 @@ fn draw_device_alert(frame: &mut Frame, alert: &DeviceAlert) {
         .border_style(Style::default().fg(Color::Magenta));
 
     let text = format!(
-        "New device '{}' joined conversation '{}' (press any key to dismiss)",
-        alert.device_name, alert.conversation_name
+        "New device '{}:{}' joined conversation '{}' at {} (press any key to dismiss)",
+        alert.user_name, alert.device_name, alert.conversation_name, alert.timestamp
     );
 
     let paragraph = Paragraph::new(text)
