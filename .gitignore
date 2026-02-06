@@ -1,6 +1,8 @@
 # Build artifacts
 /target/
 **/*.rs.bk
+/moat-drawbridge/drawbridge
+/moat-drawbridge/certs/
 
 # IDE
 .idea/
