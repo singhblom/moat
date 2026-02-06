@@ -11,9 +11,13 @@ Moat is an encrypted messaging application built on ATProto (Bluesky's protocol)
 ```bash
 cargo build                  # Build all crates
 cargo test                   # Run all tests
-cargo test -p moat-core      # Run core crypto tests only (73 tests)
+cargo test -p moat-core      # Run core crypto tests (73 unit + 8 proptest)
 cargo test -p moat-atproto   # Run ATProto tests only (3 tests)
 cargo run -p moat-cli        # Run the TUI (default, no subcommand)
+
+# Flutter tests
+cd moat-flutter && flutter test          # Run Dart unit tests (52 tests)
+cd moat-flutter/rust && cargo test       # Run FFI wrapper tests (21 tests)
 
 # Testing multiple accounts locally
 cargo run -p moat-cli -- -s /tmp/moat-alice
@@ -146,6 +150,25 @@ cargo install -f wasm-bindgen-cli  # version must match Cargo.lock (currently 0.
 - **Bundled locally** in `moat-flutter/fonts/` — Roboto and Platypi (both variable fonts with italic variants). Google Fonts CDN is blocked by `require-corp` COEP header, so fonts must be local.
 - **Variable font weights** — Use `fontVariations: [FontVariation.weight(N)]` (from `dart:ui`), NOT `fontWeight: FontWeight.wN`. FontWeight doesn't work with variable .ttf files.
 - **Theme font setup** — Per-style fontFamily in `_applyFonts()`. Do NOT set `fontFamily` at the top-level `ThemeData` — it overrides all textTheme styles.
+
+## Testing
+
+### Test Layout
+
+- **moat-core** — 73 unit tests inline (`#[cfg(test)]` in each module) + 8 property-based tests in `crates/moat-core/tests/proptest_padding_tag.rs` using `proptest` crate. Covers padding roundtrips, bucket selection, tag derivation properties (determinism, uniqueness across epochs/groups).
+- **moat-atproto** — 3 serialization tests in `src/records.rs`.
+- **moat-cli** — 5 keystore persistence tests in `src/keystore.rs`.
+- **moat-flutter (Dart)** — 52 unit tests in `moat-flutter/test/`:
+  - `test/models/` — `Message`, `Conversation`, `BlueskyProfile` JSON roundtrips, `copyWith`, `groupIdHex`, status parsing, `isStale`, `fromApiResponse`.
+  - `test/services/` — `ConversationStorage` and `MessageStorage` JSON format tests (save/load, add-or-update, dedup, timestamp sorting, per-group file isolation).
+- **moat-flutter (Rust FFI)** — 21 tests in `moat-flutter/rust/src/api/simple.rs`. Covers `MoatSessionHandle` lifecycle (create, export/import, device ID), key package generation, group creation, two-party encrypt/decrypt, stealth keypair/encrypt/decrypt, tag derivation, padding, `EventDto` conversions.
+
+### Testing Conventions
+
+- Use `tempfile::tempdir()` for Rust tests needing file I/O isolation.
+- Flutter storage tests use `Directory.systemTemp.createTempSync()` instead of `path_provider` (unavailable in unit tests).
+- MLS does not allow self-decryption — encrypt/decrypt tests must use two separate sessions (Alice encrypts, Bob decrypts).
+- Property-based tests use the `proptest` crate; run with `cargo test -p moat-core` alongside unit tests.
 
 ## FFI / Flutter Bridge
 

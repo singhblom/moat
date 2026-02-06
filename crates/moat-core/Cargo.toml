@@ -28,3 +28,4 @@ getrandom = { version = "0.2", features = ["js"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+proptest = "1"

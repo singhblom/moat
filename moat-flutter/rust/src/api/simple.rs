@@ -353,3 +353,314 @@ pub fn unpad(padded: Vec<u8>) -> Vec<u8> {
 pub fn init_app() {
     flutter_rust_bridge::setup_default_user_utils();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_session_create() {
+        let handle = MoatSessionHandle::new_session();
+        let device_id = handle.device_id();
+        assert_eq!(device_id.len(), 16);
+    }
+
+    #[test]
+    fn test_session_device_id_is_stable() {
+        let handle = MoatSessionHandle::new_session();
+        let id1 = handle.device_id();
+        let id2 = handle.device_id();
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn test_session_device_id_unique() {
+        let h1 = MoatSessionHandle::new_session();
+        let h2 = MoatSessionHandle::new_session();
+        assert_ne!(h1.device_id(), h2.device_id());
+    }
+
+    #[test]
+    fn test_session_export_import_roundtrip() {
+        let handle = MoatSessionHandle::new_session();
+        let device_id = handle.device_id();
+
+        let state = handle.export_state().expect("export should succeed");
+        assert!(!state.is_empty());
+
+        let restored =
+            MoatSessionHandle::from_state(state).expect("import should succeed");
+        assert_eq!(restored.device_id(), device_id);
+    }
+
+    #[test]
+    fn test_new_session_has_no_pending_changes() {
+        let handle = MoatSessionHandle::new_session();
+        assert!(!handle.has_pending_changes());
+    }
+
+    #[test]
+    fn test_generate_key_package() {
+        let handle = MoatSessionHandle::new_session();
+        let result = handle
+            .generate_key_package("did:plc:test123".into(), "My Phone".into())
+            .expect("key package generation should succeed");
+
+        assert!(!result.key_package.is_empty());
+        assert!(!result.key_bundle.is_empty());
+    }
+
+    #[test]
+    fn test_create_group() {
+        let handle = MoatSessionHandle::new_session();
+        let kp = handle
+            .generate_key_package("did:plc:alice".into(), "Desktop".into())
+            .unwrap();
+
+        let group_id = handle
+            .create_group("did:plc:alice".into(), "Desktop".into(), kp.key_bundle)
+            .expect("group creation should succeed");
+
+        assert!(!group_id.is_empty());
+    }
+
+    #[test]
+    fn test_group_epoch_starts_at_zero() {
+        let handle = MoatSessionHandle::new_session();
+        let kp = handle
+            .generate_key_package("did:plc:alice".into(), "Desktop".into())
+            .unwrap();
+        let group_id = handle
+            .create_group("did:plc:alice".into(), "Desktop".into(), kp.key_bundle)
+            .unwrap();
+
+        let epoch = handle
+            .get_group_epoch(group_id)
+            .expect("should get epoch")
+            .expect("group should exist");
+
+        assert!(epoch <= 1);
+    }
+
+    #[test]
+    fn test_group_epoch_nonexistent_group() {
+        let handle = MoatSessionHandle::new_session();
+        let result = handle.get_group_epoch(vec![0xFF; 16]);
+        match result {
+            Ok(epoch) => assert!(epoch.is_none()),
+            Err(_) => {} // also acceptable
+        }
+    }
+
+    #[test]
+    fn test_get_group_dids() {
+        let handle = MoatSessionHandle::new_session();
+        let kp = handle
+            .generate_key_package("did:plc:alice".into(), "Desktop".into())
+            .unwrap();
+        let group_id = handle
+            .create_group("did:plc:alice".into(), "Desktop".into(), kp.key_bundle)
+            .unwrap();
+
+        let dids = handle.get_group_dids(group_id).expect("should get DIDs");
+        assert_eq!(dids, vec!["did:plc:alice"]);
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_message_roundtrip() {
+        // Alice creates group and adds Bob so Bob can decrypt Alice's messages
+        let alice = MoatSessionHandle::new_session();
+        let alice_kp = alice
+            .generate_key_package("did:plc:alice".into(), "Desktop".into())
+            .unwrap();
+        let group_id = alice
+            .create_group(
+                "did:plc:alice".into(),
+                "Desktop".into(),
+                alice_kp.key_bundle.clone(),
+            )
+            .unwrap();
+
+        let bob = MoatSessionHandle::new_session();
+        let bob_kp = bob
+            .generate_key_package("did:plc:bob".into(), "Phone".into())
+            .unwrap();
+
+        let welcome = alice
+            .add_member(
+                group_id.clone(),
+                alice_kp.key_bundle.clone(),
+                bob_kp.key_package,
+            )
+            .unwrap();
+
+        bob.process_welcome(welcome.welcome).unwrap();
+
+        // Alice encrypts a message
+        let event = EventDto {
+            kind: EventKindDto::Message,
+            group_id: group_id.clone(),
+            epoch: 0,
+            payload: b"Hello, world!".to_vec(),
+        };
+        let encrypted = alice
+            .encrypt_event(group_id.clone(), alice_kp.key_bundle.clone(), event)
+            .expect("encryption should succeed");
+
+        assert!(!encrypted.ciphertext.is_empty());
+        assert_eq!(encrypted.tag.len(), 16);
+
+        // Bob decrypts Alice's message (MLS doesn't allow self-decryption)
+        let decrypted = bob
+            .decrypt_event(group_id, encrypted.ciphertext)
+            .expect("decryption should succeed");
+
+        assert_eq!(decrypted.event.payload, b"Hello, world!");
+        assert!(matches!(decrypted.event.kind, EventKindDto::Message));
+    }
+
+    #[test]
+    fn test_two_party_encrypt_decrypt() {
+        let alice = MoatSessionHandle::new_session();
+        let alice_kp = alice
+            .generate_key_package("did:plc:alice".into(), "Desktop".into())
+            .unwrap();
+        let group_id = alice
+            .create_group(
+                "did:plc:alice".into(),
+                "Desktop".into(),
+                alice_kp.key_bundle.clone(),
+            )
+            .unwrap();
+
+        let bob = MoatSessionHandle::new_session();
+        let bob_kp = bob
+            .generate_key_package("did:plc:bob".into(), "Phone".into())
+            .unwrap();
+
+        let welcome = alice
+            .add_member(
+                group_id.clone(),
+                alice_kp.key_bundle.clone(),
+                bob_kp.key_package,
+            )
+            .expect("add member should succeed");
+
+        assert!(!welcome.welcome.is_empty());
+        assert!(!welcome.commit.is_empty());
+
+        let bob_group_id = bob
+            .process_welcome(welcome.welcome)
+            .expect("process welcome should succeed");
+
+        assert_eq!(bob_group_id, group_id);
+    }
+
+    #[test]
+    fn test_stealth_keypair_generation() {
+        let kp = generate_stealth_keypair();
+        assert_eq!(kp.private_key.len(), 32);
+        assert_eq!(kp.public_key.len(), 32);
+    }
+
+    #[test]
+    fn test_stealth_keypair_unique() {
+        let kp1 = generate_stealth_keypair();
+        let kp2 = generate_stealth_keypair();
+        assert_ne!(kp1.private_key, kp2.private_key);
+        assert_ne!(kp1.public_key, kp2.public_key);
+    }
+
+    #[test]
+    fn test_stealth_encrypt_decrypt_roundtrip() {
+        let kp = generate_stealth_keypair();
+        let message = b"Welcome message bytes".to_vec();
+
+        let encrypted =
+            encrypt_for_stealth(vec![kp.public_key.clone()], message.clone())
+                .expect("stealth encryption should succeed");
+
+        let decrypted = try_decrypt_stealth(kp.private_key, encrypted)
+            .expect("should decrypt successfully");
+
+        assert_eq!(decrypted, message);
+    }
+
+    #[test]
+    fn test_stealth_wrong_key_fails() {
+        let sender_kp = generate_stealth_keypair();
+        let wrong_kp = generate_stealth_keypair();
+        let message = b"Secret".to_vec();
+
+        let encrypted =
+            encrypt_for_stealth(vec![sender_kp.public_key], message).unwrap();
+
+        let result = try_decrypt_stealth(wrong_kp.private_key, encrypted);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_derive_tag() {
+        let group_id = vec![1, 2, 3, 4, 5, 6, 7, 8];
+        let tag = derive_tag(group_id.clone(), 0).expect("tag derivation should succeed");
+        assert_eq!(tag.len(), 16);
+
+        let tag2 = derive_tag(group_id.clone(), 0).unwrap();
+        assert_eq!(tag, tag2);
+
+        let tag3 = derive_tag(group_id, 1).unwrap();
+        assert_ne!(tag, tag3);
+    }
+
+    #[test]
+    fn test_pad_unpad_roundtrip() {
+        let plaintext = b"Hello, world!".to_vec();
+        let padded = pad_to_bucket(plaintext.clone());
+
+        assert_eq!(padded.len(), 256);
+        let unpadded = unpad(padded);
+        assert_eq!(unpadded, plaintext);
+    }
+
+    #[test]
+    fn test_pad_bucket_sizes() {
+        let small = pad_to_bucket(vec![0x42; 100]);
+        assert_eq!(small.len(), 256);
+
+        let medium = pad_to_bucket(vec![0x42; 500]);
+        assert_eq!(medium.len(), 1024);
+
+        let large = pad_to_bucket(vec![0x42; 2000]);
+        assert_eq!(large.len(), 4096);
+    }
+
+    #[test]
+    fn test_pad_empty() {
+        let padded = pad_to_bucket(vec![]);
+        assert_eq!(padded.len(), 256);
+        let unpadded = unpad(padded);
+        assert!(unpadded.is_empty());
+    }
+
+    #[test]
+    fn test_event_dto_conversions() {
+        for kind in [
+            EventKindDto::Message,
+            EventKindDto::Commit,
+            EventKindDto::Welcome,
+            EventKindDto::Checkpoint,
+        ] {
+            let dto = EventDto {
+                kind,
+                group_id: vec![1, 2, 3],
+                epoch: 42,
+                payload: b"test".to_vec(),
+            };
+            let core_event = dto.into_core();
+            let restored = EventDto::from_core(core_event);
+            assert_eq!(restored.group_id, vec![1, 2, 3]);
+            assert_eq!(restored.epoch, 42);
+            assert_eq!(restored.payload, b"test");
+        }
+    }
+}
