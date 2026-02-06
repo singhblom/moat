@@ -98,9 +98,12 @@ cd moat-flutter
 flutter run                  # Run on connected device (Android/iOS)
 flutter run -d chrome \      # Run in Chrome with required CORS headers
   --web-header=Cross-Origin-Opener-Policy=same-origin \
-  --web-header=Cross-Origin-Embedder-Policy=credentialless
+  --web-header=Cross-Origin-Embedder-Policy=require-corp
 
-flutter_rust_bridge_codegen build-web  # Rebuild WASM after Rust changes
+# Rebuild WASM after Rust changes (must include shared memory flags!)
+flutter_rust_bridge_codegen build-web \
+  --wasm-pack-rustflags="-C target-feature=+atomics,+bulk-memory,+mutable-globals -C link-arg=--shared-memory -C link-arg=--import-memory -C link-arg=--max-memory=1073741824 -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base"
+
 flutter build web            # Production web build
 flutter build apk            # Android APK
 ```
@@ -111,7 +114,7 @@ flutter build apk            # Android APK
 - **Native** uses `dart:io` + `path_provider` for file-based storage.
 - **Web** uses `package:web` (`window.localStorage`) for persistence.
 - **WASM** — The Rust FFI library is compiled to WASM via `flutter_rust_bridge_codegen build-web`. Output goes to `moat-flutter/web/pkg/`. Requires nightly Rust + `wasm-pack`.
-- **Cross-origin headers** are required for `SharedArrayBuffer` (WASM threading). Flutter 3.17+ supports `--web-header` flags.
+- **Cross-origin headers** — `require-corp` (not `credentialless`) is needed for `SharedArrayBuffer` / WASM threading. Flutter 3.17+ supports `--web-header` flags. Since fonts are bundled locally, `require-corp` doesn't block any resources.
 - **`flutter_secure_storage`** works on web out of the box (uses localStorage internally).
 
 ### WASM Build Prerequisites
@@ -121,7 +124,14 @@ rustup toolchain install nightly
 rustup +nightly component add rust-src
 rustup +nightly target add wasm32-unknown-unknown
 cargo install wasm-pack
+cargo install -f wasm-bindgen-cli  # version must match Cargo.lock (currently 0.2.108)
 ```
+
+### WASM Build Gotchas
+
+- **wasm-bindgen version must match** — `wasm-bindgen-cli` version must exactly match the `wasm-bindgen` crate version in `moat-flutter/rust/Cargo.lock`. After `cargo update -p wasm-bindgen`, reinstall CLI: `cargo install -f wasm-bindgen-cli --version <version>`. wasm-pack caches old versions in `~/Library/Caches/.wasm-pack/` — delete the cache if version mismatch occurs.
+- **Shared memory linker flags are required** — Without `--shared-memory --import-memory --max-memory=...`, the WASM memory won't be a SharedArrayBuffer, and FRB's worker pool will fail with `DataCloneError: #<Memory> could not be cloned`. The `--export=__wasm_init_tls` flags are also needed for the TLS setup.
+- **FRB's default RUSTFLAGS are insufficient** — FRB only sets `+atomics,+bulk-memory,+mutable-globals` but omits the shared memory linker args. Always use `--wasm-pack-rustflags` to override.
 
 ### Key Constraints for WASM Compatibility
 
@@ -130,6 +140,12 @@ cargo install wasm-pack
 - **OpenMLS** requires the `js` feature for WASM (`openmls/js`). This is enabled via moat-core's `js` feature, which the flutter rust crate activates for wasm targets.
 - **`getrandom`** requires the `js` feature for WASM.
 - **Avoid `parking_lot`** in moat-core — it has WASM compatibility issues. Use `std::sync::RwLock` / `std::sync::Mutex` instead.
+
+### Fonts
+
+- **Bundled locally** in `moat-flutter/fonts/` — Roboto and Platypi (both variable fonts with italic variants). Google Fonts CDN is blocked by `require-corp` COEP header, so fonts must be local.
+- **Variable font weights** — Use `fontVariations: [FontVariation.weight(N)]` (from `dart:ui`), NOT `fontWeight: FontWeight.wN`. FontWeight doesn't work with variable .ttf files.
+- **Theme font setup** — Per-style fontFamily in `_applyFonts()`. Do NOT set `fontFamily` at the top-level `ThemeData` — it overrides all textTheme styles.
 
 ## FFI / Flutter Bridge
 
