@@ -91,6 +91,10 @@ flutter:
     - family: Roboto
       fonts:
         - asset: fonts/Roboto.ttf
+        - asset: fonts/Roboto-Italic.ttf
+          style: italic
     - family: Platypi
       fonts:
         - asset: fonts/Platypi.ttf
+        - asset: fonts/Platypi-Italic.ttf
+          style: italic

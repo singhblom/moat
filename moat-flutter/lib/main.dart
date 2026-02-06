@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'providers/auth_provider.dart';
@@ -17,32 +16,41 @@ Future<void> main() async {
   debugPrint('[moat] main() started');
   await DebugLog.instance.init();
   debugPrint('[moat] DebugLog initialized');
-  if (!kIsWeb) {
-    try {
-      await RustLib.init();
-      debugPrint('[moat] Rust library initialized');
-    } catch (e) {
-      debugPrint('[moat] Failed to initialize Rust library: $e');
-    }
-  } else {
-    debugPrint('[moat] Skipping RustLib.init() on web for now');
+  try {
+    await RustLib.init();
+    debugPrint('[moat] Rust library initialized');
+  } catch (e) {
+    debugPrint('[moat] Failed to initialize Rust library: $e');
   }
   debugPrint('[moat] Starting app...');
   runApp(const MoatApp());
 }
 
-TextTheme _applyPlatypiHeaders(TextTheme base) {
+TextTheme _applyFonts(TextTheme base) {
   const platypi = 'Platypi';
+  const roboto = 'Roboto';
+
+  TextStyle? withPlatypi(TextStyle? s, double weight) =>
+      s?.copyWith(fontFamily: platypi, fontVariations: [FontVariation.weight(weight)]);
+  TextStyle? withRoboto(TextStyle? s) =>
+      s?.copyWith(fontFamily: roboto);
+
   return base.copyWith(
-    displayLarge: base.displayLarge?.copyWith(fontFamily: platypi),
-    displayMedium: base.displayMedium?.copyWith(fontFamily: platypi),
-    displaySmall: base.displaySmall?.copyWith(fontFamily: platypi),
-    headlineLarge: base.headlineLarge?.copyWith(fontFamily: platypi),
-    headlineMedium: base.headlineMedium?.copyWith(fontFamily: platypi),
-    headlineSmall: base.headlineSmall?.copyWith(fontFamily: platypi),
-    titleLarge: base.titleLarge?.copyWith(fontFamily: platypi),
-    titleMedium: base.titleMedium?.copyWith(fontFamily: platypi),
-    titleSmall: base.titleSmall?.copyWith(fontFamily: platypi),
+    displayLarge: withPlatypi(base.displayLarge, 400),
+    displayMedium: withPlatypi(base.displayMedium, 400),
+    displaySmall: withPlatypi(base.displaySmall, 400),
+    headlineLarge: withPlatypi(base.headlineLarge, 600),
+    headlineMedium: withPlatypi(base.headlineMedium, 600),
+    headlineSmall: withPlatypi(base.headlineSmall, 600),
+    titleLarge: withPlatypi(base.titleLarge, 600),
+    titleMedium: withPlatypi(base.titleMedium, 500),
+    titleSmall: withPlatypi(base.titleSmall, 500),
+    bodyLarge: withRoboto(base.bodyLarge),
+    bodyMedium: withRoboto(base.bodyMedium),
+    bodySmall: withRoboto(base.bodySmall),
+    labelLarge: withRoboto(base.labelLarge),
+    labelMedium: withRoboto(base.labelMedium),
+    labelSmall: withRoboto(base.labelSmall),
   );
 }
 
@@ -100,21 +108,19 @@ class MoatApp extends StatelessWidget {
         title: 'Moat',
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
-          fontFamily: 'Roboto',
           colorScheme: ColorScheme.fromSeed(
             seedColor: Color.fromRGBO(74, 232, 205, 255),
             brightness: Brightness.dark,
           ),
-          textTheme: _applyPlatypiHeaders(ThemeData.dark().textTheme),
+          textTheme: _applyFonts(ThemeData.dark().textTheme),
           useMaterial3: true,
         ),
         darkTheme: ThemeData(
-          fontFamily: 'Roboto',
           colorScheme: ColorScheme.fromSeed(
             seedColor: Color.fromRGBO(19, 144, 123, 255),
             brightness: Brightness.light,
           ),
-          textTheme: _applyPlatypiHeaders(ThemeData.light().textTheme),
+          textTheme: _applyFonts(ThemeData.light().textTheme),
           useMaterial3: true,
         ),
         home: const AuthGate(),
