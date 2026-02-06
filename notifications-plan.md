@@ -260,11 +260,83 @@ When connected to a relay, clients can reduce poll frequency (e.g., from every 5
 ## Implementation Milestones
 
 ### Milestone 1: Relay Core
-- Go service with WebSocket server
-- Signed challenge authentication
-- Tag registration and in-memory index
-- Notification forwarding (WebSocket only)
-- Async PDS verification
+
+Location: `moat-drawbridge/` directory in this repo (Go module). Binary/service name: `drawbridge`.
+
+#### Go Service & Networking
+
+- **Dual listen mode** controlled by `RELAY_TLS` env var:
+  - `RELAY_TLS=true` (default): Listen on port 443 with built-in autocert (Let's Encrypt via `golang.org/x/crypto/acme/autocert`). Requires `RELAY_DOMAIN` env var for the domain name. Single binary, zero external dependencies.
+  - `RELAY_TLS=false`: Listen on port 8080, plain HTTP/WS. For local development and behind-proxy deployments.
+- **Endpoints**:
+  - `GET /ws` — WebSocket endpoint for client connections
+  - `GET /health` — HTTP health check returning 200 OK + JSON stats (connections, uptime, tags tracked)
+- **WebSocket keepalive**: Relay sends ping frames every 60 seconds. If no pong within 10 seconds, connection is closed.
+- **Wire format**: JSON over WebSocket text frames for all messages.
+- **Logging**: Structured JSON logs (using `slog`). Configurable via `LOG_FORMAT=json` (default) or `LOG_FORMAT=text` for development.
+- **Configuration** via environment variables:
+  - `RELAY_TLS` — Enable/disable TLS (default: `true`)
+  - `RELAY_DOMAIN` — Domain for autocert (required when TLS enabled)
+  - `RELAY_ADDR` — Override listen address (default: `:443` or `:8080` based on TLS)
+  - `LOG_FORMAT` — `json` (default) or `text`
+
+#### Signed Challenge Authentication
+
+- Supports both **Ed25519** and **P-256 (secp256r1)** signing algorithms (full ATProto DID compatibility).
+- **DID resolution**: Resolves `did:plc` only for MVP via PLC directory HTTP API.
+- **DID document cache**: 1-hour TTL to avoid repeated PLC lookups.
+- **Timestamp window**: 60 seconds. Challenge signatures with timestamps outside this window are rejected (replay protection).
+- **Flow** (unchanged from overview):
+  1. Client connects via WebSocket to `/ws`
+  2. Relay sends `{ type: "challenge", nonce: "<random-hex>" }`
+  3. Client signs `nonce + relay_url + timestamp` with DID signing key
+  4. Client sends `{ type: "challenge_response", did: "<did>", signature: "<base64>", timestamp: <unix_seconds> }`
+  5. Relay resolves DID → PLC directory → extracts signing key → verifies signature
+  6. Relay sends `{ type: "authenticated" }` or `{ type: "error", message: "..." }`
+
+#### Multi-Device Support
+
+- A single DID may have **multiple simultaneous WebSocket connections** (e.g., phone + desktop).
+- `DID -> []client` mapping (not `DID -> client`).
+- When a client sends `event_posted`, the relay notifies:
+  - All other DIDs watching the tag
+  - The sender's **other devices** (all connections for the sender's DID *except* the originating connection)
+- Each connection has its own watched tags and push token.
+
+#### Tag Registration & In-Memory Index
+
+- No limit on tags per client for MVP (deferred to Milestone 4 hardening).
+- **Messages**:
+  - `{ type: "watch_tags", tags: ["<hex>", ...] }` — Register initial tag set on connect
+  - `{ type: "update_tags", add: ["<hex>", ...], remove: ["<hex>", ...] }` — Incremental update on epoch change
+- Tags are opaque 16-byte hex strings to the relay.
+
+#### Notification Forwarding (WebSocket Only)
+
+- **Sender message**: `{ type: "event_posted", tag: "<hex>", rkey: "<rkey>" }`
+- **Recipient notification**: `{ type: "new_event", tag: "<hex>", rkey: "<rkey>", did: "<sender-did>" }`
+- **Deduplication**: Tag+rkey combinations are debounced with a 5-second window. Duplicate `event_posted` messages for the same tag+rkey within 5 seconds are silently dropped.
+- **Disconnect buffer**: When an authenticated client disconnects, the relay buffers notifications for that DID for up to 30 seconds. If the client reconnects within 30 seconds, buffered notifications are delivered. After 30 seconds, the buffer is discarded. Only applies to clients that had an active WebSocket session (not push-token-only clients).
+
+#### Async PDS Verification
+
+- After forwarding a notification, the relay asynchronously verifies the event:
+  1. Resolve sender's DID document → extract PDS service endpoint
+  2. Fetch `com.atproto.repo.getRecord` for `social.moat.event` at the claimed rkey from the sender's PDS
+  3. Verify **both** that the record exists **and** that its tag field matches the claimed tag
+- **On verification failure**: Log the failure and apply a soft rate limit — temporarily cool down the sender DID's notification privileges for 1 minute. No hard ban for MVP.
+- Verification is non-blocking — notifications are already delivered before verification completes.
+
+#### Testing
+
+- **Integration tests**: Spin up an in-process relay, connect test WebSocket clients, and test the full flow:
+  - Authentication challenge/response
+  - Tag registration and update
+  - Notification forwarding between clients
+  - Deduplication behavior
+  - Disconnect buffer and reconnect
+  - Multi-device notification routing (including self-notify to other devices)
+  - Async verification (mock PDS responses)
 
 ### Milestone 2: Client Integration
 - CLI: WebSocket connection to relay, send notifications on post, receive notifications
