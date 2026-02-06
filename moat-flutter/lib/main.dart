@@ -186,9 +186,46 @@ class _AuthGateState extends State<AuthGate> {
     });
 
     if (auth.isLoading) {
-      return const Scaffold(
-        body: Center(
-          child: CircularProgressIndicator(),
+      return Scaffold(
+        body: Stack(
+          children: [
+            Container(
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surface,
+                image: DecorationImage(
+                  image: AssetImage('assets/tile_pattern.png'),
+                  repeat: ImageRepeat.repeat,
+                  opacity: 0.1,
+                  colorFilter: ColorFilter.mode(
+                    Theme.of(context).colorScheme.primary,
+                    BlendMode.srcIn,
+                  ),
+                ),
+              ),
+            ),
+            Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Moat',
+                    style: Theme.of(context).textTheme.headlineLarge?.copyWith(
+                          fontVariations: [FontVariation.weight(800)],
+                        ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Messaging on ATProto',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                  ),
+                  const SizedBox(height: 32),
+                  const CircularProgressIndicator(),
+                ],
+              ),
+            ),
+          ],
         ),
       );
     }

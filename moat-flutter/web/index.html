@@ -18,21 +18,52 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
+  <meta name="description" content="Messaging on ATProto">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="moat_flutter">
+  <meta name="apple-mobile-web-app-title" content="Moat">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>moat_flutter</title>
+  <title>Moat</title>
   <link rel="manifest" href="manifest.json">
+
+  <style>
+    body {
+      margin: 0;
+      background-color: #1B1B1B;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      font-family: sans-serif;
+    }
+    #loading {
+      text-align: center;
+      color: #E0E0E0;
+    }
+    #loading h1 {
+      font-size: 2.5rem;
+      font-weight: 800;
+      margin: 0 0 8px 0;
+      letter-spacing: 0.02em;
+    }
+    #loading p {
+      font-size: 0.95rem;
+      color: #9E9E9E;
+      margin: 0;
+    }
+  </style>
 </head>
 <body>
+  <div id="loading">
+    <h1>Moat</h1>
+    <p>Messaging on ATProto</p>
+  </div>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>
