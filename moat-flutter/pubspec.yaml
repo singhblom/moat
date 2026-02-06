@@ -53,6 +53,9 @@ dependencies:
   # Web APIs (for localStorage on web platform)
   web: ^1.1.0
 
+  # Native splash screen
+  flutter_native_splash: ^2.4.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -98,3 +101,10 @@ flutter:
         - asset: fonts/Platypi.ttf
         - asset: fonts/Platypi-Italic.ttf
           style: italic
+
+flutter_native_splash:
+  color: "#1B1B1B"
+  image: assets/splash_logo.png
+  android_12:
+    color: "#1B1B1B"
+    image: assets/splash_logo_android12.png

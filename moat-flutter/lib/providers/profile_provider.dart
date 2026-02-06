@@ -62,7 +62,6 @@ class ProfileProvider extends ChangeNotifier {
 
   void _fetchInBackground(String did) {
     _loadingDids.add(did);
-    notifyListeners();
 
     _cacheService.getProfile(did).then((_) {
       _loadingDids.remove(did);
