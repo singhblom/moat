@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'providers/auth_provider.dart';
@@ -13,9 +14,36 @@ import 'src/rust/frb_generated.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  debugPrint('[moat] main() started');
   await DebugLog.instance.init();
-  await RustLib.init();
+  debugPrint('[moat] DebugLog initialized');
+  if (!kIsWeb) {
+    try {
+      await RustLib.init();
+      debugPrint('[moat] Rust library initialized');
+    } catch (e) {
+      debugPrint('[moat] Failed to initialize Rust library: $e');
+    }
+  } else {
+    debugPrint('[moat] Skipping RustLib.init() on web for now');
+  }
+  debugPrint('[moat] Starting app...');
   runApp(const MoatApp());
+}
+
+TextTheme _applyPlatypiHeaders(TextTheme base) {
+  const platypi = 'Platypi';
+  return base.copyWith(
+    displayLarge: base.displayLarge?.copyWith(fontFamily: platypi),
+    displayMedium: base.displayMedium?.copyWith(fontFamily: platypi),
+    displaySmall: base.displaySmall?.copyWith(fontFamily: platypi),
+    headlineLarge: base.headlineLarge?.copyWith(fontFamily: platypi),
+    headlineMedium: base.headlineMedium?.copyWith(fontFamily: platypi),
+    headlineSmall: base.headlineSmall?.copyWith(fontFamily: platypi),
+    titleLarge: base.titleLarge?.copyWith(fontFamily: platypi),
+    titleMedium: base.titleMedium?.copyWith(fontFamily: platypi),
+    titleSmall: base.titleSmall?.copyWith(fontFamily: platypi),
+  );
 }
 
 class MoatApp extends StatelessWidget {
@@ -72,17 +100,21 @@ class MoatApp extends StatelessWidget {
         title: 'Moat',
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
+          fontFamily: 'Roboto',
           colorScheme: ColorScheme.fromSeed(
             seedColor: Color.fromRGBO(74, 232, 205, 255),
             brightness: Brightness.dark,
           ),
+          textTheme: _applyPlatypiHeaders(ThemeData.dark().textTheme),
           useMaterial3: true,
         ),
         darkTheme: ThemeData(
+          fontFamily: 'Roboto',
           colorScheme: ColorScheme.fromSeed(
             seedColor: Color.fromRGBO(19, 144, 123, 255),
             brightness: Brightness.light,
           ),
+          textTheme: _applyPlatypiHeaders(ThemeData.light().textTheme),
           useMaterial3: true,
         ),
         home: const AuthGate(),

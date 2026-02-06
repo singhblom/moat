@@ -13,15 +13,13 @@ use openmls_rust_crypto::RustCrypto;
 use openmls_traits::storage::{traits, Entity, StorageProvider, CURRENT_VERSION};
 use openmls_traits::OpenMlsProvider;
 use serde::Serialize;
-use parking_lot::RwLock;
 use std::collections::HashMap;
+use std::sync::RwLock;
 
 /// In-memory storage for OpenMLS state.
 ///
-/// This wraps a HashMap behind a `parking_lot::RwLock`, implementing OpenMLS's
-/// `StorageProvider` trait. Uses `parking_lot` instead of `std::sync` for:
-/// - No poisoning (cleaner FFI boundary — panics don't leave locks broken)
-/// - Better performance on contended workloads
+/// This wraps a HashMap behind an `RwLock`, implementing OpenMLS's
+/// `StorageProvider` trait.
 ///
 /// There is no built-in persistence — callers control when and how state
 /// is persisted using `export_state()` and `from_state()`.
@@ -50,12 +48,12 @@ impl MlsStorage {
 
     /// Check if there are unsaved changes.
     pub fn has_pending_changes(&self) -> bool {
-        *self.dirty.read()
+        *self.dirty.read().unwrap()
     }
 
     /// Clear the dirty flag (call after persisting state).
     pub fn clear_pending_changes(&self) {
-        *self.dirty.write() = false;
+        *self.dirty.write().unwrap() = false;
     }
 
     /// Export the entire storage state as bytes.
@@ -63,7 +61,7 @@ impl MlsStorage {
     /// Callers are responsible for persisting this data however they choose
     /// (file, SQLite, platform storage, etc.).
     pub fn export_state(&self) -> Result<Vec<u8>, MlsStorageError> {
-        let values = self.values.read();
+        let values = self.values.read().unwrap();
 
         // Use the same binary format as save_to_file
         let mut buf = Vec::new();
@@ -131,14 +129,14 @@ impl MlsStorage {
 
     /// Mark storage as dirty (has unsaved changes).
     fn mark_dirty(&self) {
-        *self.dirty.write() = true;
+        *self.dirty.write().unwrap() = true;
     }
 
     /// Internal helper to write a value
     fn write_value(&self, label: &[u8], key: &[u8], value: Vec<u8>) -> Result<(), MlsStorageError> {
         let storage_key = build_key_from_vec::<CURRENT_VERSION>(label, key.to_vec());
         {
-            let mut values = self.values.write();
+            let mut values = self.values.write().unwrap();
             values.insert(storage_key, value);
         }
         self.mark_dirty();
@@ -154,7 +152,7 @@ impl MlsStorage {
     ) -> Result<(), MlsStorageError> {
         let storage_key = build_key_from_vec::<CURRENT_VERSION>(label, key.to_vec());
         {
-            let mut values = self.values.write();
+            let mut values = self.values.write().unwrap();
             let list_bytes = values.entry(storage_key).or_insert(b"[]".to_vec());
             let mut list: Vec<Vec<u8>> =
                 serde_json::from_slice(list_bytes).map_err(|_| MlsStorageError::Serialization)?;
@@ -175,7 +173,7 @@ impl MlsStorage {
     ) -> Result<(), MlsStorageError> {
         let storage_key = build_key_from_vec::<CURRENT_VERSION>(label, key.to_vec());
         {
-            let mut values = self.values.write();
+            let mut values = self.values.write().unwrap();
             let list_bytes = values.entry(storage_key).or_insert(b"[]".to_vec());
             let mut list: Vec<Vec<u8>> =
                 serde_json::from_slice(list_bytes).map_err(|_| MlsStorageError::Serialization)?;
@@ -196,7 +194,7 @@ impl MlsStorage {
         key: &[u8],
     ) -> Result<Option<V>, MlsStorageError> {
         let storage_key = build_key_from_vec::<CURRENT_VERSION>(label, key.to_vec());
-        let values = self.values.read();
+        let values = self.values.read().unwrap();
 
         match values.get(&storage_key) {
             Some(value) => serde_json::from_slice(value)
@@ -216,7 +214,7 @@ impl MlsStorage {
         storage_key.extend_from_slice(key);
         storage_key.extend_from_slice(&CURRENT_VERSION.to_be_bytes());
 
-        let values = self.values.read();
+        let values = self.values.read().unwrap();
 
         let list_bytes: Vec<Vec<u8>> = match values.get(&storage_key) {
             Some(bytes) => {
@@ -240,7 +238,7 @@ impl MlsStorage {
         storage_key.extend_from_slice(&CURRENT_VERSION.to_be_bytes());
 
         {
-            let mut values = self.values.write();
+            let mut values = self.values.write().unwrap();
             values.remove(&storage_key);
         }
         self.mark_dirty();
@@ -431,7 +429,7 @@ impl StorageProvider<CURRENT_VERSION> for MlsStorage {
         let key = build_key::<CURRENT_VERSION, _>(INTERIM_TRANSCRIPT_HASH_LABEL, group_id);
         let value = serde_json::to_vec(interim_transcript_hash)
             .map_err(|_| MlsStorageError::Serialization)?;
-        let mut values = self.values.write();
+        let mut values = self.values.write().unwrap();
         values.insert(key, value);
         drop(values);
         self.mark_dirty();
@@ -449,7 +447,7 @@ impl StorageProvider<CURRENT_VERSION> for MlsStorage {
         let key = build_key::<CURRENT_VERSION, _>(GROUP_CONTEXT_LABEL, group_id);
         let value =
             serde_json::to_vec(group_context).map_err(|_| MlsStorageError::Serialization)?;
-        let mut values = self.values.write();
+        let mut values = self.values.write().unwrap();
         values.insert(key, value);
         drop(values);
         self.mark_dirty();
@@ -467,7 +465,7 @@ impl StorageProvider<CURRENT_VERSION> for MlsStorage {
         let key = build_key::<CURRENT_VERSION, _>(CONFIRMATION_TAG_LABEL, group_id);
         let value =
             serde_json::to_vec(confirmation_tag).map_err(|_| MlsStorageError::Serialization)?;
-        let mut values = self.values.write();
+        let mut values = self.values.write().unwrap();
         values.insert(key, value);
         drop(values);
         self.mark_dirty();
@@ -485,7 +483,7 @@ impl StorageProvider<CURRENT_VERSION> for MlsStorage {
         let key = build_key::<CURRENT_VERSION, _>(SIGNATURE_KEY_PAIR_LABEL, public_key);
         let value =
             serde_json::to_vec(signature_key_pair).map_err(|_| MlsStorageError::Serialization)?;
-        let mut values = self.values.write();
+        let mut values = self.values.write().unwrap();
         values.insert(key, value);
         drop(values);
         self.mark_dirty();
@@ -538,7 +536,7 @@ impl StorageProvider<CURRENT_VERSION> for MlsStorage {
         group_id: &GroupId,
     ) -> Result<Option<TreeSync>, Self::Error> {
         let key = build_key::<CURRENT_VERSION, _>(TREE_LABEL, group_id);
-        let values = self.values.read();
+        let values = self.values.read().unwrap();
         match values.get(&key) {
             Some(value) => serde_json::from_slice(value)
                 .map(Some)
@@ -555,7 +553,7 @@ impl StorageProvider<CURRENT_VERSION> for MlsStorage {
         group_id: &GroupId,
     ) -> Result<Option<GroupContext>, Self::Error> {
         let key = build_key::<CURRENT_VERSION, _>(GROUP_CONTEXT_LABEL, group_id);
-        let values = self.values.read();
+        let values = self.values.read().unwrap();
         match values.get(&key) {
             Some(value) => serde_json::from_slice(value)
                 .map(Some)
@@ -572,7 +570,7 @@ impl StorageProvider<CURRENT_VERSION> for MlsStorage {
         group_id: &GroupId,
     ) -> Result<Option<InterimTranscriptHash>, Self::Error> {
         let key = build_key::<CURRENT_VERSION, _>(INTERIM_TRANSCRIPT_HASH_LABEL, group_id);
-        let values = self.values.read();
+        let values = self.values.read().unwrap();
         match values.get(&key) {
             Some(value) => serde_json::from_slice(value)
                 .map(Some)
@@ -589,7 +587,7 @@ impl StorageProvider<CURRENT_VERSION> for MlsStorage {
         group_id: &GroupId,
     ) -> Result<Option<ConfirmationTag>, Self::Error> {
         let key = build_key::<CURRENT_VERSION, _>(CONFIRMATION_TAG_LABEL, group_id);
-        let values = self.values.read();
+        let values = self.values.read().unwrap();
         match values.get(&key) {
             Some(value) => serde_json::from_slice(value)
                 .map(Some)
@@ -606,7 +604,7 @@ impl StorageProvider<CURRENT_VERSION> for MlsStorage {
         public_key: &SignaturePublicKey,
     ) -> Result<Option<SignatureKeyPair>, Self::Error> {
         let key = build_key::<CURRENT_VERSION, _>(SIGNATURE_KEY_PAIR_LABEL, public_key);
-        let values = self.values.read();
+        let values = self.values.read().unwrap();
         match values.get(&key) {
             Some(value) => serde_json::from_slice(value)
                 .map(Some)
@@ -955,7 +953,7 @@ impl StorageProvider<CURRENT_VERSION> for MlsStorage {
     ) -> Result<Vec<HpkeKeyPair>, Self::Error> {
         let key = epoch_key_pairs_id(group_id, epoch, leaf_index)?;
         let storage_key = build_key_from_vec::<CURRENT_VERSION>(EPOCH_KEY_PAIRS_LABEL, key);
-        let values = self.values.read();
+        let values = self.values.read().unwrap();
 
         match values.get(&storage_key) {
             Some(value) => {
@@ -991,7 +989,7 @@ impl StorageProvider<CURRENT_VERSION> for MlsStorage {
         )?;
 
         {
-            let mut values = self.values.write();
+            let mut values = self.values.write().unwrap();
             for proposal_ref in proposal_refs {
                 let key = serde_json::to_vec(&(group_id, proposal_ref))
                     .map_err(|_| MlsStorageError::Serialization)?;
@@ -1148,7 +1146,7 @@ mod tests {
         // Test basic write and read
         storage.write_value(b"test", b"key1", b"value1".to_vec()).unwrap();
 
-        let values = storage.values.read();
+        let values = storage.values.read().unwrap();
         assert!(!values.is_empty());
     }
 
@@ -1175,7 +1173,7 @@ mod tests {
 
         // Import into new storage
         let storage2 = MlsStorage::from_state(&state).unwrap();
-        let values2 = storage2.values.read();
+        let values2 = storage2.values.read().unwrap();
         assert_eq!(values2.len(), 2);
     }
 
@@ -1185,7 +1183,7 @@ mod tests {
         let state = storage.export_state().unwrap();
 
         let storage2 = MlsStorage::from_state(&state).unwrap();
-        let values2 = storage2.values.read();
+        let values2 = storage2.values.read().unwrap();
         assert!(values2.is_empty());
     }
 }

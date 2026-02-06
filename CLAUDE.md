@@ -10,8 +10,8 @@ Moat is an encrypted messaging application built on ATProto (Bluesky's protocol)
 
 ```bash
 cargo build                  # Build all crates
-cargo test                   # Run all tests (49 total)
-cargo test -p moat-core      # Run core crypto tests only (46 tests)
+cargo test                   # Run all tests
+cargo test -p moat-core      # Run core crypto tests only (73 tests)
 cargo test -p moat-atproto   # Run ATProto tests only (3 tests)
 cargo run -p moat-cli        # Run the TUI (default, no subcommand)
 
@@ -29,11 +29,12 @@ cargo run -p moat-cli -- export --events /tmp/e.json --repository handle.bsky.so
 
 ## Workspace Structure
 
-Three-crate Rust workspace:
+Three-crate Rust workspace + Flutter app:
 
 - **moat-core** - Pure MLS cryptography, no network/IO. Provides `MoatSession` API for all crypto operations.
 - **moat-atproto** - Async ATProto client for PDS interactions (key packages, events, stealth addresses).
 - **moat-cli** - Ratatui terminal UI that orchestrates core + atproto.
+- **moat-flutter/** - Flutter app (Android + Web). Contains its own Rust crate at `moat-flutter/rust/` that wraps moat-core via flutter_rust_bridge.
 
 ## Architecture Principles
 
@@ -88,10 +89,51 @@ Located in `lexicons/social/moat/`:
 
 `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519`
 
-## FFI Considerations (Future)
+## Flutter App (moat-flutter)
 
-When adding FFI/mobile support:
-- Keep operations synchronous in moat-core
-- Prefer fixed-size arrays over Vec
-- Make storage controllable by native side (explicit save())
-- Error types should be FFI-friendly
+### Build & Run
+
+```bash
+cd moat-flutter
+flutter run                  # Run on connected device (Android/iOS)
+flutter run -d chrome \      # Run in Chrome with required CORS headers
+  --web-header=Cross-Origin-Opener-Policy=same-origin \
+  --web-header=Cross-Origin-Embedder-Policy=credentialless
+
+flutter_rust_bridge_codegen build-web  # Rebuild WASM after Rust changes
+flutter build web            # Production web build
+flutter build apk            # Android APK
+```
+
+### Web Platform Architecture
+
+- **Conditional imports** — Services that need platform-specific I/O use Dart conditional imports (`*_native.dart` / `*_web.dart`), selected via `dart.library.js_interop`. Files using this pattern: `debug_log`, `conversation_storage`, `message_storage`, `profile_cache_service`.
+- **Native** uses `dart:io` + `path_provider` for file-based storage.
+- **Web** uses `package:web` (`window.localStorage`) for persistence.
+- **WASM** — The Rust FFI library is compiled to WASM via `flutter_rust_bridge_codegen build-web`. Output goes to `moat-flutter/web/pkg/`. Requires nightly Rust + `wasm-pack`.
+- **Cross-origin headers** are required for `SharedArrayBuffer` (WASM threading). Flutter 3.17+ supports `--web-header` flags.
+- **`flutter_secure_storage`** works on web out of the box (uses localStorage internally).
+
+### WASM Build Prerequisites
+
+```bash
+rustup toolchain install nightly
+rustup +nightly component add rust-src
+rustup +nightly target add wasm32-unknown-unknown
+cargo install wasm-pack
+```
+
+### Key Constraints for WASM Compatibility
+
+- **No `dart:io`** on web — any file I/O must be behind conditional imports.
+- **`path_provider`** has no web implementation for `getApplicationDocumentsDirectory`.
+- **OpenMLS** requires the `js` feature for WASM (`openmls/js`). This is enabled via moat-core's `js` feature, which the flutter rust crate activates for wasm targets.
+- **`getrandom`** requires the `js` feature for WASM.
+- **Avoid `parking_lot`** in moat-core — it has WASM compatibility issues. Use `std::sync::RwLock` / `std::sync::Mutex` instead.
+
+## FFI / Flutter Bridge
+
+- moat-core operations are synchronous — the flutter bridge wraps `MoatSession` in a `std::sync::Mutex` via `MoatSessionHandle`.
+- flutter_rust_bridge v2.11.1 generates platform-conditional code in `lib/src/rust/frb_generated.dart`.
+- Binary data crosses the FFI boundary as `Vec<u8>` (Rust) / `Uint8List` (Dart).
+- Error types use `Result<T, String>` for FFI-friendliness.

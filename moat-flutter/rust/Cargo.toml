@@ -10,5 +10,9 @@ crate-type = ["cdylib", "staticlib"]
 flutter_rust_bridge = "=2.11.1"
 moat-core = { path = "../../crates/moat-core" }
 
+[target.'cfg(target_family = "wasm")'.dependencies]
+moat-core = { path = "../../crates/moat-core", features = ["js"] }
+getrandom = { version = "0.2", features = ["js"] }
+
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }

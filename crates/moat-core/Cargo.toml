@@ -19,7 +19,12 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 x25519-dalek = { workspace = true }
 chacha20poly1305 = { workspace = true }
-parking_lot = { workspace = true }
+
+[features]
+js = ["openmls/js", "getrandom/js"]
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

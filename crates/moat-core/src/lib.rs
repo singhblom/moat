@@ -111,8 +111,8 @@ const STATE_HEADER_SIZE: usize = 4 + 2 + 16;
 ///
 /// # Thread Safety
 ///
-/// `MoatSession` is `Send + Sync`. The internal storage uses `parking_lot::RwLock`
-/// for lock-free reads and safe concurrent access.
+/// `MoatSession` is `Send + Sync`. The internal storage uses `std::sync::RwLock`
+/// for safe concurrent access.
 ///
 /// However, MLS operations that load-modify-save a group (e.g., `encrypt_event`,
 /// `decrypt_event`, `add_member`) are **not atomic** at the session level. If
