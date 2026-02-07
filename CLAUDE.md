@@ -100,9 +100,7 @@ Located in `lexicons/social/moat/`:
 ```bash
 cd moat-flutter
 flutter run                  # Run on connected device (Android/iOS)
-flutter run -d chrome \      # Run in Chrome with required CORS headers
-  --web-header=Cross-Origin-Opener-Policy=same-origin \
-  --web-header=Cross-Origin-Embedder-Policy=require-corp
+./scripts/run-web.sh         # Run in Chrome with persistent localStorage + CORS headers
 
 # Rebuild WASM after Rust changes (must include shared memory flags!)
 flutter_rust_bridge_codegen build-web \
