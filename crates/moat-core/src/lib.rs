@@ -42,7 +42,7 @@ use serde::{Deserialize as SerdeDeserialize, Serialize as SerdeSerialize};
 // Disambiguate from openmls::prelude::* and make accessible as moat_core::X
 pub use crate::credential::MoatCredential;
 pub use crate::error::{Error, ErrorCode, Result};
-pub use crate::event::{Event, EventKind, SenderInfo};
+pub use crate::event::{Event, EventKind, ReactionPayload, SenderInfo};
 pub use crate::padding::{pad_to_bucket, unpad, Bucket};
 pub use crate::stealth::{encrypt_for_stealth, generate_stealth_keypair, try_decrypt_stealth};
 pub(crate) use crate::storage::MoatProvider;
@@ -74,6 +74,8 @@ pub struct EncryptResult {
     pub new_group_state: Vec<u8>,
     pub tag: [u8; 16],
     pub ciphertext: Vec<u8>,
+    /// The message_id assigned to the event (16 bytes for Message/Reaction, None otherwise)
+    pub message_id: Option<Vec<u8>>,
 }
 
 /// Result of decrypting an event
@@ -489,6 +491,7 @@ impl MoatSession {
             new_group_state: Vec::new(), // State is managed by provider
             tag,
             ciphertext: ciphertext_bytes,
+            message_id: event.message_id.clone(),
         })
     }
 

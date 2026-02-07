@@ -266,10 +266,11 @@ class _ConversationScreenState extends State<ConversationScreen> {
           showSender: showSender,
           senderName: showSender ? _getSenderDisplayName(message.senderDid) : null,
           senderDid: showSender ? message.senderDid : null,
-          onLongPress: () => _showMessageInfo(context, message),
+          onLongPress: () => _showMessageActions(context, message, provider),
           onRetry: message.status == MessageStatus.failed
               ? () => provider.retryMessage(message.localId ?? message.id)
               : null,
+          onReaction: (emoji) => provider.sendReaction(message, emoji),
         );
       },
     );
@@ -445,15 +446,36 @@ class _ConversationScreenState extends State<ConversationScreen> {
     );
   }
 
-  void _showMessageInfo(BuildContext context, Message message) {
+  void _showMessageActions(BuildContext context, Message message, MessagesProvider provider) {
+    const quickEmojis = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+
     showModalBottomSheet(
       context: context,
-      builder: (context) => Padding(
+      builder: (sheetContext) => Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Quick reaction row
+            if (message.messageId != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: quickEmojis.map((emoji) {
+                    return GestureDetector(
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        provider.sendReaction(message, emoji);
+                      },
+                      child: Text(emoji, style: const TextStyle(fontSize: 28)),
+                    );
+                  }).toList(),
+                ),
+              ),
+            if (message.messageId != null) const Divider(),
+            // Message info
             Text(
               'Message Info',
               style: Theme.of(context).textTheme.titleLarge,

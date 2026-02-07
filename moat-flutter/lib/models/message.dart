@@ -13,6 +13,24 @@ enum MessageStatus {
   failed,
 }
 
+/// A single emoji reaction on a message
+class Reaction {
+  final String emoji;
+  final String senderDid;
+
+  const Reaction({required this.emoji, required this.senderDid});
+
+  Map<String, dynamic> toJson() => {
+        'emoji': emoji,
+        'senderDid': senderDid,
+      };
+
+  factory Reaction.fromJson(Map<String, dynamic> json) => Reaction(
+        emoji: json['emoji'] as String,
+        senderDid: json['senderDid'] as String,
+      );
+}
+
 /// A message in a conversation
 class Message {
   /// Unique ID (groupIdHex + rkey)
@@ -45,6 +63,12 @@ class Message {
   /// Temporary local ID for pending messages (before rkey is assigned)
   final String? localId;
 
+  /// Unique message identifier from MLS (16 bytes, for reaction targeting)
+  final Uint8List? messageId;
+
+  /// Emoji reactions on this message
+  final List<Reaction> reactions;
+
   Message({
     required this.id,
     required this.groupId,
@@ -56,11 +80,18 @@ class Message {
     required this.epoch,
     this.status = MessageStatus.sent,
     this.localId,
+    this.messageId,
+    this.reactions = const [],
   });
 
   /// Group ID as hex string
   String get groupIdHex =>
       groupId.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+  /// Message ID as hex string (for display/debugging)
+  String? get messageIdHex => messageId
+      ?.map((b) => b.toRadixString(16).padLeft(2, '0'))
+      .join();
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -73,6 +104,8 @@ class Message {
         'epoch': epoch,
         'status': status.name,
         'localId': localId,
+        'messageId': messageId != null ? base64Encode(messageId!) : null,
+        'reactions': reactions.map((r) => r.toJson()).toList(),
       };
 
   /// Create a copy with updated fields
@@ -87,6 +120,8 @@ class Message {
     int? epoch,
     MessageStatus? status,
     String? localId,
+    Uint8List? messageId,
+    List<Reaction>? reactions,
   }) =>
       Message(
         id: id ?? this.id,
@@ -99,6 +134,8 @@ class Message {
         epoch: epoch ?? this.epoch,
         status: status ?? this.status,
         localId: localId ?? this.localId,
+        messageId: messageId ?? this.messageId,
+        reactions: reactions ?? this.reactions,
       );
 
   factory Message.fromJson(Map<String, dynamic> json) => Message(
@@ -112,6 +149,13 @@ class Message {
         epoch: json['epoch'] as int,
         status: _parseStatus(json['status'] as String?),
         localId: json['localId'] as String?,
+        messageId: json['messageId'] != null
+            ? base64Decode(json['messageId'] as String)
+            : null,
+        reactions: (json['reactions'] as List<dynamic>?)
+                ?.map((r) => Reaction.fromJson(r as Map<String, dynamic>))
+                .toList() ??
+            const [],
       );
 
   static MessageStatus _parseStatus(String? status) {

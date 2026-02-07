@@ -142,15 +142,22 @@ class EncryptResultDto {
   final Uint8List tag;
   final Uint8List ciphertext;
 
+  /// The message_id assigned to the event (16 bytes for Message/Reaction, None otherwise)
+  final Uint8List? messageId;
+
   const EncryptResultDto({
     required this.newGroupState,
     required this.tag,
     required this.ciphertext,
+    this.messageId,
   });
 
   @override
   int get hashCode =>
-      newGroupState.hashCode ^ tag.hashCode ^ ciphertext.hashCode;
+      newGroupState.hashCode ^
+      tag.hashCode ^
+      ciphertext.hashCode ^
+      messageId.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -159,7 +166,8 @@ class EncryptResultDto {
           runtimeType == other.runtimeType &&
           newGroupState == other.newGroupState &&
           tag == other.tag &&
-          ciphertext == other.ciphertext;
+          ciphertext == other.ciphertext &&
+          messageId == other.messageId;
 }
 
 class EventDto {
@@ -168,16 +176,29 @@ class EventDto {
   final BigInt epoch;
   final Uint8List payload;
 
+  /// Unique message identifier (16 random bytes). Present for Message and Reaction events.
+  final Uint8List? messageId;
+
   const EventDto({
     required this.kind,
     required this.groupId,
     required this.epoch,
     required this.payload,
+    this.messageId,
   });
+
+  /// Parse the payload as a reaction. Only valid when kind is Reaction.
+  /// Returns None if this is not a Reaction event or if the payload is malformed.
+  ReactionPayloadDto? reactionPayload() =>
+      RustLib.instance.api.crateApiSimpleEventDtoReactionPayload(that: this);
 
   @override
   int get hashCode =>
-      kind.hashCode ^ groupId.hashCode ^ epoch.hashCode ^ payload.hashCode;
+      kind.hashCode ^
+      groupId.hashCode ^
+      epoch.hashCode ^
+      payload.hashCode ^
+      messageId.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -187,10 +208,11 @@ class EventDto {
           kind == other.kind &&
           groupId == other.groupId &&
           epoch == other.epoch &&
-          payload == other.payload;
+          payload == other.payload &&
+          messageId == other.messageId;
 }
 
-enum EventKindDto { message, commit, welcome, checkpoint }
+enum EventKindDto { message, commit, welcome, checkpoint, reaction }
 
 class KeyPackageResult {
   final Uint8List keyPackage;
@@ -208,6 +230,28 @@ class KeyPackageResult {
           runtimeType == other.runtimeType &&
           keyPackage == other.keyPackage &&
           keyBundle == other.keyBundle;
+}
+
+/// Reaction payload extracted from a Reaction event.
+class ReactionPayloadDto {
+  final String emoji;
+  final Uint8List targetMessageId;
+
+  const ReactionPayloadDto({
+    required this.emoji,
+    required this.targetMessageId,
+  });
+
+  @override
+  int get hashCode => emoji.hashCode ^ targetMessageId.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ReactionPayloadDto &&
+          runtimeType == other.runtimeType &&
+          emoji == other.emoji &&
+          targetMessageId == other.targetMessageId;
 }
 
 /// Information about the sender of a message, extracted from MLS credentials.

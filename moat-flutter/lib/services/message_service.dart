@@ -62,6 +62,9 @@ class MessageService {
             timestamp: record.createdAt,
             isOwn: isOwn,
             epoch: result.event.epoch.toInt(),
+            messageId: result.event.messageId != null
+                ? Uint8List.fromList(result.event.messageId!)
+                : null,
           );
 
           return DecryptEventResult(
@@ -79,6 +82,19 @@ class MessageService {
             message: null,
             newGroupState: result.newGroupState,
             newEpoch: newEpoch,
+          );
+
+        case EventKindDto.reaction:
+          // Parse the reaction payload and return it for the caller to handle
+          final rp = result.event.reactionPayload();
+          final senderDid = result.sender?.did ?? 'unknown';
+          return DecryptEventResult(
+            message: null,
+            newGroupState: result.newGroupState,
+            newEpoch: null,
+            reactionEmoji: rp?.emoji,
+            reactionTargetMessageId: rp?.targetMessageId,
+            reactionSenderDid: senderDid,
           );
 
         case EventKindDto.welcome:
@@ -123,9 +139,17 @@ class DecryptEventResult {
   /// New epoch if this was a commit event
   final int? newEpoch;
 
+  /// Reaction fields (set when event kind is Reaction)
+  final String? reactionEmoji;
+  final List<int>? reactionTargetMessageId;
+  final String? reactionSenderDid;
+
   DecryptEventResult({
     required this.message,
     required this.newGroupState,
     required this.newEpoch,
+    this.reactionEmoji,
+    this.reactionTargetMessageId,
+    this.reactionSenderDid,
   });
 }

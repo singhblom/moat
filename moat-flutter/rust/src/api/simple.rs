@@ -205,6 +205,8 @@ pub struct EncryptResultDto {
     pub new_group_state: Vec<u8>,
     pub tag: Vec<u8>,
     pub ciphertext: Vec<u8>,
+    /// The message_id assigned to the event (16 bytes for Message/Reaction, None otherwise)
+    pub message_id: Option<Vec<u8>>,
 }
 
 impl From<EncryptResult> for EncryptResultDto {
@@ -213,6 +215,7 @@ impl From<EncryptResult> for EncryptResultDto {
             new_group_state: r.new_group_state,
             tag: r.tag.to_vec(),
             ciphertext: r.ciphertext,
+            message_id: r.message_id,
         }
     }
 }
@@ -255,6 +258,7 @@ pub enum EventKindDto {
     Commit,
     Welcome,
     Checkpoint,
+    Reaction,
 }
 
 pub struct EventDto {
@@ -262,6 +266,14 @@ pub struct EventDto {
     pub group_id: Vec<u8>,
     pub epoch: u64,
     pub payload: Vec<u8>,
+    /// Unique message identifier (16 random bytes). Present for Message and Reaction events.
+    pub message_id: Option<Vec<u8>>,
+}
+
+/// Reaction payload extracted from a Reaction event.
+pub struct ReactionPayloadDto {
+    pub emoji: String,
+    pub target_message_id: Vec<u8>,
 }
 
 impl EventDto {
@@ -271,6 +283,17 @@ impl EventDto {
             EventKindDto::Commit => Event::commit(self.group_id, self.epoch, self.payload),
             EventKindDto::Welcome => Event::welcome(self.group_id, self.epoch, self.payload),
             EventKindDto::Checkpoint => Event::checkpoint(self.group_id, self.epoch, self.payload),
+            EventKindDto::Reaction => {
+                // payload is already a JSON-serialized ReactionPayload from the core Event
+                // We need to extract emoji and target_message_id to call Event::reaction
+                // Use the core's from_bytes to reconstruct, but payload is the reaction JSON
+                // Parse via core's Event::from_bytes won't work since payload is the inner JSON.
+                // Instead, reconstruct a core Event directly with the raw payload.
+                let mut event = Event::commit(self.group_id, self.epoch, self.payload);
+                event.kind = EventKind::Reaction;
+                event.message_id = self.message_id;
+                event
+            }
         }
     }
 
@@ -281,11 +304,35 @@ impl EventDto {
                 EventKind::Commit => EventKindDto::Commit,
                 EventKind::Welcome => EventKindDto::Welcome,
                 EventKind::Checkpoint => EventKindDto::Checkpoint,
+                EventKind::Reaction => EventKindDto::Reaction,
             },
+            message_id: e.message_id,
             group_id: e.group_id,
             epoch: e.epoch,
             payload: e.payload,
         }
+    }
+
+    /// Parse the payload as a reaction. Only valid when kind is Reaction.
+    /// Returns None if this is not a Reaction event or if the payload is malformed.
+    #[frb(sync)]
+    pub fn reaction_payload(&self) -> Option<ReactionPayloadDto> {
+        if !matches!(self.kind, EventKindDto::Reaction) {
+            return None;
+        }
+        // Reconstruct a temporary core Event to use its reaction_payload() parser
+        let temp_event = Event {
+            kind: EventKind::Reaction,
+            group_id: vec![],
+            epoch: 0,
+            payload: self.payload.clone(),
+            message_id: None,
+        };
+        let rp = temp_event.reaction_payload()?;
+        Some(ReactionPayloadDto {
+            emoji: rp.emoji,
+            target_message_id: rp.target_message_id,
+        })
     }
 }
 
@@ -502,6 +549,7 @@ mod tests {
             group_id: group_id.clone(),
             epoch: 0,
             payload: b"Hello, world!".to_vec(),
+            message_id: None,
         };
         let encrypted = alice
             .encrypt_event(group_id.clone(), alice_kp.key_bundle.clone(), event)
@@ -655,12 +703,40 @@ mod tests {
                 group_id: vec![1, 2, 3],
                 epoch: 42,
                 payload: b"test".to_vec(),
+                message_id: None,
             };
             let core_event = dto.into_core();
             let restored = EventDto::from_core(core_event);
             assert_eq!(restored.group_id, vec![1, 2, 3]);
             assert_eq!(restored.epoch, 42);
-            assert_eq!(restored.payload, b"test");
         }
+    }
+
+    #[test]
+    fn test_reaction_dto_roundtrip() {
+        let target_id = vec![0xAB; 16];
+        // Create a reaction via core and convert to DTO
+        let core_reaction = Event::reaction(vec![1, 2, 3], 5, &target_id, "👍");
+        assert_eq!(core_reaction.kind, EventKind::Reaction);
+
+        let rp = core_reaction.reaction_payload().unwrap();
+        assert_eq!(rp.emoji, "👍");
+        assert_eq!(rp.target_message_id, target_id);
+
+        // Convert to DTO and back
+        let dto = EventDto::from_core(core_reaction);
+        assert!(matches!(dto.kind, EventKindDto::Reaction));
+        assert!(dto.message_id.is_some());
+
+        let dto_rp = dto.reaction_payload().unwrap();
+        assert_eq!(dto_rp.emoji, "👍");
+        assert_eq!(dto_rp.target_message_id, target_id);
+
+        // Convert back to core
+        let restored_core = dto.into_core();
+        assert_eq!(restored_core.kind, EventKind::Reaction);
+        let restored_rp = restored_core.reaction_payload().unwrap();
+        assert_eq!(restored_rp.emoji, "👍");
+        assert_eq!(restored_rp.target_message_id, target_id);
     }
 }

@@ -317,6 +317,9 @@ class PollingService {
             timestamp: event.createdAt,
             isOwn: isOwn,
             epoch: result.event.epoch.toInt(),
+            messageId: result.event.messageId != null
+                ? Uint8List.fromList(result.event.messageId!)
+                : null,
           );
 
           moatLog('PollingService: Decrypted message: "${text.substring(0, text.length > 20 ? 20 : text.length)}..."');
@@ -349,6 +352,25 @@ class PollingService {
           // Derive and register new tag for this epoch
           final newTag = deriveTag(groupId: conversation.groupId, epoch: BigInt.from(newEpoch));
           await _authProvider.registerTag(newTag, conversation.groupId);
+
+        case EventKindDto.reaction:
+          // Reaction event - apply toggle to target message
+          final rp = result.event.reactionPayload();
+          if (rp != null) {
+            final senderDid = result.sender?.did ?? 'unknown';
+            moatLog('PollingService: Reaction "${rp.emoji}" from $senderDid on msg ${rp.targetMessageId.length} bytes');
+
+            final updated = await _messageStorage.toggleReaction(
+              conversation.groupIdHex,
+              rp.targetMessageId,
+              rp.emoji,
+              senderDid,
+            );
+            if (updated != null) {
+              // Notify the active MessagesProvider so the UI updates
+              onNewMessages?.call(conversation.groupIdHex, [updated]);
+            }
+          }
 
         case EventKindDto.welcome:
         case EventKindDto.checkpoint:

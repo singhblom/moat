@@ -52,6 +52,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   EventDto dco_decode_box_autoadd_event_dto(dynamic raw);
 
   @protected
+  ReactionPayloadDto dco_decode_box_autoadd_reaction_payload_dto(dynamic raw);
+
+  @protected
   SenderInfoDto dco_decode_box_autoadd_sender_info_dto(dynamic raw);
 
   @protected
@@ -88,6 +91,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
+  ReactionPayloadDto? dco_decode_opt_box_autoadd_reaction_payload_dto(
+    dynamic raw,
+  );
+
+  @protected
   SenderInfoDto? dco_decode_opt_box_autoadd_sender_info_dto(dynamic raw);
 
   @protected
@@ -95,6 +103,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw);
+
+  @protected
+  ReactionPayloadDto dco_decode_reaction_payload_dto(dynamic raw);
 
   @protected
   SenderInfoDto dco_decode_sender_info_dto(dynamic raw);
@@ -145,6 +156,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   EventDto sse_decode_box_autoadd_event_dto(SseDeserializer deserializer);
 
   @protected
+  ReactionPayloadDto sse_decode_box_autoadd_reaction_payload_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   SenderInfoDto sse_decode_box_autoadd_sender_info_dto(
     SseDeserializer deserializer,
   );
@@ -185,6 +201,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
+  ReactionPayloadDto? sse_decode_opt_box_autoadd_reaction_payload_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   SenderInfoDto? sse_decode_opt_box_autoadd_sender_info_dto(
     SseDeserializer deserializer,
   );
@@ -194,6 +215,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   Uint8List? sse_decode_opt_list_prim_u_8_strict(SseDeserializer deserializer);
+
+  @protected
+  ReactionPayloadDto sse_decode_reaction_payload_dto(
+    SseDeserializer deserializer,
+  );
 
   @protected
   SenderInfoDto sse_decode_sender_info_dto(SseDeserializer deserializer);
@@ -246,6 +272,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_box_autoadd_event_dto(
     EventDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_reaction_payload_dto(
+    ReactionPayloadDto self,
     SseSerializer serializer,
   );
 
@@ -304,6 +336,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_opt_box_autoadd_reaction_payload_dto(
+    ReactionPayloadDto? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_box_autoadd_sender_info_dto(
     SenderInfoDto? self,
     SseSerializer serializer,
@@ -315,6 +353,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_opt_list_prim_u_8_strict(
     Uint8List? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_reaction_payload_dto(
+    ReactionPayloadDto self,
     SseSerializer serializer,
   );
 

@@ -41,6 +41,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
         draw_message_info_popup(frame, app);
     }
 
+    // Draw reaction input popup
+    if let Some(ref input) = app.reaction_input {
+        draw_reaction_input_popup(frame, input);
+    }
+
     // Draw device alerts if any
     if let Some(alert) = app.device_alerts.first() {
         draw_device_alert(frame, alert);
@@ -244,8 +249,14 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
     };
     let style = Style::default().fg(color);
 
+    let title = if is_focused && app.selected_message.is_some() {
+        " Messages  [r]eact [i]nfo "
+    } else {
+        " Messages "
+    };
+
     let block = Block::default()
-        .title(" Messages ")
+        .title(title)
         .borders(Borders::ALL)
         .style(style);
 
@@ -260,34 +271,102 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
         let inner_width = area.width.saturating_sub(2) as usize; // subtract borders
         let visible_height = area.height.saturating_sub(2) as usize;
 
+        // Compute which message index is selected (selected_message is offset from bottom)
+        let selected_msg_index = app.selected_message.map(|offset| {
+            app.messages.len().saturating_sub(1).saturating_sub(offset)
+        });
+
         // Build styled lines for each message
         let mut lines: Vec<Line> = Vec::new();
-        for msg in &app.messages {
+        for (msg_idx, msg) in app.messages.iter().enumerate() {
+            let is_selected = selected_msg_index == Some(msg_idx) && is_focused;
+
             let msg_style = if msg.is_own {
                 Style::default().fg(Color::Green)
             } else {
                 Style::default().fg(Color::White)
             };
 
+            // Selected message gets a background highlight
+            let msg_style = if is_selected {
+                msg_style.bg(Color::Rgb(40, 40, 60))
+            } else {
+                msg_style
+            };
+
             let time = msg.timestamp.format("%H:%M").to_string();
             let prefix = format!("[{}] {}: ", time, msg.from);
             let content = &msg.content;
 
+            // Selection indicator
+            let indicator = if is_selected { "▎" } else { " " };
+            let indicator_style = if is_selected {
+                Style::default().fg(Color::Cyan).bg(Color::Rgb(40, 40, 60))
+            } else {
+                Style::default()
+            };
+
+            let time_style = if is_selected {
+                Style::default().fg(Color::Gray).bg(Color::Rgb(40, 40, 60))
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+
+            let name_style = if is_selected {
+                msg_style.add_modifier(Modifier::BOLD)
+            } else {
+                msg_style.add_modifier(Modifier::BOLD)
+            };
+
             // First visual line has the styled prefix
             if inner_width > 0 {
-                let first_content_len = inner_width.saturating_sub(prefix.len());
+                let first_content_len = inner_width.saturating_sub(prefix.len() + 1); // +1 for indicator
                 let first_chunk: String = content.chars().take(first_content_len).collect();
                 lines.push(Line::from(vec![
-                    Span::styled(format!("[{}] ", time), Style::default().fg(Color::Gray)),
-                    Span::styled(format!("{}: ", msg.from), msg_style.add_modifier(Modifier::BOLD)),
+                    Span::styled(indicator, indicator_style),
+                    Span::styled(format!("[{}] ", time), time_style),
+                    Span::styled(format!("{}: ", msg.from), name_style),
                     Span::styled(first_chunk, msg_style),
                 ]));
 
                 // Remaining content wraps onto continuation lines
                 let remaining: String = content.chars().skip(first_content_len).collect();
-                for chunk in remaining.chars().collect::<Vec<_>>().chunks(inner_width) {
+                let wrap_width = inner_width.saturating_sub(1); // account for indicator column
+                for chunk in remaining.chars().collect::<Vec<_>>().chunks(wrap_width) {
                     let s: String = chunk.iter().collect();
-                    lines.push(Line::from(Span::styled(s, msg_style)));
+                    lines.push(Line::from(vec![
+                        Span::styled(" ", indicator_style),
+                        Span::styled(s, msg_style),
+                    ]));
+                }
+
+                // Show aggregated reactions below the message
+                if !msg.reactions.is_empty() {
+                    // Aggregate: count each emoji
+                    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+                    for r in &msg.reactions {
+                        *counts.entry(&r.emoji).or_insert(0) += 1;
+                    }
+                    let reaction_chips: Vec<String> = counts
+                        .iter()
+                        .map(|(emoji, count)| {
+                            if *count > 1 {
+                                format!("{} {}", emoji, count)
+                            } else {
+                                emoji.to_string()
+                            }
+                        })
+                        .collect();
+                    let reaction_line = format!(" {}", reaction_chips.join("  "));
+                    let reaction_style = if is_selected {
+                        Style::default().fg(Color::Yellow).bg(Color::Rgb(40, 40, 60))
+                    } else {
+                        Style::default().fg(Color::Yellow)
+                    };
+                    lines.push(Line::from(vec![
+                        Span::styled(" ", indicator_style),
+                        Span::styled(reaction_line, reaction_style),
+                    ]));
                 }
             }
         }
@@ -483,6 +562,29 @@ fn draw_message_info_popup(frame: &mut Frame, app: &App) {
 
     let paragraph = Paragraph::new(lines);
     frame.render_widget(paragraph, inner);
+}
+
+fn draw_reaction_input_popup(frame: &mut Frame, input: &str) {
+    let area = frame.area();
+    let popup_width = 40.min(area.width.saturating_sub(4));
+    let popup_height = 3;
+    let popup_x = (area.width.saturating_sub(popup_width)) / 2;
+    let popup_y = (area.height.saturating_sub(popup_height)) / 2;
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+    frame.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .title(" React (Enter to send, Esc to cancel) ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let display = if input.is_empty() { "type emoji..." } else { input };
+    let paragraph = Paragraph::new(display)
+        .block(block)
+        .style(Style::default().fg(Color::White));
+
+    frame.render_widget(paragraph, popup_area);
 }
 
 fn draw_device_alert(frame: &mut Frame, alert: &DeviceAlert) {

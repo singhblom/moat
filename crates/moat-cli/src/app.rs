@@ -96,6 +96,13 @@ pub struct Conversation {
     pub unread: usize,
 }
 
+/// A single reaction on a message
+#[derive(Debug, Clone)]
+pub struct DisplayReaction {
+    pub emoji: String,
+    pub sender_did: String,
+}
+
 /// A display message
 #[derive(Debug, Clone)]
 pub struct DisplayMessage {
@@ -107,6 +114,10 @@ pub struct DisplayMessage {
     pub sender_did: Option<String>,
     /// The sender's device name (for message info feature)
     pub sender_device: Option<String>,
+    /// Unique message identifier (for reactions)
+    pub message_id: Option<Vec<u8>>,
+    /// Reactions on this message (aggregated)
+    pub reactions: Vec<DisplayReaction>,
 }
 
 /// A notification about a new device joining a conversation
@@ -141,6 +152,7 @@ pub struct App {
     pub message_scroll: usize,
     pub selected_message: Option<usize>,  // For message info feature
     pub show_message_info: bool,          // Toggle message info popup
+    pub reaction_input: Option<String>,   // Emoji input for reaction (Some = popup open)
 
     // Device alerts (new devices joining conversations)
     pub device_alerts: Vec<DeviceAlert>,
@@ -220,6 +232,7 @@ impl App {
             message_scroll: 0,
             selected_message: None,
             show_message_info: false,
+            reaction_input: None,
             device_alerts: Vec::new(),
             input_buffer: String::new(),
             cursor_position: 0,
@@ -820,6 +833,8 @@ impl App {
             is_own: false,
             sender_did: None,
             sender_device: None,
+            message_id: None,
+            reactions: vec![],
         });
 
         Ok(())
@@ -909,6 +924,8 @@ impl App {
 
         // Build a combined list of (rkey, DisplayMessage)
         let mut all_messages: Vec<(String, DisplayMessage)> = Vec::new();
+        // Collect reactions to apply after all messages are loaded
+        let mut pending_reactions: Vec<(Vec<u8>, String, String)> = Vec::new(); // (target_message_id, emoji, sender_did)
 
         // Add locally stored messages (our sent messages)
         for stored in &local_messages.messages {
@@ -921,6 +938,8 @@ impl App {
                     is_own: true,
                     sender_did: Some(my_did.clone()),
                     sender_device: self.keys.get_or_create_device_name().ok(),
+                    message_id: stored.message_id.clone(),
+                    reactions: vec![],
                 },
             ));
         }
@@ -934,27 +953,40 @@ impl App {
 
             match self.mls.decrypt_event(&group_id, &event_record.ciphertext) {
                 Ok(decrypted) => {
-                    if let EventKind::Message = decrypted.event.kind {
-                        let content = String::from_utf8_lossy(&decrypted.event.payload).to_string();
+                    match decrypted.event.kind {
+                        EventKind::Message => {
+                            let content = String::from_utf8_lossy(&decrypted.event.payload).to_string();
 
-                        // Extract sender info for collapsed identity and message info
-                        let (sender_did, sender_device) = decrypted.sender
-                            .map(|s| (Some(s.did), Some(s.device_name)))
-                            .unwrap_or((Some(participant_did.clone()), None));
+                            // Extract sender info for collapsed identity and message info
+                            let (sender_did, sender_device) = decrypted.sender
+                                .map(|s| (Some(s.did), Some(s.device_name)))
+                                .unwrap_or((Some(participant_did.clone()), None));
 
-                        all_messages.push((
-                            event_record.rkey.clone(),
-                            DisplayMessage {
-                                from: participant_name.clone(),
-                                content,
-                                timestamp: event_record.created_at,
-                                is_own: false,
-                                sender_did,
-                                sender_device,
-                            },
-                        ));
+                            all_messages.push((
+                                event_record.rkey.clone(),
+                                DisplayMessage {
+                                    from: participant_name.clone(),
+                                    content,
+                                    timestamp: event_record.created_at,
+                                    is_own: false,
+                                    sender_did,
+                                    sender_device,
+                                    message_id: decrypted.event.message_id,
+                                    reactions: vec![],
+                                },
+                            ));
+                        }
+                        EventKind::Reaction => {
+                            // Apply reaction to target message (handled after sorting)
+                            if let Some(rp) = decrypted.event.reaction_payload() {
+                                let sender_did = decrypted.sender
+                                    .map(|s| s.did)
+                                    .unwrap_or_else(|| participant_did.clone());
+                                pending_reactions.push((rp.target_message_id, rp.emoji, sender_did));
+                            }
+                        }
+                        _ => {} // Ignore Commit, Checkpoint, Welcome
                     }
-                    // Ignore non-message events (Commit, Checkpoint, Welcome)
                 }
                 Err(e) => {
                     self.debug_log.log(&format!(
@@ -974,6 +1006,20 @@ impl App {
 
         // Sort by rkey (chronological order since rkeys are TIDs)
         all_messages.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // Apply pending reactions to their target messages (toggle semantics)
+        for (target_id, emoji, sender_did) in pending_reactions {
+            if let Some((_, msg)) = all_messages.iter_mut().find(|(_, m)| {
+                m.message_id.as_ref() == Some(&target_id)
+            }) {
+                // Toggle: if same sender+emoji exists, remove it; otherwise add it
+                if let Some(pos) = msg.reactions.iter().position(|r| r.emoji == emoji && r.sender_did == sender_did) {
+                    msg.reactions.remove(pos);
+                } else {
+                    msg.reactions.push(DisplayReaction { emoji, sender_did });
+                }
+            }
+        }
 
         // Extract just the messages
         self.messages = all_messages.into_iter().map(|(_, msg)| msg).collect();
@@ -1002,6 +1048,30 @@ impl App {
     }
 
     async fn handle_messages_key(&mut self, key: KeyEvent) -> Result<bool> {
+        // If reaction input popup is open, handle it separately
+        if let Some(ref mut input) = self.reaction_input {
+            match key.code {
+                KeyCode::Enter => {
+                    let emoji = input.clone();
+                    self.reaction_input = None;
+                    if !emoji.is_empty() {
+                        self.send_reaction(&emoji).await?;
+                    }
+                }
+                KeyCode::Esc => {
+                    self.reaction_input = None;
+                }
+                KeyCode::Char(c) => {
+                    input.push(c);
+                }
+                KeyCode::Backspace => {
+                    input.pop();
+                }
+                _ => {}
+            }
+            return Ok(false);
+        }
+
         match key.code {
             KeyCode::Char('q') => return Ok(true),
             KeyCode::Tab => {
@@ -1026,6 +1096,12 @@ impl App {
                 // Toggle message info popup for selected message
                 if self.selected_message.is_some() && !self.messages.is_empty() {
                     self.show_message_info = !self.show_message_info;
+                }
+            }
+            KeyCode::Char('r') => {
+                // Open reaction input for selected message
+                if self.selected_message.is_some() && !self.messages.is_empty() {
+                    self.reaction_input = Some(String::new());
                 }
             }
             KeyCode::Esc => {
@@ -1167,6 +1243,7 @@ impl App {
             content: self.input_buffer.clone(),
             timestamp,
             is_own: true,
+            message_id: encrypted.message_id.clone(),
         };
         if let Err(e) = self.keys.append_message(&conv_id, stored_msg) {
             self.debug_log.log(&format!("send_message: failed to store locally: {}", e));
@@ -1181,12 +1258,78 @@ impl App {
             is_own: true,
             sender_did: Some(my_did),
             sender_device: self.keys.get_or_create_device_name().ok(),
+            message_id: event.message_id.clone(),
+            reactions: vec![],
         });
 
         // Clear input
         self.input_buffer.clear();
         self.cursor_position = 0;
 
+        Ok(())
+    }
+
+    /// Send an emoji reaction to the currently selected message
+    async fn send_reaction(&mut self, emoji: &str) -> Result<()> {
+        if self.client.is_none() {
+            return Err(AppError::NotLoggedIn);
+        }
+        let conv_idx = self.active_conversation.ok_or(AppError::NoConversation)?;
+        let conv_id = self.conversations[conv_idx].id.clone();
+
+        // Find the selected message (selected_message is offset from bottom)
+        let msg_index = {
+            let offset = self.selected_message.unwrap_or(0);
+            self.messages.len().saturating_sub(1).saturating_sub(offset)
+        };
+        let target_message_id = match self.messages.get(msg_index).and_then(|m| m.message_id.clone()) {
+            Some(id) => id,
+            None => {
+                self.error_message = Some("Cannot react: message has no ID".to_string());
+                return Ok(());
+            }
+        };
+
+        self.debug_log.log(&format!(
+            "send_reaction: emoji={}, target_id={:02x?}",
+            emoji, &target_message_id[..4.min(target_message_id.len())]
+        ));
+
+        let key_bundle = self.keys.load_identity_key()?;
+        let group_id = hex::decode(&conv_id)
+            .map_err(|e| AppError::Other(format!("Invalid group ID: {}", e)))?;
+
+        let current_epoch = self.mls.get_group_epoch(&group_id)?.unwrap_or(1);
+        let event = Event::reaction(group_id.clone(), current_epoch, &target_message_id, emoji);
+
+        let encrypted = self.mls.encrypt_event(&group_id, &key_bundle, &event)?;
+        self.save_mls_state()?;
+
+        // Update stored group state
+        self.keys.store_group_state(&conv_id, &encrypted.new_group_state)?;
+
+        // Publish to PDS
+        let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
+        client.publish_event(&encrypted.tag, &encrypted.ciphertext).await?;
+
+        // Update tag mapping
+        self.tag_map.insert(encrypted.tag, conv_id);
+
+        // Apply reaction locally (toggle semantics)
+        let my_did = self.client.as_ref().unwrap().did().to_string();
+        if let Some(msg) = self.messages.get_mut(msg_index) {
+            let emoji_str = emoji.to_string();
+            if let Some(pos) = msg.reactions.iter().position(|r| r.emoji == emoji_str && r.sender_did == my_did) {
+                msg.reactions.remove(pos);
+            } else {
+                msg.reactions.push(DisplayReaction {
+                    emoji: emoji_str,
+                    sender_did: my_did,
+                });
+            }
+        }
+
+        self.debug_log.log("send_reaction: published");
         Ok(())
     }
 
@@ -1347,14 +1490,14 @@ impl App {
                             self.debug_log.log(&format!("poll: failed to store group state: {}", e));
                         }
 
+                        // Find the first matching conversation index
+                        let conv_idx = conv_indices.first().copied();
+
                         // Handle based on event kind
                         match decrypted.event.kind {
                             EventKind::Message => {
                                 let content =
                                     String::from_utf8_lossy(&decrypted.event.payload).to_string();
-
-                                // Find the first matching conversation index
-                                let conv_idx = conv_indices.first().copied();
 
                                 // Find conversation name
                                 let from = conv_idx
@@ -1379,6 +1522,8 @@ impl App {
                                         is_own,
                                         sender_did,
                                         sender_device,
+                                        message_id: decrypted.event.message_id,
+                                        reactions: vec![],
                                     });
                                 } else if let Some(idx) = conv_idx {
                                     // Increment unread count
@@ -1400,6 +1545,31 @@ impl App {
                                     // Update conversation's current epoch
                                     if let Some(conv) = self.conversations.iter_mut().find(|c| c.id == conv_id) {
                                         conv.current_epoch = new_epoch;
+                                    }
+                                }
+                            }
+                            EventKind::Reaction => {
+                                // Apply reaction to existing message in display
+                                if let Some(rp) = decrypted.event.reaction_payload() {
+                                    let sender_did = decrypted.sender
+                                        .map(|s| s.did)
+                                        .unwrap_or_default();
+                                    if self.active_conversation == conv_idx {
+                                        // Find target message and toggle reaction
+                                        if let Some(msg) = self.messages.iter_mut().find(|m| {
+                                            m.message_id.as_ref() == Some(&rp.target_message_id)
+                                        }) {
+                                            if let Some(pos) = msg.reactions.iter().position(|r| {
+                                                r.emoji == rp.emoji && r.sender_did == sender_did
+                                            }) {
+                                                msg.reactions.remove(pos);
+                                            } else {
+                                                msg.reactions.push(DisplayReaction {
+                                                    emoji: rp.emoji,
+                                                    sender_did,
+                                                });
+                                            }
+                                        }
                                     }
                                 }
                             }

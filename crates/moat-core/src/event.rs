@@ -1,6 +1,6 @@
 //! Unified Event type for Moat messages
 //!
-//! All communication (messages, commits, welcomes, checkpoints) is represented
+//! All communication (messages, commits, welcomes, checkpoints, reactions) is represented
 //! as a single Event type. This hides the type of communication from observers
 //! who only see encrypted blobs with opaque tags.
 
@@ -19,6 +19,8 @@ pub enum EventKind {
     Welcome,
     /// A group state checkpoint for faster sync
     Checkpoint,
+    /// An emoji reaction to a message (toggle semantics)
+    Reaction,
 }
 
 /// Information about the sender of a message.
@@ -55,6 +57,15 @@ impl SenderInfo {
     }
 }
 
+/// Payload for a reaction event, serialized as JSON inside Event.payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReactionPayload {
+    /// The emoji string (UTF-8, supports multi-codepoint sequences and custom names like ":duck:")
+    pub emoji: String,
+    /// The message_id of the target message (16 bytes)
+    pub target_message_id: Vec<u8>,
+}
+
 /// An event to be encrypted and published
 ///
 /// This is the plaintext structure that gets encrypted before publishing.
@@ -74,10 +85,24 @@ pub struct Event {
     pub epoch: u64,
 
     /// The actual payload (message text, commit bytes, welcome bytes, etc.)
+    /// For Reaction events, this is a JSON-serialized ReactionPayload.
     pub payload: Vec<u8>,
+
+    /// Unique message identifier (16 random bytes, generated at send time).
+    /// Used to reference messages for reactions. Absent for legacy events.
+    #[serde(default)]
+    pub message_id: Option<Vec<u8>>,
 }
 
 impl Event {
+    /// Generate a random 16-byte message ID.
+    fn random_message_id() -> Vec<u8> {
+        use rand::RngCore;
+        let mut id = vec![0u8; 16];
+        rand::thread_rng().fill_bytes(&mut id);
+        id
+    }
+
     /// Create a new message event
     pub fn message(group_id: Vec<u8>, epoch: u64, content: &[u8]) -> Self {
         Self {
@@ -85,6 +110,7 @@ impl Event {
             group_id,
             epoch,
             payload: content.to_vec(),
+            message_id: Some(Self::random_message_id()),
         }
     }
 
@@ -95,6 +121,7 @@ impl Event {
             group_id,
             epoch,
             payload: commit_bytes,
+            message_id: None,
         }
     }
 
@@ -105,6 +132,7 @@ impl Event {
             group_id,
             epoch,
             payload: welcome_bytes,
+            message_id: None,
         }
     }
 
@@ -115,7 +143,33 @@ impl Event {
             group_id,
             epoch,
             payload: state_bytes,
+            message_id: None,
         }
+    }
+
+    /// Create a new reaction event (toggle semantics: same sender + emoji + target = remove)
+    pub fn reaction(group_id: Vec<u8>, epoch: u64, target_message_id: &[u8], emoji: &str) -> Self {
+        let reaction_payload = ReactionPayload {
+            emoji: emoji.to_string(),
+            target_message_id: target_message_id.to_vec(),
+        };
+        let payload = serde_json::to_vec(&reaction_payload)
+            .expect("ReactionPayload serialization should never fail");
+        Self {
+            kind: EventKind::Reaction,
+            group_id,
+            epoch,
+            payload,
+            message_id: Some(Self::random_message_id()),
+        }
+    }
+
+    /// Parse the payload as a ReactionPayload (only valid for Reaction events).
+    pub fn reaction_payload(&self) -> Option<ReactionPayload> {
+        if self.kind != EventKind::Reaction {
+            return None;
+        }
+        serde_json::from_slice(&self.payload).ok()
     }
 
     /// Serialize this event to bytes for encryption
@@ -144,20 +198,66 @@ mod tests {
         assert_eq!(recovered.group_id, b"group-123");
         assert_eq!(recovered.epoch, 5);
         assert_eq!(recovered.payload, b"Hello, world!");
+        assert!(recovered.message_id.is_some());
+        assert_eq!(recovered.message_id.unwrap().len(), 16);
     }
 
     #[test]
     fn test_event_kinds() {
         let msg = Event::message(vec![], 0, b"text");
         assert_eq!(msg.kind, EventKind::Message);
+        assert!(msg.message_id.is_some());
 
         let commit = Event::commit(vec![], 0, vec![1, 2, 3]);
         assert_eq!(commit.kind, EventKind::Commit);
+        assert!(commit.message_id.is_none());
 
         let welcome = Event::welcome(vec![], 0, vec![4, 5, 6]);
         assert_eq!(welcome.kind, EventKind::Welcome);
+        assert!(welcome.message_id.is_none());
 
         let checkpoint = Event::checkpoint(vec![], 0, vec![7, 8, 9]);
         assert_eq!(checkpoint.kind, EventKind::Checkpoint);
+        assert!(checkpoint.message_id.is_none());
+
+        let reaction = Event::reaction(vec![], 0, &[1; 16], "👍");
+        assert_eq!(reaction.kind, EventKind::Reaction);
+        assert!(reaction.message_id.is_some());
+    }
+
+    #[test]
+    fn test_message_ids_are_unique() {
+        let msg1 = Event::message(vec![], 0, b"hello");
+        let msg2 = Event::message(vec![], 0, b"hello");
+        assert_ne!(msg1.message_id, msg2.message_id);
+    }
+
+    #[test]
+    fn test_reaction_roundtrip() {
+        let target_id = vec![0xAB; 16];
+        let event = Event::reaction(b"group-1".to_vec(), 3, &target_id, "🎉");
+
+        let bytes = event.to_bytes().unwrap();
+        let recovered = Event::from_bytes(&bytes).unwrap();
+
+        assert_eq!(recovered.kind, EventKind::Reaction);
+        let rp = recovered.reaction_payload().unwrap();
+        assert_eq!(rp.emoji, "🎉");
+        assert_eq!(rp.target_message_id, target_id);
+    }
+
+    #[test]
+    fn test_reaction_payload_on_non_reaction() {
+        let msg = Event::message(vec![], 0, b"text");
+        assert!(msg.reaction_payload().is_none());
+    }
+
+    #[test]
+    fn test_backward_compat_no_message_id() {
+        // Simulate a legacy event without message_id field
+        let json = r#"{"kind":"message","group_id":[1,2,3],"epoch":0,"payload":[104,105]}"#;
+        let event: Event = serde_json::from_str(json).unwrap();
+        assert_eq!(event.kind, EventKind::Message);
+        assert!(event.message_id.is_none());
     }
 }

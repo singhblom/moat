@@ -85,6 +85,33 @@ class MessageStorage {
     await saveMessages(groupIdHex, messages);
   }
 
+  /// Toggle a reaction on a message. If the same (senderDid, emoji) exists, remove it; otherwise add it.
+  /// Returns the updated message, or null if the target message was not found.
+  Future<Message?> toggleReaction(String groupIdHex, List<int> targetMessageId, String emoji, String senderDid) async {
+    final messages = await loadMessages(groupIdHex);
+    final targetHex = targetMessageId.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+    final index = messages.indexWhere((m) => m.messageIdHex == targetHex);
+    if (index < 0) return null;
+
+    final msg = messages[index];
+    final existing = msg.reactions.indexWhere(
+      (r) => r.emoji == emoji && r.senderDid == senderDid,
+    );
+
+    List<Reaction> updatedReactions;
+    if (existing >= 0) {
+      updatedReactions = List.of(msg.reactions)..removeAt(existing);
+    } else {
+      updatedReactions = [...msg.reactions, Reaction(emoji: emoji, senderDid: senderDid)];
+    }
+
+    final updated = msg.copyWith(reactions: updatedReactions);
+    messages[index] = updated;
+    await saveMessages(groupIdHex, messages);
+    return updated;
+  }
+
   /// Delete messages for a conversation
   Future<void> deleteMessages(String groupIdHex) async {
     final dir = await _getDir();

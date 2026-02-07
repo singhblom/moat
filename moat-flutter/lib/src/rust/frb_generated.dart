@@ -66,7 +66,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => 112553158;
+  int get rustContentHash => -562693748;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -151,6 +151,10 @@ abstract class RustLibApi extends BaseApi {
   Future<Uint8List> crateApiSimpleEncryptForStealth({
     required List<Uint8List> recipientScanPubkeys,
     required List<int> welcomeBytes,
+  });
+
+  ReactionPayloadDto? crateApiSimpleEventDtoReactionPayload({
+    required EventDto that,
   });
 
   StealthKeypair crateApiSimpleGenerateStealthKeypair();
@@ -732,12 +736,40 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  ReactionPayloadDto? crateApiSimpleEventDtoReactionPayload({
+    required EventDto that,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_box_autoadd_event_dto(that, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 16)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_box_autoadd_reaction_payload_dto,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiSimpleEventDtoReactionPayloadConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSimpleEventDtoReactionPayloadConstMeta =>
+      const TaskConstMeta(
+        debugName: "event_dto_reaction_payload",
+        argNames: ["that"],
+      );
+
+  @override
   StealthKeypair crateApiSimpleGenerateStealthKeypair() {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 16)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 17)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_stealth_keypair,
@@ -762,7 +794,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 17,
+            funcId: 18,
             port: port_,
           );
         },
@@ -787,7 +819,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_list_prim_u_8_loose(plaintext, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 18)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 19)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -814,7 +846,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_list_prim_u_8_loose(scanPrivkey, serializer);
           sse_encode_list_prim_u_8_loose(payload, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 19)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 20)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_opt_list_prim_u_8_strict,
@@ -840,7 +872,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_list_prim_u_8_loose(padded, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 20)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 21)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -910,6 +942,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ReactionPayloadDto dco_decode_box_autoadd_reaction_payload_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_reaction_payload_dto(raw);
+  }
+
+  @protected
   SenderInfoDto dco_decode_box_autoadd_sender_info_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_sender_info_dto(raw);
@@ -938,12 +976,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   EncryptResultDto dco_decode_encrypt_result_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
     return EncryptResultDto(
       newGroupState: dco_decode_list_prim_u_8_strict(arr[0]),
       tag: dco_decode_list_prim_u_8_strict(arr[1]),
       ciphertext: dco_decode_list_prim_u_8_strict(arr[2]),
+      messageId: dco_decode_opt_list_prim_u_8_strict(arr[3]),
     );
   }
 
@@ -951,13 +990,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   EventDto dco_decode_event_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
     return EventDto(
       kind: dco_decode_event_kind_dto(arr[0]),
       groupId: dco_decode_list_prim_u_8_strict(arr[1]),
       epoch: dco_decode_u_64(arr[2]),
       payload: dco_decode_list_prim_u_8_strict(arr[3]),
+      messageId: dco_decode_opt_list_prim_u_8_strict(arr[4]),
     );
   }
 
@@ -1010,6 +1050,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ReactionPayloadDto? dco_decode_opt_box_autoadd_reaction_payload_dto(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null
+        ? null
+        : dco_decode_box_autoadd_reaction_payload_dto(raw);
+  }
+
+  @protected
   SenderInfoDto? dco_decode_opt_box_autoadd_sender_info_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_sender_info_dto(raw);
@@ -1025,6 +1075,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_list_prim_u_8_strict(raw);
+  }
+
+  @protected
+  ReactionPayloadDto dco_decode_reaction_payload_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return ReactionPayloadDto(
+      emoji: dco_decode_String(arr[0]),
+      targetMessageId: dco_decode_list_prim_u_8_strict(arr[1]),
+    );
   }
 
   @protected
@@ -1145,6 +1207,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ReactionPayloadDto sse_decode_box_autoadd_reaction_payload_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_reaction_payload_dto(deserializer));
+  }
+
+  @protected
   SenderInfoDto sse_decode_box_autoadd_sender_info_dto(
     SseDeserializer deserializer,
   ) {
@@ -1177,10 +1247,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_newGroupState = sse_decode_list_prim_u_8_strict(deserializer);
     var var_tag = sse_decode_list_prim_u_8_strict(deserializer);
     var var_ciphertext = sse_decode_list_prim_u_8_strict(deserializer);
+    var var_messageId = sse_decode_opt_list_prim_u_8_strict(deserializer);
     return EncryptResultDto(
       newGroupState: var_newGroupState,
       tag: var_tag,
       ciphertext: var_ciphertext,
+      messageId: var_messageId,
     );
   }
 
@@ -1191,11 +1263,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_groupId = sse_decode_list_prim_u_8_strict(deserializer);
     var var_epoch = sse_decode_u_64(deserializer);
     var var_payload = sse_decode_list_prim_u_8_strict(deserializer);
+    var var_messageId = sse_decode_opt_list_prim_u_8_strict(deserializer);
     return EventDto(
       kind: var_kind,
       groupId: var_groupId,
       epoch: var_epoch,
       payload: var_payload,
+      messageId: var_messageId,
     );
   }
 
@@ -1264,6 +1338,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ReactionPayloadDto? sse_decode_opt_box_autoadd_reaction_payload_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_reaction_payload_dto(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
   SenderInfoDto? sse_decode_opt_box_autoadd_sender_info_dto(
     SseDeserializer deserializer,
   ) {
@@ -1296,6 +1383,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     } else {
       return null;
     }
+  }
+
+  @protected
+  ReactionPayloadDto sse_decode_reaction_payload_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_emoji = sse_decode_String(deserializer);
+    var var_targetMessageId = sse_decode_list_prim_u_8_strict(deserializer);
+    return ReactionPayloadDto(
+      emoji: var_emoji,
+      targetMessageId: var_targetMessageId,
+    );
   }
 
   @protected
@@ -1413,6 +1513,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_reaction_payload_dto(
+    ReactionPayloadDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_reaction_payload_dto(self, serializer);
+  }
+
+  @protected
   void sse_encode_box_autoadd_sender_info_dto(
     SenderInfoDto self,
     SseSerializer serializer,
@@ -1447,6 +1556,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_list_prim_u_8_strict(self.newGroupState, serializer);
     sse_encode_list_prim_u_8_strict(self.tag, serializer);
     sse_encode_list_prim_u_8_strict(self.ciphertext, serializer);
+    sse_encode_opt_list_prim_u_8_strict(self.messageId, serializer);
   }
 
   @protected
@@ -1456,6 +1566,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_list_prim_u_8_strict(self.groupId, serializer);
     sse_encode_u_64(self.epoch, serializer);
     sse_encode_list_prim_u_8_strict(self.payload, serializer);
+    sse_encode_opt_list_prim_u_8_strict(self.messageId, serializer);
   }
 
   @protected
@@ -1524,6 +1635,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_opt_box_autoadd_reaction_payload_dto(
+    ReactionPayloadDto? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_reaction_payload_dto(self, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_opt_box_autoadd_sender_info_dto(
     SenderInfoDto? self,
     SseSerializer serializer,
@@ -1557,6 +1681,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     if (self != null) {
       sse_encode_list_prim_u_8_strict(self, serializer);
     }
+  }
+
+  @protected
+  void sse_encode_reaction_payload_dto(
+    ReactionPayloadDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.emoji, serializer);
+    sse_encode_list_prim_u_8_strict(self.targetMessageId, serializer);
   }
 
   @protected

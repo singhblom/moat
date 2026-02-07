@@ -235,6 +235,60 @@ class MessagesProvider extends ChangeNotifier {
     }
   }
 
+  /// Send a reaction to a message
+  Future<void> sendReaction(Message targetMessage, String emoji) async {
+    if (_sendService == null) {
+      throw StateError('SendService not initialized');
+    }
+    if (targetMessage.messageId == null) {
+      moatLog('MessagesProvider: Cannot react to message without messageId');
+      return;
+    }
+
+    try {
+      await _sendService!.sendReaction(
+        conversation: _conversation,
+        targetMessageId: targetMessage.messageId!,
+        emoji: emoji,
+      );
+
+      // Apply toggle locally for immediate UI feedback
+      _toggleReactionLocally(targetMessage.id, emoji, 'self');
+    } catch (e) {
+      moatLog('MessagesProvider: Failed to send reaction: $e');
+    }
+  }
+
+  /// Toggle a reaction locally on a message (for immediate UI feedback)
+  void _toggleReactionLocally(String messageId, String emoji, String senderDid) {
+    final index = _messages.indexWhere((m) => m.id == messageId);
+    if (index < 0) return;
+
+    final msg = _messages[index];
+    final existing = msg.reactions.indexWhere(
+      (r) => r.emoji == emoji && r.senderDid == senderDid,
+    );
+
+    List<Reaction> updatedReactions;
+    if (existing >= 0) {
+      updatedReactions = List.of(msg.reactions)..removeAt(existing);
+    } else {
+      updatedReactions = [...msg.reactions, Reaction(emoji: emoji, senderDid: senderDid)];
+    }
+
+    _messages[index] = msg.copyWith(reactions: updatedReactions);
+    notifyListeners();
+  }
+
+  /// Update a message in the list (e.g. after reaction toggle from polling)
+  void updateMessage(Message updated) {
+    final index = _messages.indexWhere((m) => m.id == updated.id);
+    if (index >= 0) {
+      _messages[index] = updated;
+      notifyListeners();
+    }
+  }
+
   /// Add a single message (from polling)
   void addMessage(Message message) {
     // Check for duplicate by ID

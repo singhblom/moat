@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 112553158;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -562693748;
 
 // Section: executor
 
@@ -763,6 +763,37 @@ fn wire__crate__api__simple__encrypt_for_stealth_impl(
         },
     )
 }
+fn wire__crate__api__simple__event_dto_reaction_payload_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "event_dto_reaction_payload",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <crate::api::simple::EventDto>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok =
+                    Result::<_, ()>::Ok(crate::api::simple::EventDto::reaction_payload(&api_that))?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__simple__generate_stealth_keypair_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -986,10 +1017,12 @@ impl SseDecode for crate::api::simple::EncryptResultDto {
         let mut var_newGroupState = <Vec<u8>>::sse_decode(deserializer);
         let mut var_tag = <Vec<u8>>::sse_decode(deserializer);
         let mut var_ciphertext = <Vec<u8>>::sse_decode(deserializer);
+        let mut var_messageId = <Option<Vec<u8>>>::sse_decode(deserializer);
         return crate::api::simple::EncryptResultDto {
             new_group_state: var_newGroupState,
             tag: var_tag,
             ciphertext: var_ciphertext,
+            message_id: var_messageId,
         };
     }
 }
@@ -1001,11 +1034,13 @@ impl SseDecode for crate::api::simple::EventDto {
         let mut var_groupId = <Vec<u8>>::sse_decode(deserializer);
         let mut var_epoch = <u64>::sse_decode(deserializer);
         let mut var_payload = <Vec<u8>>::sse_decode(deserializer);
+        let mut var_messageId = <Option<Vec<u8>>>::sse_decode(deserializer);
         return crate::api::simple::EventDto {
             kind: var_kind,
             group_id: var_groupId,
             epoch: var_epoch,
             payload: var_payload,
+            message_id: var_messageId,
         };
     }
 }
@@ -1019,6 +1054,7 @@ impl SseDecode for crate::api::simple::EventKindDto {
             1 => crate::api::simple::EventKindDto::Commit,
             2 => crate::api::simple::EventKindDto::Welcome,
             3 => crate::api::simple::EventKindDto::Checkpoint,
+            4 => crate::api::simple::EventKindDto::Reaction,
             _ => unreachable!("Invalid variant for EventKindDto: {}", inner),
         };
     }
@@ -1079,6 +1115,19 @@ impl SseDecode for Vec<u8> {
     }
 }
 
+impl SseDecode for Option<crate::api::simple::ReactionPayloadDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::simple::ReactionPayloadDto>::sse_decode(
+                deserializer,
+            ));
+        } else {
+            return None;
+        }
+    }
+}
+
 impl SseDecode for Option<crate::api::simple::SenderInfoDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1111,6 +1160,18 @@ impl SseDecode for Option<Vec<u8>> {
         } else {
             return None;
         }
+    }
+}
+
+impl SseDecode for crate::api::simple::ReactionPayloadDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_emoji = <String>::sse_decode(deserializer);
+        let mut var_targetMessageId = <Vec<u8>>::sse_decode(deserializer);
+        return crate::api::simple::ReactionPayloadDto {
+            emoji: var_emoji,
+            target_message_id: var_targetMessageId,
+        };
     }
 }
 
@@ -1250,7 +1311,7 @@ fn pde_ffi_dispatcher_primary_impl(
             data_len,
         ),
         15 => wire__crate__api__simple__encrypt_for_stealth_impl(port, ptr, rust_vec_len, data_len),
-        17 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1277,10 +1338,13 @@ fn pde_ffi_dispatcher_sync_impl(
             data_len,
         ),
         14 => wire__crate__api__simple__derive_tag_impl(ptr, rust_vec_len, data_len),
-        16 => wire__crate__api__simple__generate_stealth_keypair_impl(ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__simple__pad_to_bucket_impl(ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__simple__try_decrypt_stealth_impl(ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__simple__unpad_impl(ptr, rust_vec_len, data_len),
+        16 => {
+            wire__crate__api__simple__event_dto_reaction_payload_impl(ptr, rust_vec_len, data_len)
+        }
+        17 => wire__crate__api__simple__generate_stealth_keypair_impl(ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__simple__pad_to_bucket_impl(ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__simple__try_decrypt_stealth_impl(ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__simple__unpad_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1331,6 +1395,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::simple::EncryptResultDto {
             self.new_group_state.into_into_dart().into_dart(),
             self.tag.into_into_dart().into_dart(),
             self.ciphertext.into_into_dart().into_dart(),
+            self.message_id.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -1354,6 +1419,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::simple::EventDto {
             self.group_id.into_into_dart().into_dart(),
             self.epoch.into_into_dart().into_dart(),
             self.payload.into_into_dart().into_dart(),
+            self.message_id.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -1374,6 +1440,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::simple::EventKindDto {
             Self::Commit => 1.into_dart(),
             Self::Welcome => 2.into_dart(),
             Self::Checkpoint => 3.into_dart(),
+            Self::Reaction => 4.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -1407,6 +1474,27 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::simple::KeyPackageResult>
     for crate::api::simple::KeyPackageResult
 {
     fn into_into_dart(self) -> crate::api::simple::KeyPackageResult {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::simple::ReactionPayloadDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.emoji.into_into_dart().into_dart(),
+            self.target_message_id.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::simple::ReactionPayloadDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::simple::ReactionPayloadDto>
+    for crate::api::simple::ReactionPayloadDto
+{
+    fn into_into_dart(self) -> crate::api::simple::ReactionPayloadDto {
         self
     }
 }
@@ -1523,6 +1611,7 @@ impl SseEncode for crate::api::simple::EncryptResultDto {
         <Vec<u8>>::sse_encode(self.new_group_state, serializer);
         <Vec<u8>>::sse_encode(self.tag, serializer);
         <Vec<u8>>::sse_encode(self.ciphertext, serializer);
+        <Option<Vec<u8>>>::sse_encode(self.message_id, serializer);
     }
 }
 
@@ -1533,6 +1622,7 @@ impl SseEncode for crate::api::simple::EventDto {
         <Vec<u8>>::sse_encode(self.group_id, serializer);
         <u64>::sse_encode(self.epoch, serializer);
         <Vec<u8>>::sse_encode(self.payload, serializer);
+        <Option<Vec<u8>>>::sse_encode(self.message_id, serializer);
     }
 }
 
@@ -1545,6 +1635,7 @@ impl SseEncode for crate::api::simple::EventKindDto {
                 crate::api::simple::EventKindDto::Commit => 1,
                 crate::api::simple::EventKindDto::Welcome => 2,
                 crate::api::simple::EventKindDto::Checkpoint => 3,
+                crate::api::simple::EventKindDto::Reaction => 4,
                 _ => {
                     unimplemented!("");
                 }
@@ -1599,6 +1690,16 @@ impl SseEncode for Vec<u8> {
     }
 }
 
+impl SseEncode for Option<crate::api::simple::ReactionPayloadDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::simple::ReactionPayloadDto>::sse_encode(value, serializer);
+        }
+    }
+}
+
 impl SseEncode for Option<crate::api::simple::SenderInfoDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -1626,6 +1727,14 @@ impl SseEncode for Option<Vec<u8>> {
         if let Some(value) = self {
             <Vec<u8>>::sse_encode(value, serializer);
         }
+    }
+}
+
+impl SseEncode for crate::api::simple::ReactionPayloadDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.emoji, serializer);
+        <Vec<u8>>::sse_encode(self.target_message_id, serializer);
     }
 }
 

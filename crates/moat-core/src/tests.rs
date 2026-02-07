@@ -200,9 +200,9 @@ fn test_event_serialization_with_padding() {
     // Serialize
     let event_bytes = event.to_bytes().unwrap();
 
-    // Pad
+    // Pad (message_id adds ~24 bytes of JSON, so this may land in small or medium bucket)
     let padded = pad_to_bucket(&event_bytes);
-    assert_eq!(padded.len(), 256); // Should fit in small bucket
+    assert!(padded.len() == 256 || padded.len() == 1024, "Should fit in small or medium bucket");
 
     // Unpad
     let unpadded = unpad(&padded);
@@ -716,4 +716,89 @@ fn test_kick_user() {
     assert_eq!(members.len(), 1);
     let dids = alice_session.get_group_dids(&group_id).unwrap();
     assert_eq!(dids, vec!["did:plc:alice123"]);
+}
+
+#[test]
+fn test_reaction_event_creation() {
+    let target_id = vec![0xAB; 16];
+    let reaction = Event::reaction(b"group-1".to_vec(), 5, &target_id, "👍");
+
+    assert_eq!(reaction.kind, EventKind::Reaction);
+    assert!(reaction.message_id.is_some());
+
+    let rp = reaction.reaction_payload().unwrap();
+    assert_eq!(rp.emoji, "👍");
+    assert_eq!(rp.target_message_id, target_id);
+}
+
+#[test]
+fn test_reaction_encrypt_decrypt_roundtrip() {
+    // Setup: Alice and Bob in a group
+    let alice_session = MoatSession::new();
+    let bob_session = MoatSession::new();
+
+    let alice_cred = MoatCredential::new("did:plc:alice123", "Alice Phone");
+    let bob_cred = MoatCredential::new("did:plc:bob456", "Bob Laptop");
+
+    let (_alice_kp, alice_bundle) = alice_session.generate_key_package(&alice_cred).unwrap();
+    let (bob_kp, bob_bundle) = bob_session.generate_key_package(&bob_cred).unwrap();
+
+    let group_id = alice_session.create_group(&alice_cred, &alice_bundle).unwrap();
+    let welcome = alice_session.add_member(&group_id, &alice_bundle, &bob_kp).unwrap();
+    let bob_group_id = bob_session.process_welcome(&welcome.welcome).unwrap();
+
+    // Alice sends a message
+    let message = Event::message(group_id.clone(), 0, b"Hello Bob!");
+    let msg_id = message.message_id.clone().unwrap();
+    let encrypted_msg = alice_session.encrypt_event(&group_id, &alice_bundle, &message).unwrap();
+
+    // Bob decrypts the message
+    let decrypted_msg = bob_session.decrypt_event(&bob_group_id, &encrypted_msg.ciphertext).unwrap();
+    assert_eq!(decrypted_msg.event.kind, EventKind::Message);
+    assert_eq!(decrypted_msg.event.message_id.as_ref().unwrap(), &msg_id);
+
+    // Bob reacts to Alice's message with 👍
+    let reaction = Event::reaction(bob_group_id.clone(), 0, &msg_id, "👍");
+    let encrypted_reaction = bob_session.encrypt_event(&bob_group_id, &bob_bundle, &reaction).unwrap();
+
+    // Alice decrypts the reaction
+    let decrypted_reaction = alice_session.decrypt_event(&group_id, &encrypted_reaction.ciphertext).unwrap();
+    assert_eq!(decrypted_reaction.event.kind, EventKind::Reaction);
+
+    let rp = decrypted_reaction.event.reaction_payload().unwrap();
+    assert_eq!(rp.emoji, "👍");
+    assert_eq!(rp.target_message_id, msg_id);
+
+    // Verify sender info
+    let sender = decrypted_reaction.sender.expect("Should have sender info");
+    assert_eq!(sender.did, "did:plc:bob456");
+}
+
+#[test]
+fn test_reaction_with_custom_emoji_string() {
+    let target_id = vec![0x01; 16];
+    let reaction = Event::reaction(vec![], 0, &target_id, ":green-duck:");
+
+    let bytes = reaction.to_bytes().unwrap();
+    let recovered = Event::from_bytes(&bytes).unwrap();
+
+    let rp = recovered.reaction_payload().unwrap();
+    assert_eq!(rp.emoji, ":green-duck:");
+}
+
+#[test]
+fn test_reaction_fits_in_small_or_medium_padding_bucket() {
+    let target_id = vec![0x01; 16];
+    let reaction = Event::reaction(b"group-id".to_vec(), 0, &target_id, "👍");
+
+    let event_bytes = reaction.to_bytes().unwrap();
+    let padded = pad_to_bucket(&event_bytes);
+    assert!(padded.len() <= 1024, "Reactions should fit in small or medium bucket, got {}", padded.len());
+}
+
+#[test]
+fn test_message_has_message_id() {
+    let msg = Event::message(b"group".to_vec(), 0, b"hello");
+    assert!(msg.message_id.is_some());
+    assert_eq!(msg.message_id.unwrap().len(), 16);
 }

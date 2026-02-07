@@ -56,6 +56,11 @@ pub struct StoredMessage {
     pub timestamp: chrono::DateTime<chrono::Utc>,
     /// Whether this is our own message
     pub is_own: bool,
+    /// Unique message identifier (16 bytes, for reaction targeting).
+    /// Option + serde(default) for backwards compat with existing stored JSON.
+    /// Can be made non-optional (Vec<u8>) once there are no pre-existing users.
+    #[serde(default)]
+    pub message_id: Option<Vec<u8>>,
 }
 
 /// All stored messages for a conversation

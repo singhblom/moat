@@ -10,6 +10,7 @@ class MessageBubble extends StatelessWidget {
   final String? senderDid;
   final VoidCallback? onLongPress;
   final VoidCallback? onRetry;
+  final void Function(String emoji)? onReaction;
 
   const MessageBubble({
     super.key,
@@ -19,6 +20,7 @@ class MessageBubble extends StatelessWidget {
     this.senderDid,
     this.onLongPress,
     this.onRetry,
+    this.onReaction,
   });
 
   @override
@@ -108,9 +110,47 @@ class MessageBubble extends StatelessWidget {
               ),
             ),
           ),
+          if (message.reactions.isNotEmpty)
+            Padding(
+              padding: EdgeInsets.only(
+                left: isOwn ? 0 : 8,
+                right: isOwn ? 8 : 0,
+                top: 2,
+              ),
+              child: Wrap(
+                spacing: 4,
+                runSpacing: 4,
+                children: _buildReactionChips(theme),
+              ),
+            ),
         ],
       ),
     );
+  }
+
+  List<Widget> _buildReactionChips(ThemeData theme) {
+    // Aggregate reactions by emoji
+    final counts = <String, int>{};
+    for (final r in message.reactions) {
+      counts[r.emoji] = (counts[r.emoji] ?? 0) + 1;
+    }
+    return counts.entries.map((entry) {
+      final label = entry.value > 1 ? '${entry.key} ${entry.value}' : entry.key;
+      return GestureDetector(
+        onTap: onReaction != null ? () => onReaction!(entry.key) : null,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            label,
+            style: theme.textTheme.labelSmall,
+          ),
+        ),
+      );
+    }).toList();
   }
 
   Color _getBubbleColor(ThemeData theme, bool isOwn) {
