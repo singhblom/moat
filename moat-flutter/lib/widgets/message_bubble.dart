@@ -111,16 +111,14 @@ class MessageBubble extends StatelessWidget {
             ),
           ),
           if (message.reactions.isNotEmpty)
-            Padding(
-              padding: EdgeInsets.only(
-                left: isOwn ? 0 : 8,
-                right: isOwn ? 8 : 0,
-                top: 2,
-              ),
-              child: Wrap(
-                spacing: 4,
-                runSpacing: 4,
-                children: _buildReactionChips(theme),
+            Transform.translate(
+              offset: const Offset(0, -6),
+              child: Padding(
+                padding: EdgeInsets.only(
+                  left: isOwn ? 0 : 8,
+                  right: isOwn ? 8 : 0,
+                ),
+                child: _buildReactionBubble(theme),
               ),
             ),
         ],
@@ -128,29 +126,47 @@ class MessageBubble extends StatelessWidget {
     );
   }
 
-  List<Widget> _buildReactionChips(ThemeData theme) {
+  Widget _buildReactionBubble(ThemeData theme) {
     // Aggregate reactions by emoji
     final counts = <String, int>{};
     for (final r in message.reactions) {
       counts[r.emoji] = (counts[r.emoji] ?? 0) + 1;
     }
-    return counts.entries.map((entry) {
-      final label = entry.value > 1 ? '${entry.key} ${entry.value}' : entry.key;
-      return GestureDetector(
-        onTap: onReaction != null ? () => onReaction!(entry.key) : null,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Text(
-            label,
-            style: theme.textTheme.labelSmall,
-          ),
+
+    final entries = counts.entries.toList();
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.85),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: theme.colorScheme.surface.withValues(alpha: 0.6),
+          width: 2,
         ),
-      );
-    }).toList();
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (int i = 0; i < entries.length; i++) ...[
+            if (i > 0) const SizedBox(width: 6),
+            GestureDetector(
+              onTap: onReaction != null
+                  ? () => onReaction!(entries[i].key)
+                  : null,
+              child: Text(
+                entries[i].value > 1
+                    ? '${entries[i].key} ${entries[i].value}'
+                    : entries[i].key,
+                style: theme.textTheme.labelSmall?.copyWith(
+                  fontFamily: 'NotoColorEmoji',
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
   Color _getBubbleColor(ThemeData theme, bool isOwn) {

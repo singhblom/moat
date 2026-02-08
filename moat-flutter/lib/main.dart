@@ -26,14 +26,17 @@ Future<void> main() async {
   runApp(const MoatApp());
 }
 
+/// Apply custom fonts to the text theme.
+/// Platypi is used for display/headline/title styles.
+/// Body/label styles use default Roboto (bundled for web COEP compatibility).
+/// For emoji rendering, use [emojiTextStyle] on pure-emoji widgets only —
+/// CanvasKit's greedy font matching means NotoColorEmoji cannot be mixed
+/// with Roboto without breaking space/digit metrics.
 TextTheme _applyFonts(TextTheme base) {
   const platypi = 'Platypi';
-  const roboto = 'Roboto';
 
   TextStyle? withPlatypi(TextStyle? s, double weight) =>
       s?.copyWith(fontFamily: platypi, fontVariations: [FontVariation.weight(weight)]);
-  TextStyle? withRoboto(TextStyle? s) =>
-      s?.copyWith(fontFamily: roboto);
 
   return base.copyWith(
     displayLarge: withPlatypi(base.displayLarge, 400),
@@ -45,12 +48,6 @@ TextTheme _applyFonts(TextTheme base) {
     titleLarge: withPlatypi(base.titleLarge, 600),
     titleMedium: withPlatypi(base.titleMedium, 500),
     titleSmall: withPlatypi(base.titleSmall, 500),
-    bodyLarge: withRoboto(base.bodyLarge),
-    bodyMedium: withRoboto(base.bodyMedium),
-    bodySmall: withRoboto(base.bodySmall),
-    labelLarge: withRoboto(base.labelLarge),
-    labelMedium: withRoboto(base.labelMedium),
-    labelSmall: withRoboto(base.labelSmall),
   );
 }
 

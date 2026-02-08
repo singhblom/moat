@@ -29,6 +29,11 @@ class _ConversationScreenState extends State<ConversationScreen> {
   bool _isAtBottom = true;
   int _previousMessageCount = 0;
 
+  /// Currently selected message for reaction/actions (WhatsApp-style overlay)
+  Message? _selectedMessage;
+  /// Global key for the selected message bubble, used to position the emoji bar
+  final Map<String, GlobalKey> _messageKeys = {};
+
   @override
   void initState() {
     super.initState();
@@ -137,32 +142,54 @@ class _ConversationScreenState extends State<ConversationScreen> {
     }
     _previousMessageCount = messagesProvider.messages.length;
 
+    final hasSelection = _selectedMessage != null;
+
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.conversation.displayName),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.info_outline),
-            onPressed: () => _showConversationInfo(context),
-            tooltip: 'Conversation Info',
-          ),
-        ],
+        leading: hasSelection
+            ? IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: _clearSelection,
+              )
+            : null,
+        title: hasSelection
+            ? null
+            : Text(widget.conversation.displayName),
+        actions: hasSelection
+            ? [
+                IconButton(
+                  icon: const Icon(Icons.info_outline),
+                  onPressed: () {
+                    final msg = _selectedMessage!;
+                    _clearSelection();
+                    _showMessageInfo(context, msg);
+                  },
+                  tooltip: 'Message Info',
+                ),
+              ]
+            : [
+                IconButton(
+                  icon: const Icon(Icons.info_outline),
+                  onPressed: () => _showConversationInfo(context),
+                  tooltip: 'Conversation Info',
+                ),
+              ],
       ),
       body: Stack(
         children: [
           // Layer 1: The Tiled Background
           Container(
             decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surface, // The base color under the pattern
+              color: Theme.of(context).colorScheme.surface,
               image: DecorationImage(
                 image: AssetImage('assets/tile_pattern.png'),
                 repeat: ImageRepeat.repeat,
-                opacity: 0.1, // Keeps the pattern subtle so text is readable
+                opacity: 0.1,
                 colorFilter: ColorFilter.mode(Theme.of(context).colorScheme.primary, BlendMode.srcIn)
               ),
             ),
           ),
-          
+
           // Layer 2: Your UI Content
           SafeArea(
             child: Column(
@@ -174,6 +201,9 @@ class _ConversationScreenState extends State<ConversationScreen> {
               ],
             ),
           ),
+
+          // Layer 3: Reaction overlay
+          if (hasSelection) _buildReactionOverlay(context, messagesProvider),
         ],
       ),
     );
@@ -261,12 +291,16 @@ class _ConversationScreenState extends State<ConversationScreen> {
             (previousMessage == null ||
                 previousMessage.senderDid != message.senderDid);
 
+        // Ensure we have a GlobalKey for this message
+        final key = _messageKeys.putIfAbsent(message.id, () => GlobalKey());
+
         return MessageBubble(
+          key: key,
           message: message,
           showSender: showSender,
           senderName: showSender ? _getSenderDisplayName(message.senderDid) : null,
           senderDid: showSender ? message.senderDid : null,
-          onLongPress: () => _showMessageActions(context, message, provider),
+          onLongPress: () => _selectMessage(message),
           onRetry: message.status == MessageStatus.failed
               ? () => provider.retryMessage(message.localId ?? message.id)
               : null,
@@ -446,36 +480,110 @@ class _ConversationScreenState extends State<ConversationScreen> {
     );
   }
 
-  void _showMessageActions(BuildContext context, Message message, MessagesProvider provider) {
-    const quickEmojis = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+  void _selectMessage(Message message) {
+    setState(() {
+      _selectedMessage = message;
+    });
+  }
 
+  void _clearSelection() {
+    setState(() {
+      _selectedMessage = null;
+    });
+  }
+
+  /// Build the floating emoji bar + scrim overlay (WhatsApp-style)
+  Widget _buildReactionOverlay(BuildContext context, MessagesProvider provider) {
+    const quickEmojis = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+    final message = _selectedMessage!;
+
+    // Find the position of the selected message bubble
+    final key = _messageKeys[message.id];
+    Offset bubblePosition = Offset.zero;
+    Size bubbleSize = Size.zero;
+    if (key?.currentContext != null) {
+      final renderBox = key!.currentContext!.findRenderObject() as RenderBox;
+      bubblePosition = renderBox.localToGlobal(Offset.zero);
+      bubbleSize = renderBox.size;
+    }
+
+    // Position emoji bar above or below the bubble
+    final emojiBarHeight = 56.0;
+    final aboveBubble = bubblePosition.dy - emojiBarHeight - 8;
+    final belowBubble = bubblePosition.dy + bubbleSize.height + 8;
+    // Show above if there's room, otherwise below
+    final showAbove = aboveBubble > MediaQuery.of(context).padding.top + kToolbarHeight;
+    final emojiBarTop = showAbove ? aboveBubble : belowBubble;
+
+    // Horizontal position: align with bubble
+    final isOwn = message.isOwn;
+    final screenWidth = MediaQuery.of(context).size.width;
+    final emojiBarWidth = 280.0;
+
+    double emojiBarLeft;
+    if (isOwn) {
+      // Right-align with bubble
+      emojiBarLeft = (bubblePosition.dx + bubbleSize.width - emojiBarWidth)
+          .clamp(8.0, screenWidth - emojiBarWidth - 8);
+    } else {
+      // Left-align with bubble
+      emojiBarLeft = bubblePosition.dx.clamp(8.0, screenWidth - emojiBarWidth - 8);
+    }
+
+    return Stack(
+      children: [
+        // Scrim: tap to dismiss
+        Positioned.fill(
+          child: GestureDetector(
+            onTap: _clearSelection,
+            child: Container(
+              color: Colors.black.withValues(alpha: 0.3),
+            ),
+          ),
+        ),
+        // Emoji bar
+        if (message.messageId != null)
+          Positioned(
+            top: emojiBarTop,
+            left: emojiBarLeft,
+            child: Material(
+              elevation: 8,
+              borderRadius: BorderRadius.circular(28),
+              color: Theme.of(context).colorScheme.surfaceContainerHigh,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: quickEmojis.map((emoji) {
+                    return InkWell(
+                      borderRadius: BorderRadius.circular(20),
+                      onTap: () {
+                        _clearSelection();
+                        provider.sendReaction(message, emoji);
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: Text(emoji, style: const TextStyle(fontSize: 24, fontFamily: 'NotoColorEmoji')),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  void _showMessageInfo(BuildContext context, Message message) {
     showModalBottomSheet(
       context: context,
-      builder: (sheetContext) => Padding(
+      builder: (context) => Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Quick reaction row
-            if (message.messageId != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 16),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: quickEmojis.map((emoji) {
-                    return GestureDetector(
-                      onTap: () {
-                        Navigator.pop(sheetContext);
-                        provider.sendReaction(message, emoji);
-                      },
-                      child: Text(emoji, style: const TextStyle(fontSize: 28)),
-                    );
-                  }).toList(),
-                ),
-              ),
-            if (message.messageId != null) const Divider(),
-            // Message info
             Text(
               'Message Info',
               style: Theme.of(context).textTheme.titleLarge,
