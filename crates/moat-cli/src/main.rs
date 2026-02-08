@@ -178,6 +178,12 @@ async fn run_app(
     loop {
         terminal.draw(|f| ui::draw(f, &app))?;
 
+        // Drain all pending background events (non-blocking)
+        while let Ok(bg_event) = app.bg_rx.try_recv() {
+            app.handle_bg_event(bg_event);
+        }
+
+        // Poll for terminal input (16ms = ~60fps)
         if event::poll(Duration::from_millis(16))? {
             if let Event::Key(key) = event::read()? {
                 if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -197,7 +203,13 @@ async fn run_app(
             }
         }
 
-        app.tick().await?;
+        // Spawn background tasks as needed (non-blocking)
+        app.tick();
+
+        // Device polling runs async but only every 30s (not latency-critical)
+        if app.should_poll_devices() {
+            app.do_device_poll().await;
+        }
     }
 }
 

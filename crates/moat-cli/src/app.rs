@@ -12,6 +12,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
 use thiserror::Error;
+use tokio::sync::mpsc;
 
 /// Debug logger that writes to a file in the storage directory
 struct DebugLog {
@@ -129,6 +130,41 @@ pub struct DeviceAlert {
     pub timestamp: chrono::DateTime<chrono::Utc>,
 }
 
+/// Events produced by background tasks and consumed by the main loop.
+pub(crate) enum BgEvent {
+    /// Network portion of poll_messages completed.
+    PollFetched {
+        participant_events: Vec<(Vec<usize>, moat_atproto::EventRecord, String)>,
+        watched_events: Vec<(String, moat_atproto::EventRecord)>,
+        new_rkeys: Vec<(String, String)>,
+    },
+    /// Network publish for send_message completed.
+    SendPublished {
+        uri: String,
+        conv_id: String,
+        tag: [u8; 16],
+    },
+    /// Network publish for send_message failed.
+    SendFailed(String),
+    /// Network fetch for load_messages completed.
+    MessagesFetched {
+        conv_idx: usize,
+        their_events: Vec<moat_atproto::EventRecord>,
+        my_did: String,
+    },
+    /// Background auto-login completed.
+    LoggedIn {
+        client: MoatAtprotoClient,
+        did: String,
+        access_jwt: String,
+        refresh_jwt: String,
+    },
+    /// Background login failed.
+    LoginFailed(String),
+    /// Background poll error (non-fatal).
+    PollError(String),
+}
+
 /// Main application state
 pub struct App {
     pub keys: KeyStore,
@@ -174,6 +210,13 @@ pub struct App {
     // DIDs to watch for incoming invites
     watched_dids: std::collections::HashSet<String>,
     pub watch_handle_input: String,
+
+    // Background task channel
+    bg_tx: mpsc::UnboundedSender<BgEvent>,
+    pub(crate) bg_rx: mpsc::UnboundedReceiver<BgEvent>,
+
+    // Prevent overlapping background tasks
+    poll_in_flight: bool,
 }
 
 impl App {
@@ -216,6 +259,8 @@ impl App {
             Focus::Login
         };
 
+        let (bg_tx, bg_rx) = mpsc::unbounded_channel();
+
         Ok(Self {
             keys,
             client: None,
@@ -242,6 +287,9 @@ impl App {
             last_device_poll: None,
             watched_dids: std::collections::HashSet::new(),
             watch_handle_input: String::new(),
+            bg_tx,
+            bg_rx,
+            poll_in_flight: false,
         })
     }
 
@@ -286,21 +334,21 @@ impl App {
             Focus::Login => self.handle_login_key(key).await,
             Focus::Conversations => self.handle_conversations_key(key).await,
             Focus::Messages => self.handle_messages_key(key).await,
-            Focus::Input => self.handle_input_key(key).await,
+            Focus::Input => self.handle_input_key(key),  // sync — no await
             Focus::NewConversation => self.handle_new_conversation_key(key).await,
             Focus::WatchHandle => self.handle_watch_handle_key(key).await,
         }
     }
 
-    /// Periodic tick for async operations
-    pub async fn tick(&mut self) -> Result<()> {
+    /// Periodic tick — spawns background tasks and is non-blocking.
+    pub fn tick(&mut self) {
         // Auto-login if credentials exist but not logged in
-        if self.client.is_none() && self.keys.has_credentials() {
-            self.auto_login().await?;
+        if self.client.is_none() && self.keys.has_credentials() && !self.poll_in_flight {
+            self.spawn_auto_login();
         }
 
-        // Poll for new messages if logged in (every 5 seconds)
-        if self.client.is_some() {
+        // Spawn background poll for new messages (every 5 seconds)
+        if self.client.is_some() && !self.poll_in_flight {
             let should_poll = self
                 .last_poll
                 .map(|t| t.elapsed().as_secs() >= 5)
@@ -308,96 +356,518 @@ impl App {
 
             if should_poll {
                 self.last_poll = Some(Instant::now());
-                if let Err(e) = self.poll_messages().await {
-                    // Log error but don't fail the tick
-                    self.set_error(format!("Poll error: {e}"));
-                }
-            }
-
-            // Poll for new devices from group members (every 30 seconds)
-            let should_poll_devices = self
-                .last_device_poll
-                .map(|t| t.elapsed().as_secs() >= 30)
-                .unwrap_or(true);
-
-            if should_poll_devices {
-                self.last_device_poll = Some(Instant::now());
-                if let Err(e) = self.poll_for_new_devices().await {
-                    self.debug_log.log(&format!("Device poll error: {e}"));
-                }
+                self.spawn_poll_messages();
             }
         }
 
-        Ok(())
+        // Device polling is handled by the main loop via should_poll_devices()/do_device_poll()
     }
 
-    async fn auto_login(&mut self) -> Result<()> {
-        // First, try to resume from stored session tokens (avoids rate limiting)
-        if self.keys.has_session() {
-            if let Ok(stored_session) = self.keys.load_session() {
-                self.set_status("Resuming session...".to_string());
+    /// Spawn auto-login in background.
+    fn spawn_auto_login(&mut self) {
+        self.poll_in_flight = true;
+        self.set_status("Logging in...".to_string());
 
+        let has_session = self.keys.has_session();
+        let stored_session = if has_session {
+            self.keys.load_session().ok()
+        } else {
+            None
+        };
+        let credentials = self.keys.load_credentials().ok();
+        let tx = self.bg_tx.clone();
+
+        tokio::spawn(async move {
+            // Try session resume first
+            if let Some(session) = stored_session {
                 match MoatAtprotoClient::resume_session(
-                    &stored_session.did,
-                    &stored_session.access_jwt,
-                    &stored_session.refresh_jwt,
+                    &session.did,
+                    &session.access_jwt,
+                    &session.refresh_jwt,
                 )
                 .await
                 {
                     Ok(client) => {
-                        // Update stored tokens (may have been refreshed)
-                        if let Some((access_jwt, refresh_jwt)) = client.get_session_tokens().await {
-                            let _ = self.keys.store_session(&StoredSession {
-                                did: stored_session.did.clone(),
-                                access_jwt,
-                                refresh_jwt,
-                            });
-                        }
-
-                        self.client = Some(client);
-                        self.status_message = None;
-                        self.load_conversations().await?;
-                        return Ok(());
+                        let (aj, rj) = client
+                            .get_session_tokens()
+                            .await
+                            .unwrap_or((session.access_jwt, session.refresh_jwt));
+                        let _ = tx.send(BgEvent::LoggedIn {
+                            did: client.did().to_string(),
+                            client,
+                            access_jwt: aj,
+                            refresh_jwt: rj,
+                        });
+                        return;
                     }
-                    Err(_) => {
-                        // Session expired or invalid, clear it and fall through to login
-                        let _ = self.keys.clear_session();
-                        self.debug_log
-                            .log("auto_login: stored session invalid, will try fresh login");
-                    }
+                    Err(_) => {} // fall through
                 }
             }
-        }
 
-        // Fall back to fresh login with credentials
-        if let Ok((handle, password)) = self.keys.load_credentials() {
-            self.set_status("Logging in...".to_string());
-
-            match MoatAtprotoClient::login(&handle, &password).await {
-                Ok(client) => {
-                    // Store session tokens for future use
-                    if let Some((access_jwt, refresh_jwt)) = client.get_session_tokens().await {
-                        let _ = self.keys.store_session(&StoredSession {
+            // Fresh login
+            if let Some((handle, password)) = credentials {
+                match MoatAtprotoClient::login(&handle, &password).await {
+                    Ok(client) => {
+                        let (aj, rj) = client
+                            .get_session_tokens()
+                            .await
+                            .unwrap_or_default();
+                        let _ = tx.send(BgEvent::LoggedIn {
                             did: client.did().to_string(),
-                            access_jwt,
-                            refresh_jwt,
+                            client,
+                            access_jwt: aj,
+                            refresh_jwt: rj,
                         });
                     }
-
-                    self.client = Some(client);
-                    self.status_message = None;
-                    self.load_conversations().await?;
+                    Err(e) => {
+                        let _ = tx.send(BgEvent::LoginFailed(format!("{e}")));
+                    }
                 }
-                Err(e) => {
-                    // Don't retry automatically - show warning and go to login screen
-                    self.set_error(format!(
-                        "Login failed: {e}\n\nIf you hit rate limits, wait before trying again.\nCheck your app password if credentials are outdated."
-                    ));
-                    self.focus = Focus::Login;
+            } else {
+                let _ = tx.send(BgEvent::LoginFailed("No credentials".to_string()));
+            }
+        });
+    }
+
+    /// Spawn the network portion of message polling in a background task.
+    fn spawn_poll_messages(&mut self) {
+        let client = match self.client.as_ref() {
+            Some(c) => c.clone(),
+            None => return,
+        };
+        self.poll_in_flight = true;
+        let my_did = client.did().to_string();
+
+        // Collect DIDs and their last rkeys
+        let mut dids_to_poll: HashMap<String, Vec<usize>> = HashMap::new();
+        for (idx, conv) in self.conversations.iter().enumerate() {
+            dids_to_poll
+                .entry(conv.participant_did.clone())
+                .or_default()
+                .push(idx);
+        }
+        if !self.conversations.is_empty() {
+            let all_conv_indices: Vec<usize> = (0..self.conversations.len()).collect();
+            dids_to_poll.entry(my_did).or_insert(all_conv_indices);
+        }
+
+        let dids_with_rkeys: Vec<(String, Vec<usize>, Option<String>)> = dids_to_poll
+            .into_iter()
+            .map(|(did, indices)| {
+                let last_rkey = self.keys.get_last_rkey(&did).ok().flatten();
+                (did, indices, last_rkey)
+            })
+            .collect();
+
+        let watched: Vec<(String, Option<String>)> = self
+            .watched_dids
+            .iter()
+            .map(|did| {
+                let last_rkey = self.keys.get_last_rkey(did).ok().flatten();
+                (did.clone(), last_rkey)
+            })
+            .collect();
+
+        let tx = self.bg_tx.clone();
+
+        tokio::spawn(async move {
+            let mut participant_events = Vec::new();
+            let mut new_rkeys = Vec::new();
+
+            for (participant_did, conv_indices, last_rkey) in &dids_with_rkeys {
+                match client
+                    .fetch_events_from_did(participant_did, last_rkey.as_deref())
+                    .await
+                {
+                    Ok(events) => {
+                        let mut max_rkey: Option<String> = last_rkey.clone();
+                        for event in events {
+                            if let Some(ref last) = last_rkey {
+                                if event.rkey <= *last {
+                                    continue;
+                                }
+                            }
+                            if max_rkey.as_ref().map_or(true, |m| event.rkey > *m) {
+                                max_rkey = Some(event.rkey.clone());
+                            }
+                            participant_events.push((
+                                conv_indices.clone(),
+                                event,
+                                participant_did.clone(),
+                            ));
+                        }
+                        if let Some(rkey) = max_rkey {
+                            new_rkeys.push((participant_did.clone(), rkey));
+                        }
+                    }
+                    Err(_) => {}
                 }
             }
+
+            let mut watched_events = Vec::new();
+            for (did, last_rkey) in &watched {
+                match client
+                    .fetch_events_from_did(did, last_rkey.as_deref())
+                    .await
+                {
+                    Ok(events) => {
+                        let mut max_rkey = last_rkey.clone();
+                        for event in events {
+                            if let Some(ref last) = last_rkey {
+                                if event.rkey <= *last {
+                                    continue;
+                                }
+                            }
+                            if max_rkey.as_ref().map_or(true, |m| event.rkey > *m) {
+                                max_rkey = Some(event.rkey.clone());
+                            }
+                            watched_events.push((did.clone(), event));
+                        }
+                        if let Some(rkey) = max_rkey {
+                            new_rkeys.push((did.clone(), rkey));
+                        }
+                    }
+                    Err(_) => {}
+                }
+            }
+
+            let _ = tx.send(BgEvent::PollFetched {
+                participant_events,
+                watched_events,
+                new_rkeys,
+            });
+        });
+    }
+
+    /// Check if device polling should run now.
+    pub fn should_poll_devices(&self) -> bool {
+        self.client.is_some()
+            && self
+                .last_device_poll
+                .map(|t| t.elapsed().as_secs() >= 30)
+                .unwrap_or(true)
+    }
+
+    /// Run device polling (async, called from the main loop periodically).
+    pub async fn do_device_poll(&mut self) {
+        self.last_device_poll = Some(Instant::now());
+        if let Err(e) = self.poll_for_new_devices().await {
+            self.debug_log.log(&format!("Device poll error: {e}"));
         }
-        Ok(())
+    }
+
+    /// Process a background event. Called from the main loop.
+    pub fn handle_bg_event(&mut self, event: BgEvent) {
+        match event {
+            BgEvent::LoggedIn {
+                client,
+                did,
+                access_jwt,
+                refresh_jwt,
+            } => {
+                self.poll_in_flight = false;
+                let _ = self.keys.store_session(&StoredSession {
+                    did,
+                    access_jwt,
+                    refresh_jwt,
+                });
+                self.client = Some(client);
+                self.status_message = None;
+                self.load_conversations_sync();
+            }
+            BgEvent::LoginFailed(e) => {
+                self.poll_in_flight = false;
+                self.set_error(format!(
+                    "Login failed: {e}\n\nIf you hit rate limits, wait before trying again."
+                ));
+                self.focus = Focus::Login;
+            }
+            BgEvent::PollFetched {
+                participant_events,
+                watched_events,
+                new_rkeys,
+            } => {
+                self.poll_in_flight = false;
+                self.process_poll_results(participant_events, watched_events, new_rkeys);
+            }
+            BgEvent::PollError(e) => {
+                self.poll_in_flight = false;
+                self.set_error(format!("Poll error: {e}"));
+            }
+            BgEvent::SendPublished { uri, conv_id, tag } => {
+                self.debug_log
+                    .log(&format!("send_message: published to PDS, uri={}", uri));
+                self.tag_map.insert(tag, conv_id);
+            }
+            BgEvent::SendFailed(e) => {
+                self.set_error(format!("Send error: {e}"));
+            }
+            BgEvent::MessagesFetched {
+                conv_idx,
+                their_events,
+                my_did,
+            } => {
+                self.finish_load_messages(conv_idx, their_events, &my_did);
+            }
+        }
+    }
+
+    /// Synchronous version of load_conversations (no network calls).
+    fn load_conversations_sync(&mut self) {
+        let group_ids = match self.keys.list_groups() {
+            Ok(ids) => ids,
+            Err(e) => {
+                self.set_error(format!("Failed to load conversations: {e}"));
+                return;
+            }
+        };
+
+        self.conversations.clear();
+        for group_id in group_ids {
+            let (name, participant_did) = match self.keys.load_group_metadata(&group_id) {
+                Ok(meta) => (meta.participant_handle, meta.participant_did),
+                Err(_) => {
+                    let short_id = &group_id[..8.min(group_id.len())];
+                    (format!("Conversation {}", short_id), String::new())
+                }
+            };
+
+            let group_id_bytes = hex::decode(&group_id).unwrap_or_default();
+            let current_epoch =
+                if let Ok(Some(epoch)) = self.mls.get_group_epoch(&group_id_bytes) {
+                    epoch
+                } else {
+                    1
+                };
+
+            if let Ok(tag) =
+                moat_core::derive_tag_from_group_id(&group_id_bytes, current_epoch)
+            {
+                self.tag_map.insert(tag, group_id.clone());
+            }
+
+            self.conversations.push(Conversation {
+                id: group_id,
+                name,
+                participant_did,
+                current_epoch,
+                unread: 0,
+            });
+        }
+    }
+
+    /// Process poll results on the main thread (decrypt, update state).
+    fn process_poll_results(
+        &mut self,
+        participant_events: Vec<(Vec<usize>, moat_atproto::EventRecord, String)>,
+        watched_events: Vec<(String, moat_atproto::EventRecord)>,
+        new_rkeys: Vec<(String, String)>,
+    ) {
+        let my_did = self
+            .client
+            .as_ref()
+            .map(|c| c.did().to_string())
+            .unwrap_or_default();
+
+        for (conv_indices, event_record, _did) in participant_events {
+            if let Some(conv_id) = self.tag_map.get(&event_record.tag).cloned() {
+                let group_id = match hex::decode(&conv_id) {
+                    Ok(id) => id,
+                    Err(_) => continue,
+                };
+
+                match self.mls.decrypt_event(&group_id, &event_record.ciphertext) {
+                    Ok(decrypted) => {
+                        if let Err(e) = self
+                            .keys
+                            .store_group_state(&conv_id, &decrypted.new_group_state)
+                        {
+                            self.debug_log
+                                .log(&format!("poll: failed to store group state: {}", e));
+                        }
+
+                        let conv_idx = conv_indices.first().copied();
+
+                        match decrypted.event.kind {
+                            EventKind::Message => {
+                                let content = String::from_utf8_lossy(&decrypted.event.payload)
+                                    .to_string();
+                                let from = conv_idx
+                                    .and_then(|idx| self.conversations.get(idx))
+                                    .map(|c| c.name.clone())
+                                    .unwrap_or_else(|| "Unknown".to_string());
+
+                                let (sender_did, sender_device) = decrypted
+                                    .sender
+                                    .map(|s| (Some(s.did), Some(s.device_name)))
+                                    .unwrap_or((None, None));
+
+                                let is_own = sender_did
+                                    .as_ref()
+                                    .map_or(false, |did| did == &my_did);
+
+                                if self.active_conversation == conv_idx {
+                                    self.messages.push(DisplayMessage {
+                                        from,
+                                        content,
+                                        timestamp: event_record.created_at,
+                                        is_own,
+                                        sender_did,
+                                        sender_device,
+                                        message_id: decrypted.event.message_id,
+                                        reactions: vec![],
+                                    });
+                                } else if let Some(idx) = conv_idx {
+                                    if let Some(conv) = self.conversations.get_mut(idx) {
+                                        conv.unread += 1;
+                                    }
+                                }
+                            }
+                            EventKind::Commit => {
+                                let new_epoch = decrypted.event.epoch;
+                                if let Ok(new_tag) =
+                                    moat_core::derive_tag_from_group_id(&group_id, new_epoch)
+                                {
+                                    self.tag_map.insert(new_tag, conv_id.clone());
+                                    if let Some(conv) = self
+                                        .conversations
+                                        .iter_mut()
+                                        .find(|c| c.id == conv_id)
+                                    {
+                                        conv.current_epoch = new_epoch;
+                                    }
+                                }
+                            }
+                            EventKind::Reaction => {
+                                if let Some(rp) = decrypted.event.reaction_payload() {
+                                    let sender_did = decrypted
+                                        .sender
+                                        .map(|s| s.did)
+                                        .unwrap_or_default();
+                                    if self.active_conversation == conv_idx {
+                                        if let Some(msg) = self.messages.iter_mut().find(|m| {
+                                            m.message_id.as_ref()
+                                                == Some(&rp.target_message_id)
+                                        }) {
+                                            if let Some(pos) =
+                                                msg.reactions.iter().position(|r| {
+                                                    r.emoji == rp.emoji
+                                                        && r.sender_did == sender_did
+                                                })
+                                            {
+                                                msg.reactions.remove(pos);
+                                            } else {
+                                                msg.reactions.push(DisplayReaction {
+                                                    emoji: rp.emoji,
+                                                    sender_did,
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    Err(e) => {
+                        self.debug_log
+                            .log(&format!("poll: decryption failed: {}", e));
+                    }
+                }
+            } else {
+                // Unknown tag — try as welcome (sync crypto, only resolve_handle is async)
+                self.try_process_welcome_sync(
+                    &event_record.ciphertext,
+                    &event_record.author_did,
+                    event_record.tag,
+                );
+            }
+        }
+
+        // Process watched DID events
+        for (did, event_record) in watched_events {
+            if self.tag_map.contains_key(&event_record.tag) {
+                continue;
+            }
+            if self.try_process_welcome_sync(
+                &event_record.ciphertext,
+                &event_record.author_did,
+                event_record.tag,
+            ) {
+                self.watched_dids.remove(&did);
+            }
+        }
+
+        // Save MLS state if modified
+        if self.mls.has_pending_changes() {
+            if let Err(e) = self.save_mls_state() {
+                self.debug_log
+                    .log(&format!("poll: failed to save MLS state: {}", e));
+            }
+        }
+
+        // Persist rkeys
+        for (did, rkey) in new_rkeys {
+            if let Err(e) = self.keys.set_last_rkey(&did, &rkey) {
+                self.debug_log.log(&format!(
+                    "poll: failed to save rkey for {}: {}",
+                    &did[..20.min(did.len())],
+                    e
+                ));
+            }
+        }
+    }
+
+    /// Synchronous welcome processing (no handle resolution — uses DID as name).
+    fn try_process_welcome_sync(
+        &mut self,
+        ciphertext: &[u8],
+        author_did: &str,
+        _tag: [u8; 16],
+    ) -> bool {
+        let stealth_privkey = match self.keys.load_stealth_key() {
+            Ok(key) => key,
+            Err(_) => return false,
+        };
+
+        let welcome_bytes = match try_decrypt_stealth(&stealth_privkey, ciphertext) {
+            Some(bytes) => bytes,
+            None => return false,
+        };
+
+        let group_id = match self.mls.process_welcome(&welcome_bytes) {
+            Ok(id) => id,
+            Err(_) => return false,
+        };
+
+        let conv_id = hex::encode(&group_id);
+
+        // Use DID as name initially; will be resolved later
+        let participant_handle = author_did.to_string();
+
+        let _ = self.keys.store_group_metadata(
+            &conv_id,
+            &GroupMetadata {
+                participant_did: author_did.to_string(),
+                participant_handle: participant_handle.clone(),
+            },
+        );
+
+        self.conversations.push(Conversation {
+            id: conv_id.clone(),
+            name: participant_handle,
+            participant_did: author_did.to_string(),
+            current_epoch: 1,
+            unread: 1,
+        });
+
+        if let Ok(current_tag) = moat_core::derive_tag_from_group_id(&group_id, 1) {
+            self.tag_map.insert(current_tag, conv_id);
+        }
+
+        self.debug_log
+            .log("process_welcome: successfully joined group");
+        true
     }
 
     async fn handle_login_key(&mut self, key: KeyEvent) -> Result<bool> {
@@ -498,73 +968,7 @@ impl App {
         self.status_message = None;
         self.focus = Focus::Conversations;
 
-        self.load_conversations().await?;
-
-        Ok(())
-    }
-
-    async fn load_conversations(&mut self) -> Result<()> {
-        // Load conversations from stored group metadata
-        let group_ids = self.keys.list_groups()?;
-
-        self.conversations.clear();
-        for group_id in group_ids {
-            // Try to load metadata for this group
-            let (mut name, participant_did) = match self.keys.load_group_metadata(&group_id) {
-                Ok(meta) => (meta.participant_handle, meta.participant_did),
-                Err(_) => {
-                    // Fallback for old groups without metadata
-                    let short_id = &group_id[..8.min(group_id.len())];
-                    (format!("Conversation {}", short_id), String::new())
-                }
-            };
-
-            // If name looks like a DID, try to resolve it to a handle
-            if name.starts_with("did:") {
-                if let Some(client) = &self.client {
-                    if let Ok(handle) = client.resolve_handle(&name).await {
-                        // Update stored metadata with resolved handle
-                        let _ = self.keys.store_group_metadata(
-                            &group_id,
-                            &GroupMetadata {
-                                participant_did: participant_did.clone(),
-                                participant_handle: handle.clone(),
-                            },
-                        );
-                        name = handle;
-                    }
-                }
-            }
-
-            // Get the current epoch from the MLS group and register the tag
-            let group_id_bytes = hex::decode(&group_id)
-                .unwrap_or_default();
-
-            let current_epoch = if let Ok(Some(epoch)) = self.mls.get_group_epoch(&group_id_bytes) {
-                epoch
-            } else {
-                1 // Default to epoch 1 if group can't be loaded
-            };
-
-            // Register tag for current epoch
-            if let Ok(tag) = moat_core::derive_tag_from_group_id(&group_id_bytes, current_epoch) {
-                self.debug_log.log(&format!(
-                    "load_conversations: registering tag {:02x?} for conv {} epoch {}",
-                    &tag[..4],
-                    &group_id[..16.min(group_id.len())],
-                    current_epoch
-                ));
-                self.tag_map.insert(tag, group_id.clone());
-            }
-
-            self.conversations.push(Conversation {
-                id: group_id.clone(),
-                name,
-                participant_did,
-                current_epoch,
-                unread: 0,
-            });
-        }
+        self.load_conversations_sync();
 
         Ok(())
     }
@@ -597,7 +1001,7 @@ impl App {
             }
             KeyCode::Enter => {
                 if self.active_conversation.is_some() {
-                    self.load_messages().await?;
+                    self.load_messages()?;
                     self.message_scroll = 0;
                     self.focus = Focus::Input;
                 }
@@ -700,7 +1104,7 @@ impl App {
         {
             // Switch to existing conversation instead of creating a duplicate
             self.active_conversation = Some(existing_idx);
-            self.load_messages().await?;
+            self.load_messages()?;
             self.focus = Focus::Input;
             self.new_conv_handle.clear();
             self.status_message = None;
@@ -840,31 +1244,104 @@ impl App {
         Ok(())
     }
 
-    async fn load_messages(&mut self) -> Result<()> {
+    /// Load messages: show local messages immediately, spawn network fetch.
+    fn load_messages(&mut self) -> Result<()> {
         self.messages.clear();
 
         let Some(idx) = self.active_conversation else {
             return Ok(());
         };
 
-        let conv = &self.conversations[idx];
+        let conv_id = self.conversations[idx].id.clone();
+        let participant_did = self.conversations[idx].participant_did.clone();
+        let my_did = self
+            .client
+            .as_ref()
+            .map(|c| c.did().to_string())
+            .unwrap_or_default();
+
+        // Show locally stored messages immediately (no network wait)
+        let local_messages = self.keys.load_messages(&conv_id).unwrap_or_default();
+        for stored in &local_messages.messages {
+            self.messages.push(DisplayMessage {
+                from: "You".to_string(),
+                content: stored.content.clone(),
+                timestamp: stored.timestamp,
+                is_own: true,
+                sender_did: Some(my_did.clone()),
+                sender_device: self.keys.get_or_create_device_name().ok(),
+                message_id: stored.message_id.clone(),
+                reactions: vec![],
+            });
+        }
+
+        // Clear unread count
+        if let Some(conv) = self.conversations.get_mut(idx) {
+            conv.unread = 0;
+        }
+
+        // Spawn network fetch in background
+        let client = match self.client.as_ref() {
+            Some(c) => c.clone(),
+            None => return Ok(()),
+        };
+        let tx = self.bg_tx.clone();
+
+        tokio::spawn(async move {
+            match client
+                .fetch_events_from_did(&participant_did, None)
+                .await
+            {
+                Ok(events) => {
+                    let _ = tx.send(BgEvent::MessagesFetched {
+                        conv_idx: idx,
+                        their_events: events,
+                        my_did,
+                    });
+                }
+                Err(e) => {
+                    let _ = tx.send(BgEvent::PollError(format!(
+                        "Failed to fetch messages: {e}"
+                    )));
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    /// Process fetched messages (decrypt and merge with local).
+    fn finish_load_messages(
+        &mut self,
+        conv_idx: usize,
+        their_events: Vec<moat_atproto::EventRecord>,
+        _my_did: &str,
+    ) {
+        // Only process if this conversation is still active
+        if self.active_conversation != Some(conv_idx) {
+            return;
+        }
+
+        let conv = match self.conversations.get(conv_idx) {
+            Some(c) => c,
+            None => return,
+        };
         let conv_id = conv.id.clone();
         let participant_did = conv.participant_did.clone();
         let participant_name = conv.name.clone();
         let current_epoch = conv.current_epoch;
 
-        let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
-        let my_did = client.did().to_string();
+        let group_id = match hex::decode(&conv_id) {
+            Ok(id) => id,
+            Err(_) => return,
+        };
 
-        self.debug_log.log(&format!(
-            "load_messages: conv={}, participant={}, my_did={}, epoch={}",
-            &conv_id[..16.min(conv_id.len())],
-            &participant_did[..20.min(participant_did.len())],
-            &my_did[..20.min(my_did.len())],
-            current_epoch
-        ));
+        // Generate valid tags
+        let valid_tags: std::collections::HashSet<[u8; 16]> = (0..=current_epoch)
+            .filter_map(|epoch| moat_core::derive_tag_from_group_id(&group_id, epoch).ok())
+            .collect();
 
-        // Load locally stored messages (our sent messages that MLS can't decrypt)
+        // Get local rkeys to avoid duplicates
         let local_messages = self.keys.load_messages(&conv_id).unwrap_or_default();
         let local_rkeys: std::collections::HashSet<String> = local_messages
             .messages
@@ -872,44 +1349,21 @@ impl App {
             .map(|m| m.rkey.clone())
             .collect();
 
-        self.debug_log.log(&format!(
-            "load_messages: {} locally stored messages",
-            local_messages.messages.len()
-        ));
-
-        // Generate all valid tags for this conversation (epochs 0 through current)
-        let group_id = hex::decode(&conv_id)
-            .map_err(|e| AppError::Other(format!("Invalid group ID: {}", e)))?;
-
-        let epochs: Vec<u64> = (0..=current_epoch).collect();
-        let valid_tags: std::collections::HashSet<[u8; 16]> = epochs
-            .iter()
-            .filter_map(|&epoch| moat_core::derive_tag_from_group_id(&group_id, epoch).ok())
+        // Start with existing local messages already in display
+        let mut all_messages: Vec<(String, DisplayMessage)> = self
+            .messages
+            .drain(..)
+            .enumerate()
+            .map(|(i, msg)| (format!("local_{:06}", i), msg))
             .collect();
 
-        self.debug_log.log(&format!(
-            "load_messages: generated {} valid tags for epochs 0..={}",
-            valid_tags.len(),
-            current_epoch
-        ));
-
-        // Fetch ALL events from participant for display (we have our own messages locally)
-        // We fetch from the beginning to show full history, but track max rkey to update cursor
-        let their_events = client.fetch_events_from_did(&participant_did, None).await.unwrap_or_default();
-
-        self.debug_log.log(&format!(
-            "load_messages: fetched {} events from participant",
-            their_events.len()
-        ));
-
-        // Track max rkey to update cursor after loading (so poll_messages won't re-process)
+        let mut pending_reactions: Vec<(Vec<u8>, String, String)> = Vec::new();
         let mut max_rkey: Option<String> = None;
 
-        // Filter by valid tags for this conversation
+        // Filter and decrypt
         let their_events: Vec<_> = their_events
             .into_iter()
             .filter(|e| {
-                // Track max rkey across ALL events (not just filtered ones)
                 if max_rkey.as_ref().map_or(true, |m| e.rkey > *m) {
                     max_rkey = Some(e.rkey.clone());
                 }
@@ -917,103 +1371,75 @@ impl App {
             })
             .collect();
 
-        self.debug_log.log(&format!(
-            "load_messages: {} events match conversation tags",
-            their_events.len()
-        ));
-
-        // Build a combined list of (rkey, DisplayMessage)
-        let mut all_messages: Vec<(String, DisplayMessage)> = Vec::new();
-        // Collect reactions to apply after all messages are loaded
-        let mut pending_reactions: Vec<(Vec<u8>, String, String)> = Vec::new(); // (target_message_id, emoji, sender_did)
-
-        // Add locally stored messages (our sent messages)
-        for stored in &local_messages.messages {
-            all_messages.push((
-                stored.rkey.clone(),
-                DisplayMessage {
-                    from: "You".to_string(),
-                    content: stored.content.clone(),
-                    timestamp: stored.timestamp,
-                    is_own: true,
-                    sender_did: Some(my_did.clone()),
-                    sender_device: self.keys.get_or_create_device_name().ok(),
-                    message_id: stored.message_id.clone(),
-                    reactions: vec![],
-                },
-            ));
-        }
-
-        // Decrypt and add received messages
         for event_record in their_events {
-            // Skip if we somehow have this rkey locally (shouldn't happen for their messages)
             if local_rkeys.contains(&event_record.rkey) {
                 continue;
             }
 
             match self.mls.decrypt_event(&group_id, &event_record.ciphertext) {
-                Ok(decrypted) => {
-                    match decrypted.event.kind {
-                        EventKind::Message => {
-                            let content = String::from_utf8_lossy(&decrypted.event.payload).to_string();
+                Ok(decrypted) => match decrypted.event.kind {
+                    EventKind::Message => {
+                        let content =
+                            String::from_utf8_lossy(&decrypted.event.payload).to_string();
+                        let (sender_did, sender_device) = decrypted
+                            .sender
+                            .map(|s| (Some(s.did), Some(s.device_name)))
+                            .unwrap_or((Some(participant_did.clone()), None));
 
-                            // Extract sender info for collapsed identity and message info
-                            let (sender_did, sender_device) = decrypted.sender
-                                .map(|s| (Some(s.did), Some(s.device_name)))
-                                .unwrap_or((Some(participant_did.clone()), None));
-
-                            all_messages.push((
-                                event_record.rkey.clone(),
-                                DisplayMessage {
-                                    from: participant_name.clone(),
-                                    content,
-                                    timestamp: event_record.created_at,
-                                    is_own: false,
-                                    sender_did,
-                                    sender_device,
-                                    message_id: decrypted.event.message_id,
-                                    reactions: vec![],
-                                },
+                        all_messages.push((
+                            event_record.rkey.clone(),
+                            DisplayMessage {
+                                from: participant_name.clone(),
+                                content,
+                                timestamp: event_record.created_at,
+                                is_own: false,
+                                sender_did,
+                                sender_device,
+                                message_id: decrypted.event.message_id,
+                                reactions: vec![],
+                            },
+                        ));
+                    }
+                    EventKind::Reaction => {
+                        if let Some(rp) = decrypted.event.reaction_payload() {
+                            let sender_did = decrypted
+                                .sender
+                                .map(|s| s.did)
+                                .unwrap_or_else(|| participant_did.clone());
+                            pending_reactions.push((
+                                rp.target_message_id,
+                                rp.emoji,
+                                sender_did,
                             ));
                         }
-                        EventKind::Reaction => {
-                            // Apply reaction to target message (handled after sorting)
-                            if let Some(rp) = decrypted.event.reaction_payload() {
-                                let sender_did = decrypted.sender
-                                    .map(|s| s.did)
-                                    .unwrap_or_else(|| participant_did.clone());
-                                pending_reactions.push((rp.target_message_id, rp.emoji, sender_did));
-                            }
-                        }
-                        _ => {} // Ignore Commit, Checkpoint, Welcome
                     }
-                }
+                    _ => {}
+                },
                 Err(e) => {
                     self.debug_log.log(&format!(
                         "load_messages: failed to decrypt event {}: {}",
-                        &event_record.rkey,
-                        e
+                        &event_record.rkey, e
                     ));
-                    // Skip events we can't decrypt (might be from before we joined)
                 }
             }
         }
 
-        // Save MLS state after decrypting messages
         if self.mls.has_pending_changes() {
-            self.save_mls_state()?;
+            let _ = self.save_mls_state();
         }
 
-        // Sort by rkey (chronological order since rkeys are TIDs)
         all_messages.sort_by(|a, b| a.0.cmp(&b.0));
 
-        // Apply pending reactions to their target messages (toggle semantics)
         for (target_id, emoji, sender_did) in pending_reactions {
-            if let Some((_, msg)) = all_messages.iter_mut().find(|(_, m)| {
-                m.message_id.as_ref() == Some(&target_id)
-            }) {
-                // Toggle: if same sender+emoji exists, remove it; otherwise add it
-                if let Some(pos) = msg.reactions.iter().position(|r| r.emoji == emoji && r.sender_did == sender_did) {
+            if let Some((_, msg)) = all_messages
+                .iter_mut()
+                .find(|(_, m)| m.message_id.as_ref() == Some(&target_id))
+            {
+                if let Some(pos) = msg
+                    .reactions
+                    .iter()
+                    .position(|r| r.emoji == emoji && r.sender_did == sender_did)
+                {
                     msg.reactions.remove(pos);
                 } else {
                     msg.reactions.push(DisplayReaction { emoji, sender_did });
@@ -1021,30 +1447,11 @@ impl App {
             }
         }
 
-        // Extract just the messages
         self.messages = all_messages.into_iter().map(|(_, msg)| msg).collect();
 
-        // Clear unread count since we've now loaded the conversation
-        if let Some(conv) = self.conversations.get_mut(idx) {
-            conv.unread = 0;
-        }
-
-        self.debug_log.log(&format!(
-            "load_messages: loaded {} messages total",
-            self.messages.len()
-        ));
-
-        // Update the last_rkey cursor so poll_messages won't re-process these events
         if let Some(rkey) = max_rkey {
-            if let Err(e) = self.keys.set_last_rkey(&participant_did, &rkey) {
-                self.debug_log.log(&format!(
-                    "load_messages: failed to save rkey cursor: {}",
-                    e
-                ));
-            }
+            let _ = self.keys.set_last_rkey(&participant_did, &rkey);
         }
-
-        Ok(())
     }
 
     async fn handle_messages_key(&mut self, key: KeyEvent) -> Result<bool> {
@@ -1116,11 +1523,12 @@ impl App {
         Ok(false)
     }
 
-    async fn handle_input_key(&mut self, key: KeyEvent) -> Result<bool> {
+    /// Handle input key — fully synchronous for typing, crypto inline for send.
+    fn handle_input_key(&mut self, key: KeyEvent) -> Result<bool> {
         match key.code {
             KeyCode::Enter => {
                 if !self.input_buffer.is_empty() {
-                    self.send_message().await?;
+                    self.send_message_nonblocking()?;
                 }
             }
             KeyCode::Char(c) => {
@@ -1163,7 +1571,8 @@ impl App {
         Ok(false)
     }
 
-    async fn send_message(&mut self) -> Result<()> {
+    /// Encrypt inline (fast) and spawn the network publish to background.
+    fn send_message_nonblocking(&mut self) -> Result<()> {
         if self.client.is_none() {
             return Err(AppError::NotLoggedIn);
         }
@@ -1176,44 +1585,16 @@ impl App {
             self.input_buffer.len()
         ));
 
-        // Load key bundle for signing
         let key_bundle = self.keys.load_identity_key()?;
-
-        // Parse group_id from hex
         let group_id = hex::decode(&conv_id)
             .map_err(|e| AppError::Other(format!("Invalid group ID: {}", e)))?;
 
-        // Create message event
         let current_epoch = self.mls.get_group_epoch(&group_id)?.unwrap_or(1);
         let message_bytes = self.input_buffer.as_bytes().to_vec();
-        let event = Event::message(
-            group_id.clone(),
-            current_epoch,
-            &message_bytes,
-        );
+        let event = Event::message(group_id.clone(), current_epoch, &message_bytes);
 
-        // Encrypt with MLS (handles padding internally)
-        // If encryption fails (e.g., stale epoch), try to refresh state first
-        let encrypted = match self.mls.encrypt_event(&group_id, &key_bundle, &event) {
-            Ok(enc) => enc,
-            Err(e) => {
-                self.debug_log.log(&format!(
-                    "send_message: encryption failed ({}), attempting refresh",
-                    e
-                ));
-                // Try to poll for updates before failing
-                self.poll_messages().await?;
-
-                // Retry encryption with potentially updated state
-                let new_epoch = self.mls.get_group_epoch(&group_id)?.unwrap_or(1);
-                let new_event = Event::message(
-                    group_id.clone(),
-                    new_epoch,
-                    &message_bytes,
-                );
-                self.mls.encrypt_event(&group_id, &key_bundle, &new_event)?
-            }
-        };
+        // Encrypt synchronously (fast — pure crypto, no I/O)
+        let encrypted = self.mls.encrypt_event(&group_id, &key_bundle, &event)?;
         self.save_mls_state()?;
 
         self.debug_log.log(&format!(
@@ -1221,36 +1602,11 @@ impl App {
             &encrypted.tag[..4]
         ));
 
-        // Update stored group state (epoch may have advanced)
         self.keys.store_group_state(&conv_id, &encrypted.new_group_state)?;
 
-        // Publish encrypted event to PDS
-        let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
-        let uri = client.publish_event(&encrypted.tag, &encrypted.ciphertext).await?;
-
-        // Extract rkey from URI: at://did:plc:xxx/social.moat.event/rkey
-        let rkey = uri.split('/').last().unwrap_or("unknown").to_string();
+        // Optimistically update UI before network publish
         let timestamp = chrono::Utc::now();
-
-        self.debug_log.log(&format!("send_message: published to PDS, rkey={}", rkey));
-
-        // Update tag mapping with new tag
-        self.tag_map.insert(encrypted.tag, conv_id.clone());
-
-        // Store message locally (MLS can't decrypt our own messages)
-        let stored_msg = crate::keystore::StoredMessage {
-            rkey: rkey.clone(),
-            content: self.input_buffer.clone(),
-            timestamp,
-            is_own: true,
-            message_id: encrypted.message_id.clone(),
-        };
-        if let Err(e) = self.keys.append_message(&conv_id, stored_msg) {
-            self.debug_log.log(&format!("send_message: failed to store locally: {}", e));
-        }
-
-        // Add to messages display
-        let my_did = client.did().to_string();
+        let my_did = self.client.as_ref().unwrap().did().to_string();
         self.messages.push(DisplayMessage {
             from: "You".to_string(),
             content: self.input_buffer.clone(),
@@ -1262,9 +1618,43 @@ impl App {
             reactions: vec![],
         });
 
-        // Clear input
+        // Store locally with placeholder rkey (will be real once publish completes)
+        let stored_msg = crate::keystore::StoredMessage {
+            rkey: "pending".to_string(),
+            content: self.input_buffer.clone(),
+            timestamp,
+            is_own: true,
+            message_id: encrypted.message_id.clone(),
+        };
+        if let Err(e) = self.keys.append_message(&conv_id, stored_msg) {
+            self.debug_log.log(&format!("send_message: failed to store locally: {}", e));
+        }
+
+        // Clear input immediately (before network)
         self.input_buffer.clear();
         self.cursor_position = 0;
+
+        // Spawn network publish in background
+        let client = self.client.as_ref().unwrap().clone();
+        let tag = encrypted.tag;
+        let ciphertext = encrypted.ciphertext;
+        let conv_id_clone = conv_id;
+        let tx = self.bg_tx.clone();
+
+        tokio::spawn(async move {
+            match client.publish_event(&tag, &ciphertext).await {
+                Ok(uri) => {
+                    let _ = tx.send(BgEvent::SendPublished {
+                        uri,
+                        conv_id: conv_id_clone,
+                        tag,
+                    });
+                }
+                Err(e) => {
+                    let _ = tx.send(BgEvent::SendFailed(format!("{e}")));
+                }
+            }
+        });
 
         Ok(())
     }
@@ -1331,379 +1721,6 @@ impl App {
 
         self.debug_log.log("send_reaction: published");
         Ok(())
-    }
-
-    /// Poll for new messages from all conversation participants
-    ///
-    /// Uses rkey-based pagination to only fetch new events since last poll.
-    /// This avoids unbounded memory growth from tracking all seen URIs.
-    async fn poll_messages(&mut self) -> Result<()> {
-        use moat_atproto::EventRecord;
-
-        let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
-        let my_did = client.did().to_string();
-
-        // Collect DIDs to poll (deduplicated)
-        let mut dids_to_poll: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
-        for (idx, conv) in self.conversations.iter().enumerate() {
-            dids_to_poll
-                .entry(conv.participant_did.clone())
-                .or_default()
-                .push(idx);
-        }
-
-        // Also poll our own DID to receive messages from our other devices
-        if !self.conversations.is_empty() {
-            let all_conv_indices: Vec<usize> = (0..self.conversations.len()).collect();
-            dids_to_poll.entry(my_did.clone()).or_insert(all_conv_indices);
-        }
-
-        let watched: Vec<String> = self.watched_dids.iter().cloned().collect();
-
-        self.debug_log.log(&format!(
-            "poll: {} unique participant DIDs, {} watched DIDs, {} known tags",
-            dids_to_poll.len(),
-            watched.len(),
-            self.tag_map.len()
-        ));
-
-        // Fetch events from participants using rkey-based pagination
-        let mut participant_events: Vec<(Vec<usize>, EventRecord, String)> = Vec::new(); // (conv_indices, event, did)
-        let mut new_rkeys: Vec<(String, String)> = Vec::new(); // (did, max_rkey)
-        {
-            let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
-            for (participant_did, conv_indices) in &dids_to_poll {
-                // Get last seen rkey for this DID
-                let last_rkey = self.keys.get_last_rkey(participant_did).ok().flatten();
-
-                self.debug_log.log(&format!(
-                    "poll: fetching from DID {} (last_rkey={:?})",
-                    &participant_did[..20.min(participant_did.len())],
-                    last_rkey.as_ref().map(|r| &r[..10.min(r.len())])
-                ));
-
-                match client.fetch_events_from_did(participant_did, last_rkey.as_deref()).await {
-                    Ok(events) => {
-                        self.debug_log.log(&format!(
-                            "poll: got {} events from {}",
-                            events.len(),
-                            &participant_did[..20.min(participant_did.len())]
-                        ));
-
-                        // Track max rkey seen and filter out already-seen events
-                        // Note: rkey_start is INCLUSIVE in ATProto, so we must skip events <= last_rkey
-                        let mut max_rkey: Option<String> = last_rkey.clone();
-                        let mut new_count = 0;
-                        for event in events {
-                            // Skip events we've already seen (rkey_start is inclusive)
-                            if let Some(ref last) = last_rkey {
-                                if event.rkey <= *last {
-                                    continue;
-                                }
-                            }
-                            new_count += 1;
-                            // Update max rkey (rkeys are TIDs that sort lexicographically)
-                            if max_rkey.as_ref().map_or(true, |m| event.rkey > *m) {
-                                max_rkey = Some(event.rkey.clone());
-                            }
-                            participant_events.push((conv_indices.clone(), event, participant_did.clone()));
-                        }
-                        self.debug_log.log(&format!("poll: {} new events after filtering", new_count));
-
-                        // Record the new max rkey for this DID
-                        if let Some(rkey) = max_rkey {
-                            new_rkeys.push((participant_did.clone(), rkey));
-                        }
-                    }
-                    Err(e) => {
-                        self.debug_log.log(&format!(
-                            "poll: error fetching from {}: {}",
-                            &participant_did[..20.min(participant_did.len())],
-                            e
-                        ));
-                    }
-                }
-            }
-        }
-
-        // Fetch events from watched DIDs
-        let mut watched_events: Vec<(String, EventRecord)> = Vec::new();
-        {
-            let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
-            for did in &watched {
-                let last_rkey = self.keys.get_last_rkey(did).ok().flatten();
-
-                match client.fetch_events_from_did(did, last_rkey.as_deref()).await {
-                    Ok(events) => {
-                        let mut max_rkey = last_rkey.clone();
-                        for event in events {
-                            // Skip events we've already seen (rkey_start is inclusive)
-                            if let Some(ref last) = last_rkey {
-                                if event.rkey <= *last {
-                                    continue;
-                                }
-                            }
-                            if max_rkey.as_ref().map_or(true, |m| event.rkey > *m) {
-                                max_rkey = Some(event.rkey.clone());
-                            }
-                            watched_events.push((did.clone(), event));
-                        }
-                        if let Some(rkey) = max_rkey {
-                            new_rkeys.push((did.clone(), rkey));
-                        }
-                    }
-                    Err(_) => {
-                        // Silently skip DIDs that fail (repo may not exist)
-                    }
-                }
-            }
-        }
-
-        self.debug_log.log(&format!(
-            "poll: fetched {} participant events, {} watched events",
-            participant_events.len(),
-            watched_events.len()
-        ));
-
-        // Process participant events
-        for (conv_indices, event_record, _did) in participant_events {
-            self.debug_log.log(&format!(
-                "poll: processing event rkey={}, tag={:02x?}",
-                &event_record.rkey[..10.min(event_record.rkey.len())],
-                &event_record.tag[..4]
-            ));
-
-            // Check if tag matches any known conversation
-            if let Some(conv_id) = self.tag_map.get(&event_record.tag).cloned() {
-                self.debug_log.log(&format!("poll: tag matched conv {}", &conv_id[..16]));
-
-                // Decrypt the event
-                let group_id = hex::decode(&conv_id)
-                    .map_err(|e| AppError::Other(format!("Invalid group ID: {}", e)))?;
-
-                match self.mls.decrypt_event(&group_id, &event_record.ciphertext) {
-                    Ok(decrypted) => {
-                        self.debug_log.log(&format!("poll: decrypted, kind={:?}", decrypted.event.kind));
-
-                        // Update group state
-                        if let Err(e) = self.keys.store_group_state(&conv_id, &decrypted.new_group_state) {
-                            self.debug_log.log(&format!("poll: failed to store group state: {}", e));
-                        }
-
-                        // Find the first matching conversation index
-                        let conv_idx = conv_indices.first().copied();
-
-                        // Handle based on event kind
-                        match decrypted.event.kind {
-                            EventKind::Message => {
-                                let content =
-                                    String::from_utf8_lossy(&decrypted.event.payload).to_string();
-
-                                // Find conversation name
-                                let from = conv_idx
-                                    .and_then(|idx| self.conversations.get(idx))
-                                    .map(|c| c.name.clone())
-                                    .unwrap_or_else(|| "Unknown".to_string());
-
-                                // Extract sender info for collapsed identity and message info
-                                let (sender_did, sender_device) = decrypted.sender
-                                    .map(|s| (Some(s.did), Some(s.device_name)))
-                                    .unwrap_or((None, None));
-
-                                // Check if this message is from our own DID (multi-device)
-                                let is_own = sender_did.as_ref().map_or(false, |did| did == &my_did);
-
-                                // Only add to display if this is the active conversation
-                                if self.active_conversation == conv_idx {
-                                    self.messages.push(DisplayMessage {
-                                        from,
-                                        content,
-                                        timestamp: event_record.created_at,
-                                        is_own,
-                                        sender_did,
-                                        sender_device,
-                                        message_id: decrypted.event.message_id,
-                                        reactions: vec![],
-                                    });
-                                } else if let Some(idx) = conv_idx {
-                                    // Increment unread count
-                                    if let Some(conv) = self.conversations.get_mut(idx) {
-                                        conv.unread += 1;
-                                    }
-                                }
-                            }
-                            EventKind::Commit => {
-                                // MLS commit was merged - update tag map for new epoch
-                                let new_epoch = decrypted.event.epoch;
-                                if let Ok(new_tag) = moat_core::derive_tag_from_group_id(&group_id, new_epoch) {
-                                    self.tag_map.insert(new_tag, conv_id.clone());
-                                    self.debug_log.log(&format!(
-                                        "poll: commit merged, registered tag for epoch {}",
-                                        new_epoch
-                                    ));
-
-                                    // Update conversation's current epoch
-                                    if let Some(conv) = self.conversations.iter_mut().find(|c| c.id == conv_id) {
-                                        conv.current_epoch = new_epoch;
-                                    }
-                                }
-                            }
-                            EventKind::Reaction => {
-                                // Apply reaction to existing message in display
-                                if let Some(rp) = decrypted.event.reaction_payload() {
-                                    let sender_did = decrypted.sender
-                                        .map(|s| s.did)
-                                        .unwrap_or_default();
-                                    if self.active_conversation == conv_idx {
-                                        // Find target message and toggle reaction
-                                        if let Some(msg) = self.messages.iter_mut().find(|m| {
-                                            m.message_id.as_ref() == Some(&rp.target_message_id)
-                                        }) {
-                                            if let Some(pos) = msg.reactions.iter().position(|r| {
-                                                r.emoji == rp.emoji && r.sender_did == sender_did
-                                            }) {
-                                                msg.reactions.remove(pos);
-                                            } else {
-                                                msg.reactions.push(DisplayReaction {
-                                                    emoji: rp.emoji,
-                                                    sender_did,
-                                                });
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            EventKind::Checkpoint => {
-                                // Checkpoint - could use for faster sync
-                            }
-                            EventKind::Welcome => {
-                                // Welcome inside existing conversation - unusual
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        // Decryption failed - might be for a different epoch/key
-                        self.debug_log.log(&format!("poll: decryption failed: {}", e));
-                    }
-                }
-            } else {
-                // Unknown tag - might be a welcome for a new conversation
-                self.debug_log.log("poll: tag not matched, trying as welcome");
-                self.try_process_welcome(&event_record.ciphertext, &event_record.author_did, event_record.tag).await?;
-            }
-        }
-
-        // Process watched DID events
-        for (did, event_record) in watched_events {
-            // Skip if tag matches known conversation (already handled above or will be)
-            if self.tag_map.contains_key(&event_record.tag) {
-                continue;
-            }
-
-            // Try to process as welcome
-            if self.try_process_welcome(&event_record.ciphertext, &event_record.author_did, event_record.tag).await? {
-                // Remove from watched list - they're now a conversation participant
-                self.watched_dids.remove(&did);
-            }
-        }
-
-        // Save MLS state if any decrypt/welcome operations modified it
-        if self.mls.has_pending_changes() {
-            self.save_mls_state()?;
-        }
-
-        // Persist new rkeys for all DIDs we fetched from
-        for (did, rkey) in new_rkeys {
-            if let Err(e) = self.keys.set_last_rkey(&did, &rkey) {
-                self.debug_log.log(&format!("poll: failed to save rkey for {}: {}", &did[..20.min(did.len())], e));
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Try to process ciphertext as a stealth-encrypted welcome message.
-    /// Returns true if successful.
-    async fn try_process_welcome(
-        &mut self,
-        ciphertext: &[u8],
-        author_did: &str,
-        _tag: [u8; 16],
-    ) -> Result<bool> {
-        // Load our stealth private key
-        let stealth_privkey = match self.keys.load_stealth_key() {
-            Ok(key) => key,
-            Err(_) => {
-                self.debug_log.log("try_process_welcome: no stealth key");
-                return Ok(false);
-            }
-        };
-
-        // Try stealth decryption first
-        let welcome_bytes = match try_decrypt_stealth(&stealth_privkey, ciphertext) {
-            Some(bytes) => {
-                self.debug_log.log(&format!(
-                    "try_process_welcome: stealth decrypted {} bytes from {}",
-                    bytes.len(),
-                    &author_did[..20]
-                ));
-                bytes
-            }
-            None => return Ok(false), // Not for us, or not a stealth-encrypted welcome
-        };
-
-        // Now try to process the decrypted bytes as an MLS Welcome
-        let group_id = match self.mls.process_welcome(&welcome_bytes) {
-            Ok(id) => {
-                self.debug_log.log(&format!("try_process_welcome: MLS welcome processed, group_id len={}", id.len()));
-                id
-            }
-            Err(e) => {
-                self.debug_log.log(&format!("try_process_welcome: MLS welcome failed: {}", e));
-                return Ok(false);
-            }
-        };
-
-        // Successfully joined a new group!
-        let conv_id = hex::encode(&group_id);
-
-        // Try to resolve the sender's DID to a handle
-        let participant_handle = if let Some(client) = &self.client {
-            client.resolve_handle(author_did).await.unwrap_or_else(|_| author_did.to_string())
-        } else {
-            author_did.to_string()
-        };
-
-        // Store metadata with resolved handle
-        self.keys.store_group_metadata(
-            &conv_id,
-            &GroupMetadata {
-                participant_did: author_did.to_string(),
-                participant_handle: participant_handle.clone(),
-            },
-        )?;
-
-        // Add to conversations list
-        self.conversations.push(Conversation {
-            id: conv_id.clone(),
-            name: participant_handle,
-            participant_did: author_did.to_string(),
-            current_epoch: 1,
-            unread: 1,
-        });
-
-        // Register current epoch's tag for this conversation
-        if let Ok(current_tag) = moat_core::derive_tag_from_group_id(&group_id, 1) {
-            self.debug_log.log(&format!(
-                "process_welcome: registering tag {:02x?} for conv {}",
-                &current_tag[..4],
-                &conv_id[..16]
-            ));
-            self.tag_map.insert(current_tag, conv_id);
-        }
-
-        self.debug_log.log("process_welcome: successfully joined group");
-        Ok(true)
     }
 
     /// Poll for new devices belonging to our own DID and auto-add them.

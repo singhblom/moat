@@ -33,9 +33,13 @@ const DEFAULT_PDS_URL: &str = "https://bsky.social";
 const PLC_DIRECTORY_URL: &str = "https://plc.directory";
 
 /// ATProto client for Moat operations
+///
+/// This type is cheaply cloneable (all fields are `Arc`-wrapped or inherently
+/// clone-friendly) so it can be shared with background `tokio::spawn` tasks.
+#[derive(Clone)]
 pub struct MoatAtprotoClient {
     /// Authenticated agent for the user's PDS (used for writes)
-    agent: AtpAgent<MemorySessionStore, ReqwestClient>,
+    agent: std::sync::Arc<AtpAgent<MemorySessionStore, ReqwestClient>>,
     /// HTTP client for PLC directory lookups
     http_client: reqwest::Client,
     did: String,
@@ -70,7 +74,7 @@ impl MoatAtprotoClient {
             .ok_or(Error::Authentication("no session after login".to_string()))?;
 
         Ok(Self {
-            agent,
+            agent: std::sync::Arc::new(agent),
             http_client,
             did: session.did.to_string(),
         })
@@ -123,7 +127,7 @@ impl MoatAtprotoClient {
             .map_err(|_| Error::SessionExpired)?;
 
         Ok(Self {
-            agent,
+            agent: std::sync::Arc::new(agent),
             http_client,
             did: did.to_string(),
         })
