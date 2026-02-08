@@ -134,6 +134,7 @@ cargo install -f wasm-bindgen-cli  # version must match Cargo.lock (currently 0.
 - **wasm-bindgen version must match** — `wasm-bindgen-cli` version must exactly match the `wasm-bindgen` crate version in `moat-flutter/rust/Cargo.lock`. After `cargo update -p wasm-bindgen`, reinstall CLI: `cargo install -f wasm-bindgen-cli --version <version>`. wasm-pack caches old versions in `~/Library/Caches/.wasm-pack/` — delete the cache if version mismatch occurs.
 - **Shared memory linker flags are required** — Without `--shared-memory --import-memory --max-memory=...`, the WASM memory won't be a SharedArrayBuffer, and FRB's worker pool will fail with `DataCloneError: #<Memory> could not be cloned`. The `--export=__wasm_init_tls` flags are also needed for the TLS setup.
 - **FRB's default RUSTFLAGS are insufficient** — FRB only sets `+atomics,+bulk-memory,+mutable-globals` but omits the shared memory linker args. Always use `--wasm-pack-rustflags` to override.
+- **WASM must be rebuilt after Rust changes** — Any change to `moat-core` or `moat-flutter/rust/` requires rebuilding the WASM binary. The Dart FRB bindings and the compiled WASM must stay in sync — a mismatch causes `Offset is outside the bounds of the DataView` errors at runtime. After modifying Rust code, always run the `flutter_rust_bridge_codegen build-web` command from the Build & Run section before testing on web.
 
 ### Key Constraints for WASM Compatibility
 
