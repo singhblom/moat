@@ -324,15 +324,6 @@ impl KeyStore {
         self.base_path.join("session.json").exists()
     }
 
-    /// Clear stored session (e.g., on auth failure)
-    pub fn clear_session(&self) -> Result<()> {
-        let path = self.base_path.join("session.json");
-        if path.exists() {
-            fs::remove_file(&path)?;
-        }
-        Ok(())
-    }
-
     /// Get or generate a default device name
     pub fn get_or_create_device_name(&self) -> Result<String> {
         if self.has_device_name() {
