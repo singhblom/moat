@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Moat is an encrypted messaging application built on ATProto (Bluesky's protocol) using MLS (Messaging Layer Security) for end-to-end encryption. The MVP is a Ratatui-based terminal UI. Privacy features include stealth addresses and metadata obfuscation through rotating tags and message padding.
 
+The full protocol is documented in `PROTOCOL.md`. **When making changes that affect the protocol (crypto, event types, record schemas, privacy mechanisms, stealth flow, tag derivation, storage layout), update `PROTOCOL.md` to match.**
+
 ## Build & Test Commands
 
 ```bash
