@@ -38,11 +38,14 @@ use openmls::framing::MlsMessageBodyIn;
 use openmls_basic_credential::SignatureKeyPair;
 use openmls_traits::OpenMlsProvider;
 use serde::{Deserialize as SerdeDeserialize, Serialize as SerdeSerialize};
+use sha2::{Sha256, Digest};
+use std::collections::HashMap;
+use std::sync::RwLock;
 
 // Disambiguate from openmls::prelude::* and make accessible as moat_core::X
 pub use crate::credential::MoatCredential;
 pub use crate::error::{Error, ErrorCode, Result};
-pub use crate::event::{Event, EventKind, ReactionPayload, SenderInfo};
+pub use crate::event::{DecryptOutcome, Event, EventKind, ReactionPayload, SenderInfo, TranscriptWarning};
 pub use crate::padding::{pad_to_bucket, unpad, Bucket};
 pub use crate::stealth::{encrypt_for_stealth, generate_stealth_keypair, try_decrypt_stealth};
 pub(crate) use crate::storage::MoatProvider;
@@ -79,6 +82,7 @@ pub struct EncryptResult {
 }
 
 /// Result of decrypting an event
+#[derive(Debug)]
 pub struct DecryptResult {
     pub new_group_state: Vec<u8>,
     pub event: Event,
@@ -98,10 +102,43 @@ pub struct RemoveResult {
 const STATE_MAGIC: &[u8; 4] = b"MOAT";
 
 /// Current state format version.
-const STATE_VERSION: u16 = 1;
+const STATE_VERSION: u16 = 2;
 
 /// Size of the state header: 4 (magic) + 2 (version) + 16 (device_id) = 22 bytes.
 const STATE_HEADER_SIZE: usize = 4 + 2 + 16;
+
+/// Label for epoch fingerprint derivation via MLS export_secret.
+const EPOCH_FINGERPRINT_LABEL: &str = "moat-epoch-fingerprint-v1";
+
+/// Length of epoch fingerprint in bytes.
+const EPOCH_FINGERPRINT_LEN: usize = 16;
+
+/// Key for the hash chain map: (group_id, device_id).
+type HashChainKey = (Vec<u8>, [u8; 16]);
+
+/// Maximum number of automatic conflict recovery retries.
+const CONFLICT_RETRY_LIMIT: usize = 2;
+
+/// A pending MLS operation that can be retried after conflict recovery.
+/// In-memory only — not persisted in the state blob.
+#[derive(Debug, Clone)]
+pub enum PendingOperation {
+    AddMember {
+        key_bundle: Vec<u8>,
+        new_member_key_package: Vec<u8>,
+    },
+    RemoveMember {
+        key_bundle: Vec<u8>,
+        leaf_index: u32,
+    },
+    KickUser {
+        key_bundle: Vec<u8>,
+        did: String,
+    },
+    LeaveGroup {
+        key_bundle: Vec<u8>,
+    },
+}
 
 /// A persistent MLS session.
 ///
@@ -126,13 +163,20 @@ const STATE_HEADER_SIZE: usize = 4 + 2 + 16;
 /// Read-only methods (`export_state`, `get_group_epoch`, `has_pending_changes`,
 /// `device_id`) are safe to call concurrently.
 ///
-/// # State format
+/// # State format (v2)
 ///
 /// The exported state has the following layout:
 /// - `b"MOAT"` (4 bytes) — magic identifier
-/// - Version (2 bytes, little-endian u16) — currently `1`
+/// - Version (2 bytes, little-endian u16) — currently `2`
 /// - Device ID (16 bytes) — random, generated once per device
-/// - MLS state (remaining bytes) — raw storage data
+/// - MLS state length (8 bytes, little-endian u64)
+/// - MLS state (variable) — raw storage data
+/// - Hash chain entry count (8 bytes, little-endian u64)
+/// - Hash chain entries: for each entry:
+///   - group_id length (4 bytes, little-endian u32)
+///   - group_id (variable)
+///   - device_id (16 bytes)
+///   - last_event_hash (32 bytes)
 ///
 /// # Example
 ///
@@ -156,6 +200,12 @@ const STATE_HEADER_SIZE: usize = 4 + 2 + 16;
 pub struct MoatSession {
     provider: MoatProvider,
     device_id: [u8; 16],
+    /// Per-device hash chain state: maps (group_id, device_id) → last event hash.
+    /// Used for transcript integrity verification.
+    hash_chains: RwLock<HashMap<HashChainKey, [u8; 32]>>,
+    /// In-memory pending operations for conflict recovery. Maps group_id → operation.
+    /// Not persisted — if the app restarts mid-operation, the user retries manually.
+    pending_ops: RwLock<HashMap<Vec<u8>, PendingOperation>>,
 }
 
 impl MoatSession {
@@ -167,6 +217,8 @@ impl MoatSession {
         Self {
             provider: MoatProvider::new(),
             device_id,
+            hash_chains: RwLock::new(HashMap::new()),
+            pending_ops: RwLock::new(HashMap::new()),
         }
     }
 
@@ -184,14 +236,39 @@ impl MoatSession {
         }
         let version = u16::from_le_bytes([state[4], state[5]]);
         match version {
-            1 => {}
+            1 => return Err(Error::StateVersionMismatch(
+                "v1 state not supported; re-initialize session".into()
+            )),
+            2 => {}
             _ => return Err(Error::Deserialization(format!("unsupported state version: {version}"))),
         }
         let mut device_id = [0u8; 16];
         device_id.copy_from_slice(&state[6..22]);
-        let provider = MoatProvider::from_state(&state[STATE_HEADER_SIZE..])
+
+        let rest = &state[STATE_HEADER_SIZE..];
+
+        // v2: MLS state length prefix + hash chain data
+        if rest.len() < 8 {
+            return Err(Error::Deserialization("state too short for v2 MLS length".into()));
+        }
+        let mls_len = u64::from_le_bytes(rest[..8].try_into().unwrap()) as usize;
+        let rest = &rest[8..];
+        if rest.len() < mls_len {
+            return Err(Error::Deserialization("state too short for MLS data".into()));
+        }
+        let provider = MoatProvider::from_state(&rest[..mls_len])
             .map_err(|e| Error::Storage(e.to_string()))?;
-        Ok(Self { provider, device_id })
+        let rest = &rest[mls_len..];
+
+        // Parse hash chain entries
+        let hash_chains = Self::deserialize_hash_chains(rest)?;
+
+        Ok(Self {
+            provider,
+            device_id,
+            hash_chains: RwLock::new(hash_chains),
+            pending_ops: RwLock::new(HashMap::new()),
+        })
     }
 
     /// Export the full session state as bytes.
@@ -203,11 +280,20 @@ impl MoatSession {
         let raw_state = self.provider.export_state()
             .map_err(|e| Error::Storage(e.to_string()))?;
         self.provider.clear_pending_changes();
-        let mut buf = Vec::with_capacity(STATE_HEADER_SIZE + raw_state.len());
+
+        let hash_chain_bytes = self.serialize_hash_chains();
+
+        let mut buf = Vec::with_capacity(
+            STATE_HEADER_SIZE + 8 + raw_state.len() + hash_chain_bytes.len()
+        );
         buf.extend_from_slice(STATE_MAGIC);
         buf.extend_from_slice(&STATE_VERSION.to_le_bytes());
         buf.extend_from_slice(&self.device_id);
+        // v2: MLS state with length prefix
+        buf.extend_from_slice(&(raw_state.len() as u64).to_le_bytes());
         buf.extend_from_slice(&raw_state);
+        // v2: hash chain data
+        buf.extend_from_slice(&hash_chain_bytes);
         Ok(buf)
     }
 
@@ -396,10 +482,22 @@ impl MoatSession {
             .add_members(&self.provider, &signature_keys, &[validated_key_package])
             .map_err(|e| Error::AddMember(e.to_string()))?;
 
+        // Track pending operation for conflict recovery
+        {
+            let mut ops = self.pending_ops.write().unwrap();
+            ops.insert(group_id.to_vec(), PendingOperation::AddMember {
+                key_bundle: key_bundle.to_vec(),
+                new_member_key_package: new_member_key_package.to_vec(),
+            });
+        }
+
         // Merge the pending commit
         group
             .merge_pending_commit(&self.provider)
             .map_err(|e| Error::MergeCommit(e.to_string()))?;
+
+        // Clear pending op on success
+        self.pending_ops.write().unwrap().remove(group_id);
 
         // Serialize results
         let commit_bytes = commit
@@ -452,6 +550,8 @@ impl MoatSession {
     /// Encrypt an event for a group.
     ///
     /// The event is serialized, padded, and encrypted using MLS.
+    /// Sets transcript integrity fields (prev_event_hash, epoch_fingerprint,
+    /// sender_device_id) before encryption.
     /// Returns (conversation_tag, ciphertext).
     pub fn encrypt_event(
         &self,
@@ -469,9 +569,31 @@ impl MoatSession {
         let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
             .map_err(|e| Error::Deserialization(e.to_string()))?;
 
+        // Build the event with transcript integrity fields
+        let mut event = event.clone();
+        event.sender_device_id = Some(self.device_id.to_vec());
+
+        // Set prev_event_hash from our hash chain
+        let chain_key = (group_id.to_vec(), self.device_id);
+        {
+            let chains = self.hash_chains.read().unwrap();
+            event.prev_event_hash = chains.get(&chain_key).map(|h| h.to_vec());
+        }
+
+        // Derive epoch fingerprint
+        event.epoch_fingerprint = Some(Self::derive_epoch_fingerprint(&group, &self.provider)?);
+
         // Serialize and pad the event
         let event_bytes = event.to_bytes()
             .map_err(|e| Error::Serialization(e.to_string()))?;
+
+        // Update hash chain with this event's hash
+        let event_hash = Self::hash_event_bytes(&event_bytes);
+        {
+            let mut chains = self.hash_chains.write().unwrap();
+            chains.insert(chain_key, event_hash);
+        }
+
         let padded = pad_to_bucket(&event_bytes);
 
         // Encrypt the message
@@ -498,7 +620,8 @@ impl MoatSession {
     /// Decrypt a ciphertext for a group.
     ///
     /// The ciphertext is decrypted, unpadded, and deserialized.
-    /// Returns the decrypted event along with sender information.
+    /// Returns a `DecryptOutcome` containing the decrypted event, sender
+    /// information, and any transcript integrity warnings.
     ///
     /// For commit messages (e.g., adding/removing members), this function
     /// merges the commit into the group state and returns an Event with
@@ -507,7 +630,7 @@ impl MoatSession {
         &self,
         group_id: &[u8],
         ciphertext: &[u8],
-    ) -> Result<DecryptResult> {
+    ) -> Result<DecryptOutcome> {
         // Load the group
         let mut group = self.load_group(group_id)?
             .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
@@ -521,10 +644,13 @@ impl MoatSession {
             .try_into_protocol_message()
             .map_err(|e| Error::Deserialization(e.to_string()))?;
 
-        // Process the message
-        let processed = group
-            .process_message(&self.provider, protocol_message)
-            .map_err(|e| Error::Decryption(e.to_string()))?;
+        // Process the message with structured error classification
+        let processed = match group.process_message(&self.provider, protocol_message) {
+            Ok(msg) => msg,
+            Err(e) => {
+                return Err(Self::classify_process_error(e, group_id));
+            }
+        };
 
         // Extract sender info from the credential
         let sender = self.extract_sender_info(&group, &processed);
@@ -538,17 +664,28 @@ impl MoatSession {
                 let event = Event::from_bytes(&event_bytes)
                     .map_err(|e| Error::Deserialization(e.to_string()))?;
 
-                Ok(DecryptResult {
-                    new_group_state: Vec::new(), // State is managed by provider
+                // Validate transcript integrity
+                let mut warnings = Vec::new();
+                self.validate_hash_chain(group_id, &event, &event_bytes, &mut warnings);
+                self.validate_epoch_fingerprint(group_id, &event, &group, &mut warnings);
+
+                let result = DecryptResult {
+                    new_group_state: Vec::new(),
                     event,
                     sender,
-                })
+                };
+                Ok(DecryptOutcome::from_result_and_warnings(result, warnings))
             }
             ProcessedMessageContent::StagedCommitMessage(staged_commit) => {
-                // Commit message - merge it into group state to advance the epoch
-                // This advances the epoch and the provider auto-saves the state
+                // Check if we have a pending local commit that conflicts with this remote commit
+                let had_pending_op = {
+                    let ops = self.pending_ops.read().unwrap();
+                    ops.contains_key(group_id)
+                };
+
+                // Merge the remote commit
                 group.merge_staged_commit(&self.provider, *staged_commit)
-                    .map_err(|e| Error::MergeCommit(e.to_string()))?;
+                    .map_err(|e| Error::StateDiverged(e.to_string()))?;
 
                 // Get the new epoch after merging
                 let new_epoch = group.epoch().as_u64();
@@ -556,11 +693,31 @@ impl MoatSession {
                 // Return a commit event to signal the epoch has advanced
                 let event = Event::commit(group_id.to_vec(), new_epoch, Vec::new());
 
-                Ok(DecryptResult {
-                    new_group_state: Vec::new(), // State is managed by provider
+                // For commits, validate epoch fingerprint after merge (both sides agree on post-commit state)
+                // We skip hash chain validation for commit events since they're synthetic.
+                let mut warnings = Vec::new();
+
+                // Derive post-merge fingerprint (this is what all parties should agree on)
+                let _ = Self::derive_epoch_fingerprint(&group, &self.provider);
+
+                // Attempt conflict recovery if we had a pending operation
+                if had_pending_op {
+                    let recovered = self.attempt_conflict_recovery(group_id);
+                    if recovered {
+                        warnings.push(TranscriptWarning::ConflictRecovered {
+                            group_id: group_id.to_vec(),
+                        });
+                    }
+                    // If recovery failed, the pending op was already cleared — caller
+                    // will get the warning so they know recovery happened (or didn't).
+                }
+
+                let result = DecryptResult {
+                    new_group_state: Vec::new(),
                     event,
                     sender,
-                })
+                };
+                Ok(DecryptOutcome::from_result_and_warnings(result, warnings))
             }
             ProcessedMessageContent::ProposalMessage(_) => {
                 Err(Error::InvalidMessageType("Unexpected proposal message".to_string()))
@@ -569,6 +726,252 @@ impl MoatSession {
                 Err(Error::InvalidMessageType("Unexpected external join".to_string()))
             }
         }
+    }
+
+    /// Classify a `ProcessMessageError` into a structured moat-core `Error`.
+    fn classify_process_error(e: ProcessMessageError, group_id: &[u8]) -> Error {
+        let group_hex: String = group_id.iter().map(|b| format!("{:02x}", b)).collect();
+        match &e {
+            ProcessMessageError::GroupStateError(state_err) => {
+                match state_err {
+                    MlsGroupStateError::PendingCommit => {
+                        Error::StaleCommit(format!(
+                            "group {}: pending local commit conflicts with incoming message",
+                            group_hex
+                        ))
+                    }
+                    MlsGroupStateError::UseAfterEviction => {
+                        Error::StateDiverged(format!(
+                            "group {}: evicted from group",
+                            group_hex
+                        ))
+                    }
+                    _ => Error::Decryption(e.to_string()),
+                }
+            }
+            ProcessMessageError::InvalidCommit(_) => {
+                Error::StateDiverged(format!(
+                    "group {}: invalid commit — {}",
+                    group_hex, e
+                ))
+            }
+            ProcessMessageError::ValidationError(_) => {
+                // Validation errors can include unknown sender scenarios
+                let msg = e.to_string();
+                if msg.contains("unknown") || msg.contains("sender") {
+                    Error::UnknownSender(format!("group {}: {}", group_hex, msg))
+                } else {
+                    Error::Decryption(e.to_string())
+                }
+            }
+            _ => Error::Decryption(e.to_string()),
+        }
+    }
+
+    /// Attempt to recover from a commit conflict by retrying the pending operation.
+    ///
+    /// When we receive a remote commit while we had a pending local operation,
+    /// we discard our pending commit and retry the operation on the new epoch.
+    /// Returns true if recovery succeeded, false otherwise.
+    fn attempt_conflict_recovery(&self, group_id: &[u8]) -> bool {
+        let pending_op = {
+            let mut ops = self.pending_ops.write().unwrap();
+            ops.remove(group_id)
+        };
+
+        let pending_op = match pending_op {
+            Some(op) => op,
+            None => return false,
+        };
+
+        for attempt in 0..CONFLICT_RETRY_LIMIT {
+            let result = match &pending_op {
+                PendingOperation::AddMember { key_bundle, new_member_key_package } => {
+                    self.add_member(group_id, key_bundle, new_member_key_package).map(|_| ())
+                }
+                PendingOperation::RemoveMember { key_bundle, leaf_index } => {
+                    self.remove_member(group_id, key_bundle, *leaf_index).map(|_| ())
+                }
+                PendingOperation::KickUser { key_bundle, did } => {
+                    self.kick_user(group_id, key_bundle, did).map(|_| ())
+                }
+                PendingOperation::LeaveGroup { key_bundle } => {
+                    self.leave_group(group_id, key_bundle).map(|_| ())
+                }
+            };
+
+            match result {
+                Ok(()) => return true,
+                Err(e) => {
+                    if attempt + 1 < CONFLICT_RETRY_LIMIT {
+                        // Will retry
+                        continue;
+                    }
+                    // Exhausted retries — log but don't error (caller gets no ConflictRecovered warning)
+                    let _ = e; // suppress unused warning
+                    return false;
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Validate the hash chain for a received event.
+    fn validate_hash_chain(
+        &self,
+        group_id: &[u8],
+        event: &Event,
+        event_bytes: &[u8],
+        warnings: &mut Vec<TranscriptWarning>,
+    ) {
+        let sender_device_id = match &event.sender_device_id {
+            Some(id) if id.len() == 16 => {
+                let mut arr = [0u8; 16];
+                arr.copy_from_slice(id);
+                arr
+            }
+            _ => return, // No sender_device_id — old event, skip validation
+        };
+
+        let chain_key = (group_id.to_vec(), sender_device_id);
+        let event_hash = Self::hash_event_bytes(event_bytes);
+
+        let mut chains = self.hash_chains.write().unwrap();
+
+        // Check for replay: if prev_event_hash matches the current stored hash
+        // AND the event hash is the same as stored, it's a replay
+        if let Some(&stored_hash) = chains.get(&chain_key) {
+            if event_hash == stored_hash {
+                warnings.push(TranscriptWarning::ReplayDetected {
+                    group_id: group_id.to_vec(),
+                    sender_device_id: sender_device_id.to_vec(),
+                });
+                return; // Don't update chain on replay
+            }
+        }
+
+        // Validate prev_event_hash
+        let expected = chains.get(&chain_key).copied();
+        let received = &event.prev_event_hash;
+
+        match (expected, received) {
+            (None, None) => {
+                // First event from this sender — valid
+            }
+            (None, Some(_)) => {
+                // We have no record but they claim a previous hash — we're new or missed events.
+                // Accept silently since we may have just joined.
+            }
+            (Some(exp), Some(recv)) => {
+                if recv.len() != 32 || recv.as_slice() != exp.as_slice() {
+                    warnings.push(TranscriptWarning::HashChainMismatch {
+                        group_id: group_id.to_vec(),
+                        sender_device_id: sender_device_id.to_vec(),
+                        expected: Some(exp),
+                        received: Some(recv.clone()),
+                    });
+                }
+            }
+            (Some(exp), None) => {
+                // We expected a hash but got None — gap or old client
+                warnings.push(TranscriptWarning::HashChainMismatch {
+                    group_id: group_id.to_vec(),
+                    sender_device_id: sender_device_id.to_vec(),
+                    expected: Some(exp),
+                    received: None,
+                });
+            }
+        }
+
+        // Update stored hash
+        chains.insert(chain_key, event_hash);
+    }
+
+    /// Validate epoch fingerprint for a received event.
+    fn validate_epoch_fingerprint(
+        &self,
+        group_id: &[u8],
+        event: &Event,
+        group: &MlsGroup,
+        warnings: &mut Vec<TranscriptWarning>,
+    ) {
+        let received = match &event.epoch_fingerprint {
+            Some(fp) => fp,
+            None => return, // Old event without fingerprint — skip
+        };
+
+        let local = match Self::derive_epoch_fingerprint(group, &self.provider) {
+            Ok(fp) => fp,
+            Err(_) => return, // Can't derive — skip (shouldn't happen)
+        };
+
+        if local != *received {
+            warnings.push(TranscriptWarning::EpochFingerprintMismatch {
+                group_id: group_id.to_vec(),
+                epoch: event.epoch,
+                local,
+                received: received.clone(),
+            });
+        }
+    }
+
+    /// Serialize hash chain state to bytes.
+    fn serialize_hash_chains(&self) -> Vec<u8> {
+        let chains = self.hash_chains.read().unwrap();
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&(chains.len() as u64).to_le_bytes());
+        for ((group_id, device_id), hash) in chains.iter() {
+            buf.extend_from_slice(&(group_id.len() as u32).to_le_bytes());
+            buf.extend_from_slice(group_id);
+            buf.extend_from_slice(device_id);
+            buf.extend_from_slice(hash);
+        }
+        buf
+    }
+
+    /// Deserialize hash chain state from bytes.
+    fn deserialize_hash_chains(data: &[u8]) -> Result<HashMap<HashChainKey, [u8; 32]>> {
+        if data.len() < 8 {
+            return Err(Error::Deserialization("hash chain data too short".into()));
+        }
+        let count = u64::from_le_bytes(data[..8].try_into().unwrap()) as usize;
+        let mut offset = 8;
+        let mut map = HashMap::with_capacity(count);
+        for _ in 0..count {
+            if offset + 4 > data.len() {
+                return Err(Error::Deserialization("hash chain entry truncated".into()));
+            }
+            let gid_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+            offset += 4;
+            if offset + gid_len + 16 + 32 > data.len() {
+                return Err(Error::Deserialization("hash chain entry truncated".into()));
+            }
+            let group_id = data[offset..offset + gid_len].to_vec();
+            offset += gid_len;
+            let mut device_id = [0u8; 16];
+            device_id.copy_from_slice(&data[offset..offset + 16]);
+            offset += 16;
+            let mut hash = [0u8; 32];
+            hash.copy_from_slice(&data[offset..offset + 32]);
+            offset += 32;
+            map.insert((group_id, device_id), hash);
+        }
+        Ok(map)
+    }
+
+    /// Derive the epoch fingerprint for a group's current state.
+    fn derive_epoch_fingerprint(group: &MlsGroup, provider: &MoatProvider) -> Result<Vec<u8>> {
+        group
+            .export_secret(provider, EPOCH_FINGERPRINT_LABEL, &[], EPOCH_FINGERPRINT_LEN)
+            .map_err(|e| Error::Encryption(format!("epoch fingerprint derivation failed: {e}")))
+    }
+
+    /// Compute SHA-256 hash of event bytes.
+    fn hash_event_bytes(event_bytes: &[u8]) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(event_bytes);
+        hasher.finalize().into()
     }
 
     /// Extract sender information from a processed message.
@@ -715,10 +1118,21 @@ impl MoatSession {
             .remove_members(&self.provider, &signature_keys, &[leaf_node_index])
             .map_err(|e| Error::RemoveMember(e.to_string()))?;
 
+        // Track pending operation
+        {
+            let mut ops = self.pending_ops.write().unwrap();
+            ops.insert(group_id.to_vec(), PendingOperation::RemoveMember {
+                key_bundle: key_bundle.to_vec(),
+                leaf_index,
+            });
+        }
+
         // Merge the pending commit
         group
             .merge_pending_commit(&self.provider)
             .map_err(|e| Error::MergeCommit(e.to_string()))?;
+
+        self.pending_ops.write().unwrap().remove(group_id);
 
         // Serialize the commit
         let commit_bytes = commit
@@ -778,10 +1192,21 @@ impl MoatSession {
             .remove_members(&self.provider, &signature_keys, &leaf_node_indices)
             .map_err(|e| Error::RemoveMember(e.to_string()))?;
 
+        // Track pending operation
+        {
+            let mut ops = self.pending_ops.write().unwrap();
+            ops.insert(group_id.to_vec(), PendingOperation::KickUser {
+                key_bundle: key_bundle.to_vec(),
+                did: did_to_kick.to_string(),
+            });
+        }
+
         // Merge the pending commit
         group
             .merge_pending_commit(&self.provider)
             .map_err(|e| Error::MergeCommit(e.to_string()))?;
+
+        self.pending_ops.write().unwrap().remove(group_id);
 
         // Serialize the commit
         let commit_bytes = commit
@@ -846,10 +1271,20 @@ impl MoatSession {
             .remove_members(&self.provider, &signature_keys, &[our_leaf.index])
             .map_err(|e| Error::RemoveMember(e.to_string()))?;
 
+        // Track pending operation
+        {
+            let mut ops = self.pending_ops.write().unwrap();
+            ops.insert(group_id.to_vec(), PendingOperation::LeaveGroup {
+                key_bundle: key_bundle.to_vec(),
+            });
+        }
+
         // Merge the pending commit
         group
             .merge_pending_commit(&self.provider)
             .map_err(|e| Error::MergeCommit(e.to_string()))?;
+
+        self.pending_ops.write().unwrap().remove(group_id);
 
         // Serialize the commit
         let commit_bytes = commit

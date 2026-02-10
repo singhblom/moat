@@ -9,27 +9,36 @@ pub type Result<T> = std::result::Result<T, Error>;
 ///
 /// Each variant maps to a specific failure category. FFI bindings (e.g. UniFFI)
 /// can expose these as integers for pattern matching in Swift/Kotlin/Dart.
+///
+/// Note: These codes were renumbered in the transcript integrity update.
+/// FFI consumers must be updated to match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum ErrorCode {
-    KeyGeneration = 1,
-    KeyPackageGeneration = 2,
-    KeyPackageValidation = 3,
-    GroupCreation = 4,
-    GroupLoad = 5,
-    Storage = 6,
-    Serialization = 7,
-    Deserialization = 8,
-    InvalidMessageType = 9,
-    AddMember = 10,
-    MergeCommit = 11,
-    ProcessWelcome = 12,
-    Encryption = 13,
-    Decryption = 14,
-    ProcessCommit = 15,
-    TagDerivation = 16,
-    StealthEncryption = 17,
-    RemoveMember = 18,
+    KeyGeneration = 100,
+    KeyPackageGeneration = 101,
+    KeyPackageValidation = 102,
+    GroupCreation = 103,
+    GroupLoad = 104,
+    Storage = 105,
+    Serialization = 106,
+    Deserialization = 107,
+    InvalidMessageType = 108,
+    AddMember = 109,
+    MergeCommit = 110,
+    ProcessWelcome = 111,
+    Encryption = 112,
+    Decryption = 113,
+    ProcessCommit = 114,
+    TagDerivation = 115,
+    StealthEncryption = 116,
+    RemoveMember = 117,
+    // Transcript integrity error codes
+    StateVersionMismatch = 200,
+    StaleCommit = 201,
+    StateDiverged = 202,
+    UnknownSender = 203,
+    ConflictUnresolved = 204,
 }
 
 /// Errors that can occur during MLS operations
@@ -88,6 +97,21 @@ pub enum Error {
 
     #[error("failed to remove member: {0}")]
     RemoveMember(String),
+
+    #[error("state version mismatch: {0}")]
+    StateVersionMismatch(String),
+
+    #[error("stale commit: {0}")]
+    StaleCommit(String),
+
+    #[error("MLS state diverged: {0}")]
+    StateDiverged(String),
+
+    #[error("unknown sender: {0}")]
+    UnknownSender(String),
+
+    #[error("commit conflict unresolved after retries: {0}")]
+    ConflictUnresolved(String),
 }
 
 impl Error {
@@ -112,6 +136,11 @@ impl Error {
             Error::TagDerivation(_) => ErrorCode::TagDerivation,
             Error::StealthEncryption(_) => ErrorCode::StealthEncryption,
             Error::RemoveMember(_) => ErrorCode::RemoveMember,
+            Error::StateVersionMismatch(_) => ErrorCode::StateVersionMismatch,
+            Error::StaleCommit(_) => ErrorCode::StaleCommit,
+            Error::StateDiverged(_) => ErrorCode::StateDiverged,
+            Error::UnknownSender(_) => ErrorCode::UnknownSender,
+            Error::ConflictUnresolved(_) => ErrorCode::ConflictUnresolved,
         }
     }
 
@@ -135,7 +164,12 @@ impl Error {
             | Error::ProcessCommit(msg)
             | Error::TagDerivation(msg)
             | Error::StealthEncryption(msg)
-            | Error::RemoveMember(msg) => msg,
+            | Error::RemoveMember(msg)
+            | Error::StateVersionMismatch(msg)
+            | Error::StaleCommit(msg)
+            | Error::StateDiverged(msg)
+            | Error::UnknownSender(msg)
+            | Error::ConflictUnresolved(msg) => msg,
         }
     }
 }

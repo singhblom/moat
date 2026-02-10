@@ -319,7 +319,7 @@ fn test_two_party_messaging() {
     let encrypted = alice_session.encrypt_event(&group_id, &alice_bundle, &message).unwrap();
 
     // Bob decrypts the message and gets sender info
-    let decrypted = bob_session.decrypt_event(&bob_group_id, &encrypted.ciphertext).unwrap();
+    let decrypted = bob_session.decrypt_event(&bob_group_id, &encrypted.ciphertext).unwrap().into_result();
     assert_eq!(decrypted.event.kind, EventKind::Message);
     assert_eq!(decrypted.event.payload, b"Hello Bob!");
 
@@ -333,7 +333,7 @@ fn test_two_party_messaging() {
     let encrypted_reply = bob_session.encrypt_event(&bob_group_id, &bob_bundle, &reply).unwrap();
 
     // Alice decrypts Bob's reply and gets sender info
-    let decrypted_reply = alice_session.decrypt_event(&group_id, &encrypted_reply.ciphertext).unwrap();
+    let decrypted_reply = alice_session.decrypt_event(&group_id, &encrypted_reply.ciphertext).unwrap().into_result();
     assert_eq!(decrypted_reply.event.kind, EventKind::Message);
     assert_eq!(decrypted_reply.event.payload, b"Hello Alice!");
 
@@ -351,8 +351,8 @@ fn test_state_version_header() {
     // Check magic bytes
     assert_eq!(&state[0..4], b"MOAT");
 
-    // Check version (little-endian u16 = 1)
-    assert_eq!(state[4], 1);
+    // Check version (little-endian u16 = 2)
+    assert_eq!(state[4], 2);
     assert_eq!(state[5], 0);
 
     // Header is at least 22 bytes (4 magic + 2 version + 16 device_id)
@@ -407,25 +407,31 @@ fn test_device_id_unique_per_session() {
 
 #[test]
 fn test_error_code_values() {
-    // Verify repr(u32) values are stable (FFI consumers depend on these)
-    assert_eq!(ErrorCode::KeyGeneration as u32, 1);
-    assert_eq!(ErrorCode::KeyPackageGeneration as u32, 2);
-    assert_eq!(ErrorCode::KeyPackageValidation as u32, 3);
-    assert_eq!(ErrorCode::GroupCreation as u32, 4);
-    assert_eq!(ErrorCode::GroupLoad as u32, 5);
-    assert_eq!(ErrorCode::Storage as u32, 6);
-    assert_eq!(ErrorCode::Serialization as u32, 7);
-    assert_eq!(ErrorCode::Deserialization as u32, 8);
-    assert_eq!(ErrorCode::InvalidMessageType as u32, 9);
-    assert_eq!(ErrorCode::AddMember as u32, 10);
-    assert_eq!(ErrorCode::MergeCommit as u32, 11);
-    assert_eq!(ErrorCode::ProcessWelcome as u32, 12);
-    assert_eq!(ErrorCode::Encryption as u32, 13);
-    assert_eq!(ErrorCode::Decryption as u32, 14);
-    assert_eq!(ErrorCode::ProcessCommit as u32, 15);
-    assert_eq!(ErrorCode::TagDerivation as u32, 16);
-    assert_eq!(ErrorCode::StealthEncryption as u32, 17);
-    assert_eq!(ErrorCode::RemoveMember as u32, 18);
+    // Verify repr(u32) values (renumbered for transcript integrity update)
+    assert_eq!(ErrorCode::KeyGeneration as u32, 100);
+    assert_eq!(ErrorCode::KeyPackageGeneration as u32, 101);
+    assert_eq!(ErrorCode::KeyPackageValidation as u32, 102);
+    assert_eq!(ErrorCode::GroupCreation as u32, 103);
+    assert_eq!(ErrorCode::GroupLoad as u32, 104);
+    assert_eq!(ErrorCode::Storage as u32, 105);
+    assert_eq!(ErrorCode::Serialization as u32, 106);
+    assert_eq!(ErrorCode::Deserialization as u32, 107);
+    assert_eq!(ErrorCode::InvalidMessageType as u32, 108);
+    assert_eq!(ErrorCode::AddMember as u32, 109);
+    assert_eq!(ErrorCode::MergeCommit as u32, 110);
+    assert_eq!(ErrorCode::ProcessWelcome as u32, 111);
+    assert_eq!(ErrorCode::Encryption as u32, 112);
+    assert_eq!(ErrorCode::Decryption as u32, 113);
+    assert_eq!(ErrorCode::ProcessCommit as u32, 114);
+    assert_eq!(ErrorCode::TagDerivation as u32, 115);
+    assert_eq!(ErrorCode::StealthEncryption as u32, 116);
+    assert_eq!(ErrorCode::RemoveMember as u32, 117);
+    // Transcript integrity error codes
+    assert_eq!(ErrorCode::StateVersionMismatch as u32, 200);
+    assert_eq!(ErrorCode::StaleCommit as u32, 201);
+    assert_eq!(ErrorCode::StateDiverged as u32, 202);
+    assert_eq!(ErrorCode::UnknownSender as u32, 203);
+    assert_eq!(ErrorCode::ConflictUnresolved as u32, 204);
 }
 
 #[test]
@@ -753,7 +759,7 @@ fn test_reaction_encrypt_decrypt_roundtrip() {
     let encrypted_msg = alice_session.encrypt_event(&group_id, &alice_bundle, &message).unwrap();
 
     // Bob decrypts the message
-    let decrypted_msg = bob_session.decrypt_event(&bob_group_id, &encrypted_msg.ciphertext).unwrap();
+    let decrypted_msg = bob_session.decrypt_event(&bob_group_id, &encrypted_msg.ciphertext).unwrap().into_result();
     assert_eq!(decrypted_msg.event.kind, EventKind::Message);
     assert_eq!(decrypted_msg.event.message_id.as_ref().unwrap(), &msg_id);
 
@@ -762,7 +768,7 @@ fn test_reaction_encrypt_decrypt_roundtrip() {
     let encrypted_reaction = bob_session.encrypt_event(&bob_group_id, &bob_bundle, &reaction).unwrap();
 
     // Alice decrypts the reaction
-    let decrypted_reaction = alice_session.decrypt_event(&group_id, &encrypted_reaction.ciphertext).unwrap();
+    let decrypted_reaction = alice_session.decrypt_event(&group_id, &encrypted_reaction.ciphertext).unwrap().into_result();
     assert_eq!(decrypted_reaction.event.kind, EventKind::Reaction);
 
     let rp = decrypted_reaction.event.reaction_payload().unwrap();

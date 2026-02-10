@@ -1,6 +1,6 @@
 use flutter_rust_bridge::frb;
 use moat_core::{
-    self, DecryptResult, EncryptResult, Event, EventKind, MoatCredential, MoatSession,
+    self, EncryptResult, Event, EventKind, MoatCredential, MoatSession,
     SenderInfo, WelcomeResult,
 };
 use std::sync::Mutex;
@@ -161,18 +161,28 @@ impl MoatSessionHandle {
             .map_err(|e| e.to_string())
     }
 
-    /// Decrypt a ciphertext for a group. Returns decrypt result.
+    /// Decrypt a ciphertext for a group. Returns decrypt result with any warnings.
     pub fn decrypt_event(
         &self,
         group_id: Vec<u8>,
         ciphertext: Vec<u8>,
     ) -> Result<DecryptResultDto, String> {
-        self.inner
+        let outcome = self
+            .inner
             .lock()
             .unwrap()
             .decrypt_event(&group_id, &ciphertext)
-            .map(DecryptResultDto::from)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+
+        let warnings: Vec<String> = outcome.warnings().iter().map(|w| w.to_string()).collect();
+        let result = outcome.into_result();
+
+        Ok(DecryptResultDto {
+            new_group_state: result.new_group_state,
+            event: EventDto::from_core(result.event),
+            sender: result.sender.map(SenderInfoDto::from),
+            warnings,
+        })
     }
 }
 
@@ -224,16 +234,8 @@ pub struct DecryptResultDto {
     pub new_group_state: Vec<u8>,
     pub event: EventDto,
     pub sender: Option<SenderInfoDto>,
-}
-
-impl From<DecryptResult> for DecryptResultDto {
-    fn from(r: DecryptResult) -> Self {
-        DecryptResultDto {
-            new_group_state: r.new_group_state,
-            event: EventDto::from_core(r.event),
-            sender: r.sender.map(SenderInfoDto::from),
-        }
-    }
+    /// Transcript integrity warnings (empty if none).
+    pub warnings: Vec<String>,
 }
 
 /// Information about the sender of a message, extracted from MLS credentials.
@@ -327,6 +329,9 @@ impl EventDto {
             epoch: 0,
             payload: self.payload.clone(),
             message_id: None,
+            prev_event_hash: None,
+            epoch_fingerprint: None,
+            sender_device_id: None,
         };
         let rp = temp_event.reaction_payload()?;
         Some(ReactionPayloadDto {

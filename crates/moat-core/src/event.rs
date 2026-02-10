@@ -92,6 +92,23 @@ pub struct Event {
     /// Used to reference messages for reactions. Absent for legacy events.
     #[serde(default)]
     pub message_id: Option<Vec<u8>>,
+
+    /// SHA-256 hash of the plaintext Event JSON of the previous event
+    /// sent by this device in this group. Forms a per-device hash chain.
+    /// `None` for the first event from a device.
+    #[serde(default)]
+    pub prev_event_hash: Option<Vec<u8>>,
+
+    /// 16-byte fingerprint derived from MLS epoch keys via
+    /// `export_secret("moat-epoch-fingerprint-v1", 16)`. Recipients
+    /// verify it matches their own derived value.
+    #[serde(default)]
+    pub epoch_fingerprint: Option<Vec<u8>>,
+
+    /// The 16-byte device ID of the sender. Used to key the per-device
+    /// hash chain on the recipient side. Set by encrypt_event.
+    #[serde(default)]
+    pub sender_device_id: Option<Vec<u8>>,
 }
 
 impl Event {
@@ -111,6 +128,9 @@ impl Event {
             epoch,
             payload: content.to_vec(),
             message_id: Some(Self::random_message_id()),
+            prev_event_hash: None,
+            epoch_fingerprint: None,
+            sender_device_id: None,
         }
     }
 
@@ -122,6 +142,9 @@ impl Event {
             epoch,
             payload: commit_bytes,
             message_id: None,
+            prev_event_hash: None,
+            epoch_fingerprint: None,
+            sender_device_id: None,
         }
     }
 
@@ -133,6 +156,9 @@ impl Event {
             epoch,
             payload: welcome_bytes,
             message_id: None,
+            prev_event_hash: None,
+            epoch_fingerprint: None,
+            sender_device_id: None,
         }
     }
 
@@ -144,6 +170,9 @@ impl Event {
             epoch,
             payload: state_bytes,
             message_id: None,
+            prev_event_hash: None,
+            epoch_fingerprint: None,
+            sender_device_id: None,
         }
     }
 
@@ -161,6 +190,9 @@ impl Event {
             epoch,
             payload,
             message_id: Some(Self::random_message_id()),
+            prev_event_hash: None,
+            epoch_fingerprint: None,
+            sender_device_id: None,
         }
     }
 
@@ -180,6 +212,100 @@ impl Event {
     /// Deserialize an event from bytes after decryption
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, serde_json::Error> {
         serde_json::from_slice(bytes)
+    }
+}
+
+/// Warnings detected during transcript integrity validation.
+#[derive(Debug, Clone)]
+pub enum TranscriptWarning {
+    /// prev_event_hash didn't match expected value (gap or reorder).
+    HashChainMismatch {
+        group_id: Vec<u8>,
+        sender_device_id: Vec<u8>,
+        expected: Option<[u8; 32]>,
+        received: Option<Vec<u8>>,
+    },
+    /// epoch_fingerprint didn't match locally derived value (fork).
+    EpochFingerprintMismatch {
+        group_id: Vec<u8>,
+        epoch: u64,
+        local: Vec<u8>,
+        received: Vec<u8>,
+    },
+    /// Duplicate event detected (replay).
+    ReplayDetected {
+        group_id: Vec<u8>,
+        sender_device_id: Vec<u8>,
+    },
+    /// A commit conflict was automatically recovered.
+    ConflictRecovered {
+        group_id: Vec<u8>,
+    },
+}
+
+impl std::fmt::Display for TranscriptWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TranscriptWarning::HashChainMismatch { sender_device_id, .. } => {
+                write!(f, "hash chain mismatch from device {:02x?}", &sender_device_id[..4.min(sender_device_id.len())])
+            }
+            TranscriptWarning::EpochFingerprintMismatch { epoch, .. } => {
+                write!(f, "epoch fingerprint mismatch at epoch {}", epoch)
+            }
+            TranscriptWarning::ReplayDetected { sender_device_id, .. } => {
+                write!(f, "replay detected from device {:02x?}", &sender_device_id[..4.min(sender_device_id.len())])
+            }
+            TranscriptWarning::ConflictRecovered { .. } => {
+                write!(f, "commit conflict automatically recovered")
+            }
+        }
+    }
+}
+
+/// Result of decrypting an event, including transcript integrity checks.
+#[derive(Debug)]
+pub enum DecryptOutcome {
+    /// Decryption succeeded with no transcript integrity issues.
+    Success(super::DecryptResult),
+    /// Decryption succeeded but transcript integrity checks found issues.
+    Warning(super::DecryptResult, Vec<TranscriptWarning>),
+}
+
+impl DecryptOutcome {
+    /// Extract a reference to the DecryptResult regardless of warning state.
+    pub fn result(&self) -> &super::DecryptResult {
+        match self {
+            DecryptOutcome::Success(r) => r,
+            DecryptOutcome::Warning(r, _) => r,
+        }
+    }
+
+    /// Extract the DecryptResult, consuming self.
+    pub fn into_result(self) -> super::DecryptResult {
+        match self {
+            DecryptOutcome::Success(r) => r,
+            DecryptOutcome::Warning(r, _) => r,
+        }
+    }
+
+    /// Get any warnings, or an empty slice if none.
+    pub fn warnings(&self) -> &[TranscriptWarning] {
+        match self {
+            DecryptOutcome::Success(_) => &[],
+            DecryptOutcome::Warning(_, w) => w,
+        }
+    }
+
+    /// Create the appropriate variant based on whether warnings exist.
+    pub(crate) fn from_result_and_warnings(
+        result: super::DecryptResult,
+        warnings: Vec<TranscriptWarning>,
+    ) -> Self {
+        if warnings.is_empty() {
+            DecryptOutcome::Success(result)
+        } else {
+            DecryptOutcome::Warning(result, warnings)
+        }
     }
 }
 
@@ -254,10 +380,13 @@ mod tests {
 
     #[test]
     fn test_backward_compat_no_message_id() {
-        // Simulate a legacy event without message_id field
+        // Simulate a legacy event without message_id or transcript integrity fields
         let json = r#"{"kind":"message","group_id":[1,2,3],"epoch":0,"payload":[104,105]}"#;
         let event: Event = serde_json::from_str(json).unwrap();
         assert_eq!(event.kind, EventKind::Message);
         assert!(event.message_id.is_none());
+        assert!(event.prev_event_hash.is_none());
+        assert!(event.epoch_fingerprint.is_none());
+        assert!(event.sender_device_id.is_none());
     }
 }

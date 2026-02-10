@@ -677,7 +677,13 @@ impl App {
                 };
 
                 match self.mls.decrypt_event(&group_id, &event_record.ciphertext) {
-                    Ok(decrypted) => {
+                    Ok(outcome) => {
+                        // Log any transcript integrity warnings
+                        for w in outcome.warnings() {
+                            self.debug_log.log(&format!("poll: transcript warning: {}", w));
+                        }
+                        let decrypted = outcome.into_result();
+
                         if let Err(e) = self
                             .keys
                             .store_group_state(&conv_id, &decrypted.new_group_state)
@@ -1377,7 +1383,12 @@ impl App {
             }
 
             match self.mls.decrypt_event(&group_id, &event_record.ciphertext) {
-                Ok(decrypted) => match decrypted.event.kind {
+                Ok(outcome) => {
+                    for w in outcome.warnings() {
+                        self.debug_log.log(&format!("load_messages: transcript warning: {}", w));
+                    }
+                    let decrypted = outcome.into_result();
+                    match decrypted.event.kind {
                     EventKind::Message => {
                         let content =
                             String::from_utf8_lossy(&decrypted.event.payload).to_string();
@@ -1414,7 +1425,7 @@ impl App {
                         }
                     }
                     _ => {}
-                },
+                }},
                 Err(e) => {
                     self.debug_log.log(&format!(
                         "load_messages: failed to decrypt event {}: {}",

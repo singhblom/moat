@@ -316,7 +316,8 @@ async fn cmd_fetch(storage_dir: Option<PathBuf>, repository: &str) -> anyhow::Re
         // Try to decrypt
         if let Some(group_id) = tag_map.get(&event.tag) {
             match mls.decrypt_event(group_id, &event.ciphertext) {
-                Ok(decrypted) => {
+                Ok(outcome) => {
+                    let decrypted = outcome.into_result();
                     let payload = String::from_utf8_lossy(&decrypted.event.payload);
                     line.push_str(&format!(" kind={:?} payload={}", decrypted.event.kind, payload));
                 }

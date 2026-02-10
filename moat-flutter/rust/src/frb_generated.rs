@@ -1003,10 +1003,12 @@ impl SseDecode for crate::api::simple::DecryptResultDto {
         let mut var_newGroupState = <Vec<u8>>::sse_decode(deserializer);
         let mut var_event = <crate::api::simple::EventDto>::sse_decode(deserializer);
         let mut var_sender = <Option<crate::api::simple::SenderInfoDto>>::sse_decode(deserializer);
+        let mut var_warnings = <Vec<String>>::sse_decode(deserializer);
         return crate::api::simple::DecryptResultDto {
             new_group_state: var_newGroupState,
             event: var_event,
             sender: var_sender,
+            warnings: var_warnings,
         };
     }
 }
@@ -1373,6 +1375,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::simple::DecryptResultDto {
             self.new_group_state.into_into_dart().into_dart(),
             self.event.into_into_dart().into_dart(),
             self.sender.into_into_dart().into_dart(),
+            self.warnings.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -1602,6 +1605,7 @@ impl SseEncode for crate::api::simple::DecryptResultDto {
         <Vec<u8>>::sse_encode(self.new_group_state, serializer);
         <crate::api::simple::EventDto>::sse_encode(self.event, serializer);
         <Option<crate::api::simple::SenderInfoDto>>::sse_encode(self.sender, serializer);
+        <Vec<String>>::sse_encode(self.warnings, serializer);
     }
 }
 

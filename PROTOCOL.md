@@ -93,6 +93,65 @@ Stealth invite tags are random (not derived) since the recipient doesn't yet kno
 | `checkpoint` | Serialized group state | Fast sync (not yet implemented) |
 | `reaction` | `{emoji, target_message_id}` | Emoji reactions (toggle semantics) |
 
+## Transcript Integrity
+
+MLS provides confidentiality and authenticity for individual messages, but the PDS (as an untrusted relay) can still withhold, reorder, or replay events without detection by MLS alone. Moat adds two mechanisms on top of MLS to detect these attacks:
+
+### Per-Device Hash Chains
+
+Each device maintains a hash chain for its outgoing messages. Before encrypting, the sender sets:
+
+- `sender_device_id` — the sender's 16-byte device ID (inside the encryption boundary, invisible to PDS)
+- `prev_event_hash` — SHA-256 hash of the sender's previous serialized event (`None` for the first event)
+
+After serialization, the sender computes `SHA-256(event_bytes)` and stores it for the next message.
+
+On the receiving side, the recipient maintains a map `(group_id, sender_device_id) → last_hash` and validates that each incoming event's `prev_event_hash` matches the stored hash. Mismatches produce a `HashChainMismatch` warning. Duplicate hashes produce a `ReplayDetected` warning.
+
+Hash chains are keyed per-device (not per-user), so multiple devices from the same DID maintain independent chains.
+
+### Epoch Fingerprints
+
+Each encrypted event includes an `epoch_fingerprint` — 16 bytes derived via MLS `export_secret("moat-epoch-fingerprint-v1", &[], 16)`. Since `export_secret` is deterministic for all members sharing the same epoch state, the recipient can independently derive the fingerprint and compare. A mismatch (`EpochFingerprintMismatch` warning) indicates that the sender and receiver have diverged MLS state — evidence of a fork or state manipulation.
+
+### Backward Compatibility
+
+All transcript integrity fields (`prev_event_hash`, `epoch_fingerprint`, `sender_device_id`) are optional with `#[serde(default)]`. Events from older clients that lack these fields are processed normally without triggering validation.
+
+### Multi-Device Commit Conflict Recovery
+
+When two devices create commits concurrently at the same epoch, only one commit can be applied — the other becomes stale. Moat detects this scenario and automatically recovers:
+
+1. Each commit-producing operation (add member, remove member, kick user, leave group) records a `PendingOperation` in memory before merging.
+2. When `decrypt_event` receives a remote commit that conflicts with a local pending operation, it discards the local commit, merges the remote one, and retries the pending operation at the new epoch (up to 2 retries).
+3. Successful recovery produces a `ConflictRecovered` warning so callers can notify the user.
+4. If retries are exhausted, the pending operation is dropped.
+
+### State Format
+
+Session state uses a versioned binary format:
+
+```
+[4 bytes: "MOAT" magic]
+[2 bytes: version (currently 2)]
+[16 bytes: device_id]
+[8 bytes: mls_state_length]
+[variable: MLS provider state]
+[variable: hash chain state]
+```
+
+Hash chain state is serialized as:
+```
+[8 bytes: entry_count]
+For each entry:
+  [4 bytes: group_id_length]
+  [variable: group_id]
+  [16 bytes: device_id]
+  [32 bytes: last_event_hash (SHA-256)]
+```
+
+Version 1 state (without hash chains) is rejected with a `StateVersionMismatch` error.
+
 ## Local Storage
 
 All private material stays on the device, never on the PDS:
