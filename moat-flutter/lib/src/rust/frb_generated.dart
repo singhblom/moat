@@ -963,12 +963,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   DecryptResultDto dco_decode_decrypt_result_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
     return DecryptResultDto(
       newGroupState: dco_decode_list_prim_u_8_strict(arr[0]),
       event: dco_decode_event_dto(arr[1]),
       sender: dco_decode_opt_box_autoadd_sender_info_dto(arr[2]),
+      warnings: dco_decode_list_String(arr[3]),
     );
   }
 
@@ -1234,10 +1235,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_newGroupState = sse_decode_list_prim_u_8_strict(deserializer);
     var var_event = sse_decode_event_dto(deserializer);
     var var_sender = sse_decode_opt_box_autoadd_sender_info_dto(deserializer);
+    var var_warnings = sse_decode_list_String(deserializer);
     return DecryptResultDto(
       newGroupState: var_newGroupState,
       event: var_event,
       sender: var_sender,
+      warnings: var_warnings,
     );
   }
 
@@ -1545,6 +1548,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_list_prim_u_8_strict(self.newGroupState, serializer);
     sse_encode_event_dto(self.event, serializer);
     sse_encode_opt_box_autoadd_sender_info_dto(self.sender, serializer);
+    sse_encode_list_String(self.warnings, serializer);
   }
 
   @protected
@@ -1796,7 +1800,7 @@ class MoatSessionHandleImpl extends RustOpaque implements MoatSessionHandle {
     keyBundle: keyBundle,
   );
 
-  /// Decrypt a ciphertext for a group. Returns decrypt result.
+  /// Decrypt a ciphertext for a group. Returns decrypt result with any warnings.
   Future<DecryptResultDto> decryptEvent({
     required List<int> groupId,
     required List<int> ciphertext,

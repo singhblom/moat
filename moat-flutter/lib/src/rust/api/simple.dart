@@ -8,7 +8,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `from_core`, `into_core`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `MoatError`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`, `from`
 
 /// Generate a stealth keypair. Returns (private_key, public_key) each 32 bytes.
 StealthKeypair generateStealthKeypair() =>
@@ -64,7 +64,7 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
     required List<int> keyBundle,
   });
 
-  /// Decrypt a ciphertext for a group. Returns decrypt result.
+  /// Decrypt a ciphertext for a group. Returns decrypt result with any warnings.
   Future<DecryptResultDto> decryptEvent({
     required List<int> groupId,
     required List<int> ciphertext,
@@ -118,14 +118,22 @@ class DecryptResultDto {
   final EventDto event;
   final SenderInfoDto? sender;
 
+  /// Transcript integrity warnings (empty if none).
+  final List<String> warnings;
+
   const DecryptResultDto({
     required this.newGroupState,
     required this.event,
     this.sender,
+    required this.warnings,
   });
 
   @override
-  int get hashCode => newGroupState.hashCode ^ event.hashCode ^ sender.hashCode;
+  int get hashCode =>
+      newGroupState.hashCode ^
+      event.hashCode ^
+      sender.hashCode ^
+      warnings.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -134,7 +142,8 @@ class DecryptResultDto {
           runtimeType == other.runtimeType &&
           newGroupState == other.newGroupState &&
           event == other.event &&
-          sender == other.sender;
+          sender == other.sender &&
+          warnings == other.warnings;
 }
 
 class EncryptResultDto {

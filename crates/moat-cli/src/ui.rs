@@ -1,6 +1,6 @@
 //! Terminal UI rendering with Ratatui
 
-use crate::app::{App, DeviceAlert, Focus, LoginField};
+use crate::app::{App, DeviceAlert, Focus, LoginField, QUICK_EMOJIS};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -41,10 +41,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         draw_message_info_popup(frame, app);
     }
 
-    // Draw reaction input popup
-    if let Some(ref input) = app.reaction_input {
-        draw_reaction_input_popup(frame, input);
-    }
+    // Reaction picker is drawn inline in draw_messages
 
     // Draw device alerts if any
     if let Some(alert) = app.device_alerts.first() {
@@ -368,6 +365,25 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
                         Span::styled(reaction_line, reaction_style),
                     ]));
                 }
+
+                // Show inline emoji picker for selected message
+                if is_selected {
+                    if let Some(picker_idx) = app.reaction_picker {
+                        let mut spans: Vec<Span> = vec![Span::styled(" ", indicator_style), Span::raw(" ")];
+                        for (i, emoji) in QUICK_EMOJIS.iter().enumerate() {
+                            let style = if i == picker_idx {
+                                Style::default().bg(Color::Yellow).fg(Color::Black)
+                            } else {
+                                Style::default().fg(Color::Gray)
+                            };
+                            spans.push(Span::styled(format!(" {} ", emoji), style));
+                            if i + 1 < QUICK_EMOJIS.len() {
+                                spans.push(Span::raw(" "));
+                            }
+                        }
+                        lines.push(Line::from(spans));
+                    }
+                }
             }
         }
 
@@ -562,29 +578,6 @@ fn draw_message_info_popup(frame: &mut Frame, app: &App) {
 
     let paragraph = Paragraph::new(lines);
     frame.render_widget(paragraph, inner);
-}
-
-fn draw_reaction_input_popup(frame: &mut Frame, input: &str) {
-    let area = frame.area();
-    let popup_width = 40.min(area.width.saturating_sub(4));
-    let popup_height = 3;
-    let popup_x = (area.width.saturating_sub(popup_width)) / 2;
-    let popup_y = (area.height.saturating_sub(popup_height)) / 2;
-    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
-
-    frame.render_widget(Clear, popup_area);
-
-    let block = Block::default()
-        .title(" React (Enter to send, Esc to cancel) ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
-
-    let display = if input.is_empty() { "type emoji..." } else { input };
-    let paragraph = Paragraph::new(display)
-        .block(block)
-        .style(Style::default().fg(Color::White));
-
-    frame.render_widget(paragraph, popup_area);
 }
 
 fn draw_device_alert(frame: &mut Frame, alert: &DeviceAlert) {

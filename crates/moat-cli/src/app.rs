@@ -14,6 +14,9 @@ use std::time::Instant;
 use thiserror::Error;
 use tokio::sync::mpsc;
 
+/// Quick-reaction emojis (same as Flutter app)
+pub const QUICK_EMOJIS: &[&str] = &["👍", "❤️", "😂", "😮", "😢", "🙏"];
+
 /// Debug logger that writes to a file in the storage directory
 struct DebugLog {
     path: PathBuf,
@@ -188,7 +191,7 @@ pub struct App {
     pub message_scroll: usize,
     pub selected_message: Option<usize>,  // For message info feature
     pub show_message_info: bool,          // Toggle message info popup
-    pub reaction_input: Option<String>,   // Emoji input for reaction (Some = popup open)
+    pub reaction_picker: Option<usize>,   // Emoji picker index (Some = popup open)
 
     // Device alerts (new devices joining conversations)
     pub device_alerts: Vec<DeviceAlert>,
@@ -277,7 +280,7 @@ impl App {
             message_scroll: 0,
             selected_message: None,
             show_message_info: false,
-            reaction_input: None,
+            reaction_picker: None,
             device_alerts: Vec::new(),
             input_buffer: String::new(),
             cursor_position: 0,
@@ -1466,24 +1469,24 @@ impl App {
     }
 
     async fn handle_messages_key(&mut self, key: KeyEvent) -> Result<bool> {
-        // If reaction input popup is open, handle it separately
-        if let Some(ref mut input) = self.reaction_input {
+        // If reaction picker popup is open, handle it separately
+        if let Some(ref mut idx) = self.reaction_picker {
             match key.code {
                 KeyCode::Enter => {
-                    let emoji = input.clone();
-                    self.reaction_input = None;
-                    if !emoji.is_empty() {
-                        self.send_reaction(&emoji).await?;
-                    }
+                    let emoji = QUICK_EMOJIS[*idx].to_string();
+                    self.reaction_picker = None;
+                    self.send_reaction(&emoji).await?;
                 }
                 KeyCode::Esc => {
-                    self.reaction_input = None;
+                    self.reaction_picker = None;
                 }
-                KeyCode::Char(c) => {
-                    input.push(c);
+                KeyCode::Left | KeyCode::Char('h') => {
+                    *idx = idx.saturating_sub(1);
                 }
-                KeyCode::Backspace => {
-                    input.pop();
+                KeyCode::Right | KeyCode::Char('l') => {
+                    if *idx + 1 < QUICK_EMOJIS.len() {
+                        *idx += 1;
+                    }
                 }
                 _ => {}
             }
@@ -1517,9 +1520,9 @@ impl App {
                 }
             }
             KeyCode::Char('r') => {
-                // Open reaction input for selected message
+                // Open reaction picker for selected message
                 if self.selected_message.is_some() && !self.messages.is_empty() {
-                    self.reaction_input = Some(String::new());
+                    self.reaction_picker = Some(0);
                 }
             }
             KeyCode::Esc => {

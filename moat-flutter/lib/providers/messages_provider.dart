@@ -254,6 +254,9 @@ class MessagesProvider extends ChangeNotifier {
 
       // Apply toggle locally for immediate UI feedback
       _toggleReactionLocally(targetMessage.id, emoji, 'self');
+
+      // Persist to storage so reactions survive app restart
+      await _storage.saveMessages(groupIdHex, _messages);
     } catch (e) {
       moatLog('MessagesProvider: Failed to send reaction: $e');
     }
@@ -291,18 +294,22 @@ class MessagesProvider extends ChangeNotifier {
 
   /// Add a single message (from polling)
   void addMessage(Message message) {
-    // Check for duplicate by ID
-    if (_messages.any((m) => m.id == message.id)) {
+    // Check for existing message by ID
+    final existingIndex = _messages.indexWhere((m) => m.id == message.id);
+    if (existingIndex >= 0) {
+      // Update existing message (e.g. reactions changed)
+      _messages[existingIndex] = message;
+      notifyListeners();
       return;
     }
 
     // Check if this is our own message that we already have locally
     // (received from another device or polling our own events)
     if (message.isOwn) {
-      final existingIndex = _messages.indexWhere(
+      final ownIndex = _messages.indexWhere(
         (m) => m.localId != null && m.content == message.content && m.isOwn,
       );
-      if (existingIndex >= 0) {
+      if (ownIndex >= 0) {
         // This is likely our own message coming back, skip it
         return;
       }
@@ -320,17 +327,21 @@ class MessagesProvider extends ChangeNotifier {
   void addMessages(List<Message> newMessages) {
     if (newMessages.isEmpty) return;
 
-    final existingIds = _messages.map((m) => m.id).toSet();
-    var added = false;
+    var changed = false;
 
     for (final message in newMessages) {
-      if (!existingIds.contains(message.id)) {
+      final existingIndex = _messages.indexWhere((m) => m.id == message.id);
+      if (existingIndex >= 0) {
+        // Update existing message (e.g. reactions changed)
+        _messages[existingIndex] = message;
+        changed = true;
+      } else {
         _messages.add(message);
-        added = true;
+        changed = true;
       }
     }
 
-    if (added) {
+    if (changed) {
       _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
       notifyListeners();
 
