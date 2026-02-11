@@ -3,8 +3,9 @@ import 'package:provider/provider.dart';
 import '../models/conversation.dart';
 import '../providers/auth_provider.dart';
 import '../providers/conversations_provider.dart';
-import '../providers/messages_provider.dart';
 import '../providers/watch_list_provider.dart';
+import '../services/conversation_manager.dart';
+import '../services/conversation_repository.dart';
 import '../widgets/avatar_widget.dart';
 import 'conversation_screen.dart';
 import 'new_conversation_screen.dart';
@@ -209,16 +210,20 @@ class _ConversationTile extends StatelessWidget {
         // Navigate to conversation detail
         final conversationsProvider = context.read<ConversationsProvider>();
 
+        final repo = ConversationManager.instance.getRepository(conversation);
+        repo.loadMessages();
+
         Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (context) => ChangeNotifierProvider(
-              create: (_) =>
-                  MessagesProvider(conversation.groupIdHex, conversation)
-                    ..loadMessages(),
+            builder: (context) => ChangeNotifierProvider<ConversationRepository>.value(
+              value: repo,
               child: ConversationScreen(conversation: conversation),
             ),
           ),
-        );
+        ).then((_) {
+          // Unload persisted messages when leaving the screen.
+          repo.unloadMessages();
+        });
 
         // Mark as read when opening
         conversationsProvider.markAsRead(conversation.groupId);

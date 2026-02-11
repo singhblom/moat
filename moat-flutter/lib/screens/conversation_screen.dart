@@ -2,10 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/conversation.dart';
 import '../models/message.dart';
-import '../providers/auth_provider.dart';
-import '../providers/messages_provider.dart';
 import '../providers/profile_provider.dart';
-import '../services/send_service.dart';
+import '../services/conversation_repository.dart';
 import '../widgets/message_bubble.dart';
 
 /// Screen showing messages in a conversation
@@ -39,9 +37,8 @@ class _ConversationScreenState extends State<ConversationScreen> {
     super.initState();
     _scrollController.addListener(_onScroll);
 
-    // Initialize send service and preload profiles after build
+    // Preload profiles after build
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _initSendService();
       _preloadParticipantProfiles();
     });
   }
@@ -65,13 +62,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
       return shortId.length > 8 ? shortId.substring(0, 8) : shortId;
     }
     return did.isNotEmpty ? did : 'unknown';
-  }
-
-  void _initSendService() {
-    final authProvider = context.read<AuthProvider>();
-    final messagesProvider = context.read<MessagesProvider>();
-    final sendService = SendService(authProvider: authProvider);
-    messagesProvider.initSendService(sendService);
   }
 
   @override
@@ -120,27 +110,23 @@ class _ConversationScreenState extends State<ConversationScreen> {
     // Scroll to bottom to see the sending message
     _scrollToBottom();
 
-    try {
-      final messagesProvider = context.read<MessagesProvider>();
-      await messagesProvider.sendMessage(text);
-      // Scroll again after send completes
-      _scrollToBottom();
-    } catch (e) {
-      // Error is handled by the provider and shown in UI via status
-    }
+    final repo = context.read<ConversationRepository>();
+    repo.sendMessage(text);
+    // Scroll again after optimistic message is added
+    _scrollToBottom();
   }
 
   @override
   Widget build(BuildContext context) {
-    final messagesProvider = context.watch<MessagesProvider>();
+    final repo = context.watch<ConversationRepository>();
 
     // Auto-scroll when new messages arrive and we're at the bottom
-    if (messagesProvider.messages.length > _previousMessageCount && _isAtBottom) {
+    if (repo.messages.length > _previousMessageCount && _isAtBottom) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _scrollToBottom();
       });
     }
-    _previousMessageCount = messagesProvider.messages.length;
+    _previousMessageCount = repo.messages.length;
 
     final hasSelection = _selectedMessage != null;
 
@@ -195,21 +181,21 @@ class _ConversationScreenState extends State<ConversationScreen> {
             child: Column(
               children: [
                 Expanded(
-                  child: _buildMessageList(context, messagesProvider),
+                  child: _buildMessageList(context, repo),
                 ),
-                _buildMessageInput(context, messagesProvider),
+                _buildMessageInput(context, repo),
               ],
             ),
           ),
 
           // Layer 3: Reaction overlay
-          if (hasSelection) _buildReactionOverlay(context, messagesProvider),
+          if (hasSelection) _buildReactionOverlay(context, repo),
         ],
       ),
     );
   }
 
-  Widget _buildMessageList(BuildContext context, MessagesProvider provider) {
+  Widget _buildMessageList(BuildContext context, ConversationRepository provider) {
     if (provider.isLoading && provider.messages.isEmpty) {
       return const Center(
         child: CircularProgressIndicator(),
@@ -336,7 +322,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
     );
   }
 
-  Widget _buildMessageInput(BuildContext context, MessagesProvider provider) {
+  Widget _buildMessageInput(BuildContext context, ConversationRepository provider) {
     final hasText = _textController.text.trim().isNotEmpty;
 
     return Container(
@@ -493,7 +479,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
   }
 
   /// Build the floating emoji bar + scrim overlay (WhatsApp-style)
-  Widget _buildReactionOverlay(BuildContext context, MessagesProvider provider) {
+  Widget _buildReactionOverlay(BuildContext context, ConversationRepository provider) {
     const quickEmojis = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
     final message = _selectedMessage!;
 

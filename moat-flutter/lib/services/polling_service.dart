@@ -8,7 +8,7 @@ import '../providers/conversations_provider.dart';
 import '../providers/watch_list_provider.dart';
 import '../src/rust/api/simple.dart';
 import 'atproto_client.dart';
-import 'message_storage.dart';
+import 'conversation_manager.dart';
 import 'secure_storage.dart';
 import 'debug_log.dart';
 
@@ -18,7 +18,6 @@ class PollingService {
   final ConversationsProvider _conversationsProvider;
   final WatchListProvider _watchListProvider;
   final SecureStorageService _secureStorage;
-  final MessageStorage _messageStorage;
 
   Timer? _pollTimer;
   bool _isPolling = false;
@@ -26,20 +25,15 @@ class PollingService {
   /// Callback when a new conversation is received
   VoidCallback? onNewConversation;
 
-  /// Callback when new messages arrive
-  void Function(String groupIdHex, List<Message> messages)? onNewMessages;
-
   PollingService({
     required AuthProvider authProvider,
     required ConversationsProvider conversationsProvider,
     required WatchListProvider watchListProvider,
     SecureStorageService? secureStorage,
-    MessageStorage? messageStorage,
   })  : _authProvider = authProvider,
         _conversationsProvider = conversationsProvider,
         _watchListProvider = watchListProvider,
-        _secureStorage = secureStorage ?? SecureStorageService(),
-        _messageStorage = messageStorage ?? MessageStorage();
+        _secureStorage = secureStorage ?? SecureStorageService();
 
   /// Start polling for events (every 5 seconds)
   void startPolling() {
@@ -324,8 +318,8 @@ class PollingService {
 
           moatLog('PollingService: Decrypted message: "${text.substring(0, text.length > 20 ? 20 : text.length)}..."');
 
-          // Save message to storage
-          await _messageStorage.appendMessage(conversation.groupIdHex, message);
+          // Route through ConversationManager (single writer)
+          ConversationManager.instance.notify(conversation, [message]);
 
           // Update conversation metadata
           await _conversationsProvider.updateLastMessage(
@@ -334,9 +328,6 @@ class PollingService {
             timestamp: event.createdAt,
             incrementUnread: !isOwn, // Don't increment for our own messages
           );
-
-          // Notify listeners
-          onNewMessages?.call(conversation.groupIdHex, [message]);
 
         case EventKindDto.commit:
           // Epoch advanced - update conversation and tag map
@@ -360,16 +351,13 @@ class PollingService {
             final senderDid = result.sender?.did ?? 'unknown';
             moatLog('PollingService: Reaction "${rp.emoji}" from $senderDid on msg ${rp.targetMessageId.length} bytes');
 
-            final updated = await _messageStorage.toggleReaction(
-              conversation.groupIdHex,
+            // Route through ConversationManager (single writer)
+            ConversationManager.instance.notifyReaction(
+              conversation,
               rp.targetMessageId,
               rp.emoji,
               senderDid,
             );
-            if (updated != null) {
-              // Notify the active MessagesProvider so the UI updates
-              onNewMessages?.call(conversation.groupIdHex, [updated]);
-            }
           }
 
         case EventKindDto.welcome:

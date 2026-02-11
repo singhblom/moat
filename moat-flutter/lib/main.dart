@@ -7,7 +7,7 @@ import 'providers/watch_list_provider.dart';
 import 'screens/login_screen.dart';
 import 'screens/conversations_screen.dart';
 import 'services/polling_service.dart';
-import 'services/message_notifier.dart';
+import 'services/conversation_manager.dart';
 import 'services/debug_log.dart';
 import 'src/rust/frb_generated.dart';
 
@@ -153,13 +153,12 @@ class _AuthGateState extends State<AuthGate> {
         conversationsProvider: context.read<ConversationsProvider>(),
         watchListProvider: context.read<WatchListProvider>(),
       );
+      // Initialize ConversationManager with auth provider
+      ConversationManager.instance.init(authProvider: auth);
+
       _pollingService!.onNewConversation = () {
         // Refresh conversations when a new one is received
         context.read<ConversationsProvider>().refresh();
-      };
-      _pollingService!.onNewMessages = (groupIdHex, messages) {
-        // Route messages to active MessagesProvider (if any)
-        MessageNotifier.instance.notify(groupIdHex, messages);
       };
       _pollingService!.startPolling();
       debugPrint('PollingService started');
@@ -168,6 +167,7 @@ class _AuthGateState extends State<AuthGate> {
       _pollingService?.dispose();
       _pollingService = null;
       _pollingStarted = false;
+      ConversationManager.instance.clear();
       debugPrint('PollingService stopped');
     }
   }
