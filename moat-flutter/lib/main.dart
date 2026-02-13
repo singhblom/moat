@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/conversations_provider.dart';
 import 'providers/profile_provider.dart';
+import 'providers/theme_provider.dart';
 import 'providers/watch_list_provider.dart';
 import 'screens/login_screen.dart';
 import 'screens/conversations_screen.dart';
@@ -62,6 +63,7 @@ class MoatApp extends StatelessWidget {
 
     return MultiProvider(
       providers: [
+        ChangeNotifierProvider(create: (_) => ThemeProvider()),
         ChangeNotifierProvider.value(value: authProvider),
         ChangeNotifierProvider.value(value: conversationsProvider),
         ChangeNotifierProxyProvider<AuthProvider, WatchListProvider>(
@@ -101,26 +103,32 @@ class MoatApp extends StatelessWidget {
           },
         ),
       ],
-      child: MaterialApp(
-        title: 'Moat',
-        debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: Color.fromRGBO(74, 232, 205, 255),
-            brightness: Brightness.dark,
-          ),
-          textTheme: _applyFonts(ThemeData.dark().textTheme),
-          useMaterial3: true,
-        ),
-        darkTheme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: Color.fromRGBO(19, 144, 123, 255),
-            brightness: Brightness.light,
-          ),
-          textTheme: _applyFonts(ThemeData.light().textTheme),
-          useMaterial3: true,
-        ),
-        home: const AuthGate(),
+      child: Builder(
+        builder: (context) {
+          final themeMode = context.watch<ThemeProvider>().themeMode;
+          return MaterialApp(
+            title: 'Moat',
+            debugShowCheckedModeBanner: false,
+            themeMode: themeMode,
+            theme: ThemeData(
+              colorScheme: ColorScheme.fromSeed(
+                seedColor: Color.fromRGBO(74, 232, 205, 255),
+                brightness: Brightness.light,
+              ),
+              textTheme: _applyFonts(ThemeData.light().textTheme),
+              useMaterial3: true,
+            ),
+            darkTheme: ThemeData(
+              colorScheme: ColorScheme.fromSeed(
+                seedColor: Color.fromRGBO(19, 144, 123, 255),
+                brightness: Brightness.dark,
+              ),
+              textTheme: _applyFonts(ThemeData.dark().textTheme),
+              useMaterial3: true,
+            ),
+            home: const AuthGate(),
+          );
+        },
       ),
     );
   }

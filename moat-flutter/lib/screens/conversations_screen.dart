@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../models/conversation.dart';
 import '../providers/auth_provider.dart';
 import '../providers/conversations_provider.dart';
+import '../providers/theme_provider.dart';
 import '../providers/watch_list_provider.dart';
 import '../services/conversation_manager.dart';
 import '../services/conversation_repository.dart';
@@ -36,31 +37,47 @@ class ConversationsScreen extends StatelessWidget {
             onSelected: (value) async {
               if (value == 'logout') {
                 await auth.logout();
+              } else if (value == 'toggle_theme') {
+                final brightness = Theme.of(context).brightness;
+                context.read<ThemeProvider>().toggleTheme(brightness);
               }
             },
-            itemBuilder: (context) => [
-              PopupMenuItem(
-                enabled: false,
-                child: Text(
-                  auth.handle ?? auth.did ?? 'Unknown',
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurface,
-                    fontWeight: FontWeight.bold,
+            itemBuilder: (context) {
+              final isDark = Theme.of(context).brightness == Brightness.dark;
+              return [
+                PopupMenuItem(
+                  enabled: false,
+                  child: Text(
+                    auth.handle ?? auth.did ?? 'Unknown',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurface,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
-              ),
-              const PopupMenuDivider(),
-              const PopupMenuItem(
-                value: 'logout',
-                child: Row(
-                  children: [
-                    Icon(Icons.logout),
-                    SizedBox(width: 8),
-                    Text('Sign Out'),
-                  ],
+                const PopupMenuDivider(),
+                PopupMenuItem(
+                  value: 'toggle_theme',
+                  child: Row(
+                    children: [
+                      Icon(isDark ? Icons.light_mode : Icons.dark_mode),
+                      const SizedBox(width: 8),
+                      Text(isDark ? 'Light Mode' : 'Dark Mode'),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+                const PopupMenuItem(
+                  value: 'logout',
+                  child: Row(
+                    children: [
+                      Icon(Icons.logout),
+                      SizedBox(width: 8),
+                      Text('Sign Out'),
+                    ],
+                  ),
+                ),
+              ];
+            },
           ),
         ],
       ),
