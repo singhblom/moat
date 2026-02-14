@@ -75,7 +75,8 @@ impl MoatSessionHandle {
         did: String,
         device_name: String,
     ) -> Result<KeyPackageResult, String> {
-        let credential = MoatCredential::new(&did, &device_name);
+        let device_id = *self.inner.lock().unwrap().device_id();
+        let credential = MoatCredential::new(&did, &device_name, device_id);
         let (kp, kb) = self
             .inner
             .lock()
@@ -95,7 +96,8 @@ impl MoatSessionHandle {
         device_name: String,
         key_bundle: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
-        let credential = MoatCredential::new(&did, &device_name);
+        let device_id = *self.inner.lock().unwrap().device_id();
+        let credential = MoatCredential::new(&did, &device_name, device_id);
         self.inner
             .lock()
             .unwrap()
@@ -119,6 +121,33 @@ impl MoatSessionHandle {
             .unwrap()
             .get_group_dids(&group_id)
             .map_err(|e| e.to_string())
+    }
+
+    /// Generate all candidate tags for every member in a group.
+    ///
+    /// Returns a flat list of candidate tags for recipient scanning.
+    #[frb(sync)]
+    pub fn populate_candidate_tags(&self, group_id: Vec<u8>) -> Result<Vec<Vec<u8>>, String> {
+        self.inner
+            .lock()
+            .unwrap()
+            .populate_candidate_tags(&group_id)
+            .map(|tags| tags.into_iter().map(|t| t.to_vec()).collect())
+            .map_err(|e| e.to_string())
+    }
+
+    /// Mark a tag as seen, advancing the seen counter for that sender.
+    ///
+    /// Call this after matching a tag from `populate_candidate_tags`.
+    /// Returns true if the tag was found and the counter was updated.
+    #[frb(sync)]
+    pub fn mark_tag_seen(&self, tag: Vec<u8>) -> bool {
+        if tag.len() != 16 {
+            return false;
+        }
+        let mut arr = [0u8; 16];
+        arr.copy_from_slice(&tag);
+        self.inner.lock().unwrap().mark_tag_seen(&arr)
     }
 
     /// Add a member to a group. Returns welcome result.
@@ -381,10 +410,38 @@ pub fn try_decrypt_stealth(scan_privkey: Vec<u8>, payload: Vec<u8>) -> Option<Ve
     moat_core::try_decrypt_stealth(&privkey, &payload)
 }
 
-/// Derive a 16-byte conversation tag from group ID and epoch.
+/// Generate candidate tags for recipient scanning.
+///
+/// Returns a list of (tag, counter) pairs for the given sender in the group.
 #[frb(sync)]
-pub fn derive_tag(group_id: Vec<u8>, epoch: u64) -> Result<Vec<u8>, String> {
-    moat_core::derive_tag_from_group_id(&group_id, epoch)
+pub fn generate_candidate_tags(
+    handle: &MoatSessionHandle,
+    group_id: Vec<u8>,
+    sender_did: String,
+    sender_device_id: Vec<u8>,
+    from_counter: u64,
+    count: u64,
+) -> Result<Vec<Vec<u8>>, String> {
+    let session = handle.inner.lock().unwrap();
+    let device_id: [u8; 16] = sender_device_id
+        .try_into()
+        .map_err(|_| "device_id must be 16 bytes".to_string())?;
+    session
+        .generate_candidate_tags(&group_id, &sender_did, &device_id, from_counter, count)
+        .map(|tags| tags.into_iter().map(|(tag, _)| tag.to_vec()).collect())
+        .map_err(|e| e.to_string())
+}
+
+/// Derive the next unique tag for publishing an event (increments counter).
+#[frb(sync)]
+pub fn derive_next_tag(
+    handle: &MoatSessionHandle,
+    group_id: Vec<u8>,
+    key_bundle: Vec<u8>,
+) -> Result<Vec<u8>, String> {
+    let session = handle.inner.lock().unwrap();
+    session
+        .derive_next_tag(&group_id, &key_bundle)
         .map(|t| t.to_vec())
         .map_err(|e| e.to_string())
 }
@@ -653,16 +710,50 @@ mod tests {
     }
 
     #[test]
-    fn test_derive_tag() {
-        let group_id = vec![1, 2, 3, 4, 5, 6, 7, 8];
-        let tag = derive_tag(group_id.clone(), 0).expect("tag derivation should succeed");
-        assert_eq!(tag.len(), 16);
+    fn test_generate_candidate_tags() {
+        let handle = MoatSessionHandle::new_session();
+        let device_id = handle.inner.lock().unwrap().device_id().to_vec();
+        let cred = MoatCredential::new("did:plc:alice", "Phone", {
+            let mut id = [0u8; 16];
+            id.copy_from_slice(&device_id);
+            id
+        });
+        let (_, key_bundle) = handle.inner.lock().unwrap().generate_key_package(&cred).unwrap();
+        let group_id = handle.inner.lock().unwrap().create_group(&cred, &key_bundle).unwrap();
 
-        let tag2 = derive_tag(group_id.clone(), 0).unwrap();
-        assert_eq!(tag, tag2);
+        let tags = generate_candidate_tags(
+            &handle,
+            group_id.clone(),
+            "did:plc:alice".to_string(),
+            device_id,
+            0,
+            5,
+        ).unwrap();
+        assert_eq!(tags.len(), 5);
+        for tag in &tags {
+            assert_eq!(tag.len(), 16);
+        }
+        // All tags should be unique
+        for i in 0..tags.len() {
+            for j in (i + 1)..tags.len() {
+                assert_ne!(tags[i], tags[j]);
+            }
+        }
+    }
 
-        let tag3 = derive_tag(group_id, 1).unwrap();
-        assert_ne!(tag, tag3);
+    #[test]
+    fn test_derive_next_tag() {
+        let handle = MoatSessionHandle::new_session();
+        let device_id = *handle.inner.lock().unwrap().device_id();
+        let cred = MoatCredential::new("did:plc:alice", "Phone", device_id);
+        let (_, key_bundle) = handle.inner.lock().unwrap().generate_key_package(&cred).unwrap();
+        let group_id = handle.inner.lock().unwrap().create_group(&cred, &key_bundle).unwrap();
+
+        let tag1 = derive_next_tag(&handle, group_id.clone(), key_bundle.to_vec()).unwrap();
+        assert_eq!(tag1.len(), 16);
+
+        let tag2 = derive_next_tag(&handle, group_id, key_bundle.to_vec()).unwrap();
+        assert_ne!(tag1, tag2); // Counter increments, so tags differ
     }
 
     #[test]

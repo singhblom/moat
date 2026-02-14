@@ -252,6 +252,9 @@ class PollingService {
             continue;
           }
 
+          // Advance the seen counter for this sender so the scanning window moves forward
+          session.markTagSeen(tag: Uint8List.fromList(event.tag));
+
           // Find the conversation
           final conversation = conversations.where((c) => c.groupIdHex == groupIdHex).firstOrNull;
           if (conversation == null) {
@@ -340,9 +343,8 @@ class PollingService {
             epoch: newEpoch,
           );
 
-          // Derive and register new tag for this epoch
-          final newTag = deriveTag(groupId: conversation.groupId, epoch: BigInt.from(newEpoch));
-          await _authProvider.registerTag(newTag, conversation.groupId);
+          // Populate candidate tags for the new epoch
+          await _authProvider.populateConversationTags(conversation.groupId);
 
         case EventKindDto.reaction:
           // Reaction event - apply toggle to target message
@@ -384,9 +386,8 @@ class PollingService {
 
     moatLog('PollingService: Joined group at epoch $epoch');
 
-    // Derive and register tag for current epoch
-    final tag = _authProvider.deriveConversationTag(groupId, epoch);
-    await _authProvider.registerTag(tag, groupId);
+    // Populate candidate tags for all members in the group
+    await _authProvider.populateConversationTags(groupId);
 
     // Get all DIDs in the group to find the other participant(s)
     final groupDids = await _authProvider.getGroupDids(groupId);

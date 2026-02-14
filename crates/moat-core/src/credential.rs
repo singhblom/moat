@@ -9,15 +9,16 @@ use serde::{Deserialize, Serialize};
 
 /// A structured credential for Moat MLS operations.
 ///
-/// Contains the user's decentralized identifier (DID) and a human-readable
-/// device name. The DID identifies the user across all their devices, while
-/// the device name distinguishes between devices owned by the same user.
+/// Contains the user's decentralized identifier (DID), a human-readable
+/// device name, and a unique device ID. The DID identifies the user across
+/// all their devices, while the device name and device ID distinguish
+/// between devices owned by the same user.
 ///
 /// # Wire Format
 ///
 /// Serialized as JSON for embedding in MLS BasicCredential:
 /// ```json
-/// {"did":"did:plc:abc123","device_name":"My iPhone"}
+/// {"did":"did:plc:abc123","device_name":"My iPhone","device_id":[1,2,3,...]}
 /// ```
 ///
 /// # Example
@@ -25,9 +26,11 @@ use serde::{Deserialize, Serialize};
 /// ```
 /// use moat_core::MoatCredential;
 ///
-/// let credential = MoatCredential::new("did:plc:abc123", "Work Laptop");
+/// let device_id = [0u8; 16];
+/// let credential = MoatCredential::new("did:plc:abc123", "Work Laptop", device_id);
 /// assert_eq!(credential.did(), "did:plc:abc123");
 /// assert_eq!(credential.device_name(), "Work Laptop");
+/// assert_eq!(credential.device_id(), &device_id);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MoatCredential {
@@ -35,19 +38,23 @@ pub struct MoatCredential {
     did: String,
     /// Human-readable device name (e.g., "My iPhone", "Work Laptop")
     device_name: String,
+    /// Unique 16-byte device identifier, used for per-event tag derivation
+    device_id: [u8; 16],
 }
 
 impl MoatCredential {
-    /// Create a new credential with the given DID and device name.
+    /// Create a new credential with the given DID, device name, and device ID.
     ///
     /// # Arguments
     ///
     /// * `did` - The user's decentralized identifier
     /// * `device_name` - A human-readable name for this device
-    pub fn new(did: impl Into<String>, device_name: impl Into<String>) -> Self {
+    /// * `device_id` - The 16-byte unique device identifier
+    pub fn new(did: impl Into<String>, device_name: impl Into<String>, device_id: [u8; 16]) -> Self {
         Self {
             did: did.into(),
             device_name: device_name.into(),
+            device_id,
         }
     }
 
@@ -59,6 +66,11 @@ impl MoatCredential {
     /// Get the device name.
     pub fn device_name(&self) -> &str {
         &self.device_name
+    }
+
+    /// Get the device ID (16 bytes).
+    pub fn device_id(&self) -> &[u8; 16] {
+        &self.device_id
     }
 
     /// Serialize this credential to bytes for embedding in MLS BasicCredential.
@@ -86,14 +98,16 @@ mod tests {
 
     #[test]
     fn test_credential_creation() {
-        let cred = MoatCredential::new("did:plc:abc123", "My Phone");
+        let device_id = [1u8; 16];
+        let cred = MoatCredential::new("did:plc:abc123", "My Phone", device_id);
         assert_eq!(cred.did(), "did:plc:abc123");
         assert_eq!(cred.device_name(), "My Phone");
+        assert_eq!(cred.device_id(), &device_id);
     }
 
     #[test]
     fn test_credential_roundtrip() {
-        let cred = MoatCredential::new("did:plc:xyz789", "Work Laptop");
+        let cred = MoatCredential::new("did:plc:xyz789", "Work Laptop", [2u8; 16]);
         let bytes = cred.to_bytes().unwrap();
         let recovered = MoatCredential::from_bytes(&bytes).unwrap();
         assert_eq!(cred, recovered);
@@ -101,16 +115,18 @@ mod tests {
 
     #[test]
     fn test_credential_json_format() {
-        let cred = MoatCredential::new("did:plc:test", "Device");
+        let device_id = [3u8; 16];
+        let cred = MoatCredential::new("did:plc:test", "Device", device_id);
         let bytes = cred.to_bytes().unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(json["did"], "did:plc:test");
         assert_eq!(json["device_name"], "Device");
+        assert!(json["device_id"].is_array());
     }
 
     #[test]
     fn test_try_from_bytes_success() {
-        let cred = MoatCredential::new("did:plc:foo", "Bar");
+        let cred = MoatCredential::new("did:plc:foo", "Bar", [4u8; 16]);
         let bytes = cred.to_bytes().unwrap();
         let parsed = MoatCredential::try_from_bytes(&bytes);
         assert!(parsed.is_some());

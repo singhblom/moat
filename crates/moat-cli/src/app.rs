@@ -643,11 +643,7 @@ impl App {
                     1
                 };
 
-            if let Ok(tag) =
-                moat_core::derive_tag_from_group_id(&group_id_bytes, current_epoch)
-            {
-                self.tag_map.insert(tag, group_id.clone());
-            }
+            self.populate_candidate_tags(&group_id, &group_id_bytes);
 
             self.conversations.push(Conversation {
                 id: group_id,
@@ -656,6 +652,26 @@ impl App {
                 current_epoch,
                 unread: 0,
             });
+        }
+    }
+
+    /// Populate the tag_map with candidate tags for all members of a conversation.
+    ///
+    /// Generates tags for each member device using the GAP_LIMIT window.
+    /// Tags map back to the hex-encoded group_id for routing.
+    fn populate_candidate_tags(&mut self, conv_id: &str, group_id: &[u8]) {
+        match self.mls.populate_candidate_tags(group_id) {
+            Ok(tags) => {
+                for tag in tags {
+                    self.tag_map.insert(tag, conv_id.to_string());
+                }
+            }
+            Err(e) => {
+                self.debug_log.log(&format!(
+                    "populate_tags: failed for {}: {}",
+                    conv_id, e
+                ));
+            }
         }
     }
 
@@ -674,6 +690,7 @@ impl App {
 
         for (conv_indices, event_record, _did) in participant_events {
             if let Some(conv_id) = self.tag_map.get(&event_record.tag).cloned() {
+                self.mls.mark_tag_seen(&event_record.tag);
                 let group_id = match hex::decode(&conv_id) {
                     Ok(id) => id,
                     Err(_) => continue,
@@ -734,18 +751,15 @@ impl App {
                             }
                             EventKind::Commit => {
                                 let new_epoch = decrypted.event.epoch;
-                                if let Ok(new_tag) =
-                                    moat_core::derive_tag_from_group_id(&group_id, new_epoch)
+                                if let Some(conv) = self
+                                    .conversations
+                                    .iter_mut()
+                                    .find(|c| c.id == conv_id)
                                 {
-                                    self.tag_map.insert(new_tag, conv_id.clone());
-                                    if let Some(conv) = self
-                                        .conversations
-                                        .iter_mut()
-                                        .find(|c| c.id == conv_id)
-                                    {
-                                        conv.current_epoch = new_epoch;
-                                    }
+                                    conv.current_epoch = new_epoch;
                                 }
+                                // Regenerate candidate tags for the new epoch
+                                self.populate_candidate_tags(&conv_id, &group_id);
                             }
                             EventKind::Reaction => {
                                 if let Some(rp) = decrypted.event.reaction_payload() {
@@ -870,9 +884,7 @@ impl App {
             unread: 1,
         });
 
-        if let Ok(current_tag) = moat_core::derive_tag_from_group_id(&group_id, 1) {
-            self.tag_map.insert(current_tag, conv_id);
-        }
+        self.populate_candidate_tags(&conv_id, &group_id);
 
         self.debug_log
             .log("process_welcome: successfully joined group");
@@ -940,7 +952,7 @@ impl App {
 
             // Get or create device name for multi-device support
             let device_name = self.keys.get_or_create_device_name()?;
-            let credential = MoatCredential::new(client.did(), &device_name);
+            let credential = MoatCredential::new(client.did(), &device_name, *self.mls.device_id());
 
             // Use MoatSession for persistent key generation
             let (key_package, key_bundle) = self.mls.generate_key_package(&credential)?;
@@ -1172,7 +1184,7 @@ impl App {
         let key_bundle = self.keys.load_identity_key()?;
         let did = self.client.as_ref().unwrap().did().to_string();
         let device_name = self.keys.get_or_create_device_name()?;
-        let credential = MoatCredential::new(&did, &device_name);
+        let credential = MoatCredential::new(&did, &device_name, *self.mls.device_id());
 
         self.set_status("Creating encrypted group...".to_string());
 
@@ -1219,14 +1231,12 @@ impl App {
             unread: 0,
         });
 
-        // 11. Register current epoch's tag for this conversation (for future messages)
-        let current_tag = moat_core::derive_tag_from_group_id(&group_id, 1)?;
+        // 11. Register candidate tags for this conversation
+        self.populate_candidate_tags(&conv_id, &group_id);
         self.debug_log.log(&format!(
-            "start_conv: registering tag {:02x?} for conv {}",
-            &current_tag[..4],
+            "start_conv: registered candidate tags for conv {}",
             &conv_id[..16]
         ));
-        self.tag_map.insert(current_tag, conv_id.clone());
 
         // 12. Select the new conversation and switch to input mode
         self.active_conversation = Some(self.conversations.len() - 1);
@@ -1338,16 +1348,17 @@ impl App {
         let conv_id = conv.id.clone();
         let participant_did = conv.participant_did.clone();
         let participant_name = conv.name.clone();
-        let current_epoch = conv.current_epoch;
-
         let group_id = match hex::decode(&conv_id) {
             Ok(id) => id,
             Err(_) => return,
         };
 
-        // Generate valid tags
-        let valid_tags: std::collections::HashSet<[u8; 16]> = (0..=current_epoch)
-            .filter_map(|epoch| moat_core::derive_tag_from_group_id(&group_id, epoch).ok())
+        // Collect valid tags from the tag_map (already populated by populate_candidate_tags)
+        let valid_tags: std::collections::HashSet<[u8; 16]> = self
+            .tag_map
+            .iter()
+            .filter(|(_, cid)| *cid == &conv_id)
+            .map(|(tag, _)| *tag)
             .collect();
 
         // Get local rkeys to avoid duplicates
@@ -1851,13 +1862,8 @@ impl App {
                     credential.device_name()
                 ));
 
-                // Get epoch BEFORE adding device - commit must be published with pre-advance tag
-                // so other members (who haven't advanced yet) can see it
-                let epoch_before = self.mls.get_group_epoch(&group_id)
-                    .ok()
-                    .flatten()
-                    .unwrap_or(0);
-                let commit_tag = match moat_core::derive_tag_from_group_id(&group_id, epoch_before) {
+                // Derive tag for the commit using pre-advance counter
+                let commit_tag = match self.mls.derive_next_tag(&group_id, &key_bundle) {
                     Ok(t) => t,
                     Err(e) => {
                         self.debug_log.log(&format!(
@@ -1884,24 +1890,12 @@ impl App {
                             ));
                         }
 
-                        // Get new epoch for updating tag map
-                        let epoch_after = self.mls.get_group_epoch(&group_id)
-                            .ok()
-                            .flatten()
-                            .unwrap_or(1);
-                        let new_tag = match moat_core::derive_tag_from_group_id(&group_id, epoch_after) {
-                            Ok(t) => t,
-                            Err(e) => {
-                                self.debug_log.log(&format!(
-                                    "poll_devices: failed to derive post-add tag: {}",
-                                    e
-                                ));
-                                continue;
+                        // Repopulate candidate tags for the new epoch
+                        if let Ok(tags) = self.mls.populate_candidate_tags(&group_id) {
+                            for t in tags {
+                                self.tag_map.insert(t, conv_id.clone());
                             }
-                        };
-
-                        // Update tag map with new epoch's tag
-                        self.tag_map.insert(new_tag, conv_id.clone());
+                        }
 
                         // Publish the commit with PRE-advance epoch tag so others can see it
                         if let Err(e) = client.publish_event(&commit_tag, &welcome_result.commit).await {
@@ -1910,10 +1904,7 @@ impl App {
                                 e
                             ));
                         } else {
-                            self.debug_log.log(&format!(
-                                "poll_devices: published commit with epoch {} tag",
-                                epoch_before
-                            ));
+                            self.debug_log.log("poll_devices: published commit");
                         }
 
                         // Encrypt and publish welcome for the new device using our stealth addresses
@@ -1963,7 +1954,9 @@ impl App {
                             .unwrap_or_else(|| "Unknown".to_string());
 
                         if let Some(conv) = self.conversations.iter_mut().find(|c| c.id == conv_id) {
-                            conv.current_epoch = epoch_after;
+                            if let Ok(Some(new_epoch)) = self.mls.get_group_epoch(&group_id) {
+                                conv.current_epoch = new_epoch;
+                            }
                         }
 
                         // Add device alert for UI notification

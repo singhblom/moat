@@ -1,11 +1,11 @@
 //! Integration tests for moat-core
 
-use crate::{derive_tag_from_group_id, pad_to_bucket, unpad, Event, EventKind, Error, ErrorCode, MoatCredential, MoatSession};
+use crate::{pad_to_bucket, unpad, Event, EventKind, Error, ErrorCode, MoatCredential, MoatSession, tag::derive_event_tag};
 
 #[test]
 fn test_key_package_generation() {
     let session = MoatSession::new();
-    let credential = MoatCredential::new("did:plc:alice123", "Test Device");
+    let credential = MoatCredential::new("did:plc:alice123", "Test Device", [0u8; 16]);
 
     let (key_package, key_bundle) = session.generate_key_package(&credential).unwrap();
 
@@ -22,7 +22,7 @@ fn test_key_package_generation() {
 #[test]
 fn test_create_group() {
     let session = MoatSession::new();
-    let credential = MoatCredential::new("did:plc:alice123", "Test Device");
+    let credential = MoatCredential::new("did:plc:alice123", "Test Device", [0u8; 16]);
     let (_key_package, key_bundle) = session.generate_key_package(&credential).unwrap();
 
     let group_id = session.create_group(&credential, &key_bundle).unwrap();
@@ -37,36 +37,43 @@ fn test_create_group() {
 
 #[test]
 fn test_tag_derivation_consistency() {
+    let secret = [1u8; 32];
     let group_id = b"test-group-id-12345";
+    let did = "did:plc:alice";
+    let device_id = [0u8; 16];
 
-    let tag1 = derive_tag_from_group_id(group_id, 0).unwrap();
-    let tag2 = derive_tag_from_group_id(group_id, 0).unwrap();
+    let tag1 = derive_event_tag(&secret, group_id, did, &device_id, 0).unwrap();
+    let tag2 = derive_event_tag(&secret, group_id, did, &device_id, 0).unwrap();
 
     // Same inputs produce same tag
     assert_eq!(tag1, tag2);
 }
 
 #[test]
-fn test_tag_changes_with_epoch() {
+fn test_tag_changes_with_counter() {
+    let secret = [1u8; 32];
     let group_id = b"test-group-id-12345";
+    let did = "did:plc:alice";
+    let device_id = [0u8; 16];
 
-    let tag_epoch_0 = derive_tag_from_group_id(group_id, 0).unwrap();
-    let tag_epoch_1 = derive_tag_from_group_id(group_id, 1).unwrap();
-    let tag_epoch_2 = derive_tag_from_group_id(group_id, 2).unwrap();
+    let tag0 = derive_event_tag(&secret, group_id, did, &device_id, 0).unwrap();
+    let tag1 = derive_event_tag(&secret, group_id, did, &device_id, 1).unwrap();
+    let tag2 = derive_event_tag(&secret, group_id, did, &device_id, 2).unwrap();
 
-    // Different epochs produce different tags
-    assert_ne!(tag_epoch_0, tag_epoch_1);
-    assert_ne!(tag_epoch_1, tag_epoch_2);
-    assert_ne!(tag_epoch_0, tag_epoch_2);
+    // Different counters produce different tags
+    assert_ne!(tag0, tag1);
+    assert_ne!(tag1, tag2);
+    assert_ne!(tag0, tag2);
 }
 
 #[test]
 fn test_tag_changes_with_group() {
-    let group_a = b"group-a";
-    let group_b = b"group-b";
+    let secret = [1u8; 32];
+    let did = "did:plc:alice";
+    let device_id = [0u8; 16];
 
-    let tag_a = derive_tag_from_group_id(group_a, 0).unwrap();
-    let tag_b = derive_tag_from_group_id(group_b, 0).unwrap();
+    let tag_a = derive_event_tag(&secret, b"group-a", did, &device_id, 0).unwrap();
+    let tag_b = derive_event_tag(&secret, b"group-b", did, &device_id, 0).unwrap();
 
     // Different groups produce different tags
     assert_ne!(tag_a, tag_b);
@@ -155,31 +162,28 @@ fn test_event_kinds() {
 #[test]
 fn test_tag_from_group() {
     let session = MoatSession::new();
-    let credential = MoatCredential::new("did:plc:alice123", "Test Device");
+    let credential = MoatCredential::new("did:plc:alice123", "Test Device", [0u8; 16]);
     let (_key_package, key_bundle) = session.generate_key_package(&credential).unwrap();
     let group_id = session.create_group(&credential, &key_bundle).unwrap();
 
-    // Derive tag from group_id and epoch
-    let epoch = session.get_group_epoch(&group_id).unwrap().unwrap();
-    let tag = derive_tag_from_group_id(&group_id, epoch).unwrap();
+    // Derive tag using derive_next_tag
+    let tag = session.derive_next_tag(&group_id, &key_bundle).unwrap();
     assert_eq!(tag.len(), 16);
 
-    // Tag should be consistent
-    let tag2 = derive_tag_from_group_id(&group_id, epoch).unwrap();
-    assert_eq!(tag, tag2);
+    // Next tag should be different (counter increments)
+    let tag2 = session.derive_next_tag(&group_id, &key_bundle).unwrap();
+    assert_ne!(tag, tag2);
 }
 
 #[test]
-fn test_tags_differ_across_epochs() {
-    let session = MoatSession::new();
-    let credential = MoatCredential::new("did:plc:alice123", "Test Device");
-    let (_key_package, key_bundle) = session.generate_key_package(&credential).unwrap();
-    let group_id = session.create_group(&credential, &key_bundle).unwrap();
+fn test_tags_differ_across_counters() {
+    let secret = [1u8; 32];
+    let group_id = b"test-group";
+    let did = "did:plc:alice123";
+    let device_id = [0u8; 16];
 
-    let epochs = vec![0, 1, 2, 3];
-    let tags: Vec<[u8; 16]> = epochs
-        .iter()
-        .map(|&ep| derive_tag_from_group_id(&group_id, ep).unwrap())
+    let tags: Vec<[u8; 16]> = (0..4)
+        .map(|c| derive_event_tag(&secret, group_id, did, &device_id, c).unwrap())
         .collect();
 
     assert_eq!(tags.len(), 4);
@@ -187,7 +191,7 @@ fn test_tags_differ_across_epochs() {
     // All tags should be different
     for i in 0..tags.len() {
         for j in (i + 1)..tags.len() {
-            assert_ne!(tags[i], tags[j], "Tags for different epochs should differ");
+            assert_ne!(tags[i], tags[j], "Tags for different counters should differ");
         }
     }
 }
@@ -221,7 +225,7 @@ fn test_moat_session_in_memory() {
     let session = MoatSession::new();
 
     // Generate key package
-    let credential = MoatCredential::new("did:plc:alice123", "Test Device");
+    let credential = MoatCredential::new("did:plc:alice123", "Test Device", [0u8; 16]);
     let (key_package, key_bundle) = session.generate_key_package(&credential).unwrap();
 
     assert!(!key_package.is_empty());
@@ -239,7 +243,7 @@ fn test_moat_session_in_memory() {
 #[test]
 fn test_moat_session_persistence() {
     let group_id: Vec<u8>;
-    let credential = MoatCredential::new("did:plc:alice123", "Test Device");
+    let credential = MoatCredential::new("did:plc:alice123", "Test Device", [0u8; 16]);
     let state: Vec<u8>;
 
     // First session: create group, export state
@@ -272,7 +276,7 @@ fn test_encrypt_event() {
     let session = MoatSession::new();
 
     // Create Alice
-    let alice_credential = MoatCredential::new("did:plc:alice123", "Alice Phone");
+    let alice_credential = MoatCredential::new("did:plc:alice123", "Alice Phone", [0u8; 16]);
     let (_alice_kp, alice_bundle) = session.generate_key_package(&alice_credential).unwrap();
     let group_id = session.create_group(&alice_credential, &alice_bundle).unwrap();
 
@@ -295,11 +299,11 @@ fn test_two_party_messaging() {
     let bob_session = MoatSession::new();
 
     // Alice creates her identity with device name
-    let alice_credential = MoatCredential::new("did:plc:alice123", "Alice Phone");
+    let alice_credential = MoatCredential::new("did:plc:alice123", "Alice Phone", [0u8; 16]);
     let (_alice_kp, alice_bundle) = alice_session.generate_key_package(&alice_credential).unwrap();
 
     // Bob creates his identity with device name
-    let bob_credential = MoatCredential::new("did:plc:bob456", "Bob Laptop");
+    let bob_credential = MoatCredential::new("did:plc:bob456", "Bob Laptop", [0u8; 16]);
     let (bob_kp, bob_bundle) = bob_session.generate_key_package(&bob_credential).unwrap();
 
     // Alice creates a group
@@ -351,8 +355,8 @@ fn test_state_version_header() {
     // Check magic bytes
     assert_eq!(&state[0..4], b"MOAT");
 
-    // Check version (little-endian u16 = 2)
-    assert_eq!(state[4], 2);
+    // Check version (little-endian u16 = 3)
+    assert_eq!(state[4], 3);
     assert_eq!(state[5], 0);
 
     // Header is at least 22 bytes (4 magic + 2 version + 16 device_id)
@@ -461,14 +465,14 @@ fn test_error_code_from_real_failure() {
 
 #[test]
 fn test_moat_credential_creation() {
-    let cred = MoatCredential::new("did:plc:test123", "My Phone");
+    let cred = MoatCredential::new("did:plc:test123", "My Phone", [0u8; 16]);
     assert_eq!(cred.did(), "did:plc:test123");
     assert_eq!(cred.device_name(), "My Phone");
 }
 
 #[test]
 fn test_moat_credential_serialization() {
-    let cred = MoatCredential::new("did:plc:abc", "Work Laptop");
+    let cred = MoatCredential::new("did:plc:abc", "Work Laptop", [0u8; 16]);
     let bytes = cred.to_bytes().unwrap();
     let recovered = MoatCredential::from_bytes(&bytes).unwrap();
     assert_eq!(cred.did(), recovered.did());
@@ -478,7 +482,7 @@ fn test_moat_credential_serialization() {
 #[test]
 fn test_extract_credential_from_key_package() {
     let session = MoatSession::new();
-    let credential = MoatCredential::new("did:plc:xyz789", "Test Device");
+    let credential = MoatCredential::new("did:plc:xyz789", "Test Device", [0u8; 16]);
 
     let (key_package_bytes, _key_bundle) = session.generate_key_package(&credential).unwrap();
 
@@ -495,8 +499,8 @@ fn test_get_group_members() {
     let alice_session = MoatSession::new();
     let bob_session = MoatSession::new();
 
-    let alice_credential = MoatCredential::new("did:plc:alice123", "Alice Phone");
-    let bob_credential = MoatCredential::new("did:plc:bob456", "Bob Laptop");
+    let alice_credential = MoatCredential::new("did:plc:alice123", "Alice Phone", [0u8; 16]);
+    let bob_credential = MoatCredential::new("did:plc:bob456", "Bob Laptop", [0u8; 16]);
 
     let (_alice_kp, alice_bundle) = alice_session.generate_key_package(&alice_credential).unwrap();
     let (bob_kp, _bob_bundle) = bob_session.generate_key_package(&bob_credential).unwrap();
@@ -531,8 +535,8 @@ fn test_multi_device_same_did() {
     let session = MoatSession::new();
 
     let did = "did:plc:user123";
-    let device1 = MoatCredential::new(did, "Phone");
-    let device2 = MoatCredential::new(did, "Laptop");
+    let device1 = MoatCredential::new(did, "Phone", [1u8; 16]);
+    let device2 = MoatCredential::new(did, "Laptop", [2u8; 16]);
 
     let (kp1, _) = session.generate_key_package(&device1).unwrap();
     let (kp2, _) = session.generate_key_package(&device2).unwrap();
@@ -551,8 +555,8 @@ fn test_get_group_dids() {
     let alice_session = MoatSession::new();
     let bob_session = MoatSession::new();
 
-    let alice_credential = MoatCredential::new("did:plc:alice123", "Alice Phone");
-    let bob_credential = MoatCredential::new("did:plc:bob456", "Bob Laptop");
+    let alice_credential = MoatCredential::new("did:plc:alice123", "Alice Phone", [0u8; 16]);
+    let bob_credential = MoatCredential::new("did:plc:bob456", "Bob Laptop", [0u8; 16]);
 
     let (_alice_kp, alice_bundle) = alice_session.generate_key_package(&alice_credential).unwrap();
     let (bob_kp, _bob_bundle) = bob_session.generate_key_package(&bob_credential).unwrap();
@@ -571,8 +575,8 @@ fn test_is_did_in_group() {
     let alice_session = MoatSession::new();
     let bob_session = MoatSession::new();
 
-    let alice_credential = MoatCredential::new("did:plc:alice123", "Alice Phone");
-    let bob_credential = MoatCredential::new("did:plc:bob456", "Bob Laptop");
+    let alice_credential = MoatCredential::new("did:plc:alice123", "Alice Phone", [0u8; 16]);
+    let bob_credential = MoatCredential::new("did:plc:bob456", "Bob Laptop", [0u8; 16]);
 
     let (_alice_kp, alice_bundle) = alice_session.generate_key_package(&alice_credential).unwrap();
     let (bob_kp, _bob_bundle) = bob_session.generate_key_package(&bob_credential).unwrap();
@@ -596,9 +600,9 @@ fn test_add_device_for_existing_did() {
     let alice_device2_session = MoatSession::new();
     let bob_session = MoatSession::new();
 
-    let alice_device1_cred = MoatCredential::new("did:plc:alice123", "Alice Phone");
-    let alice_device2_cred = MoatCredential::new("did:plc:alice123", "Alice Laptop");
-    let bob_cred = MoatCredential::new("did:plc:bob456", "Bob Laptop");
+    let alice_device1_cred = MoatCredential::new("did:plc:alice123", "Alice Phone", [1u8; 16]);
+    let alice_device2_cred = MoatCredential::new("did:plc:alice123", "Alice Laptop", [2u8; 16]);
+    let bob_cred = MoatCredential::new("did:plc:bob456", "Bob Laptop", [0u8; 16]);
 
     let (_kp1, alice_bundle1) = alice_device1_session.generate_key_package(&alice_device1_cred).unwrap();
     let (kp2, _) = alice_device2_session.generate_key_package(&alice_device2_cred).unwrap();
@@ -634,9 +638,9 @@ fn test_add_device_fails_for_non_member() {
     let bob_session = MoatSession::new();
     let charlie_session = MoatSession::new();
 
-    let alice_cred = MoatCredential::new("did:plc:alice123", "Alice Phone");
-    let bob_cred = MoatCredential::new("did:plc:bob456", "Bob Laptop");
-    let charlie_cred = MoatCredential::new("did:plc:charlie789", "Charlie Tablet");
+    let alice_cred = MoatCredential::new("did:plc:alice123", "Alice Phone", [0u8; 16]);
+    let bob_cred = MoatCredential::new("did:plc:bob456", "Bob Laptop", [0u8; 16]);
+    let charlie_cred = MoatCredential::new("did:plc:charlie789", "Charlie Tablet", [0u8; 16]);
 
     let (_kp, alice_bundle) = alice_session.generate_key_package(&alice_cred).unwrap();
     let (bob_kp, _) = bob_session.generate_key_package(&bob_cred).unwrap();
@@ -658,8 +662,8 @@ fn test_remove_member() {
     let alice_session = MoatSession::new();
     let bob_session = MoatSession::new();
 
-    let alice_cred = MoatCredential::new("did:plc:alice123", "Alice Phone");
-    let bob_cred = MoatCredential::new("did:plc:bob456", "Bob Laptop");
+    let alice_cred = MoatCredential::new("did:plc:alice123", "Alice Phone", [0u8; 16]);
+    let bob_cred = MoatCredential::new("did:plc:bob456", "Bob Laptop", [0u8; 16]);
 
     let (_kp, alice_bundle) = alice_session.generate_key_package(&alice_cred).unwrap();
     let (bob_kp, _) = bob_session.generate_key_package(&bob_cred).unwrap();
@@ -694,9 +698,9 @@ fn test_kick_user() {
     let bob_device1_session = MoatSession::new();
     let bob_device2_session = MoatSession::new();
 
-    let alice_cred = MoatCredential::new("did:plc:alice123", "Alice Phone");
-    let bob_device1_cred = MoatCredential::new("did:plc:bob456", "Bob Phone");
-    let bob_device2_cred = MoatCredential::new("did:plc:bob456", "Bob Laptop");
+    let alice_cred = MoatCredential::new("did:plc:alice123", "Alice Phone", [0u8; 16]);
+    let bob_device1_cred = MoatCredential::new("did:plc:bob456", "Bob Phone", [1u8; 16]);
+    let bob_device2_cred = MoatCredential::new("did:plc:bob456", "Bob Laptop", [2u8; 16]);
 
     let (_kp, alice_bundle) = alice_session.generate_key_package(&alice_cred).unwrap();
     let (bob_kp1, _bob_bundle1) = bob_device1_session.generate_key_package(&bob_device1_cred).unwrap();
@@ -743,8 +747,8 @@ fn test_reaction_encrypt_decrypt_roundtrip() {
     let alice_session = MoatSession::new();
     let bob_session = MoatSession::new();
 
-    let alice_cred = MoatCredential::new("did:plc:alice123", "Alice Phone");
-    let bob_cred = MoatCredential::new("did:plc:bob456", "Bob Laptop");
+    let alice_cred = MoatCredential::new("did:plc:alice123", "Alice Phone", [0u8; 16]);
+    let bob_cred = MoatCredential::new("did:plc:bob456", "Bob Laptop", [0u8; 16]);
 
     let (_alice_kp, alice_bundle) = alice_session.generate_key_package(&alice_cred).unwrap();
     let (bob_kp, bob_bundle) = bob_session.generate_key_package(&bob_cred).unwrap();

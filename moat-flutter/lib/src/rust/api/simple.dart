@@ -33,12 +33,35 @@ Uint8List? tryDecryptStealth({
   payload: payload,
 );
 
-/// Derive a 16-byte conversation tag from group ID and epoch.
-Uint8List deriveTag({required List<int> groupId, required BigInt epoch}) =>
-    RustLib.instance.api.crateApiSimpleDeriveTag(
-      groupId: groupId,
-      epoch: epoch,
-    );
+/// Generate candidate tags for recipient scanning.
+///
+/// Returns a list of (tag, counter) pairs for the given sender in the group.
+List<Uint8List> generateCandidateTags({
+  required MoatSessionHandle handle,
+  required List<int> groupId,
+  required String senderDid,
+  required List<int> senderDeviceId,
+  required BigInt fromCounter,
+  required BigInt count,
+}) => RustLib.instance.api.crateApiSimpleGenerateCandidateTags(
+  handle: handle,
+  groupId: groupId,
+  senderDid: senderDid,
+  senderDeviceId: senderDeviceId,
+  fromCounter: fromCounter,
+  count: count,
+);
+
+/// Derive the next unique tag for publishing an event (increments counter).
+Uint8List deriveNextTag({
+  required MoatSessionHandle handle,
+  required List<int> groupId,
+  required List<int> keyBundle,
+}) => RustLib.instance.api.crateApiSimpleDeriveNextTag(
+  handle: handle,
+  groupId: groupId,
+  keyBundle: keyBundle,
+);
 
 /// Pad plaintext to bucket size (256, 1024, or 4096 bytes).
 Uint8List padToBucket({required List<int> plaintext}) =>
@@ -105,9 +128,20 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
   /// Check if there are unsaved changes.
   bool hasPendingChanges();
 
+  /// Mark a tag as seen, advancing the seen counter for that sender.
+  ///
+  /// Call this after matching a tag from `populate_candidate_tags`.
+  /// Returns true if the tag was found and the counter was updated.
+  bool markTagSeen({required List<int> tag});
+
   /// Create a new session with empty state.
   static MoatSessionHandle newSession() =>
       RustLib.instance.api.crateApiSimpleMoatSessionHandleNewSession();
+
+  /// Generate all candidate tags for every member in a group.
+  ///
+  /// Returns a flat list of candidate tags for recipient scanning.
+  List<Uint8List> populateCandidateTags({required List<int> groupId});
 
   /// Process a welcome message to join a group. Returns the group ID.
   Future<Uint8List> processWelcome({required List<int> welcomeBytes});

@@ -282,16 +282,14 @@ async fn cmd_fetch(storage_dir: Option<PathBuf>, repository: &str) -> anyhow::Re
 
     eprintln!("Fetched {} new events", events.len());
 
-    // Build tag -> group_id map for decryption
+    // Build tag -> group_id map for decryption using candidate tags
     let mut tag_map = std::collections::HashMap::new();
     let group_ids = keys.list_groups().unwrap_or_default();
     for gid in &group_ids {
         let group_id_bytes = hex::decode(gid).unwrap_or_default();
-        if let Ok(Some(epoch)) = mls.get_group_epoch(&group_id_bytes) {
-            for ep in 0..=epoch {
-                if let Ok(tag) = moat_core::derive_tag_from_group_id(&group_id_bytes, ep) {
-                    tag_map.insert(tag, group_id_bytes.clone());
-                }
+        if let Ok(tags) = mls.populate_candidate_tags(&group_id_bytes) {
+            for tag in tags {
+                tag_map.insert(tag, group_id_bytes.clone());
             }
         }
     }
@@ -315,6 +313,7 @@ async fn cmd_fetch(storage_dir: Option<PathBuf>, repository: &str) -> anyhow::Re
 
         // Try to decrypt
         if let Some(group_id) = tag_map.get(&event.tag) {
+            mls.mark_tag_seen(&event.tag);
             match mls.decrypt_event(group_id, &event.ciphertext) {
                 Ok(outcome) => {
                     let decrypted = outcome.into_result();
@@ -439,18 +438,16 @@ async fn cmd_send_test(
         anyhow::bail!("No MLS state found. Start a conversation in the TUI first.");
     };
 
-    // Find group_id for this tag
+    // Find group_id for this tag using candidate tag scanning
     let group_ids = keys.list_groups().unwrap_or_default();
     let mut found_group: Option<Vec<u8>> = None;
 
     for gid in &group_ids {
         let group_id_bytes = hex::decode(gid).unwrap_or_default();
-        if let Ok(Some(epoch)) = mls.get_group_epoch(&group_id_bytes) {
-            if let Ok(current_tag) = moat_core::derive_tag_from_group_id(&group_id_bytes, epoch) {
-                if current_tag == tag {
-                    found_group = Some(group_id_bytes);
-                    break;
-                }
+        if let Ok(tags) = mls.populate_candidate_tags(&group_id_bytes) {
+            if tags.contains(&tag) {
+                found_group = Some(group_id_bytes);
+                break;
             }
         }
     }
@@ -643,9 +640,8 @@ async fn cmd_remove_device(
     std::fs::write(&temp_path, &state)?;
     std::fs::rename(&temp_path, &mls_path)?;
 
-    // Get current epoch for tag
-    let epoch = mls.get_group_epoch(&group_id)?.unwrap_or(1);
-    let tag = moat_core::derive_tag_from_group_id(&group_id, epoch)?;
+    // Derive tag for the commit
+    let tag = mls.derive_next_tag(&group_id, &key_bundle)?;
 
     // Publish the commit
     let uri = client.publish_event(&tag, &result.commit).await?;
@@ -693,9 +689,8 @@ async fn cmd_kick(
     std::fs::write(&temp_path, &state)?;
     std::fs::rename(&temp_path, &mls_path)?;
 
-    // Get current epoch for tag
-    let epoch = mls.get_group_epoch(&group_id)?.unwrap_or(1);
-    let tag = moat_core::derive_tag_from_group_id(&group_id, epoch)?;
+    // Derive tag for the commit
+    let tag = mls.derive_next_tag(&group_id, &key_bundle)?;
 
     // Publish the commit
     let uri = client.publish_event(&tag, &result.commit).await?;
@@ -739,9 +734,8 @@ async fn cmd_leave(storage_dir: Option<PathBuf>, conversation: &str) -> anyhow::
     std::fs::write(&temp_path, &state)?;
     std::fs::rename(&temp_path, &mls_path)?;
 
-    // Get current epoch for tag
-    let epoch = mls.get_group_epoch(&group_id)?.unwrap_or(1);
-    let tag = moat_core::derive_tag_from_group_id(&group_id, epoch)?;
+    // Derive tag for the commit
+    let tag = mls.derive_next_tag(&group_id, &key_bundle)?;
 
     // Publish the commit
     let uri = client.publish_event(&tag, &result.commit).await?;

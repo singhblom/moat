@@ -341,9 +341,13 @@ class AuthProvider extends ChangeNotifier {
     return tryDecryptStealth(scanPrivkey: stealthPrivkey, payload: ciphertext);
   }
 
-  /// Derive a conversation tag from group ID and epoch
-  Uint8List deriveConversationTag(Uint8List groupId, int epoch) {
-    return deriveTag(groupId: groupId, epoch: BigInt.from(epoch));
+  /// Populate candidate tags for all members in a group and register them.
+  Future<void> populateConversationTags(Uint8List groupId) async {
+    if (_moatSession == null) return;
+    final tags = _moatSession!.populateCandidateTags(groupId: groupId);
+    for (final tag in tags) {
+      await registerTag(Uint8List.fromList(tag), groupId);
+    }
   }
 
   /// Register a tag in the tag map

@@ -1,4 +1,4 @@
-use moat_core::{pad_to_bucket, unpad, Bucket, derive_tag_from_group_id};
+use moat_core::{pad_to_bucket, unpad, Bucket, derive_event_tag};
 use proptest::prelude::*;
 
 proptest! {
@@ -44,46 +44,48 @@ proptest! {
 
     #[test]
     fn tag_is_always_16_bytes(
+        export_secret in proptest::collection::vec(any::<u8>(), 32..=32),
         group_id in proptest::collection::vec(any::<u8>(), 1..64),
-        epoch in any::<u64>(),
+        counter in any::<u64>(),
     ) {
-        let tag = derive_tag_from_group_id(&group_id, epoch).unwrap();
+        let tag = derive_event_tag(&export_secret, &group_id, "did:plc:test", &[0u8; 16], counter).unwrap();
         prop_assert_eq!(tag.len(), 16);
     }
 
     #[test]
     fn tag_is_deterministic(
+        export_secret in proptest::collection::vec(any::<u8>(), 32..=32),
         group_id in proptest::collection::vec(any::<u8>(), 1..64),
-        epoch in any::<u64>(),
+        counter in any::<u64>(),
     ) {
-        let tag1 = derive_tag_from_group_id(&group_id, epoch).unwrap();
-        let tag2 = derive_tag_from_group_id(&group_id, epoch).unwrap();
+        let tag1 = derive_event_tag(&export_secret, &group_id, "did:plc:test", &[0u8; 16], counter).unwrap();
+        let tag2 = derive_event_tag(&export_secret, &group_id, "did:plc:test", &[0u8; 16], counter).unwrap();
         prop_assert_eq!(tag1, tag2);
     }
 
     #[test]
-    fn different_epochs_produce_different_tags(
+    fn different_counters_produce_different_tags(
+        export_secret in proptest::collection::vec(any::<u8>(), 32..=32),
         group_id in proptest::collection::vec(any::<u8>(), 1..64),
-        epoch1 in any::<u64>(),
-        epoch2 in any::<u64>(),
+        counter1 in any::<u64>(),
+        counter2 in any::<u64>(),
     ) {
-        prop_assume!(epoch1 != epoch2);
-        let tag1 = derive_tag_from_group_id(&group_id, epoch1).unwrap();
-        let tag2 = derive_tag_from_group_id(&group_id, epoch2).unwrap();
+        prop_assume!(counter1 != counter2);
+        let tag1 = derive_event_tag(&export_secret, &group_id, "did:plc:test", &[0u8; 16], counter1).unwrap();
+        let tag2 = derive_event_tag(&export_secret, &group_id, "did:plc:test", &[0u8; 16], counter2).unwrap();
         prop_assert_ne!(tag1, tag2);
     }
 
     #[test]
     fn different_groups_produce_different_tags(
+        export_secret in proptest::collection::vec(any::<u8>(), 32..=32),
         group_id1 in proptest::collection::vec(any::<u8>(), 1..64),
         group_id2 in proptest::collection::vec(any::<u8>(), 1..64),
-        epoch in any::<u64>(),
+        counter in any::<u64>(),
     ) {
         prop_assume!(group_id1 != group_id2);
-        let tag1 = derive_tag_from_group_id(&group_id1, epoch).unwrap();
-        let tag2 = derive_tag_from_group_id(&group_id2, epoch).unwrap();
-        // With overwhelming probability, different inputs produce different tags.
-        // HKDF is a PRF so collisions are negligible for distinct inputs.
+        let tag1 = derive_event_tag(&export_secret, &group_id1, "did:plc:test", &[0u8; 16], counter).unwrap();
+        let tag2 = derive_event_tag(&export_secret, &group_id2, "did:plc:test", &[0u8; 16], counter).unwrap();
         prop_assert_ne!(tag1, tag2);
     }
 }

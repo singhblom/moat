@@ -14,7 +14,7 @@
 //!
 //! let session = MoatSession::new();
 //!
-//! let credential = MoatCredential::new("did:plc:alice123", "My Laptop");
+//! let credential = MoatCredential::new("did:plc:alice123", "My Laptop", [0u8; 16]);
 //! let (key_package, key_bundle) = session.generate_key_package(&credential).unwrap();
 //! let group_id = session.create_group(&credential, &key_bundle).unwrap();
 //!
@@ -49,7 +49,7 @@ pub use crate::event::{DecryptOutcome, Event, EventKind, ReactionPayload, Sender
 pub use crate::padding::{pad_to_bucket, unpad, Bucket};
 pub use crate::stealth::{encrypt_for_stealth, generate_stealth_keypair, try_decrypt_stealth};
 pub(crate) use crate::storage::MoatProvider;
-pub use crate::tag::derive_tag_from_group_id;
+pub use crate::tag::{derive_event_tag, generate_candidate_tags, TAG_EXPORT_SECRET_LABEL, TAG_EXPORT_SECRET_LEN, TAG_GAP_LIMIT};
 
 /// The ciphersuite used by Moat
 pub const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
@@ -102,7 +102,7 @@ pub struct RemoveResult {
 const STATE_MAGIC: &[u8; 4] = b"MOAT";
 
 /// Current state format version.
-const STATE_VERSION: u16 = 2;
+const STATE_VERSION: u16 = 3;
 
 /// Size of the state header: 4 (magic) + 2 (version) + 16 (device_id) = 22 bytes.
 const STATE_HEADER_SIZE: usize = 4 + 2 + 16;
@@ -115,6 +115,12 @@ const EPOCH_FINGERPRINT_LEN: usize = 16;
 
 /// Key for the hash chain map: (group_id, device_id).
 type HashChainKey = (Vec<u8>, [u8; 16]);
+
+/// Key for the tag counter map: (group_id, epoch).
+type TagCounterKey = (Vec<u8>, u64);
+
+/// Key for the seen counter map: (group_id, sender_did, sender_device_id).
+type SeenCounterKey = (Vec<u8>, String, [u8; 16]);
 
 /// Maximum number of automatic conflict recovery retries.
 const CONFLICT_RETRY_LIMIT: usize = 2;
@@ -163,11 +169,11 @@ pub enum PendingOperation {
 /// Read-only methods (`export_state`, `get_group_epoch`, `has_pending_changes`,
 /// `device_id`) are safe to call concurrently.
 ///
-/// # State format (v2)
+/// # State format (v3)
 ///
 /// The exported state has the following layout:
 /// - `b"MOAT"` (4 bytes) — magic identifier
-/// - Version (2 bytes, little-endian u16) — currently `2`
+/// - Version (2 bytes, little-endian u16) — currently `3`
 /// - Device ID (16 bytes) — random, generated once per device
 /// - MLS state length (8 bytes, little-endian u64)
 /// - MLS state (variable) — raw storage data
@@ -177,6 +183,20 @@ pub enum PendingOperation {
 ///   - group_id (variable)
 ///   - device_id (16 bytes)
 ///   - last_event_hash (32 bytes)
+/// - Tag counter entry count (8 bytes, little-endian u64)
+/// - Tag counter entries: for each entry:
+///   - group_id length (4 bytes, little-endian u32)
+///   - group_id (variable)
+///   - epoch (8 bytes, little-endian u64)
+///   - counter (8 bytes, little-endian u64)
+/// - Seen counter entry count (8 bytes, little-endian u64)
+/// - Seen counter entries: for each entry:
+///   - group_id length (4 bytes, little-endian u32)
+///   - group_id (variable)
+///   - sender_did length (4 bytes, little-endian u32)
+///   - sender_did (variable, UTF-8)
+///   - sender_device_id (16 bytes)
+///   - counter (8 bytes, little-endian u64)
 ///
 /// # Example
 ///
@@ -185,7 +205,7 @@ pub enum PendingOperation {
 ///
 /// // Create a new session
 /// let session = MoatSession::new();
-/// let credential = MoatCredential::new("did:plc:alice123", "My Laptop");
+/// let credential = MoatCredential::new("did:plc:alice123", "My Laptop", [0u8; 16]);
 /// let (key_package, key_bundle) = session.generate_key_package(&credential).unwrap();
 /// let group_id = session.create_group(&credential, &key_bundle).unwrap();
 ///
@@ -203,6 +223,15 @@ pub struct MoatSession {
     /// Per-device hash chain state: maps (group_id, device_id) → last event hash.
     /// Used for transcript integrity verification.
     hash_chains: RwLock<HashMap<HashChainKey, [u8; 32]>>,
+    /// Outgoing tag counter: maps (group_id, epoch) → next counter value.
+    /// Pre-incremented before publishing for crash safety.
+    tag_counters: RwLock<HashMap<TagCounterKey, u64>>,
+    /// Recipient-side seen counter: maps (group_id, sender_did, device_id) → highest counter seen.
+    /// Used by populate_candidate_tags to scan the right window.
+    seen_counters: RwLock<HashMap<SeenCounterKey, u64>>,
+    /// In-memory tag → (group_id, sender_did, device_id, counter) reverse lookup.
+    /// Populated by populate_candidate_tags, used by mark_tag_seen. Not persisted.
+    tag_metadata: RwLock<HashMap<[u8; 16], (Vec<u8>, String, [u8; 16], u64)>>,
     /// In-memory pending operations for conflict recovery. Maps group_id → operation.
     /// Not persisted — if the app restarts mid-operation, the user retries manually.
     pending_ops: RwLock<HashMap<Vec<u8>, PendingOperation>>,
@@ -218,6 +247,9 @@ impl MoatSession {
             provider: MoatProvider::new(),
             device_id,
             hash_chains: RwLock::new(HashMap::new()),
+            tag_counters: RwLock::new(HashMap::new()),
+            seen_counters: RwLock::new(HashMap::new()),
+            tag_metadata: RwLock::new(HashMap::new()),
             pending_ops: RwLock::new(HashMap::new()),
         }
     }
@@ -236,10 +268,10 @@ impl MoatSession {
         }
         let version = u16::from_le_bytes([state[4], state[5]]);
         match version {
-            1 => return Err(Error::StateVersionMismatch(
-                "v1 state not supported; re-initialize session".into()
+            1 | 2 => return Err(Error::StateVersionMismatch(
+                format!("v{version} state not supported; re-initialize session")
             )),
-            2 => {}
+            3 => {}
             _ => return Err(Error::Deserialization(format!("unsupported state version: {version}"))),
         }
         let mut device_id = [0u8; 16];
@@ -247,9 +279,9 @@ impl MoatSession {
 
         let rest = &state[STATE_HEADER_SIZE..];
 
-        // v2: MLS state length prefix + hash chain data
+        // MLS state with length prefix
         if rest.len() < 8 {
-            return Err(Error::Deserialization("state too short for v2 MLS length".into()));
+            return Err(Error::Deserialization("state too short for MLS length".into()));
         }
         let mls_len = u64::from_le_bytes(rest[..8].try_into().unwrap()) as usize;
         let rest = &rest[8..];
@@ -261,12 +293,21 @@ impl MoatSession {
         let rest = &rest[mls_len..];
 
         // Parse hash chain entries
-        let hash_chains = Self::deserialize_hash_chains(rest)?;
+        let (hash_chains, rest) = Self::deserialize_hash_chains(rest)?;
+
+        // v3: Parse tag counter entries
+        let (tag_counters, rest) = Self::deserialize_tag_counters(rest)?;
+
+        // Parse seen counter entries (may be absent in older state files)
+        let seen_counters = Self::deserialize_seen_counters(rest)?;
 
         Ok(Self {
             provider,
             device_id,
             hash_chains: RwLock::new(hash_chains),
+            tag_counters: RwLock::new(tag_counters),
+            seen_counters: RwLock::new(seen_counters),
+            tag_metadata: RwLock::new(HashMap::new()),
             pending_ops: RwLock::new(HashMap::new()),
         })
     }
@@ -282,18 +323,26 @@ impl MoatSession {
         self.provider.clear_pending_changes();
 
         let hash_chain_bytes = self.serialize_hash_chains();
+        let tag_counter_bytes = self.serialize_tag_counters();
+        let seen_counter_bytes = self.serialize_seen_counters();
 
         let mut buf = Vec::with_capacity(
-            STATE_HEADER_SIZE + 8 + raw_state.len() + hash_chain_bytes.len()
+            STATE_HEADER_SIZE + 8 + raw_state.len()
+            + hash_chain_bytes.len() + tag_counter_bytes.len()
+            + seen_counter_bytes.len()
         );
         buf.extend_from_slice(STATE_MAGIC);
         buf.extend_from_slice(&STATE_VERSION.to_le_bytes());
         buf.extend_from_slice(&self.device_id);
-        // v2: MLS state with length prefix
+        // MLS state with length prefix
         buf.extend_from_slice(&(raw_state.len() as u64).to_le_bytes());
         buf.extend_from_slice(&raw_state);
-        // v2: hash chain data
+        // Hash chain data
         buf.extend_from_slice(&hash_chain_bytes);
+        // v3: Tag counter data
+        buf.extend_from_slice(&tag_counter_bytes);
+        // Seen counter data (recipient-side)
+        buf.extend_from_slice(&seen_counter_bytes);
         Ok(buf)
     }
 
@@ -552,6 +601,8 @@ impl MoatSession {
     /// The event is serialized, padded, and encrypted using MLS.
     /// Sets transcript integrity fields (prev_event_hash, epoch_fingerprint,
     /// sender_device_id) before encryption.
+    /// Derives a unique per-event tag using the counter-based HD scheme.
+    /// The tag counter is pre-incremented for crash safety.
     /// Returns (conversation_tag, ciphertext).
     pub fn encrypt_event(
         &self,
@@ -568,6 +619,10 @@ impl MoatSession {
             serde_json::from_slice(key_bundle).map_err(|e| Error::Deserialization(e.to_string()))?;
         let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
             .map_err(|e| Error::Deserialization(e.to_string()))?;
+
+        // Extract our DID from the group's member list
+        let our_pubkey = signature_keys.to_public_vec();
+        let sender_did = self.extract_own_did(&group, &our_pubkey)?;
 
         // Build the event with transcript integrity fields
         let mut event = event.clone();
@@ -606,8 +661,27 @@ impl MoatSession {
             .tls_serialize_detached()
             .map_err(|e| Error::Serialization(e.to_string()))?;
 
-        // Derive conversation tag for current epoch
-        let tag = derive_tag_from_group_id(group_id, group.epoch().as_u64())?;
+        // Derive per-event tag using counter-based HD scheme
+        let epoch = group.epoch().as_u64();
+        let export_secret = self.derive_tag_export_secret(&group)?;
+        let counter_key = (group_id.to_vec(), epoch);
+
+        // Pre-increment counter for crash safety
+        let counter = {
+            let mut counters = self.tag_counters.write().unwrap();
+            let counter = counters.entry(counter_key).or_insert(0);
+            let current = *counter;
+            *counter = current + 1;
+            current
+        };
+
+        let tag = tag::derive_event_tag(
+            &export_secret,
+            group_id,
+            &sender_did,
+            &self.device_id,
+            counter,
+        )?;
 
         Ok(EncryptResult {
             new_group_state: Vec::new(), // State is managed by provider
@@ -930,8 +1004,8 @@ impl MoatSession {
         buf
     }
 
-    /// Deserialize hash chain state from bytes.
-    fn deserialize_hash_chains(data: &[u8]) -> Result<HashMap<HashChainKey, [u8; 32]>> {
+    /// Deserialize hash chain state from bytes. Returns (map, remaining_bytes).
+    fn deserialize_hash_chains(data: &[u8]) -> Result<(HashMap<HashChainKey, [u8; 32]>, &[u8])> {
         if data.len() < 8 {
             return Err(Error::Deserialization("hash chain data too short".into()));
         }
@@ -957,6 +1031,128 @@ impl MoatSession {
             offset += 32;
             map.insert((group_id, device_id), hash);
         }
+        Ok((map, &data[offset..]))
+    }
+
+    /// Serialize tag counter state to bytes.
+    ///
+    /// Prunes stale epoch entries: for each group_id, only the entry with
+    /// the highest epoch is serialized. Old epoch counters are also removed
+    /// from the in-memory map to prevent unbounded growth.
+    fn serialize_tag_counters(&self) -> Vec<u8> {
+        let mut counters = self.tag_counters.write().unwrap();
+
+        // Find the max epoch per group_id (owned keys to avoid borrow conflict)
+        let mut max_epochs: HashMap<Vec<u8>, u64> = HashMap::new();
+        for ((group_id, epoch), _) in counters.iter() {
+            let entry = max_epochs.entry(group_id.clone()).or_insert(0);
+            if *epoch > *entry {
+                *entry = *epoch;
+            }
+        }
+
+        // Remove stale entries
+        counters.retain(|(group_id, epoch), _| {
+            max_epochs.get(group_id).map_or(false, |&max| *epoch == max)
+        });
+
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&(counters.len() as u64).to_le_bytes());
+        for ((group_id, epoch), counter) in counters.iter() {
+            buf.extend_from_slice(&(group_id.len() as u32).to_le_bytes());
+            buf.extend_from_slice(group_id);
+            buf.extend_from_slice(&epoch.to_le_bytes());
+            buf.extend_from_slice(&counter.to_le_bytes());
+        }
+        buf
+    }
+
+    /// Deserialize tag counter state from bytes. Returns (map, remaining_bytes).
+    fn deserialize_tag_counters(data: &[u8]) -> Result<(HashMap<TagCounterKey, u64>, &[u8])> {
+        if data.len() < 8 {
+            return Err(Error::Deserialization("tag counter data too short".into()));
+        }
+        let count = u64::from_le_bytes(data[..8].try_into().unwrap()) as usize;
+        let mut offset = 8;
+        let mut map = HashMap::with_capacity(count);
+        for _ in 0..count {
+            if offset + 4 > data.len() {
+                return Err(Error::Deserialization("tag counter entry truncated".into()));
+            }
+            let gid_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+            offset += 4;
+            if offset + gid_len + 8 + 8 > data.len() {
+                return Err(Error::Deserialization("tag counter entry truncated".into()));
+            }
+            let group_id = data[offset..offset + gid_len].to_vec();
+            offset += gid_len;
+            let epoch = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap());
+            offset += 8;
+            let counter = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap());
+            offset += 8;
+            map.insert((group_id, epoch), counter);
+        }
+        Ok((map, &data[offset..]))
+    }
+
+    /// Serialize seen counter state to bytes.
+    fn serialize_seen_counters(&self) -> Vec<u8> {
+        let counters = self.seen_counters.read().unwrap();
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&(counters.len() as u64).to_le_bytes());
+        for ((group_id, sender_did, device_id), counter) in counters.iter() {
+            buf.extend_from_slice(&(group_id.len() as u32).to_le_bytes());
+            buf.extend_from_slice(group_id);
+            let did_bytes = sender_did.as_bytes();
+            buf.extend_from_slice(&(did_bytes.len() as u32).to_le_bytes());
+            buf.extend_from_slice(did_bytes);
+            buf.extend_from_slice(device_id);
+            buf.extend_from_slice(&counter.to_le_bytes());
+        }
+        buf
+    }
+
+    /// Deserialize seen counter state from bytes.
+    fn deserialize_seen_counters(data: &[u8]) -> Result<HashMap<SeenCounterKey, u64>> {
+        if data.is_empty() {
+            // No seen counters section — valid for states saved before this feature
+            return Ok(HashMap::new());
+        }
+        if data.len() < 8 {
+            return Err(Error::Deserialization("seen counter data too short".into()));
+        }
+        let count = u64::from_le_bytes(data[..8].try_into().unwrap()) as usize;
+        let mut offset = 8;
+        let mut map = HashMap::with_capacity(count);
+        for _ in 0..count {
+            if offset + 4 > data.len() {
+                return Err(Error::Deserialization("seen counter entry truncated".into()));
+            }
+            let gid_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+            offset += 4;
+            if offset + gid_len > data.len() {
+                return Err(Error::Deserialization("seen counter entry truncated".into()));
+            }
+            let group_id = data[offset..offset + gid_len].to_vec();
+            offset += gid_len;
+            if offset + 4 > data.len() {
+                return Err(Error::Deserialization("seen counter entry truncated".into()));
+            }
+            let did_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+            offset += 4;
+            if offset + did_len + 16 + 8 > data.len() {
+                return Err(Error::Deserialization("seen counter entry truncated".into()));
+            }
+            let sender_did = String::from_utf8(data[offset..offset + did_len].to_vec())
+                .map_err(|_| Error::Deserialization("invalid UTF-8 in seen counter DID".into()))?;
+            offset += did_len;
+            let mut device_id = [0u8; 16];
+            device_id.copy_from_slice(&data[offset..offset + 16]);
+            offset += 16;
+            let counter = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap());
+            offset += 8;
+            map.insert((group_id, sender_did, device_id), counter);
+        }
         Ok(map)
     }
 
@@ -965,6 +1161,29 @@ impl MoatSession {
         group
             .export_secret(provider, EPOCH_FINGERPRINT_LABEL, &[], EPOCH_FINGERPRINT_LEN)
             .map_err(|e| Error::Encryption(format!("epoch fingerprint derivation failed: {e}")))
+    }
+
+    /// Derive the export secret used for tag derivation.
+    fn derive_tag_export_secret(&self, group: &MlsGroup) -> Result<Vec<u8>> {
+        group
+            .export_secret(
+                &self.provider,
+                tag::TAG_EXPORT_SECRET_LABEL,
+                &[],
+                tag::TAG_EXPORT_SECRET_LEN,
+            )
+            .map_err(|e| Error::Encryption(format!("tag export secret derivation failed: {e}")))
+    }
+
+    /// Extract our own DID from the group's member list by matching the signature key.
+    fn extract_own_did(&self, group: &MlsGroup, our_pubkey: &[u8]) -> Result<String> {
+        let members: Vec<_> = group.members().collect();
+        let member = members.iter().find(|m| m.signature_key == our_pubkey)
+            .ok_or_else(|| Error::GroupLoad("Own member not found in group".to_string()))?;
+        let credential_bytes = member.credential.serialized_content();
+        let moat_credential = MoatCredential::try_from_bytes(credential_bytes)
+            .ok_or_else(|| Error::GroupLoad("Could not parse own credential".to_string()))?;
+        Ok(moat_credential.did().to_string())
     }
 
     /// Compute SHA-256 hash of event bytes.
@@ -1053,6 +1272,141 @@ impl MoatSession {
         Ok(members.iter().any(|(_, cred)| {
             cred.as_ref().map_or(false, |c| c.did() == did)
         }))
+    }
+
+    /// Derive the next tag for a group event and advance the counter.
+    ///
+    /// Use this for events that bypass `encrypt_event` (e.g., raw commits from
+    /// `add_member`/`add_device`/`remove_member`). The tag is derived using the
+    /// pre-advance epoch (the commit is the last event of the old epoch).
+    ///
+    /// Returns the derived tag.
+    pub fn derive_next_tag(
+        &self,
+        group_id: &[u8],
+        key_bundle: &[u8],
+    ) -> Result<[u8; 16]> {
+        let group = self.load_group(group_id)?
+            .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
+
+        let bundle: KeyBundle =
+            serde_json::from_slice(key_bundle).map_err(|e| Error::Deserialization(e.to_string()))?;
+        let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
+        let our_pubkey = signature_keys.to_public_vec();
+        let sender_did = self.extract_own_did(&group, &our_pubkey)?;
+
+        let epoch = group.epoch().as_u64();
+        let export_secret = self.derive_tag_export_secret(&group)?;
+        let counter_key = (group_id.to_vec(), epoch);
+
+        let counter = {
+            let mut counters = self.tag_counters.write().unwrap();
+            let counter = counters.entry(counter_key).or_insert(0);
+            let current = *counter;
+            *counter = current + 1;
+            current
+        };
+
+        tag::derive_event_tag(&export_secret, group_id, &sender_did, &self.device_id, counter)
+    }
+
+    /// Generate candidate tags for recipient scanning.
+    ///
+    /// Returns a vector of (tag, counter) pairs that a specific sender device
+    /// might have used for events in the given group at the given epoch.
+    ///
+    /// # Arguments
+    ///
+    /// * `group_id` - The MLS group identifier
+    /// * `sender_did` - The sender's ATProto DID
+    /// * `sender_device_id` - The sender's 16-byte device ID
+    /// * `from_counter` - Start of the scanning window (inclusive)
+    /// * `count` - Number of candidate tags to generate
+    pub fn generate_candidate_tags(
+        &self,
+        group_id: &[u8],
+        sender_did: &str,
+        sender_device_id: &[u8; 16],
+        from_counter: u64,
+        count: u64,
+    ) -> Result<Vec<([u8; 16], u64)>> {
+        let group = self.load_group(group_id)?
+            .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
+        let export_secret = self.derive_tag_export_secret(&group)?;
+        tag::generate_candidate_tags(
+            &export_secret,
+            group_id,
+            sender_did,
+            sender_device_id,
+            from_counter,
+            count,
+        )
+    }
+
+    /// Generate all candidate tags for every member in a group.
+    ///
+    /// Iterates all group members, and for each member with a device_id,
+    /// generates `TAG_GAP_LIMIT` candidate tags starting from the last seen
+    /// counter for that sender (or 0 if never seen). Also populates the
+    /// internal `tag_metadata` reverse lookup so that `mark_tag_seen` can
+    /// advance the seen counter when a tag is matched.
+    ///
+    /// Returns a flat list of all candidate tags.
+    pub fn populate_candidate_tags(&self, group_id: &[u8]) -> Result<Vec<[u8; 16]>> {
+        let group = self.load_group(group_id)?
+            .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
+        let export_secret = self.derive_tag_export_secret(&group)?;
+        let members = self.get_group_members(group_id)?;
+        let seen = self.seen_counters.read().unwrap();
+
+        let mut all_tags = Vec::new();
+        let mut metadata = self.tag_metadata.write().unwrap();
+        for (_leaf_idx, cred) in &members {
+            let cred = match cred {
+                Some(c) => c,
+                None => continue,
+            };
+            let device_id = cred.device_id();
+            let key = (group_id.to_vec(), cred.did().to_string(), *device_id);
+            let from_counter = seen.get(&key).map_or(0, |&c| c + 1);
+            let tags = tag::generate_candidate_tags(
+                &export_secret,
+                group_id,
+                cred.did(),
+                device_id,
+                from_counter,
+                tag::TAG_GAP_LIMIT,
+            )?;
+            for (tag, counter) in tags {
+                metadata.insert(tag, (group_id.to_vec(), cred.did().to_string(), *device_id, counter));
+                all_tags.push(tag);
+            }
+        }
+        Ok(all_tags)
+    }
+
+    /// Mark a tag as seen, advancing the seen counter for the corresponding sender.
+    ///
+    /// Call this after matching a tag from `populate_candidate_tags` to ensure
+    /// the scanning window advances. Returns true if the tag was found in metadata
+    /// and the counter was updated.
+    pub fn mark_tag_seen(&self, tag: &[u8; 16]) -> bool {
+        let meta = self.tag_metadata.read().unwrap();
+        let entry = match meta.get(tag) {
+            Some(e) => e.clone(),
+            None => return false,
+        };
+        drop(meta);
+
+        let (group_id, sender_did, device_id, counter) = entry;
+        let key = (group_id, sender_did, device_id);
+        let mut seen = self.seen_counters.write().unwrap();
+        let current = seen.entry(key).or_insert(0);
+        if counter >= *current {
+            *current = counter;
+        }
+        true
     }
 
     /// Add a new device (key package) to a group for an existing member's DID.

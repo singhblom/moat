@@ -14,7 +14,7 @@ Each conversation is an MLS group. Messages are encrypted by MLS, then published
 
 ## Identity
 
-A user is identified by their ATProto DID. Each device has its own MLS signing keys and stealth keypair. The MLS credential embeds `{did, device_name}`, enabling multi-device support — multiple devices share a DID but have independent key material.
+A user is identified by their ATProto DID. Each device has its own MLS signing keys and stealth keypair. The MLS credential embeds `{did, device_name, device_id}` where `device_id` is a random 16-byte identifier generated once per device. This enables multi-device support — multiple devices share a DID but have independent key material and tag derivation streams.
 
 ## On-PDS Records
 
@@ -33,15 +33,16 @@ Every event record looks identical — messages, commits, welcomes, and reaction
 1. Serialize the event to JSON: `{kind: "message", group_id, epoch, payload, message_id}`
 2. Pad to a fixed bucket (256B, 1KB, or 4KB) with a 4-byte length prefix and random fill
 3. MLS-encrypt using the group's current epoch keys
-4. Derive the 16-byte tag: `HKDF(salt="moat-conversation-tag-v1", ikm=group_id, info=epoch_BE)`
+4. Derive a unique 16-byte tag (see [Tag Derivation](#tag-derivation) below)
 5. Publish as `social.moat.event {tag, ciphertext}` on the sender's PDS
 
 ## Receiving Messages
 
 1. Poll each contact's PDS for new `social.moat.event` records (cursor-based, using TID ordering)
-2. Match the event's tag against known conversations (`tag → group_id` map)
-3. MLS-decrypt, unpad, deserialize the inner JSON event
-4. If it's a commit, merge it to advance the local epoch and update the tag mapping
+2. For each group, generate candidate tags for all members using the scanning window (see [Tag Derivation](#tag-derivation))
+3. Match the event's tag against candidate tags; on match, advance the seen counter for that sender
+4. MLS-decrypt, unpad, deserialize the inner JSON event
+5. If it's a commit, merge it to advance the local epoch and regenerate candidate tags
 
 ## Starting a Conversation (Stealth Invite)
 
@@ -65,7 +66,7 @@ This is the most complex part. The goal: Alice invites Bob without revealing to 
 1. While polling Alice's PDS, attempt stealth decryption on unrecognized events
 2. ECDH with own stealth private key → unwrap CEK → decrypt Welcome
 3. Process the MLS Welcome to join the group
-4. Derive the tag for the group's current epoch and register it for future message routing
+4. Generate candidate tags for all group members and register them for future message routing
 
 ## Privacy Properties
 
@@ -73,13 +74,49 @@ This is the most complex part. The goal: Alice invites Bob without revealing to 
 |-----------|--------------|
 | **MLS encryption** | Message content, event type, group metadata |
 | **Stealth addresses** | Invite recipient identity; fresh ephemeral keys make invites unlinkable |
-| **Rotating tags** | Conversation identity — tags change every MLS epoch, preventing clustering |
+| **Per-event unique tags** | Conversation identity — every event gets a unique tag, preventing clustering |
 | **Padding** | Message length patterns (3 fixed buckets) |
 | **Unified event schema** | Operation type — messages, commits, welcomes all look the same on-chain |
 
-## Tag Rotation
+## Tag Derivation
 
-Tags are derived from `(group_id, epoch)` via HKDF. When the MLS epoch advances (member added/removed, key update), the tag changes. Clients maintain a `tag → group_id` lookup table, updated on each epoch change.
+Every event gets a unique 16-byte tag, derived hierarchically from the MLS group state. This is analogous to BIP-32 HD key derivation: group members who know the export secret can reconstruct all valid tags, while observers see random-looking values.
+
+### Derivation
+
+```
+export_secret = MLS.export_secret("moat-event-tag-v2", &[], 32)
+ikm = group_id || sender_did || sender_device_id || counter_BE
+tag = HKDF-SHA256(salt=export_secret, ikm=ikm, info="moat-event-tag-v2", len=16)
+```
+
+The `export_secret` is epoch-bound — it changes when the MLS epoch advances (member add/remove, key update). The `counter` is a per-device, per-epoch monotonic counter starting at 0, pre-incremented before publishing for crash safety.
+
+### Sender Side
+
+The sender maintains an outgoing counter per `(group_id, epoch)`. For each event (message, commit, or reaction), the sender:
+
+1. Pre-increments the counter (crash safety — skipping a counter is harmless, reusing one is not)
+2. Derives the tag using the current epoch's export secret and the counter value
+3. Publishes the event with the derived tag
+
+When the epoch advances, the counter resets to 0 (the counter map is keyed by epoch). Stale epoch entries are pruned on state export.
+
+### Recipient Side
+
+Recipients generate **candidate tags** for each group member's device using a scanning window:
+
+```
+for each member (did, device_id) in group:
+    from = seen_counter[(group_id, did, device_id)] + 1   (or 0 if never seen)
+    generate tags for counters [from, from + GAP_LIMIT)
+```
+
+The `GAP_LIMIT` (currently 5) is the maximum number of consecutive missed events tolerated per sender device per epoch. When a tag matches an incoming event, the recipient calls `mark_tag_seen` to advance the seen counter, sliding the scanning window forward.
+
+The `seen_counters` map is persisted across sessions. The `tag_metadata` reverse lookup (tag → sender identity + counter) is ephemeral and rebuilt each polling cycle.
+
+### Stealth Invites
 
 Stealth invite tags are random (not derived) since the recipient doesn't yet know the group ID.
 
@@ -129,18 +166,20 @@ When two devices create commits concurrently at the same epoch, only one commit 
 
 ### State Format
 
-Session state uses a versioned binary format:
+Session state uses a versioned binary format (currently version 3):
 
 ```
 [4 bytes: "MOAT" magic]
-[2 bytes: version (currently 2)]
+[2 bytes: version (currently 3)]
 [16 bytes: device_id]
 [8 bytes: mls_state_length]
 [variable: MLS provider state]
 [variable: hash chain state]
+[variable: tag counter state]
+[variable: seen counter state]
 ```
 
-Hash chain state is serialized as:
+Hash chain state:
 ```
 [8 bytes: entry_count]
 For each entry:
@@ -150,7 +189,29 @@ For each entry:
   [32 bytes: last_event_hash (SHA-256)]
 ```
 
-Version 1 state (without hash chains) is rejected with a `StateVersionMismatch` error.
+Tag counter state (sender-side outgoing counters):
+```
+[8 bytes: entry_count]
+For each entry:
+  [4 bytes: group_id_length]
+  [variable: group_id]
+  [8 bytes: epoch (LE u64)]
+  [8 bytes: counter (LE u64)]
+```
+
+Seen counter state (recipient-side scanning window):
+```
+[8 bytes: entry_count]
+For each entry:
+  [4 bytes: group_id_length]
+  [variable: group_id]
+  [4 bytes: sender_did_length]
+  [variable: sender_did (UTF-8)]
+  [16 bytes: sender_device_id]
+  [8 bytes: counter (LE u64)]
+```
+
+Versions 1 and 2 are rejected with a `StateVersionMismatch` error.
 
 ## Local Storage
 

@@ -91,9 +91,8 @@ class _NewConversationScreenState extends State<NewConversationScreen> {
       // 5. Publish the stealth-encrypted welcome with random tag
       await client.publishEvent(result.randomTag, result.stealthCiphertext);
 
-      // 6. Register epoch 1 tag for this conversation
-      final epoch1Tag = auth.deriveConversationTag(result.groupId, 1);
-      await auth.registerTag(epoch1Tag, result.groupId);
+      // 6. Register candidate tags for this conversation
+      await auth.populateConversationTags(result.groupId);
 
       // 7. Create and save conversation locally
       final groupIdHex = result.groupId

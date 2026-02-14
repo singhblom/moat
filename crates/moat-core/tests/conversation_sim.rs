@@ -46,7 +46,7 @@ impl ConversationSim {
         for name in names {
             let session = MoatSession::new();
             let credential =
-                MoatCredential::new(&format!("did:plc:{}", name.to_lowercase()), *name);
+                MoatCredential::new(&format!("did:plc:{}", name.to_lowercase()), *name, [0u8; 16]);
             let (_kp, kb) = session.generate_key_package(&credential).unwrap();
             participants.push(Participant {
                 name: name.to_string(),
@@ -219,7 +219,7 @@ impl ConversationSim {
         // Create the new participant
         let session = MoatSession::new();
         let credential =
-            MoatCredential::new(&format!("did:plc:{}", new_name.to_lowercase()), new_name);
+            MoatCredential::new(&format!("did:plc:{}", new_name.to_lowercase()), new_name, [0u8; 16]);
         let (new_kp, new_kb) = session.generate_key_package(&credential).unwrap();
         let new_index = self.participants.len();
 

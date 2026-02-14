@@ -39,7 +39,7 @@ fn test_epoch_fingerprint_agreement_after_commit() {
 
     // Add Charlie — this creates a commit
     let charlie_session = MoatSession::new();
-    let charlie_cred = MoatCredential::new("did:plc:charlie", "Charlie");
+    let charlie_cred = MoatCredential::new("did:plc:charlie", "Charlie", [0u8; 16]);
     let (charlie_kp, _charlie_kb) = charlie_session.generate_key_package(&charlie_cred).unwrap();
 
     let welcome_result = sim.participants[0]
@@ -82,7 +82,7 @@ fn test_epoch_fingerprint_changes_with_epoch() {
 
     // Add a third member to advance the epoch
     let charlie_session = MoatSession::new();
-    let charlie_cred = MoatCredential::new("did:plc:charlie", "Charlie");
+    let charlie_cred = MoatCredential::new("did:plc:charlie", "Charlie", [0u8; 16]);
     let (charlie_kp, _charlie_kb) = charlie_session.generate_key_package(&charlie_cred).unwrap();
 
     let welcome_result = sim.participants[0]

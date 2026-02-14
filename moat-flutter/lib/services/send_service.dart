@@ -66,14 +66,6 @@ class SendService {
     moatLog('SendService: Tag used: ${_bytesToHex(result.tag)}');
     moatLog('SendService: Ciphertext length: ${result.ciphertext.length}');
 
-    // Debug: manually derive tag to verify
-    final derivedTag = deriveTag(groupId: conversation.groupId, epoch: mlsEpoch ?? BigInt.from(conversation.epoch));
-    moatLog('SendService: Manual tag derivation: ${_bytesToHex(Uint8List.fromList(derivedTag))}');
-    if (mlsEpoch != null) {
-      final altTag = deriveTag(groupId: conversation.groupId, epoch: BigInt.from(conversation.epoch));
-      moatLog('SendService: Alt tag (model epoch): ${_bytesToHex(Uint8List.fromList(altTag))}');
-    }
-
     // Save updated MLS state
     await _authProvider.saveMlsState();
     moatLog('SendService: MLS state saved');

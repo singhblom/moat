@@ -66,7 +66,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -562693748;
+  int get rustContentHash => 225147553;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -136,16 +136,27 @@ abstract class RustLibApi extends BaseApi {
     required MoatSessionHandle that,
   });
 
+  bool crateApiSimpleMoatSessionHandleMarkTagSeen({
+    required MoatSessionHandle that,
+    required List<int> tag,
+  });
+
   MoatSessionHandle crateApiSimpleMoatSessionHandleNewSession();
+
+  List<Uint8List> crateApiSimpleMoatSessionHandlePopulateCandidateTags({
+    required MoatSessionHandle that,
+    required List<int> groupId,
+  });
 
   Future<Uint8List> crateApiSimpleMoatSessionHandleProcessWelcome({
     required MoatSessionHandle that,
     required List<int> welcomeBytes,
   });
 
-  Uint8List crateApiSimpleDeriveTag({
+  Uint8List crateApiSimpleDeriveNextTag({
+    required MoatSessionHandle handle,
     required List<int> groupId,
-    required BigInt epoch,
+    required List<int> keyBundle,
   });
 
   Future<Uint8List> crateApiSimpleEncryptForStealth({
@@ -155,6 +166,15 @@ abstract class RustLibApi extends BaseApi {
 
   ReactionPayloadDto? crateApiSimpleEventDtoReactionPayload({
     required EventDto that,
+  });
+
+  List<Uint8List> crateApiSimpleGenerateCandidateTags({
+    required MoatSessionHandle handle,
+    required List<int> groupId,
+    required String senderDid,
+    required List<int> senderDeviceId,
+    required BigInt fromCounter,
+    required BigInt count,
   });
 
   StealthKeypair crateApiSimpleGenerateStealthKeypair();
@@ -605,12 +625,45 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  bool crateApiSimpleMoatSessionHandleMarkTagSeen({
+    required MoatSessionHandle that,
+    required List<int> tag,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+            that,
+            serializer,
+          );
+          sse_encode_list_prim_u_8_loose(tag, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 12)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_bool,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiSimpleMoatSessionHandleMarkTagSeenConstMeta,
+        argValues: [that, tag],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSimpleMoatSessionHandleMarkTagSeenConstMeta =>
+      const TaskConstMeta(
+        debugName: "MoatSessionHandle_mark_tag_seen",
+        argNames: ["that", "tag"],
+      );
+
+  @override
   MoatSessionHandle crateApiSimpleMoatSessionHandleNewSession() {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 12)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 13)!;
         },
         codec: SseCodec(
           decodeSuccessData:
@@ -631,6 +684,41 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  List<Uint8List> crateApiSimpleMoatSessionHandlePopulateCandidateTags({
+    required MoatSessionHandle that,
+    required List<int> groupId,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+            that,
+            serializer,
+          );
+          sse_encode_list_prim_u_8_loose(groupId, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 14)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_list_prim_u_8_strict,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta:
+            kCrateApiSimpleMoatSessionHandlePopulateCandidateTagsConstMeta,
+        argValues: [that, groupId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta
+  get kCrateApiSimpleMoatSessionHandlePopulateCandidateTagsConstMeta =>
+      const TaskConstMeta(
+        debugName: "MoatSessionHandle_populate_candidate_tags",
+        argNames: ["that", "groupId"],
+      );
+
+  @override
   Future<Uint8List> crateApiSimpleMoatSessionHandleProcessWelcome({
     required MoatSessionHandle that,
     required List<int> welcomeBytes,
@@ -647,7 +735,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 15,
             port: port_,
           );
         },
@@ -669,33 +757,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Uint8List crateApiSimpleDeriveTag({
+  Uint8List crateApiSimpleDeriveNextTag({
+    required MoatSessionHandle handle,
     required List<int> groupId,
-    required BigInt epoch,
+    required List<int> keyBundle,
   }) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+            handle,
+            serializer,
+          );
           sse_encode_list_prim_u_8_loose(groupId, serializer);
-          sse_encode_u_64(epoch, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 14)!;
+          sse_encode_list_prim_u_8_loose(keyBundle, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 16)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_list_prim_u_8_strict,
           decodeErrorData: sse_decode_String,
         ),
-        constMeta: kCrateApiSimpleDeriveTagConstMeta,
-        argValues: [groupId, epoch],
+        constMeta: kCrateApiSimpleDeriveNextTagConstMeta,
+        argValues: [handle, groupId, keyBundle],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiSimpleDeriveTagConstMeta => const TaskConstMeta(
-    debugName: "derive_tag",
-    argNames: ["groupId", "epoch"],
-  );
+  TaskConstMeta get kCrateApiSimpleDeriveNextTagConstMeta =>
+      const TaskConstMeta(
+        debugName: "derive_next_tag",
+        argNames: ["handle", "groupId", "keyBundle"],
+      );
 
   @override
   Future<Uint8List> crateApiSimpleEncryptForStealth({
@@ -714,7 +808,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 17,
             port: port_,
           );
         },
@@ -744,7 +838,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_box_autoadd_event_dto(that, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 16)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 18)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_opt_box_autoadd_reaction_payload_dto,
@@ -764,12 +858,67 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  List<Uint8List> crateApiSimpleGenerateCandidateTags({
+    required MoatSessionHandle handle,
+    required List<int> groupId,
+    required String senderDid,
+    required List<int> senderDeviceId,
+    required BigInt fromCounter,
+    required BigInt count,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+            handle,
+            serializer,
+          );
+          sse_encode_list_prim_u_8_loose(groupId, serializer);
+          sse_encode_String(senderDid, serializer);
+          sse_encode_list_prim_u_8_loose(senderDeviceId, serializer);
+          sse_encode_u_64(fromCounter, serializer);
+          sse_encode_u_64(count, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 19)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_list_prim_u_8_strict,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiSimpleGenerateCandidateTagsConstMeta,
+        argValues: [
+          handle,
+          groupId,
+          senderDid,
+          senderDeviceId,
+          fromCounter,
+          count,
+        ],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSimpleGenerateCandidateTagsConstMeta =>
+      const TaskConstMeta(
+        debugName: "generate_candidate_tags",
+        argNames: [
+          "handle",
+          "groupId",
+          "senderDid",
+          "senderDeviceId",
+          "fromCounter",
+          "count",
+        ],
+      );
+
+  @override
   StealthKeypair crateApiSimpleGenerateStealthKeypair() {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 17)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 20)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_stealth_keypair,
@@ -794,7 +943,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 18,
+            funcId: 21,
             port: port_,
           );
         },
@@ -819,7 +968,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_list_prim_u_8_loose(plaintext, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 19)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 22)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -846,7 +995,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_list_prim_u_8_loose(scanPrivkey, serializer);
           sse_encode_list_prim_u_8_loose(payload, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 20)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 23)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_opt_list_prim_u_8_strict,
@@ -872,7 +1021,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_list_prim_u_8_loose(padded, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 21)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 24)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -1858,6 +2007,22 @@ class MoatSessionHandleImpl extends RustOpaque implements MoatSessionHandle {
   /// Check if there are unsaved changes.
   bool hasPendingChanges() => RustLib.instance.api
       .crateApiSimpleMoatSessionHandleHasPendingChanges(that: this);
+
+  /// Mark a tag as seen, advancing the seen counter for that sender.
+  ///
+  /// Call this after matching a tag from `populate_candidate_tags`.
+  /// Returns true if the tag was found and the counter was updated.
+  bool markTagSeen({required List<int> tag}) => RustLib.instance.api
+      .crateApiSimpleMoatSessionHandleMarkTagSeen(that: this, tag: tag);
+
+  /// Generate all candidate tags for every member in a group.
+  ///
+  /// Returns a flat list of candidate tags for recipient scanning.
+  List<Uint8List> populateCandidateTags({required List<int> groupId}) =>
+      RustLib.instance.api.crateApiSimpleMoatSessionHandlePopulateCandidateTags(
+        that: this,
+        groupId: groupId,
+      );
 
   /// Process a welcome message to join a group. Returns the group ID.
   Future<Uint8List> processWelcome({required List<int> welcomeBytes}) =>
