@@ -1,4 +1,4 @@
-use moat_core::{pad_to_bucket, unpad, Bucket, tag::derive_event_tag};
+use moat_core::{derive_event_tag, pad_to_bucket, unpad, Bucket};
 use proptest::prelude::*;
 
 proptest! {

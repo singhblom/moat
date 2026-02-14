@@ -57,7 +57,10 @@ pub use crate::message::{
 pub use crate::padding::{pad_to_bucket, unpad, Bucket};
 pub use crate::stealth::{encrypt_for_stealth, generate_stealth_keypair, try_decrypt_stealth};
 pub(crate) use crate::storage::MoatProvider;
-pub use crate::tag::{derive_event_tag, generate_candidate_tags, TAG_EXPORT_SECRET_LABEL, TAG_EXPORT_SECRET_LEN, TAG_GAP_LIMIT};
+pub use crate::tag::{
+    derive_event_tag, generate_candidate_tags, TAG_EXPORT_SECRET_LABEL, TAG_EXPORT_SECRET_LEN,
+    TAG_GAP_LIMIT,
+};
 
 /// The ciphersuite used by Moat
 pub const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
@@ -276,11 +279,17 @@ impl MoatSession {
         }
         let version = u16::from_le_bytes([state[4], state[5]]);
         match version {
-            1 | 2 => return Err(Error::StateVersionMismatch(
-                format!("v{version} state not supported; re-initialize session")
-            )),
+            1 | 2 => {
+                return Err(Error::StateVersionMismatch(format!(
+                    "v{version} state not supported; re-initialize session"
+                )))
+            }
             3 => {}
-            _ => return Err(Error::Deserialization(format!("unsupported state version: {version}"))),
+            _ => {
+                return Err(Error::Deserialization(format!(
+                    "unsupported state version: {version}"
+                )))
+            }
         }
         let mut device_id = [0u8; 16];
         device_id.copy_from_slice(&state[6..22]);
@@ -289,7 +298,9 @@ impl MoatSession {
 
         // MLS state with length prefix
         if rest.len() < 8 {
-            return Err(Error::Deserialization("state too short for MLS length".into()));
+            return Err(Error::Deserialization(
+                "state too short for MLS length".into(),
+            ));
         }
         let mls_len = u64::from_le_bytes(rest[..8].try_into().unwrap()) as usize;
         let rest = &rest[8..];
@@ -339,9 +350,12 @@ impl MoatSession {
         let seen_counter_bytes = self.serialize_seen_counters();
 
         let mut buf = Vec::with_capacity(
-            STATE_HEADER_SIZE + 8 + raw_state.len()
-            + hash_chain_bytes.len() + tag_counter_bytes.len()
-            + seen_counter_bytes.len()
+            STATE_HEADER_SIZE
+                + 8
+                + raw_state.len()
+                + hash_chain_bytes.len()
+                + tag_counter_bytes.len()
+                + seen_counter_bytes.len(),
         );
         buf.extend_from_slice(STATE_MAGIC);
         buf.extend_from_slice(&STATE_VERSION.to_le_bytes());
@@ -1169,22 +1183,30 @@ impl MoatSession {
         let mut map = HashMap::with_capacity(count);
         for _ in 0..count {
             if offset + 4 > data.len() {
-                return Err(Error::Deserialization("seen counter entry truncated".into()));
+                return Err(Error::Deserialization(
+                    "seen counter entry truncated".into(),
+                ));
             }
             let gid_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
             offset += 4;
             if offset + gid_len > data.len() {
-                return Err(Error::Deserialization("seen counter entry truncated".into()));
+                return Err(Error::Deserialization(
+                    "seen counter entry truncated".into(),
+                ));
             }
             let group_id = data[offset..offset + gid_len].to_vec();
             offset += gid_len;
             if offset + 4 > data.len() {
-                return Err(Error::Deserialization("seen counter entry truncated".into()));
+                return Err(Error::Deserialization(
+                    "seen counter entry truncated".into(),
+                ));
             }
             let did_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
             offset += 4;
             if offset + did_len + 16 + 8 > data.len() {
-                return Err(Error::Deserialization("seen counter entry truncated".into()));
+                return Err(Error::Deserialization(
+                    "seen counter entry truncated".into(),
+                ));
             }
             let sender_did = String::from_utf8(data[offset..offset + did_len].to_vec())
                 .map_err(|_| Error::Deserialization("invalid UTF-8 in seen counter DID".into()))?;
@@ -1226,7 +1248,9 @@ impl MoatSession {
     /// Extract our own DID from the group's member list by matching the signature key.
     fn extract_own_did(&self, group: &MlsGroup, our_pubkey: &[u8]) -> Result<String> {
         let members: Vec<_> = group.members().collect();
-        let member = members.iter().find(|m| m.signature_key == our_pubkey)
+        let member = members
+            .iter()
+            .find(|m| m.signature_key == our_pubkey)
             .ok_or_else(|| Error::GroupLoad("Own member not found in group".to_string()))?;
         let credential_bytes = member.credential.serialized_content();
         let moat_credential = MoatCredential::try_from_bytes(credential_bytes)
@@ -1340,16 +1364,13 @@ impl MoatSession {
     /// pre-advance epoch (the commit is the last event of the old epoch).
     ///
     /// Returns the derived tag.
-    pub fn derive_next_tag(
-        &self,
-        group_id: &[u8],
-        key_bundle: &[u8],
-    ) -> Result<[u8; 16]> {
-        let group = self.load_group(group_id)?
+    pub fn derive_next_tag(&self, group_id: &[u8], key_bundle: &[u8]) -> Result<[u8; 16]> {
+        let group = self
+            .load_group(group_id)?
             .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
 
-        let bundle: KeyBundle =
-            serde_json::from_slice(key_bundle).map_err(|e| Error::Deserialization(e.to_string()))?;
+        let bundle: KeyBundle = serde_json::from_slice(key_bundle)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
         let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
             .map_err(|e| Error::Deserialization(e.to_string()))?;
         let our_pubkey = signature_keys.to_public_vec();
@@ -1367,7 +1388,13 @@ impl MoatSession {
             current
         };
 
-        tag::derive_event_tag(&export_secret, group_id, &sender_did, &self.device_id, counter)
+        tag::derive_event_tag(
+            &export_secret,
+            group_id,
+            &sender_did,
+            &self.device_id,
+            counter,
+        )
     }
 
     /// Generate candidate tags for recipient scanning.
@@ -1390,7 +1417,8 @@ impl MoatSession {
         from_counter: u64,
         count: u64,
     ) -> Result<Vec<([u8; 16], u64)>> {
-        let group = self.load_group(group_id)?
+        let group = self
+            .load_group(group_id)?
             .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
         let export_secret = self.derive_tag_export_secret(&group)?;
         tag::generate_candidate_tags(
@@ -1413,7 +1441,8 @@ impl MoatSession {
     ///
     /// Returns a flat list of all candidate tags.
     pub fn populate_candidate_tags(&self, group_id: &[u8]) -> Result<Vec<[u8; 16]>> {
-        let group = self.load_group(group_id)?
+        let group = self
+            .load_group(group_id)?
             .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
         let export_secret = self.derive_tag_export_secret(&group)?;
         let members = self.get_group_members(group_id)?;
@@ -1438,7 +1467,15 @@ impl MoatSession {
                 tag::TAG_GAP_LIMIT,
             )?;
             for (tag, counter) in tags {
-                metadata.insert(tag, (group_id.to_vec(), cred.did().to_string(), *device_id, counter));
+                metadata.insert(
+                    tag,
+                    (
+                        group_id.to_vec(),
+                        cred.did().to_string(),
+                        *device_id,
+                        counter,
+                    ),
+                );
                 all_tags.push(tag);
             }
         }

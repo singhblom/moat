@@ -1,18 +1,11 @@
 //! Integration tests for moat-core
 
 use crate::{
-    derive_tag_from_group_id,
     event::{ControlKind, ModifierKind},
     message::{MessagePayload, TextMessage},
     pad_to_bucket,
     tag::derive_event_tag,
-    unpad,
-    Error,
-    ErrorCode,
-    Event,
-    EventKind,
-    MoatCredential,
-    MoatSession,
+    unpad, Error, ErrorCode, Event, EventKind, MoatCredential, MoatSession,
 };
 
 fn short_text_payload(text: &str) -> MessagePayload {
@@ -229,7 +222,10 @@ fn test_tags_differ_across_counters() {
     // All tags should be different
     for i in 0..tags.len() {
         for j in (i + 1)..tags.len() {
-            assert_ne!(tags[i], tags[j], "Tags for different counters should differ");
+            assert_ne!(
+                tags[i], tags[j],
+                "Tags for different counters should differ"
+            );
         }
     }
 }
@@ -348,7 +344,9 @@ fn test_two_party_messaging() {
 
     // Alice creates her identity with device name
     let alice_credential = MoatCredential::new("did:plc:alice123", "Alice Phone", [0u8; 16]);
-    let (_alice_kp, alice_bundle) = alice_session.generate_key_package(&alice_credential).unwrap();
+    let (_alice_kp, alice_bundle) = alice_session
+        .generate_key_package(&alice_credential)
+        .unwrap();
 
     // Bob creates his identity with device name
     let bob_credential = MoatCredential::new("did:plc:bob456", "Bob Laptop", [0u8; 16]);

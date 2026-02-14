@@ -50,7 +50,11 @@ impl MoatCredential {
     /// * `did` - The user's decentralized identifier
     /// * `device_name` - A human-readable name for this device
     /// * `device_id` - The 16-byte unique device identifier
-    pub fn new(did: impl Into<String>, device_name: impl Into<String>, device_id: [u8; 16]) -> Self {
+    pub fn new(
+        did: impl Into<String>,
+        device_name: impl Into<String>,
+        device_id: [u8; 16],
+    ) -> Self {
         Self {
             did: did.into(),
             device_name: device_name.into(),

@@ -45,8 +45,11 @@ impl ConversationSim {
         // Create all participants with sessions and key packages
         for name in names {
             let session = MoatSession::new();
-            let credential =
-                MoatCredential::new(&format!("did:plc:{}", name.to_lowercase()), *name, *session.device_id());
+            let credential = MoatCredential::new(
+                &format!("did:plc:{}", name.to_lowercase()),
+                *name,
+                *session.device_id(),
+            );
             let (_kp, kb) = session.generate_key_package(&credential).unwrap();
             participants.push(Participant {
                 name: name.to_string(),
@@ -217,8 +220,11 @@ impl ConversationSim {
     pub fn add_member_sim(&mut self, adder: usize, new_name: &str) -> (Vec<u8>, Vec<u8>, usize) {
         // Create the new participant
         let session = MoatSession::new();
-        let credential =
-            MoatCredential::new(&format!("did:plc:{}", new_name.to_lowercase()), new_name, *session.device_id());
+        let credential = MoatCredential::new(
+            &format!("did:plc:{}", new_name.to_lowercase()),
+            new_name,
+            *session.device_id(),
+        );
         let (new_kp, new_kb) = session.generate_key_package(&credential).unwrap();
         let new_index = self.participants.len();
 
@@ -267,11 +273,7 @@ impl ConversationSim {
     /// Deliver a commit to all participants except those in the exclude list.
     /// Typically exclude the adder (who already merged) and the new member
     /// (who processed the welcome).
-    pub fn deliver_commit_to_all(
-        &mut self,
-        commit: &[u8],
-        exclude: &[usize],
-    ) {
+    pub fn deliver_commit_to_all(&mut self, commit: &[u8], exclude: &[usize]) {
         for i in 0..self.participants.len() {
             if exclude.contains(&i) {
                 continue;
@@ -280,7 +282,10 @@ impl ConversationSim {
                 .session
                 .decrypt_event(&self.group_id, commit)
                 .unwrap();
-            assert_eq!(outcome.result().event.kind, EventKind::Commit);
+            assert!(matches!(
+                outcome.result().event.kind,
+                EventKind::Control(ControlKind::Commit)
+            ));
         }
     }
 

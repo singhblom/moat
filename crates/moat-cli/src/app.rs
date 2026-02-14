@@ -644,13 +644,8 @@ impl App {
                 1
             };
 
-<<<<<<< HEAD
             self.populate_candidate_tags(&group_id, &group_id_bytes);
-=======
-            if let Ok(tag) = moat_core::derive_tag_from_group_id(&group_id_bytes, current_epoch) {
-                self.tag_map.insert(tag, group_id.clone());
-            }
->>>>>>> 01b8663 (Off chain initial commit)
+            self.populate_candidate_tags(&group_id, &group_id_bytes);
 
             self.conversations.push(Conversation {
                 id: group_id,
@@ -674,10 +669,8 @@ impl App {
                 }
             }
             Err(e) => {
-                self.debug_log.log(&format!(
-                    "populate_tags: failed for {}: {}",
-                    conv_id, e
-                ));
+                self.debug_log
+                    .log(&format!("populate_tags: failed for {}: {}", conv_id, e));
             }
         }
     }
@@ -761,21 +754,10 @@ impl App {
                             }
                             EventKind::Control(ControlKind::Commit) => {
                                 let new_epoch = decrypted.event.epoch;
-                                if let Some(conv) = self
-                                    .conversations
-                                    .iter_mut()
-                                    .find(|c| c.id == conv_id)
+                                if let Some(conv) =
+                                    self.conversations.iter_mut().find(|c| c.id == conv_id)
                                 {
-<<<<<<< HEAD
                                     conv.current_epoch = new_epoch;
-=======
-                                    self.tag_map.insert(new_tag, conv_id.clone());
-                                    if let Some(conv) =
-                                        self.conversations.iter_mut().find(|c| c.id == conv_id)
-                                    {
-                                        conv.current_epoch = new_epoch;
-                                    }
->>>>>>> 01b8663 (Off chain initial commit)
                                 }
                                 // Regenerate candidate tags for the new epoch
                                 self.populate_candidate_tags(&conv_id, &group_id);
@@ -1902,21 +1884,8 @@ impl App {
                     credential.device_name()
                 ));
 
-<<<<<<< HEAD
                 // Derive tag for the commit using pre-advance counter
                 let commit_tag = match self.mls.derive_next_tag(&group_id, &key_bundle) {
-=======
-                // Get epoch BEFORE adding device - commit must be published with pre-advance tag
-                // so other members (who haven't advanced yet) can see it
-                let epoch_before = self
-                    .mls
-                    .get_group_epoch(&group_id)
-                    .ok()
-                    .flatten()
-                    .unwrap_or(0);
-                let commit_tag = match moat_core::derive_tag_from_group_id(&group_id, epoch_before)
-                {
->>>>>>> 01b8663 (Off chain initial commit)
                     Ok(t) => t,
                     Err(e) => {
                         self.debug_log.log(&format!(
@@ -1944,36 +1913,12 @@ impl App {
                                 .log(&format!("poll_devices: failed to save MLS state: {}", e));
                         }
 
-<<<<<<< HEAD
                         // Repopulate candidate tags for the new epoch
                         if let Ok(tags) = self.mls.populate_candidate_tags(&group_id) {
                             for t in tags {
                                 self.tag_map.insert(t, conv_id.clone());
                             }
                         }
-=======
-                        // Get new epoch for updating tag map
-                        let epoch_after = self
-                            .mls
-                            .get_group_epoch(&group_id)
-                            .ok()
-                            .flatten()
-                            .unwrap_or(1);
-                        let new_tag =
-                            match moat_core::derive_tag_from_group_id(&group_id, epoch_after) {
-                                Ok(t) => t,
-                                Err(e) => {
-                                    self.debug_log.log(&format!(
-                                        "poll_devices: failed to derive post-add tag: {}",
-                                        e
-                                    ));
-                                    continue;
-                                }
-                            };
-
-                        // Update tag map with new epoch's tag
-                        self.tag_map.insert(new_tag, conv_id.clone());
->>>>>>> 01b8663 (Off chain initial commit)
 
                         // Publish the commit with PRE-advance epoch tag so others can see it
                         if let Err(e) = client
@@ -2040,16 +1985,11 @@ impl App {
                             .map(|c| c.name.clone())
                             .unwrap_or_else(|| "Unknown".to_string());
 
-<<<<<<< HEAD
-                        if let Some(conv) = self.conversations.iter_mut().find(|c| c.id == conv_id) {
+                        if let Some(conv) = self.conversations.iter_mut().find(|c| c.id == conv_id)
+                        {
                             if let Ok(Some(new_epoch)) = self.mls.get_group_epoch(&group_id) {
                                 conv.current_epoch = new_epoch;
                             }
-=======
-                        if let Some(conv) = self.conversations.iter_mut().find(|c| c.id == conv_id)
-                        {
-                            conv.current_epoch = epoch_after;
->>>>>>> 01b8663 (Off chain initial commit)
                         }
 
                         // Add device alert for UI notification

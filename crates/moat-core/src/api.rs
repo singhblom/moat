@@ -13,7 +13,10 @@ pub use crate::{DecryptResult, EncryptResult, KeyBundle, MoatSession, WelcomeRes
 pub use crate::stealth::{encrypt_for_stealth, generate_stealth_keypair, try_decrypt_stealth};
 
 // Tag derivation
-pub use crate::tag::{derive_event_tag, generate_candidate_tags, TAG_EXPORT_SECRET_LABEL, TAG_EXPORT_SECRET_LEN, TAG_GAP_LIMIT};
+pub use crate::tag::{
+    derive_event_tag, generate_candidate_tags, TAG_EXPORT_SECRET_LABEL, TAG_EXPORT_SECRET_LEN,
+    TAG_GAP_LIMIT,
+};
 
 // Padding utilities
 pub use crate::padding::{pad_to_bucket, unpad, Bucket};
