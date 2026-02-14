@@ -1,14 +1,7 @@
 use flutter_rust_bridge::frb;
 use moat_core::{
-    self,
-    event::{ControlKind, ModifierKind, ReactionPayload as CoreReactionPayload},
-    EncryptResult,
-    Event,
-    EventKind,
-    MoatCredential,
-    MoatSession,
-    SenderInfo,
-    WelcomeResult,
+    self, ControlKind, EncryptResult, Event, EventKind, MoatCredential, MoatSession,
+    ModifierKind, ReactionPayload as CoreReactionPayload, SenderInfo, WelcomeResult,
 };
 use std::sync::Mutex;
 
@@ -297,6 +290,7 @@ pub enum EventKindDto {
     Welcome,
     Checkpoint,
     Reaction,
+    Unknown,
 }
 
 pub struct EventDto {
@@ -335,6 +329,9 @@ impl EventDto {
                 event.message_id = self.message_id;
                 event
             }
+            EventKindDto::Unknown => {
+                panic!("cannot convert Unknown event to core Event")
+            }
         }
     }
 
@@ -347,7 +344,7 @@ impl EventDto {
                 EventKind::Control(ControlKind::Checkpoint) => EventKindDto::Checkpoint,
                 EventKind::Modifier(ModifierKind::Reaction) => EventKindDto::Reaction,
                 EventKind::Modifier(_) | EventKind::Control(_) | EventKind::Unknown(_) => {
-                    EventKindDto::Message
+                    EventKindDto::Unknown
                 }
             },
             message_id: e.message_id,
@@ -774,7 +771,7 @@ mod tests {
         let plaintext = b"Hello, world!".to_vec();
         let padded = pad_to_bucket(plaintext.clone());
 
-        assert_eq!(padded.len(), 256);
+        assert_eq!(padded.len(), 512);
         let unpadded = unpad(padded);
         assert_eq!(unpadded, plaintext);
     }
@@ -782,10 +779,10 @@ mod tests {
     #[test]
     fn test_pad_bucket_sizes() {
         let small = pad_to_bucket(vec![0x42; 100]);
-        assert_eq!(small.len(), 256);
+        assert_eq!(small.len(), 512);
 
-        let medium = pad_to_bucket(vec![0x42; 500]);
-        assert_eq!(medium.len(), 1024);
+        let standard = pad_to_bucket(vec![0x42; 600]);
+        assert_eq!(standard.len(), 1024);
 
         let large = pad_to_bucket(vec![0x42; 2000]);
         assert_eq!(large.len(), 4096);
@@ -794,7 +791,7 @@ mod tests {
     #[test]
     fn test_pad_empty() {
         let padded = pad_to_bucket(vec![]);
-        assert_eq!(padded.len(), 256);
+        assert_eq!(padded.len(), 512);
         let unpadded = unpad(padded);
         assert!(unpadded.is_empty());
     }

@@ -7,10 +7,8 @@ use crate::{
 use crossterm::event::{KeyCode, KeyEvent};
 use moat_atproto::MoatAtprotoClient;
 use moat_core::{
-    encrypt_for_stealth,
-    event::{ControlKind, ModifierKind},
-    generate_stealth_keypair, try_decrypt_stealth, Event, EventKind, MoatCredential, MoatSession,
-    ParsedMessagePayload, CIPHERSUITE,
+    encrypt_for_stealth, generate_stealth_keypair, try_decrypt_stealth, ControlKind, Event,
+    EventKind, MoatCredential, MoatSession, ModifierKind, ParsedMessagePayload, CIPHERSUITE,
 };
 use std::collections::HashMap;
 use std::io::Write;
@@ -644,7 +642,6 @@ impl App {
                 1
             };
 
-            self.populate_candidate_tags(&group_id, &group_id_bytes);
             self.populate_candidate_tags(&group_id, &group_id_bytes);
 
             self.conversations.push(Conversation {

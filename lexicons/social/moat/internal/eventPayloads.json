@@ -10,8 +10,7 @@
         "#messageShortText",
         "#messageMediumText",
         "#messageLongText",
-        "#messageImage",
-        "#messageVideo"
+        "#messageImage"
       ]
     },
     "messageShortText": {
@@ -99,42 +98,6 @@
         }
       }
     },
-    "messageVideo": {
-      "type": "object",
-      "description": "Video message with ThumbHash preview and external blob.",
-      "required": ["type", "preview_thumbhash", "external"],
-      "properties": {
-        "type": {
-          "type": "string",
-          "const": "video"
-        },
-        "preview_thumbhash": {
-          "type": "bytes",
-          "description": "ThumbHash poster (≤64 raw bytes before base64)",
-          "maxLength": 64
-        },
-        "width": {
-          "type": "integer",
-          "description": "Optional pixel width"
-        },
-        "height": {
-          "type": "integer",
-          "description": "Optional pixel height"
-        },
-        "mime": {
-          "type": "string",
-          "description": "Video MIME type (e.g., video/mp4)"
-        },
-        "duration_ms": {
-          "type": "integer",
-          "description": "Optional duration in milliseconds"
-        },
-        "external": {
-          "type": "ref",
-          "ref": "#externalVideo"
-        }
-      }
-    },
     "externalPayloadBase": {
       "type": "object",
       "description": "Common integrity binding for off-chain blobs.",
@@ -183,16 +146,6 @@
     "externalImage": {
       "type": "object",
       "description": "External payload for images.",
-      "allOf": [
-        {
-          "type": "ref",
-          "ref": "#externalPayloadBase"
-        }
-      ]
-    },
-    "externalVideo": {
-      "type": "object",
-      "description": "External payload for video.",
       "allOf": [
         {
           "type": "ref",
