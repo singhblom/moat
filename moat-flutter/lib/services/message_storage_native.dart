@@ -9,6 +9,10 @@ class MessageStorage {
 
   Directory? _dir;
 
+  /// Creates a MessageStorage. If [directory] is provided, it is used directly
+  /// (useful for tests). Otherwise, falls back to path_provider.
+  MessageStorage({Directory? directory}) : _dir = directory;
+
   Future<Directory> _getDir() async {
     if (_dir != null) return _dir!;
     final appDir = await getApplicationDocumentsDirectory();
