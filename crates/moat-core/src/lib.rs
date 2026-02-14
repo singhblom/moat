@@ -593,6 +593,17 @@ impl MoatSession {
             .map_err(|e| Error::ProcessWelcome(e.to_string()))?;
 
         let group_id = group.group_id().as_slice().to_vec();
+
+        // Clear any stale seen counters / tag metadata for this group
+        {
+            let mut seen = self.seen_counters.write().unwrap();
+            seen.retain(|(gid, _, _), _| gid != &group_id);
+        }
+        {
+            let mut metadata = self.tag_metadata.write().unwrap();
+            metadata.retain(|_, (gid, _, _, _)| gid != &group_id);
+        }
+
         Ok(group_id)
     }
 
@@ -763,6 +774,19 @@ impl MoatSession {
 
                 // Get the new epoch after merging
                 let new_epoch = group.epoch().as_u64();
+
+                // Clear seen counters and tag metadata for this group — the export
+                // secret changes with the epoch, so old counter values are meaningless.
+                // Senders also reset their counters per epoch, so recipients must
+                // start scanning from 0 in the new epoch.
+                {
+                    let mut seen = self.seen_counters.write().unwrap();
+                    seen.retain(|(gid, _, _), _| gid != group_id);
+                }
+                {
+                    let mut metadata = self.tag_metadata.write().unwrap();
+                    metadata.retain(|_, (gid, _, _, _)| gid != group_id);
+                }
 
                 // Return a commit event to signal the epoch has advanced
                 let event = Event::commit(group_id.to_vec(), new_epoch, Vec::new());

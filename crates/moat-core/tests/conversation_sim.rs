@@ -46,7 +46,7 @@ impl ConversationSim {
         for name in names {
             let session = MoatSession::new();
             let credential =
-                MoatCredential::new(&format!("did:plc:{}", name.to_lowercase()), *name, [0u8; 16]);
+                MoatCredential::new(&format!("did:plc:{}", name.to_lowercase()), *name, *session.device_id());
             let (_kp, kb) = session.generate_key_package(&credential).unwrap();
             participants.push(Participant {
                 name: name.to_string(),
@@ -219,7 +219,7 @@ impl ConversationSim {
         // Create the new participant
         let session = MoatSession::new();
         let credential =
-            MoatCredential::new(&format!("did:plc:{}", new_name.to_lowercase()), new_name, [0u8; 16]);
+            MoatCredential::new(&format!("did:plc:{}", new_name.to_lowercase()), new_name, *session.device_id());
         let (new_kp, new_kb) = session.generate_key_package(&credential).unwrap();
         let new_index = self.participants.len();
 
@@ -263,6 +263,26 @@ impl ConversationSim {
             )
             .unwrap();
         result.commit
+    }
+
+    /// Deliver a commit to all participants except those in the exclude list.
+    /// Typically exclude the adder (who already merged) and the new member
+    /// (who processed the welcome).
+    pub fn deliver_commit_to_all(
+        &mut self,
+        commit: &[u8],
+        exclude: &[usize],
+    ) {
+        for i in 0..self.participants.len() {
+            if exclude.contains(&i) {
+                continue;
+            }
+            let outcome = self.participants[i]
+                .session
+                .decrypt_event(&self.group_id, commit)
+                .unwrap();
+            assert_eq!(outcome.result().event.kind, EventKind::Commit);
+        }
     }
 
     /// Deliver a raw commit to a participant (not from inbox).
