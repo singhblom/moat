@@ -851,4 +851,22 @@ mod tests {
         assert_eq!(restored_rp.emoji, "👍");
         assert_eq!(restored_rp.target_message_id, target_id);
     }
+
+    #[test]
+    fn test_unknown_event_maps_to_unknown_dto() {
+        let event = Event {
+            kind: EventKind::Unknown("future.thing".into()),
+            group_id: vec![1, 2, 3],
+            epoch: 0,
+            payload: b"opaque".to_vec(),
+            message_id: None,
+            prev_event_hash: None,
+            epoch_fingerprint: None,
+            sender_device_id: None,
+        };
+        let dto = EventDto::from_core(event);
+        assert!(matches!(dto.kind, EventKindDto::Unknown));
+        assert_eq!(dto.group_id, vec![1, 2, 3]);
+        assert_eq!(dto.payload, b"opaque");
+    }
 }

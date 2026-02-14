@@ -52,7 +52,7 @@ pub use crate::event::{
 };
 pub use crate::message::{
     ExternalBlob, LongTextMessage, MediaMessage, MessageBodyKind, MessagePayload,
-    ParsedMessagePayload, TextMessage,
+    ParsedMessagePayload, TextMessage, MEDIUM_TEXT_MAX_BYTES, SHORT_TEXT_MAX_BYTES,
 };
 pub use crate::padding::{pad_to_bucket, unpad, Bucket};
 pub use crate::stealth::{encrypt_for_stealth, generate_stealth_keypair, try_decrypt_stealth};

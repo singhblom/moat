@@ -1,11 +1,11 @@
 //! Integration tests for moat-core
 
 use crate::{
-    event::{ControlKind, ModifierKind},
-    message::{MessagePayload, TextMessage},
+    event::{ControlKind, MessageKind, ModifierKind},
+    message::{ExternalBlob, LongTextMessage, MediaMessage, MessagePayload, TextMessage},
     pad_to_bucket,
     tag::derive_event_tag,
-    unpad, Error, ErrorCode, Event, EventKind, MoatCredential, MoatSession,
+    unpad, Error, ErrorCode, Event, EventKind, MoatCredential, MoatSession, ParsedMessagePayload,
 };
 
 fn short_text_payload(text: &str) -> MessagePayload {
@@ -982,4 +982,151 @@ fn test_message_has_message_id() {
     let msg = text_event(b"group".to_vec(), 0, "hello");
     assert!(msg.message_id.is_some());
     assert_eq!(msg.message_id.unwrap().len(), 16);
+}
+
+// --- External blob roundtrip tests ---
+
+fn test_blob() -> ExternalBlob {
+    ExternalBlob {
+        ciphertext_hash: vec![0xAA; 32],
+        ciphertext_size: 8192,
+        content_hash: vec![0xBB; 32],
+        uri: "at://did:plc:xyz/social.moat.blob/abc123".to_string(),
+        key: vec![0xCC; 32],
+    }
+}
+
+#[test]
+fn test_long_text_with_external_blob() {
+    let payload = MessagePayload::LongText(LongTextMessage {
+        preview_text: "Preview of a long document...".into(),
+        mime: Some("text/markdown".into()),
+        external: test_blob(),
+    });
+    let event = Event::message(b"group-lt".to_vec(), 3, &payload);
+    assert!(matches!(event.kind, EventKind::Message(MessageKind::LongText)));
+
+    let bytes = event.to_bytes().unwrap();
+    let recovered = Event::from_bytes(&bytes).unwrap();
+    assert!(matches!(recovered.kind, EventKind::Message(MessageKind::LongText)));
+
+    let parsed = recovered.parse_message_payload().unwrap();
+    match parsed {
+        ParsedMessagePayload::Structured(MessagePayload::LongText(msg)) => {
+            assert_eq!(msg.preview_text, "Preview of a long document...");
+            assert_eq!(msg.mime.as_deref(), Some("text/markdown"));
+            assert_eq!(msg.external.ciphertext_hash, vec![0xAA; 32]);
+            assert_eq!(msg.external.ciphertext_size, 8192);
+            assert_eq!(msg.external.content_hash, vec![0xBB; 32]);
+            assert_eq!(msg.external.uri, "at://did:plc:xyz/social.moat.blob/abc123");
+            assert_eq!(msg.external.key, vec![0xCC; 32]);
+        }
+        other => panic!("expected Structured(LongText), got {:?}", other),
+    }
+}
+
+#[test]
+fn test_image_with_external_blob() {
+    let payload = MessagePayload::Image(MediaMessage {
+        preview_thumbhash: vec![0x01; 28],
+        width: Some(1920),
+        height: Some(1080),
+        mime: Some("image/jpeg".into()),
+        external: test_blob(),
+    });
+    let event = Event::message(b"group-img".to_vec(), 5, &payload);
+    assert!(matches!(event.kind, EventKind::Message(MessageKind::Image)));
+
+    let bytes = event.to_bytes().unwrap();
+    let recovered = Event::from_bytes(&bytes).unwrap();
+    assert!(matches!(recovered.kind, EventKind::Message(MessageKind::Image)));
+
+    let parsed = recovered.parse_message_payload().unwrap();
+    match parsed {
+        ParsedMessagePayload::Structured(MessagePayload::Image(msg)) => {
+            assert_eq!(msg.preview_thumbhash, vec![0x01; 28]);
+            assert_eq!(msg.width, Some(1920));
+            assert_eq!(msg.height, Some(1080));
+            assert_eq!(msg.mime.as_deref(), Some("image/jpeg"));
+            assert_eq!(msg.external.ciphertext_size, 8192);
+            assert_eq!(msg.external.uri, "at://did:plc:xyz/social.moat.blob/abc123");
+        }
+        other => panic!("expected Structured(Image), got {:?}", other),
+    }
+}
+
+// --- ExternalBlob URI validation ---
+
+#[test]
+fn test_external_blob_uri_validation() {
+    let valid = ExternalBlob::new(
+        "at://did:plc:xyz/social.moat.blob/abc".into(),
+        vec![0; 32],
+        vec![0; 32],
+        1024,
+        vec![0; 32],
+    );
+    assert!(valid.is_ok());
+
+    let invalid = ExternalBlob::new(
+        "https://example.com/blob".into(),
+        vec![0; 32],
+        vec![0; 32],
+        1024,
+        vec![0; 32],
+    );
+    assert!(invalid.is_err());
+    assert!(matches!(
+        invalid.unwrap_err(),
+        Error::InvalidBlobUri(_)
+    ));
+
+    // Direct construction still works but validate() catches it
+    let blob = ExternalBlob {
+        uri: "ipfs://QmFoo".into(),
+        key: vec![],
+        ciphertext_hash: vec![],
+        ciphertext_size: 0,
+        content_hash: vec![],
+    };
+    assert!(blob.validate().is_err());
+}
+
+// --- Unknown event deserialization ---
+
+#[test]
+fn test_unknown_event_kind_roundtrip() {
+    let event = Event {
+        kind: EventKind::Unknown("future.new_thing".into()),
+        group_id: b"group-unk".to_vec(),
+        epoch: 7,
+        payload: b"opaque-data".to_vec(),
+        message_id: None,
+        prev_event_hash: None,
+        epoch_fingerprint: None,
+        sender_device_id: None,
+    };
+
+    let bytes = event.to_bytes().unwrap();
+    let recovered = Event::from_bytes(&bytes).unwrap();
+    assert_eq!(recovered.kind, EventKind::Unknown("future.new_thing".into()));
+    assert_eq!(recovered.group_id, b"group-unk");
+    assert_eq!(recovered.epoch, 7);
+    assert_eq!(recovered.payload, b"opaque-data");
+}
+
+#[test]
+fn test_unknown_domain_deserializes() {
+    // Unknown two-part kind
+    let json = r#"{"kind":"alien.zap","group_id":[],"epoch":0,"payload":[]}"#;
+    let event: Event = serde_json::from_str(json).unwrap();
+    assert_eq!(event.kind, EventKind::Unknown("alien.zap".into()));
+}
+
+#[test]
+fn test_unknown_single_token_deserializes() {
+    // Unknown single-token kind (not a legacy kind)
+    let json = r#"{"kind":"foobar","group_id":[],"epoch":0,"payload":[]}"#;
+    let event: Event = serde_json::from_str(json).unwrap();
+    assert_eq!(event.kind, EventKind::Unknown("foobar".into()));
 }

@@ -188,6 +188,18 @@ If a blob moves or is re-encrypted, the sender emits a follow-up event referenci
 - Algorithmic previews stay tiny: ThumbHash ≤ 64 B raw (≈88 Base64 chars) for media posters, waveform snippets ≤ 160 B raw, and `preview_text` capped ~240–440 ASCII chars depending on other fields.
 - No cover traffic in MVP, but the envelope structure keeps ciphertexts indistinguishable until MLS decryption routes them to the proper conversation.
 
+### Blob Retention & Forward Secrecy
+
+The symmetric `key` inside each `external` entry is forward-secret: it lives within the MLS-encrypted payload and is deleted when MLS epochs advance and old group state is purged. However, if MLS group state is compromised (e.g., device theft before state deletion), any blobs still hosted remain decryptable with the captured keys.
+
+**Considerations for future work:**
+
+- Align blob retention policies with MLS epoch rotation so blobs are not available longer than the keys that protect them.
+- Per-blob ephemeral keys derived from the MLS epoch secret, so compromise of one blob key does not expose others.
+- Server-side blob expiry with configurable TTL.
+
+No specific retention policy is mandated in the current protocol version.
+
 ## Transcript Integrity
 
 MLS provides confidentiality and authenticity for individual messages, but the PDS (as an untrusted relay) can still withhold, reorder, or replay events without detection by MLS alone. Moat adds two mechanisms on top of MLS to detect these attacks:

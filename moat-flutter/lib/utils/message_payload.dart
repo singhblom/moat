@@ -1,7 +1,9 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+// Canonical values defined in moat-core/src/message.rs
 const _shortTextMaxBytes = 240;
+const _mediumTextMaxBytes = 900;
 
 Uint8List encodeTextMessagePayload(String text) {
   final textBytes = utf8.encode(text);

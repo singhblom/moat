@@ -132,3 +132,40 @@ pub struct ExternalBlob {
     pub uri: String,
     pub key: Vec<u8>,
 }
+
+impl ExternalBlob {
+    /// Create a new `ExternalBlob` with URI validation.
+    ///
+    /// Returns an error if `uri` does not start with `at://`.
+    pub fn new(
+        uri: String,
+        key: Vec<u8>,
+        ciphertext_hash: Vec<u8>,
+        ciphertext_size: u64,
+        content_hash: Vec<u8>,
+    ) -> crate::Result<Self> {
+        let blob = Self {
+            ciphertext_hash,
+            ciphertext_size,
+            content_hash,
+            uri,
+            key,
+        };
+        blob.validate()?;
+        Ok(blob)
+    }
+
+    /// Validate that the URI uses an allowed scheme.
+    pub fn validate(&self) -> crate::Result<()> {
+        if !self.uri.starts_with("at://") {
+            return Err(crate::Error::InvalidBlobUri(self.uri.clone()));
+        }
+        Ok(())
+    }
+}
+
+/// Maximum byte length for short_text payloads (fits in the 512 B bucket with JSON overhead).
+pub const SHORT_TEXT_MAX_BYTES: usize = 240;
+
+/// Maximum byte length for medium_text payloads (fits in the 1 KB bucket with JSON overhead).
+pub const MEDIUM_TEXT_MAX_BYTES: usize = 900;

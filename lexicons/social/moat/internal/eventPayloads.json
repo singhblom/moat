@@ -24,7 +24,8 @@
         },
         "text": {
           "type": "string",
-          "description": "UTF-8 message text"
+          "description": "UTF-8 message text",
+          "maxGraphemes": 240
         }
       }
     },
@@ -39,7 +40,8 @@
         },
         "text": {
           "type": "string",
-          "description": "UTF-8 message text"
+          "description": "UTF-8 message text",
+          "maxGraphemes": 900
         }
       }
     },

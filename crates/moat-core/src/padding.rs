@@ -165,4 +165,16 @@ mod tests {
         // Padding portion should differ (with very high probability)
         assert_ne!(&padded1[8..], &padded2[8..]);
     }
+
+    #[test]
+    fn test_padded_sizes_at_boundaries() {
+        // Max payload that fits in Small (508 + 4 = 512)
+        assert_eq!(pad_to_bucket(&vec![0x42; 508]).len(), 512);
+        // One byte over spills to Standard
+        assert_eq!(pad_to_bucket(&vec![0x42; 509]).len(), 1024);
+        // Max payload that fits in Standard (1020 + 4 = 1024)
+        assert_eq!(pad_to_bucket(&vec![0x42; 1020]).len(), 1024);
+        // One byte over spills to Control
+        assert_eq!(pad_to_bucket(&vec![0x42; 1021]).len(), 4096);
+    }
 }

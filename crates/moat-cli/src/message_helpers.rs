@@ -1,14 +1,22 @@
-use moat_core::{LongTextMessage, MediaMessage, MessagePayload, ParsedMessagePayload, TextMessage};
-
-const SHORT_TEXT_MAX_BYTES: usize = 240;
+use moat_core::{
+    LongTextMessage, MediaMessage, MessagePayload, ParsedMessagePayload, TextMessage,
+    MEDIUM_TEXT_MAX_BYTES, SHORT_TEXT_MAX_BYTES,
+};
 
 /// Build a structured payload for plain text input.
+///
+/// Auto-promotes based on byte length:
+/// - `<= SHORT_TEXT_MAX_BYTES` → `ShortText`
+/// - `<= MEDIUM_TEXT_MAX_BYTES` → `MediumText`
+/// - `> MEDIUM_TEXT_MAX_BYTES` → `MediumText` (TODO: promote to `LongText` when blob upload is available)
 pub fn build_text_payload(text: &str) -> MessagePayload {
-    let owned = text.to_string();
-    if owned.as_bytes().len() <= SHORT_TEXT_MAX_BYTES {
-        MessagePayload::ShortText(TextMessage { text: owned })
+    let bytes = text.as_bytes().len();
+    if bytes <= SHORT_TEXT_MAX_BYTES {
+        MessagePayload::ShortText(TextMessage { text: text.to_string() })
     } else {
-        MessagePayload::MediumText(TextMessage { text: owned })
+        // TODO: when blob upload is available, promote to LongText
+        // for text exceeding MEDIUM_TEXT_MAX_BYTES
+        MessagePayload::MediumText(TextMessage { text: text.to_string() })
     }
 }
 
