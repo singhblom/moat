@@ -7,9 +7,7 @@
 // Core session and error types
 pub use crate::error::{Error, ErrorCode, Result};
 pub use crate::event::{Event, EventKind};
-pub use crate::{
-    DecryptResult, EncryptResult, KeyBundle, MoatSession, WelcomeResult, CIPHERSUITE,
-};
+pub use crate::{DecryptResult, EncryptResult, KeyBundle, MoatSession, WelcomeResult, CIPHERSUITE};
 
 // Stealth address functions
 pub use crate::stealth::{encrypt_for_stealth, generate_stealth_keypair, try_decrypt_stealth};

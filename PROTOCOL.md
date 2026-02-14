@@ -28,10 +28,24 @@ Three ATProto lexicons, all under `social.moat.*`:
 
 Every event record looks identical — messages, commits, welcomes, and reactions all use the same `event` schema, hiding the operation type from observers.
 
+## Envelope Buckets & Off-Chain Payloads
+
+Polling contacts' repos should not require downloading multi-megabyte ciphertexts just to see whether a tag belongs to one of our conversations. To cap per-event bandwidth, every padded ciphertext lands in one of three fixed buckets:
+
+| Bucket | Size | Typical contents |
+|--------|------|------------------|
+| Small | 512 B | Emoji reactions and short text |
+| Standard | 1024 B | Most user-visible messages plus previews for media/long text |
+| Control | 4096 B | Rare overflow for commits, welcomes, or checkpoints that exceed 1 KB |
+
+Padding still prepends a 4-byte big-endian length and fills the remainder with random bytes, so the observable leak is reduced to "short vs not short vs control." The `social.moat.event` record continues to hold `{tag, ciphertext}`, but the 1 KB/4 KB buckets can now embed either inline text or a preview bundle that references an external blob.
+
+Large payloads (full-resolution images, long text, video) live off-chain as repo blobs referenced by `uri` pointers inside the encrypted payload. MVP restricts `uri` to repo-local addresses resolved through normal ATProto auth against the sender's PDS, keeping availability identical to in-band ciphertexts. Future revisions can add capability URLs or alternate storage tiers without changing the envelope.
+
 ## Sending a Message
 
 1. Serialize the event to JSON: `{kind: "message", group_id, epoch, payload, message_id}`
-2. Pad to a fixed bucket (256B, 1KB, or 4KB) with a 4-byte length prefix and random fill
+2. Pad to a fixed bucket (512B, 1KB, or 4KB control) with a 4-byte length prefix and random fill
 3. MLS-encrypt using the group's current epoch keys
 4. Derive a unique 16-byte tag (see [Tag Derivation](#tag-derivation) below)
 5. Publish as `social.moat.event {tag, ciphertext}` on the sender's PDS
@@ -75,7 +89,7 @@ This is the most complex part. The goal: Alice invites Bob without revealing to 
 | **MLS encryption** | Message content, event type, group metadata |
 | **Stealth addresses** | Invite recipient identity; fresh ephemeral keys make invites unlinkable |
 | **Per-event unique tags** | Conversation identity — every event gets a unique tag, preventing clustering |
-| **Padding** | Message length patterns (3 fixed buckets) |
+| **Padding** | Message length patterns (512B/1KB/4KB control buckets) |
 | **Unified event schema** | Operation type — messages, commits, welcomes all look the same on-chain |
 
 ## Tag Derivation
@@ -124,11 +138,55 @@ Stealth invite tags are random (not derived) since the recipient doesn't yet kno
 
 | Kind | Payload | Purpose |
 |------|---------|---------|
-| `message` | UTF-8 text + 16-byte `message_id` | Chat messages |
+| `message` | Structured payload (see Message Payloads) + 16-byte `message_id` | Chat messages, attachments, previews |
 | `commit` | TLS-serialized MLS Commit | Membership/key changes |
 | `welcome` | TLS-serialized MLS Welcome | Group join (via stealth invite) |
 | `checkpoint` | Serialized group state | Fast sync (not yet implemented) |
 | `reaction` | `{emoji, target_message_id}` | Emoji reactions (toggle semantics) |
+
+## Message Payloads & External Blobs
+
+When `event.kind == "message"`, the payload is a structured JSON object describing the user-visible content plus any off-chain pointer. Each payload carries:
+
+- `group_id`, `epoch`, and transcript-integrity fields (same as other events),
+- `message_id` (16 random bytes, stable anchor for reactions and pointer retargets),
+- A discriminated `type` describing the user-visible content:
+  - `short_text` (512 B bucket): `text`
+  - `medium_text` (1 KB bucket): `text`
+  - `long_text` (1 KB bucket): `preview_text`, optional `mime`, and `external`
+  - `image` (1 KB bucket): `preview_thumbhash`, `width`, `height`, `mime`, and `external`
+  - `video` (1 KB bucket): `preview_thumbhash`, `width`, `height`, optional `duration_ms`, `mime`, and `external`
+- `reaction` remains its own event kind with `{emoji, target_message_id}`, but the 512 B bucket budget matches the `short_text` envelope.
+
+`external` entries move the heavy payload off-chain. The struct includes:
+
+| Field | Purpose |
+|-------|---------|
+| `ciphertext_hash` | SHA-256 of the stored blob (`nonce || ciphertext`) |
+| `ciphertext_size` | Size in bytes of the stored blob |
+| `content_hash` | SHA-256 of the plaintext after decrypting |
+| `uri` | Repo-local address resolvable through `com.atproto.repo.getBlob` |
+| `key` | Symmetric key (XChaCha20-Poly1305) for decrypting the blob (`nonce` lives alongside the ciphertext) |
+| Optional `mime`, `width`, `height`, `duration_ms` | Media metadata for UX and validation |
+
+Blobs are stored as `nonce || ciphertext` where the nonce is a 24-byte random value. Clients compute `ciphertext_hash = SHA-256(nonce || ciphertext)` before decrypting and `content_hash = SHA-256(plaintext)` afterward. Both hashes sit inside the MLS-authenticated payload so tampering produces transcript-integrity warnings.
+
+### Integrity & Fetch Flow
+
+1. Attempt to decrypt every 1 KB envelope as usual. If the payload contains `external`, surface the preview immediately (e.g., ThumbHash, `preview_text`, waveform).
+2. Fetch the blob lazily from the sender's PDS using existing repo auth. Hash the downloaded bytes before decrypting and compare to `ciphertext_hash`. Reject on mismatch.
+3. Decrypt using the provided `key` and the nonce prefix stored with the blob (`blob = nonce || ciphertext`). After decrypting, hash the plaintext and compare to `content_hash`.
+4. Cache blobs by `content_hash` (stable across re-encryptions). Maintain a secondary cache mapping `ciphertext_hash → content_hash` to avoid reprocessing duplicates.
+
+If a blob moves or is re-encrypted, the sender emits a follow-up event referencing the original `message_id` with updated `uri`/`ciphertext_hash`. Receivers keep previews visible, automatically retarget pointers, and classify transient fetch failures (`Timeout`, `Unauthorized`, `NotFound`, `RateLimited`) separately from integrity errors (`CiphertextHashMismatch`, `DecryptionFailed`, `ContentHashMismatch`).
+
+### Preview & Bucket Policy
+
+- 512 B bucket: reactions and `short_text`.
+- 1 KB bucket: `medium_text`, previews for long text, and all media previews.
+- 4 KB control bucket: only for overflow control traffic (commit/welcome/checkpoint) that truly cannot fit in 1 KB.
+- Algorithmic previews stay tiny: ThumbHash ≤ 64 B raw (≈88 Base64 chars) for media posters, waveform snippets ≤ 160 B raw, and `preview_text` capped ~240–440 ASCII chars depending on other fields.
+- No cover traffic in MVP, but the envelope structure keeps ciphertexts indistinguishable until MLS decryption routes them to the proper conversation.
 
 ## Transcript Integrity
 

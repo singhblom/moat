@@ -157,8 +157,7 @@ impl MlsStorage {
             let mut list: Vec<Vec<u8>> =
                 serde_json::from_slice(list_bytes).map_err(|_| MlsStorageError::Serialization)?;
             list.push(value);
-            *list_bytes =
-                serde_json::to_vec(&list).map_err(|_| MlsStorageError::Serialization)?;
+            *list_bytes = serde_json::to_vec(&list).map_err(|_| MlsStorageError::Serialization)?;
         }
         self.mark_dirty();
         Ok(())
@@ -180,8 +179,7 @@ impl MlsStorage {
             if let Some(pos) = list.iter().position(|stored| stored == &value) {
                 list.remove(pos);
             }
-            *list_bytes =
-                serde_json::to_vec(&list).map_err(|_| MlsStorageError::Serialization)?;
+            *list_bytes = serde_json::to_vec(&list).map_err(|_| MlsStorageError::Serialization)?;
         }
         self.mark_dirty();
         Ok(())
@@ -225,9 +223,7 @@ impl MlsStorage {
 
         list_bytes
             .iter()
-            .map(|bytes| {
-                serde_json::from_slice(bytes).map_err(|_| MlsStorageError::Serialization)
-            })
+            .map(|bytes| serde_json::from_slice(bytes).map_err(|_| MlsStorageError::Serialization))
             .collect()
     }
 
@@ -368,11 +364,8 @@ fn epoch_key_pairs_id(
     epoch: &impl traits::EpochKey<CURRENT_VERSION>,
     leaf_index: u32,
 ) -> Result<Vec<u8>, MlsStorageError> {
-    let mut key =
-        serde_json::to_vec(group_id).map_err(|_| MlsStorageError::Serialization)?;
-    key.extend_from_slice(
-        &serde_json::to_vec(epoch).map_err(|_| MlsStorageError::Serialization)?,
-    );
+    let mut key = serde_json::to_vec(group_id).map_err(|_| MlsStorageError::Serialization)?;
+    key.extend_from_slice(&serde_json::to_vec(epoch).map_err(|_| MlsStorageError::Serialization)?);
     key.extend_from_slice(
         &serde_json::to_vec(&leaf_index).map_err(|_| MlsStorageError::Serialization)?,
     );
@@ -392,14 +385,13 @@ impl StorageProvider<CURRENT_VERSION> for MlsStorage {
         proposal_ref: &ProposalRef,
         proposal: &QueuedProposal,
     ) -> Result<(), Self::Error> {
-        let key =
-            serde_json::to_vec(&(group_id, proposal_ref)).map_err(|_| MlsStorageError::Serialization)?;
+        let key = serde_json::to_vec(&(group_id, proposal_ref))
+            .map_err(|_| MlsStorageError::Serialization)?;
         let value = serde_json::to_vec(proposal).map_err(|_| MlsStorageError::Serialization)?;
         self.write_value(QUEUED_PROPOSAL_LABEL, &key, value)?;
 
         let key = serde_json::to_vec(group_id).map_err(|_| MlsStorageError::Serialization)?;
-        let value =
-            serde_json::to_vec(proposal_ref).map_err(|_| MlsStorageError::Serialization)?;
+        let value = serde_json::to_vec(proposal_ref).map_err(|_| MlsStorageError::Serialization)?;
         self.append_value(PROPOSAL_QUEUE_REFS_LABEL, &key, value)
     }
 
@@ -622,8 +614,7 @@ impl StorageProvider<CURRENT_VERSION> for MlsStorage {
         key_package: &KeyPackage,
     ) -> Result<(), Self::Error> {
         let key = serde_json::to_vec(hash_ref).map_err(|_| MlsStorageError::Serialization)?;
-        let value =
-            serde_json::to_vec(key_package).map_err(|_| MlsStorageError::Serialization)?;
+        let value = serde_json::to_vec(key_package).map_err(|_| MlsStorageError::Serialization)?;
         self.write_value(KEY_PACKAGE_LABEL, &key, value)
     }
 
@@ -833,8 +824,7 @@ impl StorageProvider<CURRENT_VERSION> for MlsStorage {
         self.write_value(
             RESUMPTION_PSK_STORE_LABEL,
             &serde_json::to_vec(group_id).map_err(|_| MlsStorageError::Serialization)?,
-            serde_json::to_vec(resumption_psk_store)
-                .map_err(|_| MlsStorageError::Serialization)?,
+            serde_json::to_vec(resumption_psk_store).map_err(|_| MlsStorageError::Serialization)?,
         )
     }
 
@@ -910,8 +900,7 @@ impl StorageProvider<CURRENT_VERSION> for MlsStorage {
         self.write_value(
             EPOCH_SECRETS_LABEL,
             &serde_json::to_vec(group_id).map_err(|_| MlsStorageError::Serialization)?,
-            serde_json::to_vec(group_epoch_secrets)
-                .map_err(|_| MlsStorageError::Serialization)?,
+            serde_json::to_vec(group_epoch_secrets).map_err(|_| MlsStorageError::Serialization)?,
         )
     }
 
@@ -1125,12 +1114,11 @@ impl StorageProvider<CURRENT_VERSION> for MlsStorage {
         proposal_ref: &ProposalRef,
     ) -> Result<(), Self::Error> {
         let key = serde_json::to_vec(group_id).map_err(|_| MlsStorageError::Serialization)?;
-        let value =
-            serde_json::to_vec(proposal_ref).map_err(|_| MlsStorageError::Serialization)?;
+        let value = serde_json::to_vec(proposal_ref).map_err(|_| MlsStorageError::Serialization)?;
         self.remove_item_value(PROPOSAL_QUEUE_REFS_LABEL, &key, value)?;
 
-        let key =
-            serde_json::to_vec(&(group_id, proposal_ref)).map_err(|_| MlsStorageError::Serialization)?;
+        let key = serde_json::to_vec(&(group_id, proposal_ref))
+            .map_err(|_| MlsStorageError::Serialization)?;
         self.delete_value(QUEUED_PROPOSAL_LABEL, &key)
     }
 }
@@ -1144,7 +1132,9 @@ mod tests {
         let storage = MlsStorage::new();
 
         // Test basic write and read
-        storage.write_value(b"test", b"key1", b"value1".to_vec()).unwrap();
+        storage
+            .write_value(b"test", b"key1", b"value1".to_vec())
+            .unwrap();
 
         let values = storage.values.read().unwrap();
         assert!(!values.is_empty());
@@ -1155,7 +1145,9 @@ mod tests {
         let storage = MlsStorage::new();
         assert!(!storage.has_pending_changes());
 
-        storage.write_value(b"test", b"key1", b"value1".to_vec()).unwrap();
+        storage
+            .write_value(b"test", b"key1", b"value1".to_vec())
+            .unwrap();
         assert!(storage.has_pending_changes());
 
         storage.clear_pending_changes();
@@ -1165,8 +1157,12 @@ mod tests {
     #[test]
     fn test_export_import_state() {
         let storage = MlsStorage::new();
-        storage.write_value(b"test", b"key1", b"value1".to_vec()).unwrap();
-        storage.write_value(b"test", b"key2", b"value2".to_vec()).unwrap();
+        storage
+            .write_value(b"test", b"key1", b"value1".to_vec())
+            .unwrap();
+        storage
+            .write_value(b"test", b"key2", b"value2".to_vec())
+            .unwrap();
 
         // Export
         let state = storage.export_state().unwrap();

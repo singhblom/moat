@@ -178,7 +178,9 @@ impl KeyStore {
     pub fn load_group_metadata(&self, group_id: &str) -> Result<GroupMetadata> {
         let path = self.base_path.join(format!("group_{group_id}.meta"));
         if !path.exists() {
-            return Err(KeyStoreError::NotFound(format!("group metadata: {group_id}")));
+            return Err(KeyStoreError::NotFound(format!(
+                "group metadata: {group_id}"
+            )));
         }
         let data = fs::read(&path)?;
         let metadata: GroupMetadata = serde_json::from_slice(&data)?;

@@ -1,6 +1,18 @@
 //! Integration tests for moat-core
 
-use crate::{pad_to_bucket, unpad, Event, EventKind, Error, ErrorCode, MoatCredential, MoatSession, tag::derive_event_tag};
+use crate::{
+    event::{ControlKind, ModifierKind},
+    message::{MessagePayload, TextMessage},
+    pad_to_bucket,
+    tag::derive_event_tag,
+    unpad,
+    Error,
+    ErrorCode,
+    Event,
+    EventKind,
+    MoatCredential,
+    MoatSession,
+};
 
 #[test]
 fn test_key_package_generation() {
@@ -84,13 +96,13 @@ fn test_padding_small_message() {
     let plaintext = b"Hello, world!";
     let padded = pad_to_bucket(plaintext);
 
-    assert_eq!(padded.len(), 256);
+    assert_eq!(padded.len(), 512);
     assert_eq!(unpad(&padded), plaintext);
 }
 
 #[test]
 fn test_padding_medium_message() {
-    let plaintext = vec![0x42; 500];
+    let plaintext = vec![0x42; 600];
     let padded = pad_to_bucket(&plaintext);
 
     assert_eq!(padded.len(), 1024);
@@ -111,8 +123,8 @@ fn test_padding_preserves_content() {
     let messages = vec![
         b"Short".to_vec(),
         b"A slightly longer message".to_vec(),
-        vec![0xAB; 300],  // Medium bucket
-        vec![0xCD; 1500], // Large bucket
+        vec![0xAB; 600],  // Standard bucket
+        vec![0xCD; 1500], // Control bucket
     ];
 
     for msg in messages {
@@ -204,9 +216,12 @@ fn test_event_serialization_with_padding() {
     // Serialize
     let event_bytes = event.to_bytes().unwrap();
 
-    // Pad (message_id adds ~24 bytes of JSON, so this may land in small or medium bucket)
+    // Pad (message_id adds ~24 bytes of JSON, so this may land in small or standard bucket)
     let padded = pad_to_bucket(&event_bytes);
-    assert!(padded.len() == 256 || padded.len() == 1024, "Should fit in small or medium bucket");
+    assert!(
+        padded.len() == 512 || padded.len() == 1024,
+        "Should fit in small or standard bucket"
+    );
 
     // Unpad
     let unpadded = unpad(&padded);
@@ -278,13 +293,17 @@ fn test_encrypt_event() {
     // Create Alice
     let alice_credential = MoatCredential::new("did:plc:alice123", "Alice Phone", [0u8; 16]);
     let (_alice_kp, alice_bundle) = session.generate_key_package(&alice_credential).unwrap();
-    let group_id = session.create_group(&alice_credential, &alice_bundle).unwrap();
+    let group_id = session
+        .create_group(&alice_credential, &alice_bundle)
+        .unwrap();
 
     // Create an event
     let original_event = Event::message(group_id.clone(), 0, b"Hello, world!");
 
     // Encrypt
-    let encrypt_result = session.encrypt_event(&group_id, &alice_bundle, &original_event).unwrap();
+    let encrypt_result = session
+        .encrypt_event(&group_id, &alice_bundle, &original_event)
+        .unwrap();
     assert!(!encrypt_result.ciphertext.is_empty());
     assert_eq!(encrypt_result.tag.len(), 16);
 
@@ -307,23 +326,34 @@ fn test_two_party_messaging() {
     let (bob_kp, bob_bundle) = bob_session.generate_key_package(&bob_credential).unwrap();
 
     // Alice creates a group
-    let group_id = alice_session.create_group(&alice_credential, &alice_bundle).unwrap();
+    let group_id = alice_session
+        .create_group(&alice_credential, &alice_bundle)
+        .unwrap();
 
     // Alice adds Bob to the group
-    let welcome_result = alice_session.add_member(&group_id, &alice_bundle, &bob_kp).unwrap();
+    let welcome_result = alice_session
+        .add_member(&group_id, &alice_bundle, &bob_kp)
+        .unwrap();
     assert!(!welcome_result.welcome.is_empty());
     assert!(!welcome_result.commit.is_empty());
 
     // Bob joins using the welcome
-    let bob_group_id = bob_session.process_welcome(&welcome_result.welcome).unwrap();
+    let bob_group_id = bob_session
+        .process_welcome(&welcome_result.welcome)
+        .unwrap();
     assert_eq!(bob_group_id, group_id);
 
     // Alice sends a message
     let message = Event::message(group_id.clone(), 0, b"Hello Bob!");
-    let encrypted = alice_session.encrypt_event(&group_id, &alice_bundle, &message).unwrap();
+    let encrypted = alice_session
+        .encrypt_event(&group_id, &alice_bundle, &message)
+        .unwrap();
 
     // Bob decrypts the message and gets sender info
-    let decrypted = bob_session.decrypt_event(&bob_group_id, &encrypted.ciphertext).unwrap().into_result();
+    let decrypted = bob_session
+        .decrypt_event(&bob_group_id, &encrypted.ciphertext)
+        .unwrap()
+        .into_result();
     assert_eq!(decrypted.event.kind, EventKind::Message);
     assert_eq!(decrypted.event.payload, b"Hello Bob!");
 
@@ -334,10 +364,15 @@ fn test_two_party_messaging() {
 
     // Bob replies
     let reply = Event::message(group_id.clone(), 0, b"Hello Alice!");
-    let encrypted_reply = bob_session.encrypt_event(&bob_group_id, &bob_bundle, &reply).unwrap();
+    let encrypted_reply = bob_session
+        .encrypt_event(&bob_group_id, &bob_bundle, &reply)
+        .unwrap();
 
     // Alice decrypts Bob's reply and gets sender info
-    let decrypted_reply = alice_session.decrypt_event(&group_id, &encrypted_reply.ciphertext).unwrap().into_result();
+    let decrypted_reply = alice_session
+        .decrypt_event(&group_id, &encrypted_reply.ciphertext)
+        .unwrap()
+        .into_result();
     assert_eq!(decrypted_reply.event.kind, EventKind::Message);
     assert_eq!(decrypted_reply.event.payload, b"Hello Alice!");
 
@@ -487,7 +522,9 @@ fn test_extract_credential_from_key_package() {
     let (key_package_bytes, _key_bundle) = session.generate_key_package(&credential).unwrap();
 
     // Extract credential from key package
-    let extracted = session.extract_credential_from_key_package(&key_package_bytes).unwrap();
+    let extracted = session
+        .extract_credential_from_key_package(&key_package_bytes)
+        .unwrap();
     let extracted = extracted.expect("Should be able to extract credential");
 
     assert_eq!(extracted.did(), "did:plc:xyz789");
@@ -502,11 +539,15 @@ fn test_get_group_members() {
     let alice_credential = MoatCredential::new("did:plc:alice123", "Alice Phone", [0u8; 16]);
     let bob_credential = MoatCredential::new("did:plc:bob456", "Bob Laptop", [0u8; 16]);
 
-    let (_alice_kp, alice_bundle) = alice_session.generate_key_package(&alice_credential).unwrap();
+    let (_alice_kp, alice_bundle) = alice_session
+        .generate_key_package(&alice_credential)
+        .unwrap();
     let (bob_kp, _bob_bundle) = bob_session.generate_key_package(&bob_credential).unwrap();
 
     // Alice creates a group
-    let group_id = alice_session.create_group(&alice_credential, &alice_bundle).unwrap();
+    let group_id = alice_session
+        .create_group(&alice_credential, &alice_bundle)
+        .unwrap();
 
     // Check members before adding Bob
     let members = alice_session.get_group_members(&group_id).unwrap();
@@ -516,16 +557,18 @@ fn test_get_group_members() {
     assert_eq!(alice_cred.did(), "did:plc:alice123");
 
     // Add Bob
-    let _welcome = alice_session.add_member(&group_id, &alice_bundle, &bob_kp).unwrap();
+    let _welcome = alice_session
+        .add_member(&group_id, &alice_bundle, &bob_kp)
+        .unwrap();
 
     // Check members after adding Bob
     let members = alice_session.get_group_members(&group_id).unwrap();
     assert_eq!(members.len(), 2);
 
     // Find Bob's credential
-    let bob_found = members.iter().any(|(_, cred)| {
-        cred.as_ref().map_or(false, |c| c.did() == "did:plc:bob456")
-    });
+    let bob_found = members
+        .iter()
+        .any(|(_, cred)| cred.as_ref().map_or(false, |c| c.did() == "did:plc:bob456"));
     assert!(bob_found, "Bob should be in the group");
 }
 
@@ -542,8 +585,14 @@ fn test_multi_device_same_did() {
     let (kp2, _) = session.generate_key_package(&device2).unwrap();
 
     // Extract and verify credentials
-    let cred1 = session.extract_credential_from_key_package(&kp1).unwrap().unwrap();
-    let cred2 = session.extract_credential_from_key_package(&kp2).unwrap().unwrap();
+    let cred1 = session
+        .extract_credential_from_key_package(&kp1)
+        .unwrap()
+        .unwrap();
+    let cred2 = session
+        .extract_credential_from_key_package(&kp2)
+        .unwrap()
+        .unwrap();
 
     // Same DID, different device names
     assert_eq!(cred1.did(), cred2.did());
@@ -558,11 +607,17 @@ fn test_get_group_dids() {
     let alice_credential = MoatCredential::new("did:plc:alice123", "Alice Phone", [0u8; 16]);
     let bob_credential = MoatCredential::new("did:plc:bob456", "Bob Laptop", [0u8; 16]);
 
-    let (_alice_kp, alice_bundle) = alice_session.generate_key_package(&alice_credential).unwrap();
+    let (_alice_kp, alice_bundle) = alice_session
+        .generate_key_package(&alice_credential)
+        .unwrap();
     let (bob_kp, _bob_bundle) = bob_session.generate_key_package(&bob_credential).unwrap();
 
-    let group_id = alice_session.create_group(&alice_credential, &alice_bundle).unwrap();
-    let _welcome = alice_session.add_member(&group_id, &alice_bundle, &bob_kp).unwrap();
+    let group_id = alice_session
+        .create_group(&alice_credential, &alice_bundle)
+        .unwrap();
+    let _welcome = alice_session
+        .add_member(&group_id, &alice_bundle, &bob_kp)
+        .unwrap();
 
     let dids = alice_session.get_group_dids(&group_id).unwrap();
     assert_eq!(dids.len(), 2);
@@ -578,19 +633,33 @@ fn test_is_did_in_group() {
     let alice_credential = MoatCredential::new("did:plc:alice123", "Alice Phone", [0u8; 16]);
     let bob_credential = MoatCredential::new("did:plc:bob456", "Bob Laptop", [0u8; 16]);
 
-    let (_alice_kp, alice_bundle) = alice_session.generate_key_package(&alice_credential).unwrap();
+    let (_alice_kp, alice_bundle) = alice_session
+        .generate_key_package(&alice_credential)
+        .unwrap();
     let (bob_kp, _bob_bundle) = bob_session.generate_key_package(&bob_credential).unwrap();
 
-    let group_id = alice_session.create_group(&alice_credential, &alice_bundle).unwrap();
+    let group_id = alice_session
+        .create_group(&alice_credential, &alice_bundle)
+        .unwrap();
 
     // Before adding Bob
-    assert!(alice_session.is_did_in_group(&group_id, "did:plc:alice123").unwrap());
-    assert!(!alice_session.is_did_in_group(&group_id, "did:plc:bob456").unwrap());
+    assert!(alice_session
+        .is_did_in_group(&group_id, "did:plc:alice123")
+        .unwrap());
+    assert!(!alice_session
+        .is_did_in_group(&group_id, "did:plc:bob456")
+        .unwrap());
 
     // After adding Bob
-    let _welcome = alice_session.add_member(&group_id, &alice_bundle, &bob_kp).unwrap();
-    assert!(alice_session.is_did_in_group(&group_id, "did:plc:alice123").unwrap());
-    assert!(alice_session.is_did_in_group(&group_id, "did:plc:bob456").unwrap());
+    let _welcome = alice_session
+        .add_member(&group_id, &alice_bundle, &bob_kp)
+        .unwrap();
+    assert!(alice_session
+        .is_did_in_group(&group_id, "did:plc:alice123")
+        .unwrap());
+    assert!(alice_session
+        .is_did_in_group(&group_id, "did:plc:bob456")
+        .unwrap());
 }
 
 #[test]
@@ -604,23 +673,37 @@ fn test_add_device_for_existing_did() {
     let alice_device2_cred = MoatCredential::new("did:plc:alice123", "Alice Laptop", [2u8; 16]);
     let bob_cred = MoatCredential::new("did:plc:bob456", "Bob Laptop", [0u8; 16]);
 
-    let (_kp1, alice_bundle1) = alice_device1_session.generate_key_package(&alice_device1_cred).unwrap();
-    let (kp2, _) = alice_device2_session.generate_key_package(&alice_device2_cred).unwrap();
+    let (_kp1, alice_bundle1) = alice_device1_session
+        .generate_key_package(&alice_device1_cred)
+        .unwrap();
+    let (kp2, _) = alice_device2_session
+        .generate_key_package(&alice_device2_cred)
+        .unwrap();
     let (bob_kp, bob_bundle) = bob_session.generate_key_package(&bob_cred).unwrap();
 
     // Alice device 1 creates group and adds Bob
-    let group_id = alice_device1_session.create_group(&alice_device1_cred, &alice_bundle1).unwrap();
-    let welcome_result = alice_device1_session.add_member(&group_id, &alice_bundle1, &bob_kp).unwrap();
+    let group_id = alice_device1_session
+        .create_group(&alice_device1_cred, &alice_bundle1)
+        .unwrap();
+    let welcome_result = alice_device1_session
+        .add_member(&group_id, &alice_bundle1, &bob_kp)
+        .unwrap();
 
     // Bob joins
-    let bob_group_id = bob_session.process_welcome(&welcome_result.welcome).unwrap();
+    let bob_group_id = bob_session
+        .process_welcome(&welcome_result.welcome)
+        .unwrap();
     assert_eq!(bob_group_id, group_id);
 
     // Bob adds Alice's second device (same DID as Alice device 1)
-    let device2_welcome = bob_session.add_device(&bob_group_id, &bob_bundle, &kp2).unwrap();
+    let device2_welcome = bob_session
+        .add_device(&bob_group_id, &bob_bundle, &kp2)
+        .unwrap();
 
     // Alice device 2 joins via welcome
-    let device2_group_id = alice_device2_session.process_welcome(&device2_welcome.welcome).unwrap();
+    let device2_group_id = alice_device2_session
+        .process_welcome(&device2_welcome.welcome)
+        .unwrap();
     assert_eq!(device2_group_id, group_id);
 
     // Verify group now has 3 members (2 DIDs: Alice with 2 devices, Bob with 1)
@@ -647,8 +730,12 @@ fn test_add_device_fails_for_non_member() {
     let (charlie_kp, _) = charlie_session.generate_key_package(&charlie_cred).unwrap();
 
     // Alice creates group and adds Bob
-    let group_id = alice_session.create_group(&alice_cred, &alice_bundle).unwrap();
-    let _welcome = alice_session.add_member(&group_id, &alice_bundle, &bob_kp).unwrap();
+    let group_id = alice_session
+        .create_group(&alice_cred, &alice_bundle)
+        .unwrap();
+    let _welcome = alice_session
+        .add_member(&group_id, &alice_bundle, &bob_kp)
+        .unwrap();
 
     // Try to add Charlie as a "device" - should fail because Charlie's DID isn't in the group
     let result = alice_session.add_device(&group_id, &alice_bundle, &charlie_kp);
@@ -669,21 +756,28 @@ fn test_remove_member() {
     let (bob_kp, _) = bob_session.generate_key_package(&bob_cred).unwrap();
 
     // Create group with Alice and Bob
-    let group_id = alice_session.create_group(&alice_cred, &alice_bundle).unwrap();
-    let _welcome = alice_session.add_member(&group_id, &alice_bundle, &bob_kp).unwrap();
+    let group_id = alice_session
+        .create_group(&alice_cred, &alice_bundle)
+        .unwrap();
+    let _welcome = alice_session
+        .add_member(&group_id, &alice_bundle, &bob_kp)
+        .unwrap();
 
     // Verify 2 members
     let members = alice_session.get_group_members(&group_id).unwrap();
     assert_eq!(members.len(), 2);
 
     // Find Bob's leaf index
-    let bob_leaf_idx = members.iter()
+    let bob_leaf_idx = members
+        .iter()
         .find(|(_, cred)| cred.as_ref().map_or(false, |c| c.did() == "did:plc:bob456"))
         .map(|(idx, _)| *idx)
         .unwrap();
 
     // Remove Bob
-    let remove_result = alice_session.remove_member(&group_id, &alice_bundle, bob_leaf_idx).unwrap();
+    let remove_result = alice_session
+        .remove_member(&group_id, &alice_bundle, bob_leaf_idx)
+        .unwrap();
     assert!(!remove_result.commit.is_empty());
 
     // Verify only 1 member remains
@@ -703,22 +797,34 @@ fn test_kick_user() {
     let bob_device2_cred = MoatCredential::new("did:plc:bob456", "Bob Laptop", [2u8; 16]);
 
     let (_kp, alice_bundle) = alice_session.generate_key_package(&alice_cred).unwrap();
-    let (bob_kp1, _bob_bundle1) = bob_device1_session.generate_key_package(&bob_device1_cred).unwrap();
-    let (bob_kp2, _) = bob_device2_session.generate_key_package(&bob_device2_cred).unwrap();
+    let (bob_kp1, _bob_bundle1) = bob_device1_session
+        .generate_key_package(&bob_device1_cred)
+        .unwrap();
+    let (bob_kp2, _) = bob_device2_session
+        .generate_key_package(&bob_device2_cred)
+        .unwrap();
 
     // Create group
-    let group_id = alice_session.create_group(&alice_cred, &alice_bundle).unwrap();
+    let group_id = alice_session
+        .create_group(&alice_cred, &alice_bundle)
+        .unwrap();
 
     // Alice adds both of Bob's devices (simpler test - Alice does all adding)
-    let _welcome1 = alice_session.add_member(&group_id, &alice_bundle, &bob_kp1).unwrap();
-    let _welcome2 = alice_session.add_device(&group_id, &alice_bundle, &bob_kp2).unwrap();
+    let _welcome1 = alice_session
+        .add_member(&group_id, &alice_bundle, &bob_kp1)
+        .unwrap();
+    let _welcome2 = alice_session
+        .add_device(&group_id, &alice_bundle, &bob_kp2)
+        .unwrap();
 
     // Verify 3 members (Alice + Bob's 2 devices)
     let members = alice_session.get_group_members(&group_id).unwrap();
     assert_eq!(members.len(), 3);
 
     // Alice kicks Bob (all devices)
-    let kick_result = alice_session.kick_user(&group_id, &alice_bundle, "did:plc:bob456").unwrap();
+    let kick_result = alice_session
+        .kick_user(&group_id, &alice_bundle, "did:plc:bob456")
+        .unwrap();
     assert!(!kick_result.commit.is_empty());
 
     // Verify only Alice remains
@@ -753,26 +859,40 @@ fn test_reaction_encrypt_decrypt_roundtrip() {
     let (_alice_kp, alice_bundle) = alice_session.generate_key_package(&alice_cred).unwrap();
     let (bob_kp, bob_bundle) = bob_session.generate_key_package(&bob_cred).unwrap();
 
-    let group_id = alice_session.create_group(&alice_cred, &alice_bundle).unwrap();
-    let welcome = alice_session.add_member(&group_id, &alice_bundle, &bob_kp).unwrap();
+    let group_id = alice_session
+        .create_group(&alice_cred, &alice_bundle)
+        .unwrap();
+    let welcome = alice_session
+        .add_member(&group_id, &alice_bundle, &bob_kp)
+        .unwrap();
     let bob_group_id = bob_session.process_welcome(&welcome.welcome).unwrap();
 
     // Alice sends a message
     let message = Event::message(group_id.clone(), 0, b"Hello Bob!");
     let msg_id = message.message_id.clone().unwrap();
-    let encrypted_msg = alice_session.encrypt_event(&group_id, &alice_bundle, &message).unwrap();
+    let encrypted_msg = alice_session
+        .encrypt_event(&group_id, &alice_bundle, &message)
+        .unwrap();
 
     // Bob decrypts the message
-    let decrypted_msg = bob_session.decrypt_event(&bob_group_id, &encrypted_msg.ciphertext).unwrap().into_result();
+    let decrypted_msg = bob_session
+        .decrypt_event(&bob_group_id, &encrypted_msg.ciphertext)
+        .unwrap()
+        .into_result();
     assert_eq!(decrypted_msg.event.kind, EventKind::Message);
     assert_eq!(decrypted_msg.event.message_id.as_ref().unwrap(), &msg_id);
 
     // Bob reacts to Alice's message with 👍
     let reaction = Event::reaction(bob_group_id.clone(), 0, &msg_id, "👍");
-    let encrypted_reaction = bob_session.encrypt_event(&bob_group_id, &bob_bundle, &reaction).unwrap();
+    let encrypted_reaction = bob_session
+        .encrypt_event(&bob_group_id, &bob_bundle, &reaction)
+        .unwrap();
 
     // Alice decrypts the reaction
-    let decrypted_reaction = alice_session.decrypt_event(&group_id, &encrypted_reaction.ciphertext).unwrap().into_result();
+    let decrypted_reaction = alice_session
+        .decrypt_event(&group_id, &encrypted_reaction.ciphertext)
+        .unwrap()
+        .into_result();
     assert_eq!(decrypted_reaction.event.kind, EventKind::Reaction);
 
     let rp = decrypted_reaction.event.reaction_payload().unwrap();
@@ -797,13 +917,17 @@ fn test_reaction_with_custom_emoji_string() {
 }
 
 #[test]
-fn test_reaction_fits_in_small_or_medium_padding_bucket() {
+fn test_reaction_fits_in_small_or_standard_padding_bucket() {
     let target_id = vec![0x01; 16];
     let reaction = Event::reaction(b"group-id".to_vec(), 0, &target_id, "👍");
 
     let event_bytes = reaction.to_bytes().unwrap();
     let padded = pad_to_bucket(&event_bytes);
-    assert!(padded.len() <= 1024, "Reactions should fit in small or medium bucket, got {}", padded.len());
+    assert!(
+        padded.len() <= 1024,
+        "Reactions should fit in small or standard bucket, got {}",
+        padded.len()
+    );
 }
 
 #[test]

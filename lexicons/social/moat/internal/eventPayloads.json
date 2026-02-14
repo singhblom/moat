@@ -4,12 +4,216 @@
   "description": "Payload formats for each event kind. These describe the contents of the 'payload' field in social.moat.internal.paddedPayload#event.",
   "defs": {
     "message": {
+      "type": "union",
+      "description": "Structured message payloads. The 'type' field discriminates the per-kind schema below.",
+      "refs": [
+        "#messageShortText",
+        "#messageMediumText",
+        "#messageLongText",
+        "#messageImage",
+        "#messageVideo"
+      ]
+    },
+    "messageShortText": {
       "type": "object",
-      "description": "Chat message payload. The 'payload' bytes are UTF-8 encoded text.",
+      "description": "≤512 B inline text (fits the small bucket).",
+      "required": ["type", "text"],
       "properties": {
-        "payload": {
+        "type": {
           "type": "string",
-          "description": "UTF-8 encoded message text"
+          "const": "short_text"
+        },
+        "text": {
+          "type": "string",
+          "description": "UTF-8 message text"
+        }
+      }
+    },
+    "messageMediumText": {
+      "type": "object",
+      "description": "Inline text that requires the 1 KB bucket.",
+      "required": ["type", "text"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "medium_text"
+        },
+        "text": {
+          "type": "string",
+          "description": "UTF-8 message text"
+        }
+      }
+    },
+    "messageLongText": {
+      "type": "object",
+      "description": "Long-form text backed by an external blob plus preview.",
+      "required": ["type", "preview_text", "external"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "long_text"
+        },
+        "preview_text": {
+          "type": "string",
+          "description": "Preview shown inline while the blob downloads"
+        },
+        "mime": {
+          "type": "string",
+          "description": "Optional MIME hint for the blob (e.g., text/markdown)"
+        },
+        "external": {
+          "type": "ref",
+          "ref": "#externalText"
+        }
+      }
+    },
+    "messageImage": {
+      "type": "object",
+      "description": "Image message with ThumbHash preview and external blob.",
+      "required": ["type", "preview_thumbhash", "external"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "image"
+        },
+        "preview_thumbhash": {
+          "type": "bytes",
+          "description": "ThumbHash bytes (≤64 raw bytes before base64)",
+          "maxLength": 64
+        },
+        "width": {
+          "type": "integer",
+          "description": "Optional pixel width"
+        },
+        "height": {
+          "type": "integer",
+          "description": "Optional pixel height"
+        },
+        "mime": {
+          "type": "string",
+          "description": "Image MIME type (e.g., image/jpeg)"
+        },
+        "external": {
+          "type": "ref",
+          "ref": "#externalImage"
+        }
+      }
+    },
+    "messageVideo": {
+      "type": "object",
+      "description": "Video message with ThumbHash preview and external blob.",
+      "required": ["type", "preview_thumbhash", "external"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "video"
+        },
+        "preview_thumbhash": {
+          "type": "bytes",
+          "description": "ThumbHash poster (≤64 raw bytes before base64)",
+          "maxLength": 64
+        },
+        "width": {
+          "type": "integer",
+          "description": "Optional pixel width"
+        },
+        "height": {
+          "type": "integer",
+          "description": "Optional pixel height"
+        },
+        "mime": {
+          "type": "string",
+          "description": "Video MIME type (e.g., video/mp4)"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "description": "Optional duration in milliseconds"
+        },
+        "external": {
+          "type": "ref",
+          "ref": "#externalVideo"
+        }
+      }
+    },
+    "externalPayloadBase": {
+      "type": "object",
+      "description": "Common integrity binding for off-chain blobs.",
+      "required": [
+        "ciphertext_hash",
+        "ciphertext_size",
+        "content_hash",
+        "uri",
+        "key"
+      ],
+      "properties": {
+        "ciphertext_hash": {
+          "type": "bytes",
+          "description": "SHA-256 over nonce || ciphertext"
+        },
+        "ciphertext_size": {
+          "type": "integer",
+          "description": "Size in bytes of nonce || ciphertext"
+        },
+        "content_hash": {
+          "type": "bytes",
+          "description": "SHA-256 of decrypted plaintext"
+        },
+        "uri": {
+          "type": "string",
+          "description": "Repo-local blob URI (at://did/app.bsky.blob/...)"
+        },
+        "key": {
+          "type": "bytes",
+          "description": "Symmetric key for XChaCha20-Poly1305 blob encryption",
+          "minLength": 32,
+          "maxLength": 32
+        }
+      }
+    },
+    "externalText": {
+      "type": "object",
+      "description": "External payload for long text.",
+      "allOf": [
+        {
+          "type": "ref",
+          "ref": "#externalPayloadBase"
+        }
+      ]
+    },
+    "externalImage": {
+      "type": "object",
+      "description": "External payload for images.",
+      "allOf": [
+        {
+          "type": "ref",
+          "ref": "#externalPayloadBase"
+        }
+      ]
+    },
+    "externalVideo": {
+      "type": "object",
+      "description": "External payload for video.",
+      "allOf": [
+        {
+          "type": "ref",
+          "ref": "#externalPayloadBase"
+        }
+      ]
+    },
+    "reaction": {
+      "type": "object",
+      "description": "Emoji reaction payload (event.kind == reaction).",
+      "required": ["emoji", "target_message_id"],
+      "properties": {
+        "emoji": {
+          "type": "string",
+          "description": "UTF-8 emoji string"
+        },
+        "target_message_id": {
+          "type": "bytes",
+          "description": "16-byte message ID being toggled",
+          "minLength": 16,
+          "maxLength": 16
         }
       }
     },

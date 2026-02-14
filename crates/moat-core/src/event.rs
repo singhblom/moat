@@ -4,7 +4,10 @@
 //! as a single Event type. This hides the type of communication from observers
 //! who only see encrypted blobs with opaque tags.
 
-use crate::credential::MoatCredential;
+use crate::{
+    credential::MoatCredential,
+    message::{MessagePayload, ParsedMessagePayload},
+};
 use serde::{Deserialize, Serialize};
 
 /// The kind of event being sent
@@ -120,7 +123,7 @@ impl Event {
         id
     }
 
-    /// Create a new message event
+    /// Create a new message event from raw bytes (legacy plaintext).
     pub fn message(group_id: Vec<u8>, epoch: u64, content: &[u8]) -> Self {
         Self {
             kind: EventKind::Message,
@@ -132,6 +135,22 @@ impl Event {
             epoch_fingerprint: None,
             sender_device_id: None,
         }
+    }
+
+    /// Create a new structured message event from a [`MessagePayload`].
+    pub fn message_with_payload(group_id: Vec<u8>, epoch: u64, payload: &MessagePayload) -> Self {
+        let payload_bytes = payload
+            .to_bytes()
+            .expect("MessagePayload serialization should never fail");
+        Self::message(group_id, epoch, &payload_bytes)
+    }
+
+    /// Attempt to parse the payload of a message event.
+    pub fn parse_message_payload(&self) -> Option<ParsedMessagePayload> {
+        if self.kind != EventKind::Message {
+            return None;
+        }
+        Some(ParsedMessagePayload::from_bytes(&self.payload))
     }
 
     /// Create a new commit event
@@ -238,22 +257,32 @@ pub enum TranscriptWarning {
         sender_device_id: Vec<u8>,
     },
     /// A commit conflict was automatically recovered.
-    ConflictRecovered {
-        group_id: Vec<u8>,
-    },
+    ConflictRecovered { group_id: Vec<u8> },
 }
 
 impl std::fmt::Display for TranscriptWarning {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TranscriptWarning::HashChainMismatch { sender_device_id, .. } => {
-                write!(f, "hash chain mismatch from device {:02x?}", &sender_device_id[..4.min(sender_device_id.len())])
+            TranscriptWarning::HashChainMismatch {
+                sender_device_id, ..
+            } => {
+                write!(
+                    f,
+                    "hash chain mismatch from device {:02x?}",
+                    &sender_device_id[..4.min(sender_device_id.len())]
+                )
             }
             TranscriptWarning::EpochFingerprintMismatch { epoch, .. } => {
                 write!(f, "epoch fingerprint mismatch at epoch {}", epoch)
             }
-            TranscriptWarning::ReplayDetected { sender_device_id, .. } => {
-                write!(f, "replay detected from device {:02x?}", &sender_device_id[..4.min(sender_device_id.len())])
+            TranscriptWarning::ReplayDetected {
+                sender_device_id, ..
+            } => {
+                write!(
+                    f,
+                    "replay detected from device {:02x?}",
+                    &sender_device_id[..4.min(sender_device_id.len())]
+                )
             }
             TranscriptWarning::ConflictRecovered { .. } => {
                 write!(f, "commit conflict automatically recovered")
@@ -376,6 +405,38 @@ mod tests {
     fn test_reaction_payload_on_non_reaction() {
         let msg = Event::message(vec![], 0, b"text");
         assert!(msg.reaction_payload().is_none());
+    }
+
+    #[test]
+    fn test_structured_message_payload_roundtrip() {
+        use crate::message::{MessagePayload, TextMessage};
+
+        let payload = MessagePayload::ShortText(TextMessage {
+            text: "Hello preview".to_string(),
+        });
+        let event = Event::message_with_payload(b"group".to_vec(), 1, &payload);
+
+        let parsed = event.parse_message_payload().unwrap();
+        match parsed {
+            ParsedMessagePayload::Structured(MessagePayload::ShortText(text)) => {
+                assert_eq!(text.text, "Hello preview");
+            }
+            _ => panic!("expected structured short_text payload"),
+        }
+    }
+
+    #[test]
+    fn test_message_payload_legacy_fallback() {
+        let event = Event::message(b"group".to_vec(), 1, b"legacy plaintext");
+        let parsed = event.parse_message_payload().unwrap();
+        let preview = parsed.preview_text().unwrap();
+        match parsed {
+            ParsedMessagePayload::LegacyPlaintext(bytes) => {
+                assert_eq!(bytes, b"legacy plaintext");
+            }
+            _ => panic!("expected legacy fallback"),
+        }
+        assert_eq!(preview, "legacy plaintext");
     }
 
     #[test]

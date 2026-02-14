@@ -4,9 +4,7 @@
 //! per-participant inboxes that can be delivered, reordered, or dropped.
 //! Supports dynamic membership (add/remove) from the start.
 
-use moat_core::{
-    DecryptOutcome, Event, EventKind, MoatCredential, MoatSession, TranscriptWarning,
-};
+use moat_core::{DecryptOutcome, Event, EventKind, MoatCredential, MoatSession, TranscriptWarning};
 use std::collections::VecDeque;
 
 /// A simulated participant with their own MoatSession.
@@ -211,11 +209,7 @@ impl ConversationSim {
     /// Have a participant add a new member to the group.
     /// Returns the commit ciphertext (for delivery to others) and welcome bytes.
     /// The commit is already merged locally for the adder.
-    pub fn add_member_sim(
-        &mut self,
-        adder: usize,
-        new_name: &str,
-    ) -> (Vec<u8>, Vec<u8>, usize) {
+    pub fn add_member_sim(&mut self, adder: usize, new_name: &str) -> (Vec<u8>, Vec<u8>, usize) {
         // Create the new participant
         let session = MoatSession::new();
         let credential =
@@ -234,7 +228,11 @@ impl ConversationSim {
         // Adder adds the new member
         let welcome_result = self.participants[adder]
             .session
-            .add_member(&self.group_id, &self.participants[adder].key_bundle, &new_kp)
+            .add_member(
+                &self.group_id,
+                &self.participants[adder].key_bundle,
+                &new_kp,
+            )
             .unwrap();
 
         // New member processes welcome
@@ -249,11 +247,7 @@ impl ConversationSim {
     }
 
     /// Remove a member by leaf index. Returns commit bytes for delivery.
-    pub fn remove_member_sim(
-        &mut self,
-        remover: usize,
-        leaf_index: u32,
-    ) -> Vec<u8> {
+    pub fn remove_member_sim(&mut self, remover: usize, leaf_index: u32) -> Vec<u8> {
         let result = self.participants[remover]
             .session
             .remove_member(

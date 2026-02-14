@@ -25,6 +25,7 @@
 pub(crate) mod credential;
 pub(crate) mod error;
 pub(crate) mod event;
+pub mod message;
 pub(crate) mod padding;
 pub(crate) mod stealth;
 pub(crate) mod storage;
@@ -32,20 +33,26 @@ pub(crate) mod tag;
 
 pub mod api;
 
+use openmls::framing::MlsMessageBodyIn;
 use openmls::prelude::tls_codec::{Deserialize, Serialize as TlsSerialize};
 use openmls::prelude::*;
-use openmls::framing::MlsMessageBodyIn;
 use openmls_basic_credential::SignatureKeyPair;
 use openmls_traits::OpenMlsProvider;
 use serde::{Deserialize as SerdeDeserialize, Serialize as SerdeSerialize};
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::RwLock;
 
 // Disambiguate from openmls::prelude::* and make accessible as moat_core::X
 pub use crate::credential::MoatCredential;
 pub use crate::error::{Error, ErrorCode, Result};
-pub use crate::event::{DecryptOutcome, Event, EventKind, ReactionPayload, SenderInfo, TranscriptWarning};
+pub use crate::event::{
+    DecryptOutcome, Event, EventKind, ReactionPayload, SenderInfo, TranscriptWarning,
+};
+pub use crate::message::{
+    ExternalBlob, LongTextMessage, MediaMessage, MessagePayload, ParsedMessagePayload, TextMessage,
+    VideoMessage,
+};
 pub use crate::padding::{pad_to_bucket, unpad, Bucket};
 pub use crate::stealth::{encrypt_for_stealth, generate_stealth_keypair, try_decrypt_stealth};
 pub(crate) use crate::storage::MoatProvider;
@@ -286,7 +293,9 @@ impl MoatSession {
         let mls_len = u64::from_le_bytes(rest[..8].try_into().unwrap()) as usize;
         let rest = &rest[8..];
         if rest.len() < mls_len {
-            return Err(Error::Deserialization("state too short for MLS data".into()));
+            return Err(Error::Deserialization(
+                "state too short for MLS data".into(),
+            ));
         }
         let provider = MoatProvider::from_state(&rest[..mls_len])
             .map_err(|e| Error::Storage(e.to_string()))?;
@@ -318,7 +327,9 @@ impl MoatSession {
     /// raw MLS state. Pass to `from_state()` to restore the session.
     /// Also clears the dirty flag.
     pub fn export_state(&self) -> Result<Vec<u8>> {
-        let raw_state = self.provider.export_state()
+        let raw_state = self
+            .provider
+            .export_state()
             .map_err(|e| Error::Storage(e.to_string()))?;
         self.provider.clear_pending_changes();
 
@@ -391,7 +402,12 @@ impl MoatSession {
 
         // Generate key package
         let key_package_bundle = KeyPackage::builder()
-            .build(CIPHERSUITE, &self.provider, &signature_keys, credential_with_key)
+            .build(
+                CIPHERSUITE,
+                &self.provider,
+                &signature_keys,
+                credential_with_key,
+            )
             .map_err(|e| Error::KeyPackageGeneration(e.to_string()))?;
 
         // Get the key package for publishing
@@ -443,8 +459,8 @@ impl MoatSession {
             .map_err(|e| Error::Serialization(e.to_string()))?;
 
         // Deserialize key bundle
-        let bundle: KeyBundle =
-            serde_json::from_slice(key_bundle).map_err(|e| Error::Deserialization(e.to_string()))?;
+        let bundle: KeyBundle = serde_json::from_slice(key_bundle)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
 
         // Deserialize signature keys
         let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
@@ -469,8 +485,13 @@ impl MoatSession {
             .build();
 
         // Create the group (persisted to storage via provider)
-        let group = MlsGroup::new(&self.provider, &signature_keys, &group_config, credential_with_key)
-            .map_err(|e| Error::GroupCreation(e.to_string()))?;
+        let group = MlsGroup::new(
+            &self.provider,
+            &signature_keys,
+            &group_config,
+            credential_with_key,
+        )
+        .map_err(|e| Error::GroupCreation(e.to_string()))?;
 
         let group_id = group.group_id().as_slice().to_vec();
         Ok(group_id)
@@ -508,12 +529,13 @@ impl MoatSession {
         new_member_key_package: &[u8],
     ) -> Result<WelcomeResult> {
         // Load the group
-        let mut group = self.load_group(group_id)?
+        let mut group = self
+            .load_group(group_id)?
             .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
 
         // Deserialize our key bundle to get signature keys
-        let bundle: KeyBundle =
-            serde_json::from_slice(key_bundle).map_err(|e| Error::Deserialization(e.to_string()))?;
+        let bundle: KeyBundle = serde_json::from_slice(key_bundle)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
         let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
             .map_err(|e| Error::Deserialization(e.to_string()))?;
 
@@ -534,10 +556,13 @@ impl MoatSession {
         // Track pending operation for conflict recovery
         {
             let mut ops = self.pending_ops.write().unwrap();
-            ops.insert(group_id.to_vec(), PendingOperation::AddMember {
-                key_bundle: key_bundle.to_vec(),
-                new_member_key_package: new_member_key_package.to_vec(),
-            });
+            ops.insert(
+                group_id.to_vec(),
+                PendingOperation::AddMember {
+                    key_bundle: key_bundle.to_vec(),
+                    new_member_key_package: new_member_key_package.to_vec(),
+                },
+            );
         }
 
         // Merge the pending commit
@@ -568,10 +593,7 @@ impl MoatSession {
     /// Process a welcome message to join a group.
     ///
     /// Returns the group ID of the joined group.
-    pub fn process_welcome(
-        &self,
-        welcome_bytes: &[u8],
-    ) -> Result<Vec<u8>> {
+    pub fn process_welcome(&self, welcome_bytes: &[u8]) -> Result<Vec<u8>> {
         // Deserialize the welcome
         let mls_message = MlsMessageIn::tls_deserialize_exact(welcome_bytes)
             .map_err(|e| Error::Deserialization(e.to_string()))?;
@@ -622,12 +644,13 @@ impl MoatSession {
         event: &Event,
     ) -> Result<EncryptResult> {
         // Load the group
-        let mut group = self.load_group(group_id)?
+        let mut group = self
+            .load_group(group_id)?
             .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
 
         // Get signature keys from key bundle
-        let bundle: KeyBundle =
-            serde_json::from_slice(key_bundle).map_err(|e| Error::Deserialization(e.to_string()))?;
+        let bundle: KeyBundle = serde_json::from_slice(key_bundle)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
         let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
             .map_err(|e| Error::Deserialization(e.to_string()))?;
 
@@ -650,7 +673,8 @@ impl MoatSession {
         event.epoch_fingerprint = Some(Self::derive_epoch_fingerprint(&group, &self.provider)?);
 
         // Serialize and pad the event
-        let event_bytes = event.to_bytes()
+        let event_bytes = event
+            .to_bytes()
             .map_err(|e| Error::Serialization(e.to_string()))?;
 
         // Update hash chain with this event's hash
@@ -711,13 +735,10 @@ impl MoatSession {
     /// For commit messages (e.g., adding/removing members), this function
     /// merges the commit into the group state and returns an Event with
     /// kind=Commit. The caller should update their epoch tags accordingly.
-    pub fn decrypt_event(
-        &self,
-        group_id: &[u8],
-        ciphertext: &[u8],
-    ) -> Result<DecryptOutcome> {
+    pub fn decrypt_event(&self, group_id: &[u8], ciphertext: &[u8]) -> Result<DecryptOutcome> {
         // Load the group
-        let mut group = self.load_group(group_id)?
+        let mut group = self
+            .load_group(group_id)?
             .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
 
         // Deserialize the MLS message
@@ -769,7 +790,8 @@ impl MoatSession {
                 };
 
                 // Merge the remote commit
-                group.merge_staged_commit(&self.provider, *staged_commit)
+                group
+                    .merge_staged_commit(&self.provider, *staged_commit)
                     .map_err(|e| Error::StateDiverged(e.to_string()))?;
 
                 // Get the new epoch after merging
@@ -817,12 +839,12 @@ impl MoatSession {
                 };
                 Ok(DecryptOutcome::from_result_and_warnings(result, warnings))
             }
-            ProcessedMessageContent::ProposalMessage(_) => {
-                Err(Error::InvalidMessageType("Unexpected proposal message".to_string()))
-            }
-            ProcessedMessageContent::ExternalJoinProposalMessage(_) => {
-                Err(Error::InvalidMessageType("Unexpected external join".to_string()))
-            }
+            ProcessedMessageContent::ProposalMessage(_) => Err(Error::InvalidMessageType(
+                "Unexpected proposal message".to_string(),
+            )),
+            ProcessedMessageContent::ExternalJoinProposalMessage(_) => Err(
+                Error::InvalidMessageType("Unexpected external join".to_string()),
+            ),
         }
     }
 
@@ -830,28 +852,18 @@ impl MoatSession {
     fn classify_process_error(e: ProcessMessageError, group_id: &[u8]) -> Error {
         let group_hex: String = group_id.iter().map(|b| format!("{:02x}", b)).collect();
         match &e {
-            ProcessMessageError::GroupStateError(state_err) => {
-                match state_err {
-                    MlsGroupStateError::PendingCommit => {
-                        Error::StaleCommit(format!(
-                            "group {}: pending local commit conflicts with incoming message",
-                            group_hex
-                        ))
-                    }
-                    MlsGroupStateError::UseAfterEviction => {
-                        Error::StateDiverged(format!(
-                            "group {}: evicted from group",
-                            group_hex
-                        ))
-                    }
-                    _ => Error::Decryption(e.to_string()),
+            ProcessMessageError::GroupStateError(state_err) => match state_err {
+                MlsGroupStateError::PendingCommit => Error::StaleCommit(format!(
+                    "group {}: pending local commit conflicts with incoming message",
+                    group_hex
+                )),
+                MlsGroupStateError::UseAfterEviction => {
+                    Error::StateDiverged(format!("group {}: evicted from group", group_hex))
                 }
-            }
+                _ => Error::Decryption(e.to_string()),
+            },
             ProcessMessageError::InvalidCommit(_) => {
-                Error::StateDiverged(format!(
-                    "group {}: invalid commit — {}",
-                    group_hex, e
-                ))
+                Error::StateDiverged(format!("group {}: invalid commit — {}", group_hex, e))
             }
             ProcessMessageError::ValidationError(_) => {
                 // Validation errors can include unknown sender scenarios
@@ -884,12 +896,18 @@ impl MoatSession {
 
         for attempt in 0..CONFLICT_RETRY_LIMIT {
             let result = match &pending_op {
-                PendingOperation::AddMember { key_bundle, new_member_key_package } => {
-                    self.add_member(group_id, key_bundle, new_member_key_package).map(|_| ())
-                }
-                PendingOperation::RemoveMember { key_bundle, leaf_index } => {
-                    self.remove_member(group_id, key_bundle, *leaf_index).map(|_| ())
-                }
+                PendingOperation::AddMember {
+                    key_bundle,
+                    new_member_key_package,
+                } => self
+                    .add_member(group_id, key_bundle, new_member_key_package)
+                    .map(|_| ()),
+                PendingOperation::RemoveMember {
+                    key_bundle,
+                    leaf_index,
+                } => self
+                    .remove_member(group_id, key_bundle, *leaf_index)
+                    .map(|_| ()),
                 PendingOperation::KickUser { key_bundle, did } => {
                     self.kick_user(group_id, key_bundle, did).map(|_| ())
                 }
@@ -1183,7 +1201,12 @@ impl MoatSession {
     /// Derive the epoch fingerprint for a group's current state.
     fn derive_epoch_fingerprint(group: &MlsGroup, provider: &MoatProvider) -> Result<Vec<u8>> {
         group
-            .export_secret(provider, EPOCH_FINGERPRINT_LABEL, &[], EPOCH_FINGERPRINT_LEN)
+            .export_secret(
+                provider,
+                EPOCH_FINGERPRINT_LABEL,
+                &[],
+                EPOCH_FINGERPRINT_LEN,
+            )
             .map_err(|e| Error::Encryption(format!("epoch fingerprint derivation failed: {e}")))
     }
 
@@ -1218,7 +1241,11 @@ impl MoatSession {
     }
 
     /// Extract sender information from a processed message.
-    fn extract_sender_info(&self, group: &MlsGroup, processed: &ProcessedMessage) -> Option<SenderInfo> {
+    fn extract_sender_info(
+        &self,
+        group: &MlsGroup,
+        processed: &ProcessedMessage,
+    ) -> Option<SenderInfo> {
         // Get the sender's leaf index
         let sender = processed.sender();
         let leaf_index = match sender {
@@ -1243,7 +1270,10 @@ impl MoatSession {
     /// Extract credential information from a key package.
     ///
     /// Returns the MoatCredential if the key package contains a valid structured credential.
-    pub fn extract_credential_from_key_package(&self, key_package_bytes: &[u8]) -> Result<Option<MoatCredential>> {
+    pub fn extract_credential_from_key_package(
+        &self,
+        key_package_bytes: &[u8],
+    ) -> Result<Option<MoatCredential>> {
         let key_package = KeyPackageIn::tls_deserialize_exact(key_package_bytes)
             .map_err(|e| Error::Deserialization(e.to_string()))?;
 
@@ -1261,15 +1291,19 @@ impl MoatSession {
     ///
     /// Returns a list of (leaf_index, credential) pairs for all group members.
     pub fn get_group_members(&self, group_id: &[u8]) -> Result<Vec<(u32, Option<MoatCredential>)>> {
-        let group = self.load_group(group_id)?
+        let group = self
+            .load_group(group_id)?
             .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
 
-        let members: Vec<_> = group.members().map(|m| {
-            let leaf_index = m.index.u32();
-            let credential_bytes = m.credential.serialized_content();
-            let moat_credential = MoatCredential::try_from_bytes(credential_bytes);
-            (leaf_index, moat_credential)
-        }).collect();
+        let members: Vec<_> = group
+            .members()
+            .map(|m| {
+                let leaf_index = m.index.u32();
+                let credential_bytes = m.credential.serialized_content();
+                let moat_credential = MoatCredential::try_from_bytes(credential_bytes);
+                (leaf_index, moat_credential)
+            })
+            .collect();
 
         Ok(members)
     }
@@ -1293,9 +1327,9 @@ impl MoatSession {
     /// Returns true if any member of the group has the same DID.
     pub fn is_did_in_group(&self, group_id: &[u8], did: &str) -> Result<bool> {
         let members = self.get_group_members(group_id)?;
-        Ok(members.iter().any(|(_, cred)| {
-            cred.as_ref().map_or(false, |c| c.did() == did)
-        }))
+        Ok(members
+            .iter()
+            .any(|(_, cred)| cred.as_ref().map_or(false, |c| c.did() == did)))
     }
 
     /// Derive the next tag for a group event and advance the counter.
@@ -1454,10 +1488,13 @@ impl MoatSession {
         new_device_key_package: &[u8],
     ) -> Result<WelcomeResult> {
         // Extract credential from new device's key package
-        let new_device_credential = self.extract_credential_from_key_package(new_device_key_package)?
-            .ok_or_else(|| Error::KeyPackageValidation(
-                "Cannot extract credential from key package".to_string()
-            ))?;
+        let new_device_credential = self
+            .extract_credential_from_key_package(new_device_key_package)?
+            .ok_or_else(|| {
+                Error::KeyPackageValidation(
+                    "Cannot extract credential from key package".to_string(),
+                )
+            })?;
 
         // Verify the DID is already in the group (this is an add-device, not add-member)
         if !self.is_did_in_group(group_id, new_device_credential.did())? {
@@ -1481,12 +1518,13 @@ impl MoatSession {
         leaf_index: u32,
     ) -> Result<RemoveResult> {
         // Load the group
-        let mut group = self.load_group(group_id)?
+        let mut group = self
+            .load_group(group_id)?
             .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
 
         // Deserialize our key bundle to get signature keys
-        let bundle: KeyBundle =
-            serde_json::from_slice(key_bundle).map_err(|e| Error::Deserialization(e.to_string()))?;
+        let bundle: KeyBundle = serde_json::from_slice(key_bundle)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
         let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
             .map_err(|e| Error::Deserialization(e.to_string()))?;
 
@@ -1499,10 +1537,13 @@ impl MoatSession {
         // Track pending operation
         {
             let mut ops = self.pending_ops.write().unwrap();
-            ops.insert(group_id.to_vec(), PendingOperation::RemoveMember {
-                key_bundle: key_bundle.to_vec(),
-                leaf_index,
-            });
+            ops.insert(
+                group_id.to_vec(),
+                PendingOperation::RemoveMember {
+                    key_bundle: key_bundle.to_vec(),
+                    leaf_index,
+                },
+            );
         }
 
         // Merge the pending commit
@@ -1537,9 +1578,7 @@ impl MoatSession {
         let members = self.get_group_members(group_id)?;
         let leaf_indices: Vec<u32> = members
             .into_iter()
-            .filter_map(|(idx, cred)| {
-                cred.filter(|c| c.did() == did_to_kick).map(|_| idx)
-            })
+            .filter_map(|(idx, cred)| cred.filter(|c| c.did() == did_to_kick).map(|_| idx))
             .collect();
 
         if leaf_indices.is_empty() {
@@ -1550,12 +1589,13 @@ impl MoatSession {
         }
 
         // Load the group
-        let mut group = self.load_group(group_id)?
+        let mut group = self
+            .load_group(group_id)?
             .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
 
         // Deserialize our key bundle to get signature keys
-        let bundle: KeyBundle =
-            serde_json::from_slice(key_bundle).map_err(|e| Error::Deserialization(e.to_string()))?;
+        let bundle: KeyBundle = serde_json::from_slice(key_bundle)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
         let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
             .map_err(|e| Error::Deserialization(e.to_string()))?;
 
@@ -1573,10 +1613,13 @@ impl MoatSession {
         // Track pending operation
         {
             let mut ops = self.pending_ops.write().unwrap();
-            ops.insert(group_id.to_vec(), PendingOperation::KickUser {
-                key_bundle: key_bundle.to_vec(),
-                did: did_to_kick.to_string(),
-            });
+            ops.insert(
+                group_id.to_vec(),
+                PendingOperation::KickUser {
+                    key_bundle: key_bundle.to_vec(),
+                    did: did_to_kick.to_string(),
+                },
+            );
         }
 
         // Merge the pending commit
@@ -1606,15 +1649,16 @@ impl MoatSession {
             None => return Ok(None),
         };
 
-        let bundle: KeyBundle =
-            serde_json::from_slice(key_bundle).map_err(|e| Error::Deserialization(e.to_string()))?;
+        let bundle: KeyBundle = serde_json::from_slice(key_bundle)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
         let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
             .map_err(|e| Error::Deserialization(e.to_string()))?;
 
         let our_pubkey = signature_keys.to_public_vec();
         let members: Vec<_> = group.members().collect();
 
-        Ok(members.iter()
+        Ok(members
+            .iter()
             .find(|m| m.signature_key == our_pubkey)
             .map(|m| m.index.u32()))
     }
@@ -1623,25 +1667,24 @@ impl MoatSession {
     ///
     /// Returns the commit message to broadcast. After calling this, the caller
     /// will no longer be able to decrypt messages in this group.
-    pub fn leave_group(
-        &self,
-        group_id: &[u8],
-        key_bundle: &[u8],
-    ) -> Result<RemoveResult> {
+    pub fn leave_group(&self, group_id: &[u8], key_bundle: &[u8]) -> Result<RemoveResult> {
         // Load the group
-        let mut group = self.load_group(group_id)?
+        let mut group = self
+            .load_group(group_id)?
             .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
 
         // Deserialize our key bundle to get signature keys
-        let bundle: KeyBundle =
-            serde_json::from_slice(key_bundle).map_err(|e| Error::Deserialization(e.to_string()))?;
+        let bundle: KeyBundle = serde_json::from_slice(key_bundle)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
         let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
             .map_err(|e| Error::Deserialization(e.to_string()))?;
 
         // Find our own leaf index
         let our_pubkey = signature_keys.to_public_vec();
         let members: Vec<_> = group.members().collect();
-        let our_leaf = members.iter().find(|m| m.signature_key == our_pubkey)
+        let our_leaf = members
+            .iter()
+            .find(|m| m.signature_key == our_pubkey)
             .ok_or_else(|| Error::RemoveMember("Cannot find self in group".to_string()))?;
 
         // Create remove proposal for ourselves
@@ -1652,9 +1695,12 @@ impl MoatSession {
         // Track pending operation
         {
             let mut ops = self.pending_ops.write().unwrap();
-            ops.insert(group_id.to_vec(), PendingOperation::LeaveGroup {
-                key_bundle: key_bundle.to_vec(),
-            });
+            ops.insert(
+                group_id.to_vec(),
+                PendingOperation::LeaveGroup {
+                    key_bundle: key_bundle.to_vec(),
+                },
+            );
         }
 
         // Merge the pending commit

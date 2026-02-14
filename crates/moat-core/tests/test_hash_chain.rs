@@ -96,9 +96,10 @@ fn test_replay_detected() {
     sim.inboxes[1].push_back(record);
 
     // Bob receives M1 again
-    let result = sim.participants[1]
-        .session
-        .decrypt_event(&sim.group_id, &sim.inboxes[1].pop_front().unwrap().ciphertext);
+    let result = sim.participants[1].session.decrypt_event(
+        &sim.group_id,
+        &sim.inboxes[1].pop_front().unwrap().ciphertext,
+    );
 
     match result {
         Err(_) => {

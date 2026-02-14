@@ -60,7 +60,9 @@ impl MoatAtprotoClient {
             .map_err(|e| Error::Pds(format!("Failed to create HTTP client: {}", e)))?;
 
         // Use the same client for the ATProto agent
-        let xrpc_client = ReqwestClientBuilder::new(pds_url).client(http_client.clone()).build();
+        let xrpc_client = ReqwestClientBuilder::new(pds_url)
+            .client(http_client.clone())
+            .build();
         let agent = AtpAgent::new(xrpc_client, MemorySessionStore::default());
 
         agent
@@ -84,11 +86,7 @@ impl MoatAtprotoClient {
     ///
     /// This avoids counting against the login rate limit by reusing existing tokens.
     /// If the access token is expired, the agent will automatically refresh it.
-    pub async fn resume_session(
-        did: &str,
-        access_jwt: &str,
-        refresh_jwt: &str,
-    ) -> Result<Self> {
+    pub async fn resume_session(did: &str, access_jwt: &str, refresh_jwt: &str) -> Result<Self> {
         Self::resume_session_with_pds(did, access_jwt, refresh_jwt, DEFAULT_PDS_URL).await
     }
 
@@ -104,14 +102,18 @@ impl MoatAtprotoClient {
             .build()
             .map_err(|e| Error::Pds(format!("Failed to create HTTP client: {}", e)))?;
 
-        let xrpc_client = ReqwestClientBuilder::new(pds_url).client(http_client.clone()).build();
+        let xrpc_client = ReqwestClientBuilder::new(pds_url)
+            .client(http_client.clone())
+            .build();
         let agent = AtpAgent::new(xrpc_client, MemorySessionStore::default());
 
         // Create a minimal session with the stored tokens
         let session_data = SessionData {
             access_jwt: access_jwt.to_string(),
             refresh_jwt: refresh_jwt.to_string(),
-            did: did.parse().map_err(|_| Error::InvalidDid(did.to_string()))?,
+            did: did
+                .parse()
+                .map_err(|_| Error::InvalidDid(did.to_string()))?,
             handle: "unknown.invalid".parse().expect("valid handle"), // Will be updated by resume_session
             active: None,
             did_doc: None,
@@ -182,8 +184,9 @@ impl MoatAtprotoClient {
 
     /// Create an unauthenticated agent for a specific PDS (reuses the timeout client).
     fn agent_for_pds(&self, pds_url: &str) -> AtpAgent<MemorySessionStore, ReqwestClient> {
-        let xrpc_client =
-            ReqwestClientBuilder::new(pds_url).client(self.http_client.clone()).build();
+        let xrpc_client = ReqwestClientBuilder::new(pds_url)
+            .client(self.http_client.clone())
+            .build();
         AtpAgent::new(xrpc_client, MemorySessionStore::default())
     }
 
@@ -228,7 +231,9 @@ impl MoatAtprotoClient {
                 .map_err(|e| Error::InvalidRecord(e.to_string()))?,
             record,
             repo: AtIdentifier::Did(
-                self.did.parse().map_err(|_| Error::InvalidDid(self.did.clone()))?,
+                self.did
+                    .parse()
+                    .map_err(|_| Error::InvalidDid(self.did.clone()))?,
             ),
             rkey: None,
             swap_commit: None,
@@ -262,7 +267,8 @@ impl MoatAtprotoClient {
             cursor: None,
             limit: Some(100.try_into().unwrap()),
             repo: AtIdentifier::Did(
-                did.parse().map_err(|_| Error::InvalidDid(did.to_string()))?,
+                did.parse()
+                    .map_err(|_| Error::InvalidDid(did.to_string()))?,
             ),
             reverse: None,
             rkey_start: None,
@@ -322,7 +328,9 @@ impl MoatAtprotoClient {
                 .map_err(|e| Error::InvalidRecord(e.to_string()))?,
             record,
             repo: AtIdentifier::Did(
-                self.did.parse().map_err(|_| Error::InvalidDid(self.did.clone()))?,
+                self.did
+                    .parse()
+                    .map_err(|_| Error::InvalidDid(self.did.clone()))?,
             ),
             rkey: None,
             swap_commit: None,
@@ -369,7 +377,8 @@ impl MoatAtprotoClient {
                 cursor: cursor.clone(),
                 limit: Some(100.try_into().unwrap()),
                 repo: AtIdentifier::Did(
-                    did.parse().map_err(|_| Error::InvalidDid(did.to_string()))?,
+                    did.parse()
+                        .map_err(|_| Error::InvalidDid(did.to_string()))?,
                 ),
                 reverse: None,
                 rkey_start: rkey_start.map(|s| s.to_string()),
@@ -413,11 +422,7 @@ impl MoatAtprotoClient {
     }
 
     /// Fetch events matching a specific tag from a DID.
-    pub async fn fetch_events_by_tag(
-        &self,
-        did: &str,
-        tag: &[u8; 16],
-    ) -> Result<Vec<EventRecord>> {
+    pub async fn fetch_events_by_tag(&self, did: &str, tag: &[u8; 16]) -> Result<Vec<EventRecord>> {
         let all_events = self.fetch_events_from_did(did, None).await?;
 
         // Filter by tag
@@ -429,7 +434,9 @@ impl MoatAtprotoClient {
     /// Resolve a handle to a DID.
     pub async fn resolve_did(&self, handle: &str) -> Result<String> {
         let input = atrium_api::com::atproto::identity::resolve_handle::ParametersData {
-            handle: handle.parse().map_err(|_| Error::InvalidHandle(handle.to_string()))?,
+            handle: handle
+                .parse()
+                .map_err(|_| Error::InvalidHandle(handle.to_string()))?,
         };
 
         let output = self
@@ -521,7 +528,9 @@ impl MoatAtprotoClient {
                 .map_err(|e| Error::InvalidRecord(e.to_string()))?,
             record,
             repo: AtIdentifier::Did(
-                self.did.parse().map_err(|_| Error::InvalidDid(self.did.clone()))?,
+                self.did
+                    .parse()
+                    .map_err(|_| Error::InvalidDid(self.did.clone()))?,
             ),
             rkey: None, // Let PDS generate TID
             swap_commit: None,
@@ -557,7 +566,8 @@ impl MoatAtprotoClient {
             cursor: None,
             limit: Some(100.try_into().unwrap()), // Get all devices
             repo: AtIdentifier::Did(
-                did.parse().map_err(|_| Error::InvalidDid(did.to_string()))?,
+                did.parse()
+                    .map_err(|_| Error::InvalidDid(did.to_string()))?,
             ),
             reverse: None,
             rkey_start: None,
@@ -624,7 +634,9 @@ impl MoatAtprotoClient {
                 cursor: cursor.clone(),
                 limit: Some(100.try_into().unwrap()),
                 repo: AtIdentifier::Did(
-                    self.did.parse().map_err(|_| Error::InvalidDid(self.did.clone()))?,
+                    self.did
+                        .parse()
+                        .map_err(|_| Error::InvalidDid(self.did.clone()))?,
                 ),
                 reverse: None,
                 rkey_start: None,
@@ -653,7 +665,9 @@ impl MoatAtprotoClient {
                         collection: Nsid::new(collection.to_string())
                             .map_err(|e| Error::InvalidRecord(e.to_string()))?,
                         repo: AtIdentifier::Did(
-                            self.did.parse().map_err(|_| Error::InvalidDid(self.did.clone()))?,
+                            self.did
+                                .parse()
+                                .map_err(|_| Error::InvalidDid(self.did.clone()))?,
                         ),
                         rkey: rkey.to_string(),
                         swap_commit: None,

@@ -12,7 +12,15 @@ use std::{sync::LazyLock, time::Instant};
 
 static START_TIME: LazyLock<Instant> = LazyLock::new(Instant::now);
 
-fn color_pulse(start_r: f32, start_g: f32, start_b: f32, end_r: f32, end_g: f32, end_b: f32, period_ms: u32) -> Color {
+fn color_pulse(
+    start_r: f32,
+    start_g: f32,
+    start_b: f32,
+    end_r: f32,
+    end_g: f32,
+    end_b: f32,
+    period_ms: u32,
+) -> Color {
     let elapsed = START_TIME.elapsed().as_millis() as f32;
     let t = ((elapsed / period_ms as f32) * std::f32::consts::TAU).sin();
     let t = (t + 1.0) / 2.0;
@@ -31,9 +39,19 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     // Draw input popups
     if app.focus == Focus::NewConversation {
-        draw_handle_input_popup(frame, "New Conversation", "Enter handle:", &app.new_conv_handle);
+        draw_handle_input_popup(
+            frame,
+            "New Conversation",
+            "Enter handle:",
+            &app.new_conv_handle,
+        );
     } else if app.focus == Focus::WatchHandle {
-        draw_handle_input_popup(frame, "Watch for Invites", "Enter handle to watch:", &app.watch_handle_input);
+        draw_handle_input_popup(
+            frame,
+            "Watch for Invites",
+            "Enter handle to watch:",
+            &app.watch_handle_input,
+        );
     }
 
     // Draw message info popup if toggled
@@ -119,8 +137,7 @@ fn draw_login(frame: &mut Frame, app: &App) {
             Style::default().fg(Color::Gray)
         },
     );
-    let handle_input = Paragraph::new(app.login_form.handle.as_str())
-        .block(handle_block);
+    let handle_input = Paragraph::new(app.login_form.handle.as_str()).block(handle_block);
     frame.render_widget(handle_input, chunks[1]);
 
     // Password label
@@ -269,9 +286,9 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
         let visible_height = area.height.saturating_sub(2) as usize;
 
         // Compute which message index is selected (selected_message is offset from bottom)
-        let selected_msg_index = app.selected_message.map(|offset| {
-            app.messages.len().saturating_sub(1).saturating_sub(offset)
-        });
+        let selected_msg_index = app
+            .selected_message
+            .map(|offset| app.messages.len().saturating_sub(1).saturating_sub(offset));
 
         // Build styled lines for each message
         let mut lines: Vec<Line> = Vec::new();
@@ -340,7 +357,8 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
                 // Show aggregated reactions below the message
                 if !msg.reactions.is_empty() {
                     // Aggregate: count each emoji
-                    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+                    let mut counts: std::collections::BTreeMap<&str, usize> =
+                        std::collections::BTreeMap::new();
                     for r in &msg.reactions {
                         *counts.entry(&r.emoji).or_insert(0) += 1;
                     }
@@ -356,7 +374,9 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
                         .collect();
                     let reaction_line = format!(" {}", reaction_chips.join("  "));
                     let reaction_style = if is_selected {
-                        Style::default().fg(Color::Yellow).bg(Color::Rgb(40, 40, 60))
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .bg(Color::Rgb(40, 40, 60))
                     } else {
                         Style::default().fg(Color::Yellow)
                     };
@@ -369,7 +389,8 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
                 // Show inline emoji picker for selected message
                 if is_selected {
                     if let Some(picker_idx) = app.reaction_picker {
-                        let mut spans: Vec<Span> = vec![Span::styled(" ", indicator_style), Span::raw(" ")];
+                        let mut spans: Vec<Span> =
+                            vec![Span::styled(" ", indicator_style), Span::raw(" ")];
                         for (i, emoji) in QUICK_EMOJIS.iter().enumerate() {
                             let style = if i == picker_idx {
                                 Style::default().bg(Color::Yellow).fg(Color::Black)
@@ -392,9 +413,7 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
         let scroll_to_bottom = total_lines.saturating_sub(visible_height);
         let scroll_y = scroll_to_bottom.saturating_sub(app.message_scroll) as u16;
 
-        let paragraph = Paragraph::new(lines)
-            .block(block)
-            .scroll((scroll_y, 0));
+        let paragraph = Paragraph::new(lines).block(block).scroll((scroll_y, 0));
         frame.render_widget(paragraph, area);
     }
 }
@@ -421,10 +440,7 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
 
     // Show cursor if focused
     if is_focused {
-        frame.set_cursor_position((
-            area.x + 1 + app.cursor_position as u16,
-            area.y + 1,
-        ));
+        frame.set_cursor_position((area.x + 1 + app.cursor_position as u16, area.y + 1));
     }
 }
 
@@ -460,8 +476,7 @@ fn draw_status(frame: &mut Frame, status: &str) {
     // Bottom status bar
     let status_area = Rect::new(0, area.height - 1, area.width, 1);
 
-    let text = Paragraph::new(status)
-        .style(Style::default().fg(Color::Yellow).bg(Color::Gray));
+    let text = Paragraph::new(status).style(Style::default().fg(Color::Yellow).bg(Color::Gray));
 
     frame.render_widget(text, status_area);
 }
@@ -567,9 +582,10 @@ fn draw_message_info_popup(frame: &mut Frame, app: &App) {
     }
 
     lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled("Content: ", Style::default().fg(Color::Yellow)),
-    ]));
+    lines.push(Line::from(vec![Span::styled(
+        "Content: ",
+        Style::default().fg(Color::Yellow),
+    )]));
 
     // Truncate content if too long
     let max_content_len = (popup_width as usize).saturating_sub(4);

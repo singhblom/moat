@@ -2,7 +2,7 @@
 
 mod conversation_sim;
 use conversation_sim::ConversationSim;
-use moat_core::{EventKind, ErrorCode};
+use moat_core::{ErrorCode, EventKind};
 
 /// Test 11: Sequential commits from different participants.
 /// Alice adds Dave, then Bob adds Eve. No conflict — each commit
@@ -17,11 +17,15 @@ fn test_sequential_commits_no_conflict() {
     // Deliver Alice's commit to Bob and Charlie
     let outcome_b = sim.deliver_commit(1, &commit_a).unwrap();
     assert_eq!(outcome_b.result().event.kind, EventKind::Commit);
-    assert!(!ConversationSim::has_conflict_recovered(outcome_b.warnings()));
+    assert!(!ConversationSim::has_conflict_recovered(
+        outcome_b.warnings()
+    ));
 
     let outcome_c = sim.deliver_commit(2, &commit_a).unwrap();
     assert_eq!(outcome_c.result().event.kind, EventKind::Commit);
-    assert!(!ConversationSim::has_conflict_recovered(outcome_c.warnings()));
+    assert!(!ConversationSim::has_conflict_recovered(
+        outcome_c.warnings()
+    ));
 
     // Now Bob adds Eve (different epoch, no conflict)
     let (commit_b, _welcome_b, _eve_idx) = sim.add_member_sim(1, "Eve");
@@ -29,11 +33,15 @@ fn test_sequential_commits_no_conflict() {
     // Deliver Bob's commit to Alice and Charlie
     let outcome_a = sim.deliver_commit(0, &commit_b).unwrap();
     assert_eq!(outcome_a.result().event.kind, EventKind::Commit);
-    assert!(!ConversationSim::has_conflict_recovered(outcome_a.warnings()));
+    assert!(!ConversationSim::has_conflict_recovered(
+        outcome_a.warnings()
+    ));
 
     let outcome_c2 = sim.deliver_commit(2, &commit_b).unwrap();
     assert_eq!(outcome_c2.result().event.kind, EventKind::Commit);
-    assert!(!ConversationSim::has_conflict_recovered(outcome_c2.warnings()));
+    assert!(!ConversationSim::has_conflict_recovered(
+        outcome_c2.warnings()
+    ));
 }
 
 /// Test 12: Concurrent commits detected.
@@ -174,13 +182,19 @@ fn test_messages_after_commit_succeed() {
     sim.send_message(0, b"Hello from Alice after commit");
     let outcome_b = sim.deliver_next(1).unwrap();
     assert!(!ConversationSim::has_warnings(&outcome_b));
-    assert_eq!(outcome_b.result().event.payload, b"Hello from Alice after commit");
+    assert_eq!(
+        outcome_b.result().event.payload,
+        b"Hello from Alice after commit"
+    );
 
     // Bob can also send
     sim.send_message(1, b"Hello from Bob after commit");
     let outcome_a = sim.deliver_next(0).unwrap();
     assert!(!ConversationSim::has_warnings(&outcome_a));
-    assert_eq!(outcome_a.result().event.payload, b"Hello from Bob after commit");
+    assert_eq!(
+        outcome_a.result().event.payload,
+        b"Hello from Bob after commit"
+    );
 
     // Charlie can also send and receive
     let outcome_c = sim.deliver_next(2).unwrap();

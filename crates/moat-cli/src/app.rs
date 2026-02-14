@@ -1,11 +1,14 @@
 //! Application state and logic
 
-use crate::keystore::{hex, GroupMetadata, KeyStore, StoredSession};
+use crate::{
+    keystore::{hex, GroupMetadata, KeyStore, StoredSession},
+    message_helpers::{build_text_payload, render_message_preview},
+};
 use crossterm::event::{KeyCode, KeyEvent};
 use moat_atproto::MoatAtprotoClient;
 use moat_core::{
     encrypt_for_stealth, generate_stealth_keypair, try_decrypt_stealth, Event, EventKind,
-    MoatCredential, MoatSession, CIPHERSUITE,
+    MoatCredential, MoatSession, ParsedMessagePayload, CIPHERSUITE,
 };
 use std::collections::HashMap;
 use std::io::Write;
@@ -189,9 +192,9 @@ pub struct App {
     // Messages for active conversation
     pub messages: Vec<DisplayMessage>,
     pub message_scroll: usize,
-    pub selected_message: Option<usize>,  // For message info feature
-    pub show_message_info: bool,          // Toggle message info popup
-    pub reaction_picker: Option<usize>,   // Emoji picker index (Some = popup open)
+    pub selected_message: Option<usize>, // For message info feature
+    pub show_message_info: bool,         // Toggle message info popup
+    pub reaction_picker: Option<usize>,  // Emoji picker index (Some = popup open)
 
     // Device alerts (new devices joining conversations)
     pub device_alerts: Vec<DeviceAlert>,
@@ -337,7 +340,7 @@ impl App {
             Focus::Login => self.handle_login_key(key).await,
             Focus::Conversations => self.handle_conversations_key(key).await,
             Focus::Messages => self.handle_messages_key(key).await,
-            Focus::Input => self.handle_input_key(key),  // sync — no await
+            Focus::Input => self.handle_input_key(key), // sync — no await
             Focus::NewConversation => self.handle_new_conversation_key(key).await,
             Focus::WatchHandle => self.handle_watch_handle_key(key).await,
         }
@@ -411,10 +414,7 @@ impl App {
             if let Some((handle, password)) = credentials {
                 match MoatAtprotoClient::login(&handle, &password).await {
                     Ok(client) => {
-                        let (aj, rj) = client
-                            .get_session_tokens()
-                            .await
-                            .unwrap_or_default();
+                        let (aj, rj) = client.get_session_tokens().await.unwrap_or_default();
                         let _ = tx.send(BgEvent::LoggedIn {
                             did: client.did().to_string(),
                             client,
@@ -636,14 +636,19 @@ impl App {
             };
 
             let group_id_bytes = hex::decode(&group_id).unwrap_or_default();
-            let current_epoch =
-                if let Ok(Some(epoch)) = self.mls.get_group_epoch(&group_id_bytes) {
-                    epoch
-                } else {
-                    1
-                };
+            let current_epoch = if let Ok(Some(epoch)) = self.mls.get_group_epoch(&group_id_bytes) {
+                epoch
+            } else {
+                1
+            };
 
+<<<<<<< HEAD
             self.populate_candidate_tags(&group_id, &group_id_bytes);
+=======
+            if let Ok(tag) = moat_core::derive_tag_from_group_id(&group_id_bytes, current_epoch) {
+                self.tag_map.insert(tag, group_id.clone());
+            }
+>>>>>>> 01b8663 (Off chain initial commit)
 
             self.conversations.push(Conversation {
                 id: group_id,
@@ -700,7 +705,8 @@ impl App {
                     Ok(outcome) => {
                         // Log any transcript integrity warnings
                         for w in outcome.warnings() {
-                            self.debug_log.log(&format!("poll: transcript warning: {}", w));
+                            self.debug_log
+                                .log(&format!("poll: transcript warning: {}", w));
                         }
                         let decrypted = outcome.into_result();
 
@@ -716,8 +722,11 @@ impl App {
 
                         match decrypted.event.kind {
                             EventKind::Message => {
-                                let content = String::from_utf8_lossy(&decrypted.event.payload)
-                                    .to_string();
+                                let content = decrypted
+                                    .event
+                                    .parse_message_payload()
+                                    .map(|parsed| render_message_preview(&parsed))
+                                    .unwrap_or_else(|| "(invalid message payload)".to_string());
                                 let from = conv_idx
                                     .and_then(|idx| self.conversations.get(idx))
                                     .map(|c| c.name.clone())
@@ -728,9 +737,8 @@ impl App {
                                     .map(|s| (Some(s.did), Some(s.device_name)))
                                     .unwrap_or((None, None));
 
-                                let is_own = sender_did
-                                    .as_ref()
-                                    .map_or(false, |did| did == &my_did);
+                                let is_own =
+                                    sender_did.as_ref().map_or(false, |did| did == &my_did);
 
                                 if self.active_conversation == conv_idx {
                                     self.messages.push(DisplayMessage {
@@ -756,28 +764,31 @@ impl App {
                                     .iter_mut()
                                     .find(|c| c.id == conv_id)
                                 {
+<<<<<<< HEAD
                                     conv.current_epoch = new_epoch;
+=======
+                                    self.tag_map.insert(new_tag, conv_id.clone());
+                                    if let Some(conv) =
+                                        self.conversations.iter_mut().find(|c| c.id == conv_id)
+                                    {
+                                        conv.current_epoch = new_epoch;
+                                    }
+>>>>>>> 01b8663 (Off chain initial commit)
                                 }
                                 // Regenerate candidate tags for the new epoch
                                 self.populate_candidate_tags(&conv_id, &group_id);
                             }
                             EventKind::Reaction => {
                                 if let Some(rp) = decrypted.event.reaction_payload() {
-                                    let sender_did = decrypted
-                                        .sender
-                                        .map(|s| s.did)
-                                        .unwrap_or_default();
+                                    let sender_did =
+                                        decrypted.sender.map(|s| s.did).unwrap_or_default();
                                     if self.active_conversation == conv_idx {
                                         if let Some(msg) = self.messages.iter_mut().find(|m| {
-                                            m.message_id.as_ref()
-                                                == Some(&rp.target_message_id)
+                                            m.message_id.as_ref() == Some(&rp.target_message_id)
                                         }) {
-                                            if let Some(pos) =
-                                                msg.reactions.iter().position(|r| {
-                                                    r.emoji == rp.emoji
-                                                        && r.sender_did == sender_did
-                                                })
-                                            {
+                                            if let Some(pos) = msg.reactions.iter().position(|r| {
+                                                r.emoji == rp.emoji && r.sender_did == sender_did
+                                            }) {
                                                 msg.reactions.remove(pos);
                                             } else {
                                                 msg.reactions.push(DisplayReaction {
@@ -964,7 +975,9 @@ impl App {
             // Publish key package to PDS
             self.set_status("Publishing key package...".to_string());
             let ciphersuite_name = format!("{:?}", CIPHERSUITE);
-            client.publish_key_package(&key_package, &ciphersuite_name).await?;
+            client
+                .publish_key_package(&key_package, &ciphersuite_name)
+                .await?;
         }
 
         // Generate stealth address if needed (for receiving private invites)
@@ -1136,7 +1149,10 @@ impl App {
             return Ok(());
         }
 
-        self.set_status(format!("Fetching stealth addresses for {}...", recipient_handle));
+        self.set_status(format!(
+            "Fetching stealth addresses for {}...",
+            recipient_handle
+        ));
 
         // 2. Fetch all of the recipient's stealth addresses (one per device)
         let stealth_records = self
@@ -1307,10 +1323,7 @@ impl App {
         let tx = self.bg_tx.clone();
 
         tokio::spawn(async move {
-            match client
-                .fetch_events_from_did(&participant_did, None)
-                .await
-            {
+            match client.fetch_events_from_did(&participant_did, None).await {
                 Ok(events) => {
                     let _ = tx.send(BgEvent::MessagesFetched {
                         conv_idx: idx,
@@ -1319,9 +1332,7 @@ impl App {
                     });
                 }
                 Err(e) => {
-                    let _ = tx.send(BgEvent::PollError(format!(
-                        "Failed to fetch messages: {e}"
-                    )));
+                    let _ = tx.send(BgEvent::PollError(format!("Failed to fetch messages: {e}")));
                 }
             }
         });
@@ -1399,47 +1410,52 @@ impl App {
             match self.mls.decrypt_event(&group_id, &event_record.ciphertext) {
                 Ok(outcome) => {
                     for w in outcome.warnings() {
-                        self.debug_log.log(&format!("load_messages: transcript warning: {}", w));
+                        self.debug_log
+                            .log(&format!("load_messages: transcript warning: {}", w));
                     }
                     let decrypted = outcome.into_result();
                     match decrypted.event.kind {
-                    EventKind::Message => {
-                        let content =
-                            String::from_utf8_lossy(&decrypted.event.payload).to_string();
-                        let (sender_did, sender_device) = decrypted
-                            .sender
-                            .map(|s| (Some(s.did), Some(s.device_name)))
-                            .unwrap_or((Some(participant_did.clone()), None));
-
-                        all_messages.push((
-                            event_record.rkey.clone(),
-                            DisplayMessage {
-                                from: participant_name.clone(),
-                                content,
-                                timestamp: event_record.created_at,
-                                is_own: false,
-                                sender_did,
-                                sender_device,
-                                message_id: decrypted.event.message_id,
-                                reactions: vec![],
-                            },
-                        ));
-                    }
-                    EventKind::Reaction => {
-                        if let Some(rp) = decrypted.event.reaction_payload() {
-                            let sender_did = decrypted
+                        EventKind::Message => {
+                            let content = decrypted
+                                .event
+                                .parse_message_payload()
+                                .map(|parsed| render_message_preview(&parsed))
+                                .unwrap_or_else(|| "(invalid message payload)".to_string());
+                            let (sender_did, sender_device) = decrypted
                                 .sender
-                                .map(|s| s.did)
-                                .unwrap_or_else(|| participant_did.clone());
-                            pending_reactions.push((
-                                rp.target_message_id,
-                                rp.emoji,
-                                sender_did,
+                                .map(|s| (Some(s.did), Some(s.device_name)))
+                                .unwrap_or((Some(participant_did.clone()), None));
+
+                            all_messages.push((
+                                event_record.rkey.clone(),
+                                DisplayMessage {
+                                    from: participant_name.clone(),
+                                    content,
+                                    timestamp: event_record.created_at,
+                                    is_own: false,
+                                    sender_did,
+                                    sender_device,
+                                    message_id: decrypted.event.message_id,
+                                    reactions: vec![],
+                                },
                             ));
                         }
+                        EventKind::Reaction => {
+                            if let Some(rp) = decrypted.event.reaction_payload() {
+                                let sender_did = decrypted
+                                    .sender
+                                    .map(|s| s.did)
+                                    .unwrap_or_else(|| participant_did.clone());
+                                pending_reactions.push((
+                                    rp.target_message_id,
+                                    rp.emoji,
+                                    sender_did,
+                                ));
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
-                }},
+                }
                 Err(e) => {
                     self.debug_log.log(&format!(
                         "load_messages: failed to decrypt event {}: {}",
@@ -1615,8 +1631,10 @@ impl App {
             .map_err(|e| AppError::Other(format!("Invalid group ID: {}", e)))?;
 
         let current_epoch = self.mls.get_group_epoch(&group_id)?.unwrap_or(1);
-        let message_bytes = self.input_buffer.as_bytes().to_vec();
-        let event = Event::message(group_id.clone(), current_epoch, &message_bytes);
+        let text_payload = build_text_payload(&self.input_buffer);
+        let event = Event::message_with_payload(group_id.clone(), current_epoch, &text_payload);
+        let preview_payload = ParsedMessagePayload::Structured(text_payload.clone());
+        let preview = render_message_preview(&preview_payload);
 
         // Encrypt synchronously (fast — pure crypto, no I/O)
         let encrypted = self.mls.encrypt_event(&group_id, &key_bundle, &event)?;
@@ -1627,14 +1645,15 @@ impl App {
             &encrypted.tag[..4]
         ));
 
-        self.keys.store_group_state(&conv_id, &encrypted.new_group_state)?;
+        self.keys
+            .store_group_state(&conv_id, &encrypted.new_group_state)?;
 
         // Optimistically update UI before network publish
         let timestamp = chrono::Utc::now();
         let my_did = self.client.as_ref().unwrap().did().to_string();
         self.messages.push(DisplayMessage {
             from: "You".to_string(),
-            content: self.input_buffer.clone(),
+            content: preview.clone(),
             timestamp,
             is_own: true,
             sender_did: Some(my_did),
@@ -1646,13 +1665,14 @@ impl App {
         // Store locally with placeholder rkey (will be real once publish completes)
         let stored_msg = crate::keystore::StoredMessage {
             rkey: "pending".to_string(),
-            content: self.input_buffer.clone(),
+            content: preview,
             timestamp,
             is_own: true,
             message_id: encrypted.message_id.clone(),
         };
         if let Err(e) = self.keys.append_message(&conv_id, stored_msg) {
-            self.debug_log.log(&format!("send_message: failed to store locally: {}", e));
+            self.debug_log
+                .log(&format!("send_message: failed to store locally: {}", e));
         }
 
         // Clear input immediately (before network)
@@ -1697,7 +1717,11 @@ impl App {
             let offset = self.selected_message.unwrap_or(0);
             self.messages.len().saturating_sub(1).saturating_sub(offset)
         };
-        let target_message_id = match self.messages.get(msg_index).and_then(|m| m.message_id.clone()) {
+        let target_message_id = match self
+            .messages
+            .get(msg_index)
+            .and_then(|m| m.message_id.clone())
+        {
             Some(id) => id,
             None => {
                 self.error_message = Some("Cannot react: message has no ID".to_string());
@@ -1707,7 +1731,8 @@ impl App {
 
         self.debug_log.log(&format!(
             "send_reaction: emoji={}, target_id={:02x?}",
-            emoji, &target_message_id[..4.min(target_message_id.len())]
+            emoji,
+            &target_message_id[..4.min(target_message_id.len())]
         ));
 
         let key_bundle = self.keys.load_identity_key()?;
@@ -1721,11 +1746,14 @@ impl App {
         self.save_mls_state()?;
 
         // Update stored group state
-        self.keys.store_group_state(&conv_id, &encrypted.new_group_state)?;
+        self.keys
+            .store_group_state(&conv_id, &encrypted.new_group_state)?;
 
         // Publish to PDS
         let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
-        client.publish_event(&encrypted.tag, &encrypted.ciphertext).await?;
+        client
+            .publish_event(&encrypted.tag, &encrypted.ciphertext)
+            .await?;
 
         // Update tag mapping
         self.tag_map.insert(encrypted.tag, conv_id);
@@ -1734,7 +1762,11 @@ impl App {
         let my_did = self.client.as_ref().unwrap().did().to_string();
         if let Some(msg) = self.messages.get_mut(msg_index) {
             let emoji_str = emoji.to_string();
-            if let Some(pos) = msg.reactions.iter().position(|r| r.emoji == emoji_str && r.sender_did == my_did) {
+            if let Some(pos) = msg
+                .reactions
+                .iter()
+                .position(|r| r.emoji == emoji_str && r.sender_did == my_did)
+            {
                 msg.reactions.remove(pos);
             } else {
                 msg.reactions.push(DisplayReaction {
@@ -1778,10 +1810,8 @@ impl App {
         let key_bundle = match self.keys.load_identity_key() {
             Ok(kb) => kb,
             Err(e) => {
-                self.debug_log.log(&format!(
-                    "poll_devices: failed to load key bundle: {}",
-                    e
-                ));
+                self.debug_log
+                    .log(&format!("poll_devices: failed to load key bundle: {}", e));
                 return Ok(());
             }
         };
@@ -1813,7 +1843,8 @@ impl App {
             let existing_devices: std::collections::HashSet<(String, String)> = current_members
                 .iter()
                 .filter_map(|(_, cred)| {
-                    cred.as_ref().map(|c| (c.did().to_string(), c.device_name().to_string()))
+                    cred.as_ref()
+                        .map(|c| (c.did().to_string(), c.device_name().to_string()))
                 })
                 .collect();
 
@@ -1825,10 +1856,14 @@ impl App {
 
             // Check each of our key packages to see if it's a new device
             for kp_record in &key_packages {
-                let credential = match self.mls.extract_credential_from_key_package(&kp_record.key_package) {
+                let credential = match self
+                    .mls
+                    .extract_credential_from_key_package(&kp_record.key_package)
+                {
                     Ok(Some(c)) => c,
                     Ok(None) => {
-                        self.debug_log.log("poll_devices: key package has no credential");
+                        self.debug_log
+                            .log("poll_devices: key package has no credential");
                         continue;
                     }
                     Err(e) => {
@@ -1840,7 +1875,10 @@ impl App {
                     }
                 };
 
-                let device_key = (credential.did().to_string(), credential.device_name().to_string());
+                let device_key = (
+                    credential.did().to_string(),
+                    credential.device_name().to_string(),
+                );
 
                 self.debug_log.log(&format!(
                     "poll_devices: key package device_name='{}' for did={}",
@@ -1862,8 +1900,21 @@ impl App {
                     credential.device_name()
                 ));
 
+<<<<<<< HEAD
                 // Derive tag for the commit using pre-advance counter
                 let commit_tag = match self.mls.derive_next_tag(&group_id, &key_bundle) {
+=======
+                // Get epoch BEFORE adding device - commit must be published with pre-advance tag
+                // so other members (who haven't advanced yet) can see it
+                let epoch_before = self
+                    .mls
+                    .get_group_epoch(&group_id)
+                    .ok()
+                    .flatten()
+                    .unwrap_or(0);
+                let commit_tag = match moat_core::derive_tag_from_group_id(&group_id, epoch_before)
+                {
+>>>>>>> 01b8663 (Off chain initial commit)
                     Ok(t) => t,
                     Err(e) => {
                         self.debug_log.log(&format!(
@@ -1875,7 +1926,10 @@ impl App {
                 };
 
                 // Add the new device
-                match self.mls.add_device(&group_id, &key_bundle, &kp_record.key_package) {
+                match self
+                    .mls
+                    .add_device(&group_id, &key_bundle, &kp_record.key_package)
+                {
                     Ok(welcome_result) => {
                         self.debug_log.log(&format!(
                             "poll_devices: successfully added device '{}' to group",
@@ -1884,25 +1938,48 @@ impl App {
 
                         // Save MLS state
                         if let Err(e) = self.save_mls_state() {
-                            self.debug_log.log(&format!(
-                                "poll_devices: failed to save MLS state: {}",
-                                e
-                            ));
+                            self.debug_log
+                                .log(&format!("poll_devices: failed to save MLS state: {}", e));
                         }
 
+<<<<<<< HEAD
                         // Repopulate candidate tags for the new epoch
                         if let Ok(tags) = self.mls.populate_candidate_tags(&group_id) {
                             for t in tags {
                                 self.tag_map.insert(t, conv_id.clone());
                             }
                         }
+=======
+                        // Get new epoch for updating tag map
+                        let epoch_after = self
+                            .mls
+                            .get_group_epoch(&group_id)
+                            .ok()
+                            .flatten()
+                            .unwrap_or(1);
+                        let new_tag =
+                            match moat_core::derive_tag_from_group_id(&group_id, epoch_after) {
+                                Ok(t) => t,
+                                Err(e) => {
+                                    self.debug_log.log(&format!(
+                                        "poll_devices: failed to derive post-add tag: {}",
+                                        e
+                                    ));
+                                    continue;
+                                }
+                            };
+
+                        // Update tag map with new epoch's tag
+                        self.tag_map.insert(new_tag, conv_id.clone());
+>>>>>>> 01b8663 (Off chain initial commit)
 
                         // Publish the commit with PRE-advance epoch tag so others can see it
-                        if let Err(e) = client.publish_event(&commit_tag, &welcome_result.commit).await {
-                            self.debug_log.log(&format!(
-                                "poll_devices: failed to publish commit: {}",
-                                e
-                            ));
+                        if let Err(e) = client
+                            .publish_event(&commit_tag, &welcome_result.commit)
+                            .await
+                        {
+                            self.debug_log
+                                .log(&format!("poll_devices: failed to publish commit: {}", e));
                         } else {
                             self.debug_log.log("poll_devices: published commit");
                         }
@@ -1912,10 +1989,16 @@ impl App {
                             Ok(stealth_records) if !stealth_records.is_empty() => {
                                 let stealth_pubkeys: Vec<[u8; 32]> =
                                     stealth_records.iter().map(|r| r.scan_pubkey).collect();
-                                match moat_core::encrypt_for_stealth(&stealth_pubkeys, &welcome_result.welcome) {
+                                match moat_core::encrypt_for_stealth(
+                                    &stealth_pubkeys,
+                                    &welcome_result.welcome,
+                                ) {
                                     Ok(stealth_ciphertext) => {
                                         let random_tag: [u8; 16] = rand::random();
-                                        if let Err(e) = client.publish_event(&random_tag, &stealth_ciphertext).await {
+                                        if let Err(e) = client
+                                            .publish_event(&random_tag, &stealth_ciphertext)
+                                            .await
+                                        {
                                             self.debug_log.log(&format!(
                                                 "poll_devices: failed to publish welcome: {}",
                                                 e
@@ -1948,15 +2031,23 @@ impl App {
                         }
 
                         // Update conversation epoch in UI and add device alert
-                        let conv_name = self.conversations.iter()
+                        let conv_name = self
+                            .conversations
+                            .iter()
                             .find(|c| c.id == conv_id)
                             .map(|c| c.name.clone())
                             .unwrap_or_else(|| "Unknown".to_string());
 
+<<<<<<< HEAD
                         if let Some(conv) = self.conversations.iter_mut().find(|c| c.id == conv_id) {
                             if let Ok(Some(new_epoch)) = self.mls.get_group_epoch(&group_id) {
                                 conv.current_epoch = new_epoch;
                             }
+=======
+                        if let Some(conv) = self.conversations.iter_mut().find(|c| c.id == conv_id)
+                        {
+                            conv.current_epoch = epoch_after;
+>>>>>>> 01b8663 (Off chain initial commit)
                         }
 
                         // Add device alert for UI notification
