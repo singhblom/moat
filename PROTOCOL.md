@@ -136,27 +136,27 @@ Stealth invite tags are random (not derived) since the recipient doesn't yet kno
 
 ## Event Types (Inside Encryption)
 
-| Kind | Payload | Purpose |
-|------|---------|---------|
-| `message` | Structured payload (see Message Payloads) + 16-byte `message_id` | Chat messages, attachments, previews |
-| `commit` | TLS-serialized MLS Commit | Membership/key changes |
-| `welcome` | TLS-serialized MLS Welcome | Group join (via stealth invite) |
-| `checkpoint` | Serialized group state | Fast sync (not yet implemented) |
-| `reaction` | `{emoji, target_message_id}` | Emoji reactions (toggle semantics) |
+Every event’s `kind` is now namespaced as `<domain>.<variant>`:
+
+| Domain | Variants | Purpose |
+|--------|----------|---------|
+| `control.*` | `control.commit`, `control.welcome`, `control.checkpoint` | MLS state management; payload is TLS-serialized bytes and no `message_id` is present. |
+| `message.*` | `message.short_text`, `message.medium_text`, `message.long_text`, `message.image` | User-visible content plus optional previews/external blobs. Each carries a 16-byte `message_id`. |
+| `modifier.*` | `modifier.reaction` (more to follow) | Small toggles or annotations that reference an existing `message_id`. |
 
 ## Message Payloads & External Blobs
 
-When `event.kind == "message"`, the payload is a structured JSON object describing the user-visible content plus any off-chain pointer. Each payload carries:
+When `event.kind` starts with `message.`, the payload is a structured JSON object describing the user-visible content plus any off-chain pointer. Each payload carries:
 
 - `group_id`, `epoch`, and transcript-integrity fields (same as other events),
 - `message_id` (16 random bytes, stable anchor for reactions and pointer retargets),
-- A discriminated `type` describing the user-visible content:
-  - `short_text` (512 B bucket): `text`
-  - `medium_text` (1 KB bucket): `text`
-  - `long_text` (1 KB bucket): `preview_text`, optional `mime`, and `external`
-  - `image` (1 KB bucket): `preview_thumbhash`, `width`, `height`, `mime`, and `external`
-  - `video` (1 KB bucket): `preview_thumbhash`, `width`, `height`, optional `duration_ms`, `mime`, and `external`
-- `reaction` remains its own event kind with `{emoji, target_message_id}`, but the 512 B bucket budget matches the `short_text` envelope.
+- Variants describing the user-visible content:
+  - `message.short_text` (512 B bucket): `text`
+  - `message.medium_text` (1 KB bucket): `text`
+  - `message.long_text` (1 KB bucket): `preview_text`, optional `mime`, and `external`
+  - `message.image` (1 KB bucket): `preview_thumbhash`, `width`, `height`, `mime`, and `external`
+  - (future) `message.video`, `message.audio`, etc., extend the same pattern.
+- `modifier.reaction` remains a separate event kind with `{emoji, target_message_id}`, but uses the 512 B bucket budget like `message.short_text`.
 
 `external` entries move the heavy payload off-chain. The struct includes:
 

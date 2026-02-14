@@ -4,7 +4,9 @@
 //! per-participant inboxes that can be delivered, reordered, or dropped.
 //! Supports dynamic membership (add/remove) from the start.
 
-use moat_core::{DecryptOutcome, Event, EventKind, MoatCredential, MoatSession, TranscriptWarning};
+use moat_core::{
+    ControlKind, DecryptOutcome, Event, EventKind, MoatCredential, MoatSession, TranscriptWarning,
+};
 use std::collections::VecDeque;
 
 /// A simulated participant with their own MoatSession.
@@ -89,7 +91,10 @@ impl ConversationSim {
                     .session
                     .decrypt_event(&group_id, &welcome_result.commit)
                     .unwrap();
-                assert_eq!(outcome.result().event.kind, EventKind::Commit);
+                assert!(matches!(
+                    outcome.result().event.kind,
+                    EventKind::Control(ControlKind::Commit)
+                ));
             }
         }
 
@@ -108,7 +113,7 @@ impl ConversationSim {
             .get_group_epoch(&self.group_id)
             .unwrap()
             .unwrap();
-        let event = Event::message(self.group_id.clone(), epoch, content);
+        let event = Event::message_from_bytes(self.group_id.clone(), epoch, content);
         let encrypted = self.participants[sender]
             .session
             .encrypt_event(
@@ -303,8 +308,11 @@ fn test_conversation_sim_basic() {
     let outcome = sim.deliver_next(1).unwrap();
     assert!(!ConversationSim::has_warnings(&outcome));
     let result = outcome.into_result();
-    assert_eq!(result.event.kind, EventKind::Message);
-    assert_eq!(result.event.payload, b"Hello Bob!");
+    assert!(matches!(result.event.kind, EventKind::Message(_)));
+    assert_eq!(
+        result.event.parse_message_payload().unwrap().preview_text(),
+        Some("Hello Bob!".to_string())
+    );
 }
 
 #[test]
@@ -316,8 +324,24 @@ fn test_conversation_sim_three_party() {
 
     // Both Bob and Charlie receive it
     let bob_outcome = sim.deliver_next(1).unwrap();
-    assert_eq!(bob_outcome.result().event.payload, b"Hello everyone!");
+    assert_eq!(
+        bob_outcome
+            .result()
+            .event
+            .parse_message_payload()
+            .unwrap()
+            .preview_text(),
+        Some("Hello everyone!".to_string())
+    );
 
     let charlie_outcome = sim.deliver_next(2).unwrap();
-    assert_eq!(charlie_outcome.result().event.payload, b"Hello everyone!");
+    assert_eq!(
+        charlie_outcome
+            .result()
+            .event
+            .parse_message_payload()
+            .unwrap()
+            .preview_text(),
+        Some("Hello everyone!".to_string())
+    );
 }

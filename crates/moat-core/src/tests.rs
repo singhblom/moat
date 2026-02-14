@@ -1,6 +1,7 @@
 //! Integration tests for moat-core
 
 use crate::{
+    derive_tag_from_group_id,
     event::{ControlKind, ModifierKind},
     message::{MessagePayload, TextMessage},
     pad_to_bucket,
@@ -13,6 +14,16 @@ use crate::{
     MoatCredential,
     MoatSession,
 };
+
+fn short_text_payload(text: &str) -> MessagePayload {
+    MessagePayload::ShortText(TextMessage {
+        text: text.to_string(),
+    })
+}
+
+fn text_event(group_id: Vec<u8>, epoch: u64, text: &str) -> Event {
+    Event::message(group_id, epoch, &short_text_payload(text))
+}
 
 #[test]
 fn test_key_package_generation() {
@@ -136,39 +147,54 @@ fn test_padding_preserves_content() {
 
 #[test]
 fn test_event_creation() {
-    let event = Event::message(b"group-123".to_vec(), 5, b"Hello, world!");
-    assert_eq!(event.kind, EventKind::Message);
+    let event = text_event(b"group-123".to_vec(), 5, "Hello, world!");
+    assert!(matches!(event.kind, EventKind::Message(_)));
     assert_eq!(event.group_id, b"group-123");
     assert_eq!(event.epoch, 5);
-    assert_eq!(event.payload, b"Hello, world!");
+    assert_eq!(
+        event.parse_message_payload().unwrap().preview_text(),
+        Some("Hello, world!".to_string())
+    );
 }
 
 #[test]
 fn test_event_roundtrip() {
-    let event = Event::message(b"group-123".to_vec(), 5, b"Hello, world!");
+    let event = text_event(b"group-123".to_vec(), 5, "Hello, world!");
 
     let bytes = event.to_bytes().unwrap();
     let recovered = Event::from_bytes(&bytes).unwrap();
 
-    assert_eq!(recovered.kind, EventKind::Message);
+    assert!(matches!(recovered.kind, EventKind::Message(_)));
     assert_eq!(recovered.group_id, b"group-123");
     assert_eq!(recovered.epoch, 5);
-    assert_eq!(recovered.payload, b"Hello, world!");
+    assert_eq!(
+        recovered.parse_message_payload().unwrap().preview_text(),
+        Some("Hello, world!".to_string())
+    );
 }
 
 #[test]
 fn test_event_kinds() {
-    let msg = Event::message(vec![], 0, b"text");
-    assert_eq!(msg.kind, EventKind::Message);
+    let msg = text_event(vec![], 0, "text");
+    assert!(matches!(msg.kind, EventKind::Message(_)));
 
     let commit = Event::commit(vec![], 0, vec![1, 2, 3]);
-    assert_eq!(commit.kind, EventKind::Commit);
+    assert!(matches!(
+        commit.kind,
+        EventKind::Control(ControlKind::Commit)
+    ));
 
     let welcome = Event::welcome(vec![], 0, vec![4, 5, 6]);
-    assert_eq!(welcome.kind, EventKind::Welcome);
+    assert!(matches!(
+        welcome.kind,
+        EventKind::Control(ControlKind::Welcome)
+    ));
 
     let checkpoint = Event::checkpoint(vec![], 0, vec![7, 8, 9]);
-    assert_eq!(checkpoint.kind, EventKind::Checkpoint);
+    assert!(matches!(
+        checkpoint.kind,
+        EventKind::Control(ControlKind::Checkpoint)
+    ));
 }
 
 #[test]
@@ -211,7 +237,7 @@ fn test_tags_differ_across_counters() {
 #[test]
 fn test_event_serialization_with_padding() {
     // Test that events can be serialized, padded, and recovered
-    let event = Event::message(b"group-xyz".to_vec(), 42, b"Hello, this is a test message!");
+    let event = text_event(b"group-xyz".to_vec(), 42, "Hello, this is a test message!");
 
     // Serialize
     let event_bytes = event.to_bytes().unwrap();
@@ -229,10 +255,13 @@ fn test_event_serialization_with_padding() {
     // Deserialize
     let recovered = Event::from_bytes(&unpadded).unwrap();
 
-    assert_eq!(recovered.kind, EventKind::Message);
+    assert!(matches!(recovered.kind, EventKind::Message(_)));
     assert_eq!(recovered.group_id, b"group-xyz");
     assert_eq!(recovered.epoch, 42);
-    assert_eq!(recovered.payload, b"Hello, this is a test message!");
+    assert_eq!(
+        recovered.parse_message_payload().unwrap().preview_text(),
+        Some("Hello, this is a test message!".to_string())
+    );
 }
 
 #[test]
@@ -298,7 +327,7 @@ fn test_encrypt_event() {
         .unwrap();
 
     // Create an event
-    let original_event = Event::message(group_id.clone(), 0, b"Hello, world!");
+    let original_event = text_event(group_id.clone(), 0, "Hello, world!");
 
     // Encrypt
     let encrypt_result = session
@@ -344,7 +373,7 @@ fn test_two_party_messaging() {
     assert_eq!(bob_group_id, group_id);
 
     // Alice sends a message
-    let message = Event::message(group_id.clone(), 0, b"Hello Bob!");
+    let message = text_event(group_id.clone(), 0, "Hello Bob!");
     let encrypted = alice_session
         .encrypt_event(&group_id, &alice_bundle, &message)
         .unwrap();
@@ -354,8 +383,15 @@ fn test_two_party_messaging() {
         .decrypt_event(&bob_group_id, &encrypted.ciphertext)
         .unwrap()
         .into_result();
-    assert_eq!(decrypted.event.kind, EventKind::Message);
-    assert_eq!(decrypted.event.payload, b"Hello Bob!");
+    assert!(matches!(decrypted.event.kind, EventKind::Message(_)));
+    assert_eq!(
+        decrypted
+            .event
+            .parse_message_payload()
+            .unwrap()
+            .preview_text(),
+        Some("Hello Bob!".to_string())
+    );
 
     // Verify sender info is extracted
     let sender = decrypted.sender.expect("Should have sender info");
@@ -363,7 +399,7 @@ fn test_two_party_messaging() {
     assert_eq!(sender.device_name, "Alice Phone");
 
     // Bob replies
-    let reply = Event::message(group_id.clone(), 0, b"Hello Alice!");
+    let reply = text_event(group_id.clone(), 0, "Hello Alice!");
     let encrypted_reply = bob_session
         .encrypt_event(&bob_group_id, &bob_bundle, &reply)
         .unwrap();
@@ -373,8 +409,15 @@ fn test_two_party_messaging() {
         .decrypt_event(&group_id, &encrypted_reply.ciphertext)
         .unwrap()
         .into_result();
-    assert_eq!(decrypted_reply.event.kind, EventKind::Message);
-    assert_eq!(decrypted_reply.event.payload, b"Hello Alice!");
+    assert!(matches!(decrypted_reply.event.kind, EventKind::Message(_)));
+    assert_eq!(
+        decrypted_reply
+            .event
+            .parse_message_payload()
+            .unwrap()
+            .preview_text(),
+        Some("Hello Alice!".to_string())
+    );
 
     // Verify sender info
     let sender = decrypted_reply.sender.expect("Should have sender info");
@@ -839,7 +882,10 @@ fn test_reaction_event_creation() {
     let target_id = vec![0xAB; 16];
     let reaction = Event::reaction(b"group-1".to_vec(), 5, &target_id, "👍");
 
-    assert_eq!(reaction.kind, EventKind::Reaction);
+    assert!(matches!(
+        reaction.kind,
+        EventKind::Modifier(ModifierKind::Reaction)
+    ));
     assert!(reaction.message_id.is_some());
 
     let rp = reaction.reaction_payload().unwrap();
@@ -868,7 +914,7 @@ fn test_reaction_encrypt_decrypt_roundtrip() {
     let bob_group_id = bob_session.process_welcome(&welcome.welcome).unwrap();
 
     // Alice sends a message
-    let message = Event::message(group_id.clone(), 0, b"Hello Bob!");
+    let message = text_event(group_id.clone(), 0, "Hello Bob!");
     let msg_id = message.message_id.clone().unwrap();
     let encrypted_msg = alice_session
         .encrypt_event(&group_id, &alice_bundle, &message)
@@ -879,7 +925,7 @@ fn test_reaction_encrypt_decrypt_roundtrip() {
         .decrypt_event(&bob_group_id, &encrypted_msg.ciphertext)
         .unwrap()
         .into_result();
-    assert_eq!(decrypted_msg.event.kind, EventKind::Message);
+    assert!(matches!(decrypted_msg.event.kind, EventKind::Message(_)));
     assert_eq!(decrypted_msg.event.message_id.as_ref().unwrap(), &msg_id);
 
     // Bob reacts to Alice's message with 👍
@@ -893,7 +939,10 @@ fn test_reaction_encrypt_decrypt_roundtrip() {
         .decrypt_event(&group_id, &encrypted_reaction.ciphertext)
         .unwrap()
         .into_result();
-    assert_eq!(decrypted_reaction.event.kind, EventKind::Reaction);
+    assert!(matches!(
+        decrypted_reaction.event.kind,
+        EventKind::Modifier(ModifierKind::Reaction)
+    ));
 
     let rp = decrypted_reaction.event.reaction_payload().unwrap();
     assert_eq!(rp.emoji, "👍");
@@ -932,7 +981,7 @@ fn test_reaction_fits_in_small_or_standard_padding_bucket() {
 
 #[test]
 fn test_message_has_message_id() {
-    let msg = Event::message(b"group".to_vec(), 0, b"hello");
+    let msg = text_event(b"group".to_vec(), 0, "hello");
     assert!(msg.message_id.is_some());
     assert_eq!(msg.message_id.unwrap().len(), 16);
 }

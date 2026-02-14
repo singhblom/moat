@@ -318,7 +318,7 @@ async fn cmd_fetch(storage_dir: Option<PathBuf>, repository: &str) -> anyhow::Re
             match mls.decrypt_event(group_id, &event.ciphertext) {
                 Ok(outcome) => {
                     let decrypted = outcome.into_result();
-                    let payload = if decrypted.event.kind == EventKind::Message {
+                    let payload = if matches!(decrypted.event.kind, EventKind::Message(_)) {
                         decrypted
                             .event
                             .parse_message_payload()
@@ -483,7 +483,7 @@ async fn cmd_send_test(
 
     // Create and encrypt message
     let payload = build_text_payload(&message);
-    let event = moat_core::Event::message_with_payload(group_id.clone(), epoch, &payload);
+    let event = moat_core::Event::message(group_id.clone(), epoch, &payload);
     let encrypted = mls.encrypt_event(&group_id, &key_bundle, &event)?;
 
     // Save MLS state (encryption advances epoch)

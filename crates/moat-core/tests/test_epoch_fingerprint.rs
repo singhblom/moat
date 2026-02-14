@@ -2,7 +2,7 @@
 
 mod conversation_sim;
 use conversation_sim::ConversationSim;
-use moat_core::{EventKind, MoatCredential, MoatSession};
+use moat_core::{ControlKind, EventKind, MoatCredential, MoatSession};
 
 /// Test 8: Agreement after message. Alice encrypts at epoch N. Bob decrypts.
 /// Both derive the same epoch_fingerprint (no mismatch warning).
@@ -57,7 +57,10 @@ fn test_epoch_fingerprint_agreement_after_commit() {
         .session
         .decrypt_event(&sim.group_id, &welcome_result.commit)
         .unwrap();
-    assert_eq!(commit_outcome.result().event.kind, EventKind::Commit);
+    assert!(matches!(
+        commit_outcome.result().event.kind,
+        EventKind::Control(ControlKind::Commit)
+    ));
 
     // After commit, both are at the same epoch — verify by sending another message
     sim.send_message(0, b"Post-commit message");

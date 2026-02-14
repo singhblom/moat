@@ -6,24 +6,57 @@
 
 use crate::{
     credential::MoatCredential,
-    message::{MessagePayload, ParsedMessagePayload},
+    message::{MessageBodyKind, MessagePayload, ParsedMessagePayload},
 };
-use serde::{Deserialize, Serialize};
+use serde::{de::Deserializer, Deserialize, Serialize, Serializer};
 
-/// The kind of event being sent
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+/// Top-level event discriminator (domain + variant).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EventKind {
-    /// A regular chat message
-    Message,
-    /// An MLS commit (membership change, key update)
+    Control(ControlKind),
+    Message(MessageKind),
+    Modifier(ModifierKind),
+    /// Legacy or unknown domain.
+    Unknown(String),
+}
+
+/// Control-plane events (MLS state mutations).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ControlKind {
     Commit,
-    /// An MLS welcome message for a new member
     Welcome,
-    /// A group state checkpoint for faster sync
     Checkpoint,
-    /// An emoji reaction to a message (toggle semantics)
+    Unknown(String),
+}
+
+/// User-visible message variants.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MessageKind {
+    ShortText,
+    MediumText,
+    LongText,
+    Image,
+    /// Legacy `kind: "message"` events.
+    Legacy,
+    Unknown(String),
+}
+
+/// Message modifiers (reactions, replies, ...).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModifierKind {
     Reaction,
+    Unknown(String),
+}
+
+impl EventKind {
+    fn as_str(&self) -> String {
+        match self {
+            EventKind::Control(kind) => kind.as_str_with_domain("control"),
+            EventKind::Message(kind) => kind.as_str_with_domain("message"),
+            EventKind::Modifier(kind) => kind.as_str_with_domain("modifier"),
+            EventKind::Unknown(s) => s.clone(),
+        }
+    }
 }
 
 /// Information about the sender of a message.
@@ -123,10 +156,45 @@ impl Event {
         id
     }
 
-    /// Create a new message event from raw bytes (legacy plaintext).
-    pub fn message(group_id: Vec<u8>, epoch: u64, content: &[u8]) -> Self {
+    /// Create a new structured message event.
+    pub fn message(group_id: Vec<u8>, epoch: u64, payload: &MessagePayload) -> Self {
+        let payload_bytes = payload
+            .to_bytes()
+            .expect("MessagePayload serialization should never fail");
+        let message_kind = MessageKind::from(payload.kind());
         Self {
-            kind: EventKind::Message,
+            kind: EventKind::Message(message_kind),
+            group_id,
+            epoch,
+            payload: payload_bytes,
+            message_id: Some(Self::random_message_id()),
+            prev_event_hash: None,
+            epoch_fingerprint: None,
+            sender_device_id: None,
+        }
+    }
+
+    /// Create a message event from serialized payload bytes (used by FFI/legacy callers).
+    pub fn message_from_bytes(group_id: Vec<u8>, epoch: u64, payload: &[u8]) -> Self {
+        let message_kind = serde_json::from_slice::<MessagePayload>(payload)
+            .map(|p| MessageKind::from(p.kind()))
+            .unwrap_or(MessageKind::Legacy);
+        Self {
+            kind: EventKind::Message(message_kind),
+            group_id,
+            epoch,
+            payload: payload.to_vec(),
+            message_id: Some(Self::random_message_id()),
+            prev_event_hash: None,
+            epoch_fingerprint: None,
+            sender_device_id: None,
+        }
+    }
+
+    /// Create a legacy message event from raw bytes.
+    pub fn legacy_message(group_id: Vec<u8>, epoch: u64, content: &[u8]) -> Self {
+        Self {
+            kind: EventKind::Message(MessageKind::Legacy),
             group_id,
             epoch,
             payload: content.to_vec(),
@@ -137,26 +205,18 @@ impl Event {
         }
     }
 
-    /// Create a new structured message event from a [`MessagePayload`].
-    pub fn message_with_payload(group_id: Vec<u8>, epoch: u64, payload: &MessagePayload) -> Self {
-        let payload_bytes = payload
-            .to_bytes()
-            .expect("MessagePayload serialization should never fail");
-        Self::message(group_id, epoch, &payload_bytes)
-    }
-
     /// Attempt to parse the payload of a message event.
     pub fn parse_message_payload(&self) -> Option<ParsedMessagePayload> {
-        if self.kind != EventKind::Message {
-            return None;
+        match &self.kind {
+            EventKind::Message(_) => Some(ParsedMessagePayload::from_bytes(&self.payload)),
+            _ => None,
         }
-        Some(ParsedMessagePayload::from_bytes(&self.payload))
     }
 
     /// Create a new commit event
     pub fn commit(group_id: Vec<u8>, epoch: u64, commit_bytes: Vec<u8>) -> Self {
         Self {
-            kind: EventKind::Commit,
+            kind: EventKind::Control(ControlKind::Commit),
             group_id,
             epoch,
             payload: commit_bytes,
@@ -170,7 +230,7 @@ impl Event {
     /// Create a new welcome event
     pub fn welcome(group_id: Vec<u8>, epoch: u64, welcome_bytes: Vec<u8>) -> Self {
         Self {
-            kind: EventKind::Welcome,
+            kind: EventKind::Control(ControlKind::Welcome),
             group_id,
             epoch,
             payload: welcome_bytes,
@@ -184,7 +244,7 @@ impl Event {
     /// Create a new checkpoint event
     pub fn checkpoint(group_id: Vec<u8>, epoch: u64, state_bytes: Vec<u8>) -> Self {
         Self {
-            kind: EventKind::Checkpoint,
+            kind: EventKind::Control(ControlKind::Checkpoint),
             group_id,
             epoch,
             payload: state_bytes,
@@ -204,7 +264,7 @@ impl Event {
         let payload = serde_json::to_vec(&reaction_payload)
             .expect("ReactionPayload serialization should never fail");
         Self {
-            kind: EventKind::Reaction,
+            kind: EventKind::Modifier(ModifierKind::Reaction),
             group_id,
             epoch,
             payload,
@@ -217,10 +277,12 @@ impl Event {
 
     /// Parse the payload as a ReactionPayload (only valid for Reaction events).
     pub fn reaction_payload(&self) -> Option<ReactionPayload> {
-        if self.kind != EventKind::Reaction {
-            return None;
+        match &self.kind {
+            EventKind::Modifier(ModifierKind::Reaction) => {
+                serde_json::from_slice(&self.payload).ok()
+            }
+            _ => None,
         }
-        serde_json::from_slice(&self.payload).ok()
     }
 
     /// Serialize this event to bytes for encryption
@@ -341,49 +403,77 @@ impl DecryptOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message::{MessagePayload, TextMessage};
 
     #[test]
     fn test_event_roundtrip() {
-        let event = Event::message(b"group-123".to_vec(), 5, b"Hello, world!");
+        let payload = MessagePayload::ShortText(TextMessage {
+            text: "Hello, world!".to_string(),
+        });
+        let event = Event::message(b"group-123".to_vec(), 5, &payload);
 
         let bytes = event.to_bytes().unwrap();
         let recovered = Event::from_bytes(&bytes).unwrap();
 
-        assert_eq!(recovered.kind, EventKind::Message);
+        assert!(matches!(recovered.kind, EventKind::Message(_)));
         assert_eq!(recovered.group_id, b"group-123");
         assert_eq!(recovered.epoch, 5);
-        assert_eq!(recovered.payload, b"Hello, world!");
+        assert_eq!(
+            recovered.parse_message_payload().unwrap().preview_text(),
+            Some("Hello, world!".to_string())
+        );
         assert!(recovered.message_id.is_some());
         assert_eq!(recovered.message_id.unwrap().len(), 16);
     }
 
     #[test]
     fn test_event_kinds() {
-        let msg = Event::message(vec![], 0, b"text");
-        assert_eq!(msg.kind, EventKind::Message);
+        let msg = Event::message(
+            vec![],
+            0,
+            &MessagePayload::ShortText(TextMessage {
+                text: "text".to_string(),
+            }),
+        );
+        assert!(matches!(msg.kind, EventKind::Message(_)));
         assert!(msg.message_id.is_some());
 
         let commit = Event::commit(vec![], 0, vec![1, 2, 3]);
-        assert_eq!(commit.kind, EventKind::Commit);
+        assert!(matches!(
+            commit.kind,
+            EventKind::Control(ControlKind::Commit)
+        ));
         assert!(commit.message_id.is_none());
 
         let welcome = Event::welcome(vec![], 0, vec![4, 5, 6]);
-        assert_eq!(welcome.kind, EventKind::Welcome);
+        assert!(matches!(
+            welcome.kind,
+            EventKind::Control(ControlKind::Welcome)
+        ));
         assert!(welcome.message_id.is_none());
 
         let checkpoint = Event::checkpoint(vec![], 0, vec![7, 8, 9]);
-        assert_eq!(checkpoint.kind, EventKind::Checkpoint);
+        assert!(matches!(
+            checkpoint.kind,
+            EventKind::Control(ControlKind::Checkpoint)
+        ));
         assert!(checkpoint.message_id.is_none());
 
         let reaction = Event::reaction(vec![], 0, &[1; 16], "👍");
-        assert_eq!(reaction.kind, EventKind::Reaction);
+        assert!(matches!(
+            reaction.kind,
+            EventKind::Modifier(ModifierKind::Reaction)
+        ));
         assert!(reaction.message_id.is_some());
     }
 
     #[test]
     fn test_message_ids_are_unique() {
-        let msg1 = Event::message(vec![], 0, b"hello");
-        let msg2 = Event::message(vec![], 0, b"hello");
+        let payload = MessagePayload::ShortText(TextMessage {
+            text: "hello".to_string(),
+        });
+        let msg1 = Event::message(vec![], 0, &payload);
+        let msg2 = Event::message(vec![], 0, &payload);
         assert_ne!(msg1.message_id, msg2.message_id);
     }
 
@@ -395,7 +485,10 @@ mod tests {
         let bytes = event.to_bytes().unwrap();
         let recovered = Event::from_bytes(&bytes).unwrap();
 
-        assert_eq!(recovered.kind, EventKind::Reaction);
+        assert!(matches!(
+            recovered.kind,
+            EventKind::Modifier(ModifierKind::Reaction)
+        ));
         let rp = recovered.reaction_payload().unwrap();
         assert_eq!(rp.emoji, "🎉");
         assert_eq!(rp.target_message_id, target_id);
@@ -403,18 +496,16 @@ mod tests {
 
     #[test]
     fn test_reaction_payload_on_non_reaction() {
-        let msg = Event::message(vec![], 0, b"text");
+        let msg = Event::legacy_message(vec![], 0, b"text");
         assert!(msg.reaction_payload().is_none());
     }
 
     #[test]
     fn test_structured_message_payload_roundtrip() {
-        use crate::message::{MessagePayload, TextMessage};
-
         let payload = MessagePayload::ShortText(TextMessage {
             text: "Hello preview".to_string(),
         });
-        let event = Event::message_with_payload(b"group".to_vec(), 1, &payload);
+        let event = Event::message(b"group".to_vec(), 1, &payload);
 
         let parsed = event.parse_message_payload().unwrap();
         match parsed {
@@ -427,7 +518,7 @@ mod tests {
 
     #[test]
     fn test_message_payload_legacy_fallback() {
-        let event = Event::message(b"group".to_vec(), 1, b"legacy plaintext");
+        let event = Event::legacy_message(b"group".to_vec(), 1, b"legacy plaintext");
         let parsed = event.parse_message_payload().unwrap();
         let preview = parsed.preview_text().unwrap();
         match parsed {
@@ -444,10 +535,117 @@ mod tests {
         // Simulate a legacy event without message_id or transcript integrity fields
         let json = r#"{"kind":"message","group_id":[1,2,3],"epoch":0,"payload":[104,105]}"#;
         let event: Event = serde_json::from_str(json).unwrap();
-        assert_eq!(event.kind, EventKind::Message);
+        assert!(matches!(event.kind, EventKind::Message(_)));
         assert!(event.message_id.is_none());
         assert!(event.prev_event_hash.is_none());
         assert!(event.epoch_fingerprint.is_none());
         assert!(event.sender_device_id.is_none());
+    }
+}
+impl Serialize for EventKind {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for EventKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        if let Some((domain, variant)) = raw.split_once('.') {
+            let kind = match domain {
+                "control" => EventKind::Control(ControlKind::from_variant(variant)),
+                "message" => EventKind::Message(MessageKind::from_variant(variant)),
+                "modifier" => EventKind::Modifier(ModifierKind::from_variant(variant)),
+                _ => EventKind::Unknown(raw),
+            };
+            Ok(kind)
+        } else {
+            // Legacy single-token kinds.
+            let legacy = match raw.as_str() {
+                "message" => EventKind::Message(MessageKind::Legacy),
+                "commit" => EventKind::Control(ControlKind::Commit),
+                "welcome" => EventKind::Control(ControlKind::Welcome),
+                "checkpoint" => EventKind::Control(ControlKind::Checkpoint),
+                "reaction" => EventKind::Modifier(ModifierKind::Reaction),
+                _ => EventKind::Unknown(raw),
+            };
+            Ok(legacy)
+        }
+    }
+}
+
+impl ControlKind {
+    fn as_str_with_domain(&self, domain: &str) -> String {
+        match self {
+            ControlKind::Commit => format!("{domain}.commit"),
+            ControlKind::Welcome => format!("{domain}.welcome"),
+            ControlKind::Checkpoint => format!("{domain}.checkpoint"),
+            ControlKind::Unknown(v) => format!("{domain}.{}", v),
+        }
+    }
+
+    fn from_variant(variant: &str) -> Self {
+        match variant {
+            "commit" => ControlKind::Commit,
+            "welcome" => ControlKind::Welcome,
+            "checkpoint" => ControlKind::Checkpoint,
+            other => ControlKind::Unknown(other.to_string()),
+        }
+    }
+}
+
+impl MessageKind {
+    fn as_str_with_domain(&self, domain: &str) -> String {
+        match self {
+            MessageKind::ShortText => format!("{domain}.short_text"),
+            MessageKind::MediumText => format!("{domain}.medium_text"),
+            MessageKind::LongText => format!("{domain}.long_text"),
+            MessageKind::Image => format!("{domain}.image"),
+            MessageKind::Legacy => "message".to_string(),
+            MessageKind::Unknown(v) => format!("{domain}.{}", v),
+        }
+    }
+
+    fn from_variant(variant: &str) -> Self {
+        match variant {
+            "short_text" => MessageKind::ShortText,
+            "medium_text" => MessageKind::MediumText,
+            "long_text" => MessageKind::LongText,
+            "image" => MessageKind::Image,
+            other => MessageKind::Unknown(other.to_string()),
+        }
+    }
+}
+
+impl ModifierKind {
+    fn as_str_with_domain(&self, domain: &str) -> String {
+        match self {
+            ModifierKind::Reaction => format!("{domain}.reaction"),
+            ModifierKind::Unknown(v) => format!("{domain}.{}", v),
+        }
+    }
+
+    fn from_variant(variant: &str) -> Self {
+        match variant {
+            "reaction" => ModifierKind::Reaction,
+            other => ModifierKind::Unknown(other.to_string()),
+        }
+    }
+}
+
+impl From<MessageBodyKind> for MessageKind {
+    fn from(kind: MessageBodyKind) -> Self {
+        match kind {
+            MessageBodyKind::ShortText => MessageKind::ShortText,
+            MessageBodyKind::MediumText => MessageKind::MediumText,
+            MessageBodyKind::LongText => MessageKind::LongText,
+            MessageBodyKind::Image => MessageKind::Image,
+        }
     }
 }

@@ -47,11 +47,12 @@ use std::sync::RwLock;
 pub use crate::credential::MoatCredential;
 pub use crate::error::{Error, ErrorCode, Result};
 pub use crate::event::{
-    DecryptOutcome, Event, EventKind, ReactionPayload, SenderInfo, TranscriptWarning,
+    ControlKind, DecryptOutcome, Event, EventKind, MessageKind, ModifierKind, ReactionPayload,
+    SenderInfo, TranscriptWarning,
 };
 pub use crate::message::{
-    ExternalBlob, LongTextMessage, MediaMessage, MessagePayload, ParsedMessagePayload, TextMessage,
-    VideoMessage,
+    ExternalBlob, LongTextMessage, MediaMessage, MessageBodyKind, MessagePayload,
+    ParsedMessagePayload, TextMessage,
 };
 pub use crate::padding::{pad_to_bucket, unpad, Bucket};
 pub use crate::stealth::{encrypt_for_stealth, generate_stealth_keypair, try_decrypt_stealth};

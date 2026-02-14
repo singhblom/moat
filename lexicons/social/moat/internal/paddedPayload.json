@@ -78,8 +78,17 @@
     },
     "eventKind": {
       "type": "string",
-      "description": "Discriminator for event payload interpretation",
-      "knownValues": ["message", "commit", "welcome", "checkpoint"]
+      "description": "Discriminator for event payload interpretation in the form <domain>.<variant>. Domains are: control.*, message.*, modifier.*",
+      "knownValues": [
+        "control.commit",
+        "control.welcome",
+        "control.checkpoint",
+        "message.short_text",
+        "message.medium_text",
+        "message.long_text",
+        "message.image",
+        "modifier.reaction"
+      ]
     }
   }
 }

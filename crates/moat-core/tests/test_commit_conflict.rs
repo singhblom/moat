@@ -2,7 +2,7 @@
 
 mod conversation_sim;
 use conversation_sim::ConversationSim;
-use moat_core::{ErrorCode, EventKind};
+use moat_core::{ControlKind, ErrorCode, EventKind};
 
 /// Test 11: Sequential commits from different participants.
 /// Alice adds Dave, then Bob adds Eve. No conflict — each commit
@@ -16,13 +16,19 @@ fn test_sequential_commits_no_conflict() {
 
     // Deliver Alice's commit to Bob and Charlie
     let outcome_b = sim.deliver_commit(1, &commit_a).unwrap();
-    assert_eq!(outcome_b.result().event.kind, EventKind::Commit);
+    assert!(matches!(
+        outcome_b.result().event.kind,
+        EventKind::Control(ControlKind::Commit)
+    ));
     assert!(!ConversationSim::has_conflict_recovered(
         outcome_b.warnings()
     ));
 
     let outcome_c = sim.deliver_commit(2, &commit_a).unwrap();
-    assert_eq!(outcome_c.result().event.kind, EventKind::Commit);
+    assert!(matches!(
+        outcome_c.result().event.kind,
+        EventKind::Control(ControlKind::Commit)
+    ));
     assert!(!ConversationSim::has_conflict_recovered(
         outcome_c.warnings()
     ));
@@ -32,13 +38,19 @@ fn test_sequential_commits_no_conflict() {
 
     // Deliver Bob's commit to Alice and Charlie
     let outcome_a = sim.deliver_commit(0, &commit_b).unwrap();
-    assert_eq!(outcome_a.result().event.kind, EventKind::Commit);
+    assert!(matches!(
+        outcome_a.result().event.kind,
+        EventKind::Control(ControlKind::Commit)
+    ));
     assert!(!ConversationSim::has_conflict_recovered(
         outcome_a.warnings()
     ));
 
     let outcome_c2 = sim.deliver_commit(2, &commit_b).unwrap();
-    assert_eq!(outcome_c2.result().event.kind, EventKind::Commit);
+    assert!(matches!(
+        outcome_c2.result().event.kind,
+        EventKind::Control(ControlKind::Commit)
+    ));
     assert!(!ConversationSim::has_conflict_recovered(
         outcome_c2.warnings()
     ));
@@ -121,7 +133,10 @@ fn test_bystander_receives_conflicting_commits() {
 
     // Charlie receives Alice's commit first — should work fine
     let outcome_c1 = sim.deliver_commit(2, &commit_a).unwrap();
-    assert_eq!(outcome_c1.result().event.kind, EventKind::Commit);
+    assert!(matches!(
+        outcome_c1.result().event.kind,
+        EventKind::Control(ControlKind::Commit)
+    ));
 
     // Charlie receives Bob's commit — should fail (epoch conflict)
     let result_c2 = sim.deliver_commit(2, &commit_b);

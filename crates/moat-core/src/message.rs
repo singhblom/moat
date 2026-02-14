@@ -8,7 +8,6 @@ pub enum MessagePayload {
     MediumText(TextMessage),
     LongText(LongTextMessage),
     Image(MediaMessage),
-    Video(VideoMessage),
 }
 
 impl MessagePayload {
@@ -28,10 +27,17 @@ impl MessagePayload {
 
     /// Returns true if the payload references an off-chain blob.
     pub fn uses_external_blob(&self) -> bool {
-        matches!(
-            self,
-            MessagePayload::LongText(_) | MessagePayload::Image(_) | MessagePayload::Video(_)
-        )
+        matches!(self, MessagePayload::LongText(_) | MessagePayload::Image(_))
+    }
+
+    /// Return the structural variant (short_text, image, etc.).
+    pub fn kind(&self) -> MessageBodyKind {
+        match self {
+            MessagePayload::ShortText(_) => MessageBodyKind::ShortText,
+            MessagePayload::MediumText(_) => MessageBodyKind::MediumText,
+            MessagePayload::LongText(_) => MessageBodyKind::LongText,
+            MessagePayload::Image(_) => MessageBodyKind::Image,
+        }
     }
 }
 
@@ -108,19 +114,13 @@ pub struct MediaMessage {
     pub external: ExternalBlob,
 }
 
-/// Video payload previewing an external blob.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VideoMessage {
-    pub preview_thumbhash: Vec<u8>,
-    #[serde(default)]
-    pub width: Option<u32>,
-    #[serde(default)]
-    pub height: Option<u32>,
-    #[serde(default)]
-    pub mime: Option<String>,
-    #[serde(default)]
-    pub duration_ms: Option<u32>,
-    pub external: ExternalBlob,
+/// Enumeration of supported message payload variants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageBodyKind {
+    ShortText,
+    MediumText,
+    LongText,
+    Image,
 }
 
 /// Hash/authentication bundle for an external blob referenced by a message.

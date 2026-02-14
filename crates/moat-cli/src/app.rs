@@ -7,8 +7,10 @@ use crate::{
 use crossterm::event::{KeyCode, KeyEvent};
 use moat_atproto::MoatAtprotoClient;
 use moat_core::{
-    encrypt_for_stealth, generate_stealth_keypair, try_decrypt_stealth, Event, EventKind,
-    MoatCredential, MoatSession, ParsedMessagePayload, CIPHERSUITE,
+    encrypt_for_stealth,
+    event::{ControlKind, ModifierKind},
+    generate_stealth_keypair, try_decrypt_stealth, Event, EventKind, MoatCredential, MoatSession,
+    ParsedMessagePayload, CIPHERSUITE,
 };
 use std::collections::HashMap;
 use std::io::Write;
@@ -721,7 +723,7 @@ impl App {
                         let conv_idx = conv_indices.first().copied();
 
                         match decrypted.event.kind {
-                            EventKind::Message => {
+                            EventKind::Message(_) => {
                                 let content = decrypted
                                     .event
                                     .parse_message_payload()
@@ -757,7 +759,7 @@ impl App {
                                     }
                                 }
                             }
-                            EventKind::Commit => {
+                            EventKind::Control(ControlKind::Commit) => {
                                 let new_epoch = decrypted.event.epoch;
                                 if let Some(conv) = self
                                     .conversations
@@ -778,7 +780,7 @@ impl App {
                                 // Regenerate candidate tags for the new epoch
                                 self.populate_candidate_tags(&conv_id, &group_id);
                             }
-                            EventKind::Reaction => {
+                            EventKind::Modifier(ModifierKind::Reaction) => {
                                 if let Some(rp) = decrypted.event.reaction_payload() {
                                     let sender_did =
                                         decrypted.sender.map(|s| s.did).unwrap_or_default();
@@ -1415,7 +1417,7 @@ impl App {
                     }
                     let decrypted = outcome.into_result();
                     match decrypted.event.kind {
-                        EventKind::Message => {
+                        EventKind::Message(_) => {
                             let content = decrypted
                                 .event
                                 .parse_message_payload()
@@ -1440,7 +1442,7 @@ impl App {
                                 },
                             ));
                         }
-                        EventKind::Reaction => {
+                        EventKind::Modifier(ModifierKind::Reaction) => {
                             if let Some(rp) = decrypted.event.reaction_payload() {
                                 let sender_did = decrypted
                                     .sender
@@ -1632,7 +1634,7 @@ impl App {
 
         let current_epoch = self.mls.get_group_epoch(&group_id)?.unwrap_or(1);
         let text_payload = build_text_payload(&self.input_buffer);
-        let event = Event::message_with_payload(group_id.clone(), current_epoch, &text_payload);
+        let event = Event::message(group_id.clone(), current_epoch, &text_payload);
         let preview_payload = ParsedMessagePayload::Structured(text_payload.clone());
         let preview = render_message_preview(&preview_payload);
 

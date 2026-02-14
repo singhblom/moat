@@ -1,6 +1,4 @@
-use moat_core::{
-    LongTextMessage, MediaMessage, MessagePayload, ParsedMessagePayload, TextMessage, VideoMessage,
-};
+use moat_core::{LongTextMessage, MediaMessage, MessagePayload, ParsedMessagePayload, TextMessage};
 
 const SHORT_TEXT_MAX_BYTES: usize = 240;
 
@@ -27,7 +25,6 @@ fn render_structured_payload(payload: &MessagePayload) -> String {
         MessagePayload::ShortText(msg) | MessagePayload::MediumText(msg) => msg.text.clone(),
         MessagePayload::LongText(msg) => render_long_text(msg),
         MessagePayload::Image(msg) => render_image(msg),
-        MessagePayload::Video(msg) => render_video(msg),
     }
 }
 
@@ -49,22 +46,6 @@ fn render_image(msg: &MediaMessage) -> String {
     }
     if let Some(dim) = format_dimensions(msg.width, msg.height) {
         parts.push(format!(" {}", dim));
-    }
-    parts.push("]".to_string());
-    parts.concat()
-}
-
-fn render_video(msg: &VideoMessage) -> String {
-    let mut parts = vec!["[video".to_string()];
-    if let Some(mime) = &msg.mime {
-        parts.push(format!(" {}", mime));
-    }
-    if let Some(dim) = format_dimensions(msg.width, msg.height) {
-        parts.push(format!(" {}", dim));
-    }
-    if let Some(duration_ms) = msg.duration_ms {
-        let seconds = (duration_ms as f32) / 1000.0;
-        parts.push(format!(" {:.1}s", seconds));
     }
     parts.push("]".to_string());
     parts.concat()

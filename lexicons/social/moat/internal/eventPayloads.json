@@ -202,7 +202,7 @@
     },
     "reaction": {
       "type": "object",
-      "description": "Emoji reaction payload (event.kind == reaction).",
+      "description": "Emoji reaction payload (event.kind == \"modifier.reaction\").",
       "required": ["emoji", "target_message_id"],
       "properties": {
         "emoji": {
