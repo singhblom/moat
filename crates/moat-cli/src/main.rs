@@ -2,6 +2,7 @@
 
 mod app;
 mod keystore;
+mod message_helpers;
 mod ui;
 
 use app::App;
@@ -12,6 +13,8 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use keystore::hex;
+use message_helpers::{build_text_payload, render_message_preview};
+use moat_core::EventKind;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::path::PathBuf;
@@ -136,9 +139,7 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::Kick { conversation, did }) => {
             cmd_kick(args.storage_dir, &conversation, &did).await
         }
-        Some(Command::Leave { conversation }) => {
-            cmd_leave(args.storage_dir, &conversation).await
-        }
+        Some(Command::Leave { conversation }) => cmd_leave(args.storage_dir, &conversation).await,
         Some(Command::DeleteAll { force }) => cmd_delete_all(args.storage_dir, force).await,
     }
 }
@@ -317,8 +318,19 @@ async fn cmd_fetch(storage_dir: Option<PathBuf>, repository: &str) -> anyhow::Re
             match mls.decrypt_event(group_id, &event.ciphertext) {
                 Ok(outcome) => {
                     let decrypted = outcome.into_result();
-                    let payload = String::from_utf8_lossy(&decrypted.event.payload);
-                    line.push_str(&format!(" kind={:?} payload={}", decrypted.event.kind, payload));
+                    let payload = if matches!(decrypted.event.kind, EventKind::Message(_)) {
+                        decrypted
+                            .event
+                            .parse_message_payload()
+                            .map(|parsed| render_message_preview(&parsed))
+                            .unwrap_or_else(|| "(invalid message payload)".to_string())
+                    } else {
+                        String::from_utf8_lossy(&decrypted.event.payload).to_string()
+                    };
+                    line.push_str(&format!(
+                        " kind={:?} payload={}",
+                        decrypted.event.kind, payload
+                    ));
                 }
                 Err(e) => {
                     line.push_str(&format!(" decrypt_error={}", e));
@@ -366,7 +378,11 @@ async fn cmd_status(storage_dir: Option<PathBuf>) -> anyhow::Result<()> {
     // Last rkeys
     let pagination = keys.load_pagination_state().unwrap_or_default();
     if let Some((_did, rkey)) = pagination.last_rkeys.iter().next() {
-        println!("Last rkey:       {} (and {} more DIDs)", rkey, pagination.last_rkeys.len().saturating_sub(1));
+        println!(
+            "Last rkey:       {} (and {} more DIDs)",
+            rkey,
+            pagination.last_rkeys.len().saturating_sub(1)
+        );
     } else {
         println!("Last rkey:       (none)");
     }
@@ -421,10 +437,12 @@ async fn cmd_send_test(
     let client = login_from_keystore(&keys).await?;
 
     // Parse tag
-    let tag_bytes = hex::decode(tag_hex)
-        .map_err(|e| anyhow::anyhow!("Invalid tag hex: {}", e))?;
+    let tag_bytes = hex::decode(tag_hex).map_err(|e| anyhow::anyhow!("Invalid tag hex: {}", e))?;
     if tag_bytes.len() != 16 {
-        anyhow::bail!("Tag must be exactly 16 bytes (32 hex chars), got {}", tag_bytes.len());
+        anyhow::bail!(
+            "Tag must be exactly 16 bytes (32 hex chars), got {}",
+            tag_bytes.len()
+        );
     }
     let mut tag = [0u8; 16];
     tag.copy_from_slice(&tag_bytes);
@@ -452,9 +470,8 @@ async fn cmd_send_test(
         }
     }
 
-    let group_id = found_group.ok_or_else(|| {
-        anyhow::anyhow!("No conversation found matching tag {}", tag_hex)
-    })?;
+    let group_id = found_group
+        .ok_or_else(|| anyhow::anyhow!("No conversation found matching tag {}", tag_hex))?;
 
     // Load key bundle
     let key_bundle = keys
@@ -462,12 +479,11 @@ async fn cmd_send_test(
         .map_err(|e| anyhow::anyhow!("Failed to load identity key: {}", e))?;
 
     // Get current epoch
-    let epoch = mls
-        .get_group_epoch(&group_id)?
-        .unwrap_or(1);
+    let epoch = mls.get_group_epoch(&group_id)?.unwrap_or(1);
 
     // Create and encrypt message
-    let event = moat_core::Event::message(group_id.clone(), epoch, message.as_bytes());
+    let payload = build_text_payload(&message);
+    let event = moat_core::Event::message(group_id.clone(), epoch, &payload);
     let encrypted = mls.encrypt_event(&group_id, &key_bundle, &event)?;
 
     // Save MLS state (encryption advances epoch)
@@ -544,7 +560,11 @@ async fn cmd_export(
 
         let json = serde_json::to_string_pretty(&json_events)?;
         std::fs::write(dest, &json)?;
-        println!("Exported {} events to {}", json_events.len(), dest.display());
+        println!(
+            "Exported {} events to {}",
+            json_events.len(),
+            dest.display()
+        );
     }
 
     Ok(())
@@ -580,13 +600,16 @@ async fn cmd_devices(storage_dir: Option<PathBuf>, conversation: &str) -> anyhow
     }
 
     // Decode group_id
-    let group_id = hex::decode(conversation)
-        .map_err(|e| anyhow::anyhow!("Invalid conversation ID: {}", e))?;
+    let group_id =
+        hex::decode(conversation).map_err(|e| anyhow::anyhow!("Invalid conversation ID: {}", e))?;
 
     // Get members
     let members = mls.get_group_members(&group_id)?;
 
-    println!("Devices in conversation {}:", &conversation[..16.min(conversation.len())]);
+    println!(
+        "Devices in conversation {}:",
+        &conversation[..16.min(conversation.len())]
+    );
     println!();
     println!("{:<6} {:<20} {}", "Index", "Device Name", "DID");
     println!("{}", "-".repeat(70));
@@ -623,8 +646,8 @@ async fn cmd_remove_device(
     };
 
     // Decode group_id
-    let group_id = hex::decode(conversation)
-        .map_err(|e| anyhow::anyhow!("Invalid conversation ID: {}", e))?;
+    let group_id =
+        hex::decode(conversation).map_err(|e| anyhow::anyhow!("Invalid conversation ID: {}", e))?;
 
     // Load key bundle
     let key_bundle = keys
@@ -672,8 +695,8 @@ async fn cmd_kick(
     };
 
     // Decode group_id
-    let group_id = hex::decode(conversation)
-        .map_err(|e| anyhow::anyhow!("Invalid conversation ID: {}", e))?;
+    let group_id =
+        hex::decode(conversation).map_err(|e| anyhow::anyhow!("Invalid conversation ID: {}", e))?;
 
     // Load key bundle
     let key_bundle = keys
@@ -717,8 +740,8 @@ async fn cmd_leave(storage_dir: Option<PathBuf>, conversation: &str) -> anyhow::
     };
 
     // Decode group_id
-    let group_id = hex::decode(conversation)
-        .map_err(|e| anyhow::anyhow!("Invalid conversation ID: {}", e))?;
+    let group_id =
+        hex::decode(conversation).map_err(|e| anyhow::anyhow!("Invalid conversation ID: {}", e))?;
 
     // Load key bundle
     let key_bundle = keys
@@ -739,7 +762,10 @@ async fn cmd_leave(storage_dir: Option<PathBuf>, conversation: &str) -> anyhow::
 
     // Publish the commit
     let uri = client.publish_event(&tag, &result.commit).await?;
-    println!("Left conversation {}", &conversation[..16.min(conversation.len())]);
+    println!(
+        "Left conversation {}",
+        &conversation[..16.min(conversation.len())]
+    );
     println!("Published commit: {}", uri);
 
     // Clean up local metadata
@@ -800,4 +826,3 @@ async fn cmd_delete_all(storage_dir: Option<PathBuf>, force: bool) -> anyhow::Re
     eprintln!("Done. All data deleted.");
     Ok(())
 }
-

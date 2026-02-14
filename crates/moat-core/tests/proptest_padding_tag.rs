@@ -1,4 +1,4 @@
-use moat_core::{pad_to_bucket, unpad, Bucket, derive_event_tag};
+use moat_core::{derive_event_tag, pad_to_bucket, unpad, Bucket};
 use proptest::prelude::*;
 
 proptest! {
@@ -16,7 +16,7 @@ proptest! {
         let padded = pad_to_bucket(&data);
         let len = padded.len();
         prop_assert!(
-            len == 256 || len == 1024 || len == 4096,
+            len == 512 || len == 1024 || len == 4096,
             "padded length {} is not a valid bucket size", len
         );
     }

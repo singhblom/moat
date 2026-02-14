@@ -2,7 +2,7 @@
 
 mod conversation_sim;
 use conversation_sim::ConversationSim;
-use moat_core::{EventKind, MoatCredential, MoatSession};
+use moat_core::{ControlKind, EventKind, MoatCredential, MoatSession};
 
 /// Test 8: Agreement after message. Alice encrypts at epoch N. Bob decrypts.
 /// Both derive the same epoch_fingerprint (no mismatch warning).
@@ -21,7 +21,10 @@ fn test_epoch_fingerprint_agreement_after_message() {
 
     // The event should carry an epoch fingerprint
     let event = &outcome.result().event;
-    assert!(event.epoch_fingerprint.is_some(), "event should have epoch fingerprint");
+    assert!(
+        event.epoch_fingerprint.is_some(),
+        "event should have epoch fingerprint"
+    );
     assert_eq!(event.epoch_fingerprint.as_ref().unwrap().len(), 16);
 }
 
@@ -35,7 +38,9 @@ fn test_epoch_fingerprint_agreement_after_commit() {
     // Alice sends a message to verify epoch fingerprint agreement
     sim.send_message(0, b"Pre-commit message");
     let outcome = sim.deliver_next(1).unwrap();
-    assert!(!ConversationSim::has_epoch_fingerprint_mismatch(outcome.warnings()));
+    assert!(!ConversationSim::has_epoch_fingerprint_mismatch(
+        outcome.warnings()
+    ));
 
     // Add Charlie — this creates a commit
     let charlie_session = MoatSession::new();
@@ -44,11 +49,7 @@ fn test_epoch_fingerprint_agreement_after_commit() {
 
     let welcome_result = sim.participants[0]
         .session
-        .add_member(
-            &sim.group_id,
-            &sim.participants[0].key_bundle,
-            &charlie_kp,
-        )
+        .add_member(&sim.group_id, &sim.participants[0].key_bundle, &charlie_kp)
         .unwrap();
 
     // Bob processes the commit
@@ -56,7 +57,10 @@ fn test_epoch_fingerprint_agreement_after_commit() {
         .session
         .decrypt_event(&sim.group_id, &welcome_result.commit)
         .unwrap();
-    assert_eq!(commit_outcome.result().event.kind, EventKind::Commit);
+    assert!(matches!(
+        commit_outcome.result().event.kind,
+        EventKind::Control(ControlKind::Commit)
+    ));
 
     // After commit, both are at the same epoch — verify by sending another message
     sim.send_message(0, b"Post-commit message");
@@ -87,11 +91,7 @@ fn test_epoch_fingerprint_changes_with_epoch() {
 
     let welcome_result = sim.participants[0]
         .session
-        .add_member(
-            &sim.group_id,
-            &sim.participants[0].key_bundle,
-            &charlie_kp,
-        )
+        .add_member(&sim.group_id, &sim.participants[0].key_bundle, &charlie_kp)
         .unwrap();
 
     // Bob processes the commit

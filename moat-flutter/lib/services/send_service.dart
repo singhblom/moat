@@ -4,6 +4,7 @@ import '../models/conversation.dart';
 import '../models/message.dart';
 import '../providers/auth_provider.dart';
 import '../src/rust/api/simple.dart';
+import '../utils/message_payload.dart';
 import 'debug_log.dart';
 
 /// Service for sending encrypted messages
@@ -45,14 +46,15 @@ class SendService {
       moatLog('SendService: The conversation model may be stale. Consider refreshing before send.');
     }
 
-    // Create event DTO with raw plaintext (moat-core handles padding internally)
-    final plaintext = utf8.encode(text);
+    // Create structured payload (moat-core handles padding internally)
+    final structuredPayload = encodeTextMessagePayload(text);
+    final preview = renderMessagePreview(structuredPayload);
 
     final event = EventDto(
       kind: EventKindDto.message,
       groupId: conversation.groupId,
       epoch: BigInt.from(conversation.epoch),
-      payload: plaintext,
+      payload: structuredPayload,
     );
 
     // Encrypt via FFI
@@ -90,7 +92,7 @@ class SendService {
       groupId: conversation.groupId,
       senderDid: myDid,
       senderDeviceId: '$myDid/$deviceName',
-      content: text,
+      content: preview,
       timestamp: DateTime.now(),
       isOwn: true,
       epoch: conversation.epoch,

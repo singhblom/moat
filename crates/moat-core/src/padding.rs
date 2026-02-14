@@ -1,6 +1,6 @@
 //! Phase A: Size bucketing to hide message length
 //!
-//! Messages are padded to fixed bucket sizes (256B, 1KB, 4KB) to prevent
+//! Messages are padded to fixed bucket sizes (512B, 1KB, 4KB control) to prevent
 //! traffic analysis from inferring message content based on size.
 
 use rand::Rng;
@@ -8,12 +8,12 @@ use rand::Rng;
 /// Bucket sizes for message padding
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Bucket {
-    /// 256 bytes - for short messages
-    Small = 256,
-    /// 1024 bytes - for medium messages
-    Medium = 1024,
-    /// 4096 bytes - for large messages
-    Large = 4096,
+    /// 512 bytes - for short messages and reactions
+    Small = 512,
+    /// 1024 bytes - standard envelope for most events
+    Standard = 1024,
+    /// 4096 bytes - control bucket for overflow commits/welcomes/checkpoints
+    Control = 4096,
 }
 
 impl Bucket {
@@ -21,12 +21,12 @@ impl Bucket {
     pub fn for_size(len: usize) -> Self {
         // Reserve 4 bytes for length prefix
         let needed = len + 4;
-        if needed <= 256 {
+        if needed <= Bucket::Small as usize {
             Bucket::Small
-        } else if needed <= 1024 {
-            Bucket::Medium
+        } else if needed <= Bucket::Standard as usize {
+            Bucket::Standard
         } else {
-            Bucket::Large
+            Bucket::Control
         }
     }
 
@@ -40,7 +40,7 @@ impl Bucket {
 ///
 /// Format: [4-byte big-endian length][plaintext][random padding]
 ///
-/// The total output will be exactly one of: 256, 1024, or 4096 bytes.
+/// The total output will be exactly one of: 512, 1024, or 4096 bytes.
 pub fn pad_to_bucket(plaintext: &[u8]) -> Vec<u8> {
     let bucket = Bucket::for_size(plaintext.len());
     let target_size = bucket.size();
@@ -91,20 +91,20 @@ mod tests {
 
     #[test]
     fn test_bucket_selection() {
-        // Small messages go to 256B bucket
+        // Small messages go to 512B bucket
         assert_eq!(Bucket::for_size(0), Bucket::Small);
         assert_eq!(Bucket::for_size(100), Bucket::Small);
-        assert_eq!(Bucket::for_size(252), Bucket::Small); // 252 + 4 = 256
+        assert_eq!(Bucket::for_size(508), Bucket::Small); // 508 + 4 = 512
 
-        // Medium messages go to 1KB bucket
-        assert_eq!(Bucket::for_size(253), Bucket::Medium);
-        assert_eq!(Bucket::for_size(500), Bucket::Medium);
-        assert_eq!(Bucket::for_size(1020), Bucket::Medium); // 1020 + 4 = 1024
+        // Standard messages go to 1KB bucket
+        assert_eq!(Bucket::for_size(509), Bucket::Standard);
+        assert_eq!(Bucket::for_size(800), Bucket::Standard);
+        assert_eq!(Bucket::for_size(1020), Bucket::Standard); // 1020 + 4 = 1024
 
-        // Large messages go to 4KB bucket
-        assert_eq!(Bucket::for_size(1021), Bucket::Large);
-        assert_eq!(Bucket::for_size(2000), Bucket::Large);
-        assert_eq!(Bucket::for_size(4000), Bucket::Large);
+        // Control bucket for overflow
+        assert_eq!(Bucket::for_size(1021), Bucket::Control);
+        assert_eq!(Bucket::for_size(2000), Bucket::Control);
+        assert_eq!(Bucket::for_size(4000), Bucket::Control);
     }
 
     #[test]
@@ -112,13 +112,13 @@ mod tests {
         let plaintext = b"Hello, world!";
         let padded = pad_to_bucket(plaintext);
 
-        assert_eq!(padded.len(), 256);
+        assert_eq!(padded.len(), 512);
         assert_eq!(unpad(&padded), plaintext);
     }
 
     #[test]
     fn test_pad_unpad_medium() {
-        let plaintext = vec![0x42; 500];
+        let plaintext = vec![0x42; 600];
         let padded = pad_to_bucket(&plaintext);
 
         assert_eq!(padded.len(), 1024);
@@ -139,7 +139,7 @@ mod tests {
         let plaintext = b"";
         let padded = pad_to_bucket(plaintext);
 
-        assert_eq!(padded.len(), 256);
+        assert_eq!(padded.len(), 512);
         assert_eq!(unpad(&padded), plaintext);
     }
 
@@ -164,5 +164,17 @@ mod tests {
 
         // Padding portion should differ (with very high probability)
         assert_ne!(&padded1[8..], &padded2[8..]);
+    }
+
+    #[test]
+    fn test_padded_sizes_at_boundaries() {
+        // Max payload that fits in Small (508 + 4 = 512)
+        assert_eq!(pad_to_bucket(&vec![0x42; 508]).len(), 512);
+        // One byte over spills to Standard
+        assert_eq!(pad_to_bucket(&vec![0x42; 509]).len(), 1024);
+        // Max payload that fits in Standard (1020 + 4 = 1024)
+        assert_eq!(pad_to_bucket(&vec![0x42; 1020]).len(), 1024);
+        // One byte over spills to Control
+        assert_eq!(pad_to_bucket(&vec![0x42; 1021]).len(), 4096);
     }
 }

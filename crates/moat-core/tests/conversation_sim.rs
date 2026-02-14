@@ -5,7 +5,7 @@
 //! Supports dynamic membership (add/remove) from the start.
 
 use moat_core::{
-    DecryptOutcome, Event, EventKind, MoatCredential, MoatSession, TranscriptWarning,
+    ControlKind, DecryptOutcome, Event, EventKind, MoatCredential, MoatSession, TranscriptWarning,
 };
 use std::collections::VecDeque;
 
@@ -45,8 +45,11 @@ impl ConversationSim {
         // Create all participants with sessions and key packages
         for name in names {
             let session = MoatSession::new();
-            let credential =
-                MoatCredential::new(&format!("did:plc:{}", name.to_lowercase()), *name, *session.device_id());
+            let credential = MoatCredential::new(
+                &format!("did:plc:{}", name.to_lowercase()),
+                *name,
+                *session.device_id(),
+            );
             let (_kp, kb) = session.generate_key_package(&credential).unwrap();
             participants.push(Participant {
                 name: name.to_string(),
@@ -91,7 +94,10 @@ impl ConversationSim {
                     .session
                     .decrypt_event(&group_id, &welcome_result.commit)
                     .unwrap();
-                assert_eq!(outcome.result().event.kind, EventKind::Commit);
+                assert!(matches!(
+                    outcome.result().event.kind,
+                    EventKind::Control(ControlKind::Commit)
+                ));
             }
         }
 
@@ -110,7 +116,7 @@ impl ConversationSim {
             .get_group_epoch(&self.group_id)
             .unwrap()
             .unwrap();
-        let event = Event::message(self.group_id.clone(), epoch, content);
+        let event = Event::message_from_bytes(self.group_id.clone(), epoch, content);
         let encrypted = self.participants[sender]
             .session
             .encrypt_event(
@@ -211,15 +217,14 @@ impl ConversationSim {
     /// Have a participant add a new member to the group.
     /// Returns the commit ciphertext (for delivery to others) and welcome bytes.
     /// The commit is already merged locally for the adder.
-    pub fn add_member_sim(
-        &mut self,
-        adder: usize,
-        new_name: &str,
-    ) -> (Vec<u8>, Vec<u8>, usize) {
+    pub fn add_member_sim(&mut self, adder: usize, new_name: &str) -> (Vec<u8>, Vec<u8>, usize) {
         // Create the new participant
         let session = MoatSession::new();
-        let credential =
-            MoatCredential::new(&format!("did:plc:{}", new_name.to_lowercase()), new_name, *session.device_id());
+        let credential = MoatCredential::new(
+            &format!("did:plc:{}", new_name.to_lowercase()),
+            new_name,
+            *session.device_id(),
+        );
         let (new_kp, new_kb) = session.generate_key_package(&credential).unwrap();
         let new_index = self.participants.len();
 
@@ -234,7 +239,11 @@ impl ConversationSim {
         // Adder adds the new member
         let welcome_result = self.participants[adder]
             .session
-            .add_member(&self.group_id, &self.participants[adder].key_bundle, &new_kp)
+            .add_member(
+                &self.group_id,
+                &self.participants[adder].key_bundle,
+                &new_kp,
+            )
             .unwrap();
 
         // New member processes welcome
@@ -249,11 +258,7 @@ impl ConversationSim {
     }
 
     /// Remove a member by leaf index. Returns commit bytes for delivery.
-    pub fn remove_member_sim(
-        &mut self,
-        remover: usize,
-        leaf_index: u32,
-    ) -> Vec<u8> {
+    pub fn remove_member_sim(&mut self, remover: usize, leaf_index: u32) -> Vec<u8> {
         let result = self.participants[remover]
             .session
             .remove_member(
@@ -268,11 +273,7 @@ impl ConversationSim {
     /// Deliver a commit to all participants except those in the exclude list.
     /// Typically exclude the adder (who already merged) and the new member
     /// (who processed the welcome).
-    pub fn deliver_commit_to_all(
-        &mut self,
-        commit: &[u8],
-        exclude: &[usize],
-    ) {
+    pub fn deliver_commit_to_all(&mut self, commit: &[u8], exclude: &[usize]) {
         for i in 0..self.participants.len() {
             if exclude.contains(&i) {
                 continue;
@@ -281,7 +282,10 @@ impl ConversationSim {
                 .session
                 .decrypt_event(&self.group_id, commit)
                 .unwrap();
-            assert_eq!(outcome.result().event.kind, EventKind::Commit);
+            assert!(matches!(
+                outcome.result().event.kind,
+                EventKind::Control(ControlKind::Commit)
+            ));
         }
     }
 
@@ -309,8 +313,11 @@ fn test_conversation_sim_basic() {
     let outcome = sim.deliver_next(1).unwrap();
     assert!(!ConversationSim::has_warnings(&outcome));
     let result = outcome.into_result();
-    assert_eq!(result.event.kind, EventKind::Message);
-    assert_eq!(result.event.payload, b"Hello Bob!");
+    assert!(matches!(result.event.kind, EventKind::Message(_)));
+    assert_eq!(
+        result.event.parse_message_payload().unwrap().preview_text(),
+        Some("Hello Bob!".to_string())
+    );
 }
 
 #[test]
@@ -322,8 +329,24 @@ fn test_conversation_sim_three_party() {
 
     // Both Bob and Charlie receive it
     let bob_outcome = sim.deliver_next(1).unwrap();
-    assert_eq!(bob_outcome.result().event.payload, b"Hello everyone!");
+    assert_eq!(
+        bob_outcome
+            .result()
+            .event
+            .parse_message_payload()
+            .unwrap()
+            .preview_text(),
+        Some("Hello everyone!".to_string())
+    );
 
     let charlie_outcome = sim.deliver_next(2).unwrap();
-    assert_eq!(charlie_outcome.result().event.payload, b"Hello everyone!");
+    assert_eq!(
+        charlie_outcome
+            .result()
+            .event
+            .parse_message_payload()
+            .unwrap()
+            .preview_text(),
+        Some("Hello everyone!".to_string())
+    );
 }

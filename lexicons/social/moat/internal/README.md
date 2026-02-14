@@ -24,8 +24,8 @@ what's *inside* the encrypted blobs to participate in conversations.
 ### Sending a message
 
 To send a message, the client constructs an `Event` structure with the appropriate `kind`,
-`group_id`, `epoch`, and `payload` fields. This structure is serialized to JSON, then
-padded to the nearest bucket size (256, 1024, or 4096 bytes) by prepending a 4-byte
+`group_id`, `epoch`, and structured `payload` fields. This structure is serialized to JSON, then
+padded to the nearest bucket size (512, 1024, or 4096 bytes) by prepending a 4-byte
 big-endian length and appending random bytes. The padded payload is encrypted using
 the MLS group key. Finally, a 16-byte tag is derived from the group ID and epoch using
 HKDF-SHA256, and the record is published as `social.moat.event`.
@@ -36,7 +36,9 @@ To receive messages, the client fetches `social.moat.event` records matching its
 conversation tags. For each record, it decrypts the ciphertext using the appropriate
 MLS group key, reads the 4-byte length prefix to extract the JSON portion, and parses
 the `Event` structure. The `payload` field is then interpreted according to the `kind`
-discriminator.
+discriminator. For `kind == "message"`, the payload is a discriminated union (short_text,
+medium_text, long_text, image, video) that can optionally reference off-chain blobs
+via the shared `externalPayloadBase` schema.
 
 ### Stealth invites
 

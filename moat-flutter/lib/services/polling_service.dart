@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import '../models/conversation.dart';
 import '../models/message.dart';
@@ -7,6 +6,7 @@ import '../providers/auth_provider.dart';
 import '../providers/conversations_provider.dart';
 import '../providers/watch_list_provider.dart';
 import '../src/rust/api/simple.dart';
+import '../utils/message_payload.dart';
 import 'atproto_client.dart';
 import 'conversation_manager.dart';
 import 'secure_storage.dart';
@@ -297,8 +297,7 @@ class PollingService {
       // Handle by event kind
       switch (result.event.kind) {
         case EventKindDto.message:
-          // Decode text (payload is already unpadded by decrypt_event)
-          final text = utf8.decode(result.event.payload);
+          final text = renderMessagePreview(result.event.payload);
 
           // Get sender info from MLS credential (extracted during decryption)
           final senderDid = result.sender?.did ?? 'unknown';

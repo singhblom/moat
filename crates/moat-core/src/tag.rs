@@ -80,7 +80,13 @@ pub fn generate_candidate_tags(
     let mut tags = Vec::with_capacity(count as usize);
     for i in 0..count {
         let counter = from_counter + i;
-        let tag = derive_event_tag(export_secret, group_id, sender_did, sender_device_id, counter)?;
+        let tag = derive_event_tag(
+            export_secret,
+            group_id,
+            sender_did,
+            sender_device_id,
+            counter,
+        )?;
         tags.push((tag, counter));
     }
     Ok(tags)
@@ -125,7 +131,8 @@ mod tests {
         let group_id = b"test-group";
         let device_id = [2u8; 16];
 
-        let tag_alice = derive_event_tag(&secret, group_id, "did:plc:alice", &device_id, 0).unwrap();
+        let tag_alice =
+            derive_event_tag(&secret, group_id, "did:plc:alice", &device_id, 0).unwrap();
         let tag_bob = derive_event_tag(&secret, group_id, "did:plc:bob", &device_id, 0).unwrap();
 
         assert_ne!(tag_alice, tag_bob);

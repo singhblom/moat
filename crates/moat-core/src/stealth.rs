@@ -102,7 +102,9 @@ pub fn encrypt_for_stealth(
     welcome_bytes: &[u8],
 ) -> Result<Vec<u8>> {
     if recipient_pubkeys.is_empty() {
-        return Err(Error::StealthEncryption("no recipients provided".to_string()));
+        return Err(Error::StealthEncryption(
+            "no recipients provided".to_string(),
+        ));
     }
     if recipient_pubkeys.len() > MAX_RECIPIENTS {
         return Err(Error::StealthEncryption(format!(
@@ -148,7 +150,10 @@ pub fn encrypt_for_stealth(
 }
 
 /// Wrap a content encryption key for a single recipient using their stealth public key.
-fn wrap_key_for_recipient(recipient_pubkey: &[u8; 32], cek: &[u8; CEK_SIZE]) -> Result<[u8; WRAPPED_KEY_SIZE]> {
+fn wrap_key_for_recipient(
+    recipient_pubkey: &[u8; 32],
+    cek: &[u8; CEK_SIZE],
+) -> Result<[u8; WRAPPED_KEY_SIZE]> {
     let mut rng = rand::thread_rng();
 
     // Generate ephemeral keypair for this recipient
@@ -239,11 +244,16 @@ pub fn try_decrypt_stealth(scan_privkey: &[u8; 32], payload: &[u8]) -> Option<Ve
 
     // Decrypt the welcome
     let cipher = XChaCha20Poly1305::new(&cek.into());
-    cipher.decrypt(&content_nonce.into(), encrypted_welcome).ok()
+    cipher
+        .decrypt(&content_nonce.into(), encrypted_welcome)
+        .ok()
 }
 
 /// Try to unwrap a CEK using the recipient's private key.
-fn try_unwrap_key(scan_privkey: &[u8; 32], wrapped_key: &[u8; WRAPPED_KEY_SIZE]) -> Option<[u8; CEK_SIZE]> {
+fn try_unwrap_key(
+    scan_privkey: &[u8; 32],
+    wrapped_key: &[u8; WRAPPED_KEY_SIZE],
+) -> Option<[u8; CEK_SIZE]> {
     // Unpack: ephemeral_pubkey (32) || nonce (24) || encrypted_cek (48)
     let ephemeral_pubkey_bytes: [u8; PUBKEY_SIZE] = wrapped_key[..PUBKEY_SIZE].try_into().ok()?;
     let nonce: [u8; NONCE_SIZE] = wrapped_key[PUBKEY_SIZE..PUBKEY_SIZE + NONCE_SIZE]
@@ -298,7 +308,8 @@ mod tests {
         let welcome = b"This is a test MLS Welcome message with some content";
 
         // Alice encrypts for Bob (single device)
-        let payload = encrypt_for_stealth(&[bob_pubkey], welcome).expect("encryption should succeed");
+        let payload =
+            encrypt_for_stealth(&[bob_pubkey], welcome).expect("encryption should succeed");
 
         // Payload should be larger than the original
         assert!(payload.len() > welcome.len());
@@ -338,7 +349,8 @@ mod tests {
         let welcome = b"Secret message for Bob";
 
         // Alice encrypts for Bob
-        let payload = encrypt_for_stealth(&[bob_pubkey], welcome).expect("encryption should succeed");
+        let payload =
+            encrypt_for_stealth(&[bob_pubkey], welcome).expect("encryption should succeed");
 
         // Eve tries to decrypt with her key - should fail
         let result = try_decrypt_stealth(&eve_privkey, &payload);
@@ -377,7 +389,8 @@ mod tests {
         let (bob_privkey, bob_pubkey) = generate_stealth_keypair();
         let welcome = b"";
 
-        let payload = encrypt_for_stealth(&[bob_pubkey], welcome).expect("encryption should succeed");
+        let payload =
+            encrypt_for_stealth(&[bob_pubkey], welcome).expect("encryption should succeed");
         let decrypted =
             try_decrypt_stealth(&bob_privkey, &payload).expect("decryption should succeed");
 

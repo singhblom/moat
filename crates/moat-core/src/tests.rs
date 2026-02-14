@@ -1,6 +1,22 @@
 //! Integration tests for moat-core
 
-use crate::{pad_to_bucket, unpad, Event, EventKind, Error, ErrorCode, MoatCredential, MoatSession, tag::derive_event_tag};
+use crate::{
+    event::{ControlKind, MessageKind, ModifierKind},
+    message::{ExternalBlob, LongTextMessage, MediaMessage, MessagePayload, TextMessage},
+    pad_to_bucket,
+    tag::derive_event_tag,
+    unpad, Error, ErrorCode, Event, EventKind, MoatCredential, MoatSession, ParsedMessagePayload,
+};
+
+fn short_text_payload(text: &str) -> MessagePayload {
+    MessagePayload::ShortText(TextMessage {
+        text: text.to_string(),
+    })
+}
+
+fn text_event(group_id: Vec<u8>, epoch: u64, text: &str) -> Event {
+    Event::message(group_id, epoch, &short_text_payload(text))
+}
 
 #[test]
 fn test_key_package_generation() {
@@ -84,13 +100,13 @@ fn test_padding_small_message() {
     let plaintext = b"Hello, world!";
     let padded = pad_to_bucket(plaintext);
 
-    assert_eq!(padded.len(), 256);
+    assert_eq!(padded.len(), 512);
     assert_eq!(unpad(&padded), plaintext);
 }
 
 #[test]
 fn test_padding_medium_message() {
-    let plaintext = vec![0x42; 500];
+    let plaintext = vec![0x42; 600];
     let padded = pad_to_bucket(&plaintext);
 
     assert_eq!(padded.len(), 1024);
@@ -111,8 +127,8 @@ fn test_padding_preserves_content() {
     let messages = vec![
         b"Short".to_vec(),
         b"A slightly longer message".to_vec(),
-        vec![0xAB; 300],  // Medium bucket
-        vec![0xCD; 1500], // Large bucket
+        vec![0xAB; 600],  // Standard bucket
+        vec![0xCD; 1500], // Control bucket
     ];
 
     for msg in messages {
@@ -124,39 +140,54 @@ fn test_padding_preserves_content() {
 
 #[test]
 fn test_event_creation() {
-    let event = Event::message(b"group-123".to_vec(), 5, b"Hello, world!");
-    assert_eq!(event.kind, EventKind::Message);
+    let event = text_event(b"group-123".to_vec(), 5, "Hello, world!");
+    assert!(matches!(event.kind, EventKind::Message(_)));
     assert_eq!(event.group_id, b"group-123");
     assert_eq!(event.epoch, 5);
-    assert_eq!(event.payload, b"Hello, world!");
+    assert_eq!(
+        event.parse_message_payload().unwrap().preview_text(),
+        Some("Hello, world!".to_string())
+    );
 }
 
 #[test]
 fn test_event_roundtrip() {
-    let event = Event::message(b"group-123".to_vec(), 5, b"Hello, world!");
+    let event = text_event(b"group-123".to_vec(), 5, "Hello, world!");
 
     let bytes = event.to_bytes().unwrap();
     let recovered = Event::from_bytes(&bytes).unwrap();
 
-    assert_eq!(recovered.kind, EventKind::Message);
+    assert!(matches!(recovered.kind, EventKind::Message(_)));
     assert_eq!(recovered.group_id, b"group-123");
     assert_eq!(recovered.epoch, 5);
-    assert_eq!(recovered.payload, b"Hello, world!");
+    assert_eq!(
+        recovered.parse_message_payload().unwrap().preview_text(),
+        Some("Hello, world!".to_string())
+    );
 }
 
 #[test]
 fn test_event_kinds() {
-    let msg = Event::message(vec![], 0, b"text");
-    assert_eq!(msg.kind, EventKind::Message);
+    let msg = text_event(vec![], 0, "text");
+    assert!(matches!(msg.kind, EventKind::Message(_)));
 
     let commit = Event::commit(vec![], 0, vec![1, 2, 3]);
-    assert_eq!(commit.kind, EventKind::Commit);
+    assert!(matches!(
+        commit.kind,
+        EventKind::Control(ControlKind::Commit)
+    ));
 
     let welcome = Event::welcome(vec![], 0, vec![4, 5, 6]);
-    assert_eq!(welcome.kind, EventKind::Welcome);
+    assert!(matches!(
+        welcome.kind,
+        EventKind::Control(ControlKind::Welcome)
+    ));
 
     let checkpoint = Event::checkpoint(vec![], 0, vec![7, 8, 9]);
-    assert_eq!(checkpoint.kind, EventKind::Checkpoint);
+    assert!(matches!(
+        checkpoint.kind,
+        EventKind::Control(ControlKind::Checkpoint)
+    ));
 }
 
 #[test]
@@ -191,7 +222,10 @@ fn test_tags_differ_across_counters() {
     // All tags should be different
     for i in 0..tags.len() {
         for j in (i + 1)..tags.len() {
-            assert_ne!(tags[i], tags[j], "Tags for different counters should differ");
+            assert_ne!(
+                tags[i], tags[j],
+                "Tags for different counters should differ"
+            );
         }
     }
 }
@@ -199,14 +233,17 @@ fn test_tags_differ_across_counters() {
 #[test]
 fn test_event_serialization_with_padding() {
     // Test that events can be serialized, padded, and recovered
-    let event = Event::message(b"group-xyz".to_vec(), 42, b"Hello, this is a test message!");
+    let event = text_event(b"group-xyz".to_vec(), 42, "Hello, this is a test message!");
 
     // Serialize
     let event_bytes = event.to_bytes().unwrap();
 
-    // Pad (message_id adds ~24 bytes of JSON, so this may land in small or medium bucket)
+    // Pad (message_id adds ~24 bytes of JSON, so this may land in small or standard bucket)
     let padded = pad_to_bucket(&event_bytes);
-    assert!(padded.len() == 256 || padded.len() == 1024, "Should fit in small or medium bucket");
+    assert!(
+        padded.len() == 512 || padded.len() == 1024,
+        "Should fit in small or standard bucket"
+    );
 
     // Unpad
     let unpadded = unpad(&padded);
@@ -214,10 +251,13 @@ fn test_event_serialization_with_padding() {
     // Deserialize
     let recovered = Event::from_bytes(&unpadded).unwrap();
 
-    assert_eq!(recovered.kind, EventKind::Message);
+    assert!(matches!(recovered.kind, EventKind::Message(_)));
     assert_eq!(recovered.group_id, b"group-xyz");
     assert_eq!(recovered.epoch, 42);
-    assert_eq!(recovered.payload, b"Hello, this is a test message!");
+    assert_eq!(
+        recovered.parse_message_payload().unwrap().preview_text(),
+        Some("Hello, this is a test message!".to_string())
+    );
 }
 
 #[test]
@@ -278,13 +318,17 @@ fn test_encrypt_event() {
     // Create Alice
     let alice_credential = MoatCredential::new("did:plc:alice123", "Alice Phone", [0u8; 16]);
     let (_alice_kp, alice_bundle) = session.generate_key_package(&alice_credential).unwrap();
-    let group_id = session.create_group(&alice_credential, &alice_bundle).unwrap();
+    let group_id = session
+        .create_group(&alice_credential, &alice_bundle)
+        .unwrap();
 
     // Create an event
-    let original_event = Event::message(group_id.clone(), 0, b"Hello, world!");
+    let original_event = text_event(group_id.clone(), 0, "Hello, world!");
 
     // Encrypt
-    let encrypt_result = session.encrypt_event(&group_id, &alice_bundle, &original_event).unwrap();
+    let encrypt_result = session
+        .encrypt_event(&group_id, &alice_bundle, &original_event)
+        .unwrap();
     assert!(!encrypt_result.ciphertext.is_empty());
     assert_eq!(encrypt_result.tag.len(), 16);
 
@@ -300,32 +344,52 @@ fn test_two_party_messaging() {
 
     // Alice creates her identity with device name
     let alice_credential = MoatCredential::new("did:plc:alice123", "Alice Phone", [0u8; 16]);
-    let (_alice_kp, alice_bundle) = alice_session.generate_key_package(&alice_credential).unwrap();
+    let (_alice_kp, alice_bundle) = alice_session
+        .generate_key_package(&alice_credential)
+        .unwrap();
 
     // Bob creates his identity with device name
     let bob_credential = MoatCredential::new("did:plc:bob456", "Bob Laptop", [0u8; 16]);
     let (bob_kp, bob_bundle) = bob_session.generate_key_package(&bob_credential).unwrap();
 
     // Alice creates a group
-    let group_id = alice_session.create_group(&alice_credential, &alice_bundle).unwrap();
+    let group_id = alice_session
+        .create_group(&alice_credential, &alice_bundle)
+        .unwrap();
 
     // Alice adds Bob to the group
-    let welcome_result = alice_session.add_member(&group_id, &alice_bundle, &bob_kp).unwrap();
+    let welcome_result = alice_session
+        .add_member(&group_id, &alice_bundle, &bob_kp)
+        .unwrap();
     assert!(!welcome_result.welcome.is_empty());
     assert!(!welcome_result.commit.is_empty());
 
     // Bob joins using the welcome
-    let bob_group_id = bob_session.process_welcome(&welcome_result.welcome).unwrap();
+    let bob_group_id = bob_session
+        .process_welcome(&welcome_result.welcome)
+        .unwrap();
     assert_eq!(bob_group_id, group_id);
 
     // Alice sends a message
-    let message = Event::message(group_id.clone(), 0, b"Hello Bob!");
-    let encrypted = alice_session.encrypt_event(&group_id, &alice_bundle, &message).unwrap();
+    let message = text_event(group_id.clone(), 0, "Hello Bob!");
+    let encrypted = alice_session
+        .encrypt_event(&group_id, &alice_bundle, &message)
+        .unwrap();
 
     // Bob decrypts the message and gets sender info
-    let decrypted = bob_session.decrypt_event(&bob_group_id, &encrypted.ciphertext).unwrap().into_result();
-    assert_eq!(decrypted.event.kind, EventKind::Message);
-    assert_eq!(decrypted.event.payload, b"Hello Bob!");
+    let decrypted = bob_session
+        .decrypt_event(&bob_group_id, &encrypted.ciphertext)
+        .unwrap()
+        .into_result();
+    assert!(matches!(decrypted.event.kind, EventKind::Message(_)));
+    assert_eq!(
+        decrypted
+            .event
+            .parse_message_payload()
+            .unwrap()
+            .preview_text(),
+        Some("Hello Bob!".to_string())
+    );
 
     // Verify sender info is extracted
     let sender = decrypted.sender.expect("Should have sender info");
@@ -333,13 +397,25 @@ fn test_two_party_messaging() {
     assert_eq!(sender.device_name, "Alice Phone");
 
     // Bob replies
-    let reply = Event::message(group_id.clone(), 0, b"Hello Alice!");
-    let encrypted_reply = bob_session.encrypt_event(&bob_group_id, &bob_bundle, &reply).unwrap();
+    let reply = text_event(group_id.clone(), 0, "Hello Alice!");
+    let encrypted_reply = bob_session
+        .encrypt_event(&bob_group_id, &bob_bundle, &reply)
+        .unwrap();
 
     // Alice decrypts Bob's reply and gets sender info
-    let decrypted_reply = alice_session.decrypt_event(&group_id, &encrypted_reply.ciphertext).unwrap().into_result();
-    assert_eq!(decrypted_reply.event.kind, EventKind::Message);
-    assert_eq!(decrypted_reply.event.payload, b"Hello Alice!");
+    let decrypted_reply = alice_session
+        .decrypt_event(&group_id, &encrypted_reply.ciphertext)
+        .unwrap()
+        .into_result();
+    assert!(matches!(decrypted_reply.event.kind, EventKind::Message(_)));
+    assert_eq!(
+        decrypted_reply
+            .event
+            .parse_message_payload()
+            .unwrap()
+            .preview_text(),
+        Some("Hello Alice!".to_string())
+    );
 
     // Verify sender info
     let sender = decrypted_reply.sender.expect("Should have sender info");
@@ -487,7 +563,9 @@ fn test_extract_credential_from_key_package() {
     let (key_package_bytes, _key_bundle) = session.generate_key_package(&credential).unwrap();
 
     // Extract credential from key package
-    let extracted = session.extract_credential_from_key_package(&key_package_bytes).unwrap();
+    let extracted = session
+        .extract_credential_from_key_package(&key_package_bytes)
+        .unwrap();
     let extracted = extracted.expect("Should be able to extract credential");
 
     assert_eq!(extracted.did(), "did:plc:xyz789");
@@ -502,11 +580,15 @@ fn test_get_group_members() {
     let alice_credential = MoatCredential::new("did:plc:alice123", "Alice Phone", [0u8; 16]);
     let bob_credential = MoatCredential::new("did:plc:bob456", "Bob Laptop", [0u8; 16]);
 
-    let (_alice_kp, alice_bundle) = alice_session.generate_key_package(&alice_credential).unwrap();
+    let (_alice_kp, alice_bundle) = alice_session
+        .generate_key_package(&alice_credential)
+        .unwrap();
     let (bob_kp, _bob_bundle) = bob_session.generate_key_package(&bob_credential).unwrap();
 
     // Alice creates a group
-    let group_id = alice_session.create_group(&alice_credential, &alice_bundle).unwrap();
+    let group_id = alice_session
+        .create_group(&alice_credential, &alice_bundle)
+        .unwrap();
 
     // Check members before adding Bob
     let members = alice_session.get_group_members(&group_id).unwrap();
@@ -516,16 +598,18 @@ fn test_get_group_members() {
     assert_eq!(alice_cred.did(), "did:plc:alice123");
 
     // Add Bob
-    let _welcome = alice_session.add_member(&group_id, &alice_bundle, &bob_kp).unwrap();
+    let _welcome = alice_session
+        .add_member(&group_id, &alice_bundle, &bob_kp)
+        .unwrap();
 
     // Check members after adding Bob
     let members = alice_session.get_group_members(&group_id).unwrap();
     assert_eq!(members.len(), 2);
 
     // Find Bob's credential
-    let bob_found = members.iter().any(|(_, cred)| {
-        cred.as_ref().map_or(false, |c| c.did() == "did:plc:bob456")
-    });
+    let bob_found = members
+        .iter()
+        .any(|(_, cred)| cred.as_ref().map_or(false, |c| c.did() == "did:plc:bob456"));
     assert!(bob_found, "Bob should be in the group");
 }
 
@@ -542,8 +626,14 @@ fn test_multi_device_same_did() {
     let (kp2, _) = session.generate_key_package(&device2).unwrap();
 
     // Extract and verify credentials
-    let cred1 = session.extract_credential_from_key_package(&kp1).unwrap().unwrap();
-    let cred2 = session.extract_credential_from_key_package(&kp2).unwrap().unwrap();
+    let cred1 = session
+        .extract_credential_from_key_package(&kp1)
+        .unwrap()
+        .unwrap();
+    let cred2 = session
+        .extract_credential_from_key_package(&kp2)
+        .unwrap()
+        .unwrap();
 
     // Same DID, different device names
     assert_eq!(cred1.did(), cred2.did());
@@ -558,11 +648,17 @@ fn test_get_group_dids() {
     let alice_credential = MoatCredential::new("did:plc:alice123", "Alice Phone", [0u8; 16]);
     let bob_credential = MoatCredential::new("did:plc:bob456", "Bob Laptop", [0u8; 16]);
 
-    let (_alice_kp, alice_bundle) = alice_session.generate_key_package(&alice_credential).unwrap();
+    let (_alice_kp, alice_bundle) = alice_session
+        .generate_key_package(&alice_credential)
+        .unwrap();
     let (bob_kp, _bob_bundle) = bob_session.generate_key_package(&bob_credential).unwrap();
 
-    let group_id = alice_session.create_group(&alice_credential, &alice_bundle).unwrap();
-    let _welcome = alice_session.add_member(&group_id, &alice_bundle, &bob_kp).unwrap();
+    let group_id = alice_session
+        .create_group(&alice_credential, &alice_bundle)
+        .unwrap();
+    let _welcome = alice_session
+        .add_member(&group_id, &alice_bundle, &bob_kp)
+        .unwrap();
 
     let dids = alice_session.get_group_dids(&group_id).unwrap();
     assert_eq!(dids.len(), 2);
@@ -578,19 +674,33 @@ fn test_is_did_in_group() {
     let alice_credential = MoatCredential::new("did:plc:alice123", "Alice Phone", [0u8; 16]);
     let bob_credential = MoatCredential::new("did:plc:bob456", "Bob Laptop", [0u8; 16]);
 
-    let (_alice_kp, alice_bundle) = alice_session.generate_key_package(&alice_credential).unwrap();
+    let (_alice_kp, alice_bundle) = alice_session
+        .generate_key_package(&alice_credential)
+        .unwrap();
     let (bob_kp, _bob_bundle) = bob_session.generate_key_package(&bob_credential).unwrap();
 
-    let group_id = alice_session.create_group(&alice_credential, &alice_bundle).unwrap();
+    let group_id = alice_session
+        .create_group(&alice_credential, &alice_bundle)
+        .unwrap();
 
     // Before adding Bob
-    assert!(alice_session.is_did_in_group(&group_id, "did:plc:alice123").unwrap());
-    assert!(!alice_session.is_did_in_group(&group_id, "did:plc:bob456").unwrap());
+    assert!(alice_session
+        .is_did_in_group(&group_id, "did:plc:alice123")
+        .unwrap());
+    assert!(!alice_session
+        .is_did_in_group(&group_id, "did:plc:bob456")
+        .unwrap());
 
     // After adding Bob
-    let _welcome = alice_session.add_member(&group_id, &alice_bundle, &bob_kp).unwrap();
-    assert!(alice_session.is_did_in_group(&group_id, "did:plc:alice123").unwrap());
-    assert!(alice_session.is_did_in_group(&group_id, "did:plc:bob456").unwrap());
+    let _welcome = alice_session
+        .add_member(&group_id, &alice_bundle, &bob_kp)
+        .unwrap();
+    assert!(alice_session
+        .is_did_in_group(&group_id, "did:plc:alice123")
+        .unwrap());
+    assert!(alice_session
+        .is_did_in_group(&group_id, "did:plc:bob456")
+        .unwrap());
 }
 
 #[test]
@@ -604,23 +714,37 @@ fn test_add_device_for_existing_did() {
     let alice_device2_cred = MoatCredential::new("did:plc:alice123", "Alice Laptop", [2u8; 16]);
     let bob_cred = MoatCredential::new("did:plc:bob456", "Bob Laptop", [0u8; 16]);
 
-    let (_kp1, alice_bundle1) = alice_device1_session.generate_key_package(&alice_device1_cred).unwrap();
-    let (kp2, _) = alice_device2_session.generate_key_package(&alice_device2_cred).unwrap();
+    let (_kp1, alice_bundle1) = alice_device1_session
+        .generate_key_package(&alice_device1_cred)
+        .unwrap();
+    let (kp2, _) = alice_device2_session
+        .generate_key_package(&alice_device2_cred)
+        .unwrap();
     let (bob_kp, bob_bundle) = bob_session.generate_key_package(&bob_cred).unwrap();
 
     // Alice device 1 creates group and adds Bob
-    let group_id = alice_device1_session.create_group(&alice_device1_cred, &alice_bundle1).unwrap();
-    let welcome_result = alice_device1_session.add_member(&group_id, &alice_bundle1, &bob_kp).unwrap();
+    let group_id = alice_device1_session
+        .create_group(&alice_device1_cred, &alice_bundle1)
+        .unwrap();
+    let welcome_result = alice_device1_session
+        .add_member(&group_id, &alice_bundle1, &bob_kp)
+        .unwrap();
 
     // Bob joins
-    let bob_group_id = bob_session.process_welcome(&welcome_result.welcome).unwrap();
+    let bob_group_id = bob_session
+        .process_welcome(&welcome_result.welcome)
+        .unwrap();
     assert_eq!(bob_group_id, group_id);
 
     // Bob adds Alice's second device (same DID as Alice device 1)
-    let device2_welcome = bob_session.add_device(&bob_group_id, &bob_bundle, &kp2).unwrap();
+    let device2_welcome = bob_session
+        .add_device(&bob_group_id, &bob_bundle, &kp2)
+        .unwrap();
 
     // Alice device 2 joins via welcome
-    let device2_group_id = alice_device2_session.process_welcome(&device2_welcome.welcome).unwrap();
+    let device2_group_id = alice_device2_session
+        .process_welcome(&device2_welcome.welcome)
+        .unwrap();
     assert_eq!(device2_group_id, group_id);
 
     // Verify group now has 3 members (2 DIDs: Alice with 2 devices, Bob with 1)
@@ -647,8 +771,12 @@ fn test_add_device_fails_for_non_member() {
     let (charlie_kp, _) = charlie_session.generate_key_package(&charlie_cred).unwrap();
 
     // Alice creates group and adds Bob
-    let group_id = alice_session.create_group(&alice_cred, &alice_bundle).unwrap();
-    let _welcome = alice_session.add_member(&group_id, &alice_bundle, &bob_kp).unwrap();
+    let group_id = alice_session
+        .create_group(&alice_cred, &alice_bundle)
+        .unwrap();
+    let _welcome = alice_session
+        .add_member(&group_id, &alice_bundle, &bob_kp)
+        .unwrap();
 
     // Try to add Charlie as a "device" - should fail because Charlie's DID isn't in the group
     let result = alice_session.add_device(&group_id, &alice_bundle, &charlie_kp);
@@ -669,21 +797,28 @@ fn test_remove_member() {
     let (bob_kp, _) = bob_session.generate_key_package(&bob_cred).unwrap();
 
     // Create group with Alice and Bob
-    let group_id = alice_session.create_group(&alice_cred, &alice_bundle).unwrap();
-    let _welcome = alice_session.add_member(&group_id, &alice_bundle, &bob_kp).unwrap();
+    let group_id = alice_session
+        .create_group(&alice_cred, &alice_bundle)
+        .unwrap();
+    let _welcome = alice_session
+        .add_member(&group_id, &alice_bundle, &bob_kp)
+        .unwrap();
 
     // Verify 2 members
     let members = alice_session.get_group_members(&group_id).unwrap();
     assert_eq!(members.len(), 2);
 
     // Find Bob's leaf index
-    let bob_leaf_idx = members.iter()
+    let bob_leaf_idx = members
+        .iter()
         .find(|(_, cred)| cred.as_ref().map_or(false, |c| c.did() == "did:plc:bob456"))
         .map(|(idx, _)| *idx)
         .unwrap();
 
     // Remove Bob
-    let remove_result = alice_session.remove_member(&group_id, &alice_bundle, bob_leaf_idx).unwrap();
+    let remove_result = alice_session
+        .remove_member(&group_id, &alice_bundle, bob_leaf_idx)
+        .unwrap();
     assert!(!remove_result.commit.is_empty());
 
     // Verify only 1 member remains
@@ -703,22 +838,34 @@ fn test_kick_user() {
     let bob_device2_cred = MoatCredential::new("did:plc:bob456", "Bob Laptop", [2u8; 16]);
 
     let (_kp, alice_bundle) = alice_session.generate_key_package(&alice_cred).unwrap();
-    let (bob_kp1, _bob_bundle1) = bob_device1_session.generate_key_package(&bob_device1_cred).unwrap();
-    let (bob_kp2, _) = bob_device2_session.generate_key_package(&bob_device2_cred).unwrap();
+    let (bob_kp1, _bob_bundle1) = bob_device1_session
+        .generate_key_package(&bob_device1_cred)
+        .unwrap();
+    let (bob_kp2, _) = bob_device2_session
+        .generate_key_package(&bob_device2_cred)
+        .unwrap();
 
     // Create group
-    let group_id = alice_session.create_group(&alice_cred, &alice_bundle).unwrap();
+    let group_id = alice_session
+        .create_group(&alice_cred, &alice_bundle)
+        .unwrap();
 
     // Alice adds both of Bob's devices (simpler test - Alice does all adding)
-    let _welcome1 = alice_session.add_member(&group_id, &alice_bundle, &bob_kp1).unwrap();
-    let _welcome2 = alice_session.add_device(&group_id, &alice_bundle, &bob_kp2).unwrap();
+    let _welcome1 = alice_session
+        .add_member(&group_id, &alice_bundle, &bob_kp1)
+        .unwrap();
+    let _welcome2 = alice_session
+        .add_device(&group_id, &alice_bundle, &bob_kp2)
+        .unwrap();
 
     // Verify 3 members (Alice + Bob's 2 devices)
     let members = alice_session.get_group_members(&group_id).unwrap();
     assert_eq!(members.len(), 3);
 
     // Alice kicks Bob (all devices)
-    let kick_result = alice_session.kick_user(&group_id, &alice_bundle, "did:plc:bob456").unwrap();
+    let kick_result = alice_session
+        .kick_user(&group_id, &alice_bundle, "did:plc:bob456")
+        .unwrap();
     assert!(!kick_result.commit.is_empty());
 
     // Verify only Alice remains
@@ -733,7 +880,10 @@ fn test_reaction_event_creation() {
     let target_id = vec![0xAB; 16];
     let reaction = Event::reaction(b"group-1".to_vec(), 5, &target_id, "👍");
 
-    assert_eq!(reaction.kind, EventKind::Reaction);
+    assert!(matches!(
+        reaction.kind,
+        EventKind::Modifier(ModifierKind::Reaction)
+    ));
     assert!(reaction.message_id.is_some());
 
     let rp = reaction.reaction_payload().unwrap();
@@ -753,27 +903,44 @@ fn test_reaction_encrypt_decrypt_roundtrip() {
     let (_alice_kp, alice_bundle) = alice_session.generate_key_package(&alice_cred).unwrap();
     let (bob_kp, bob_bundle) = bob_session.generate_key_package(&bob_cred).unwrap();
 
-    let group_id = alice_session.create_group(&alice_cred, &alice_bundle).unwrap();
-    let welcome = alice_session.add_member(&group_id, &alice_bundle, &bob_kp).unwrap();
+    let group_id = alice_session
+        .create_group(&alice_cred, &alice_bundle)
+        .unwrap();
+    let welcome = alice_session
+        .add_member(&group_id, &alice_bundle, &bob_kp)
+        .unwrap();
     let bob_group_id = bob_session.process_welcome(&welcome.welcome).unwrap();
 
     // Alice sends a message
-    let message = Event::message(group_id.clone(), 0, b"Hello Bob!");
+    let message = text_event(group_id.clone(), 0, "Hello Bob!");
     let msg_id = message.message_id.clone().unwrap();
-    let encrypted_msg = alice_session.encrypt_event(&group_id, &alice_bundle, &message).unwrap();
+    let encrypted_msg = alice_session
+        .encrypt_event(&group_id, &alice_bundle, &message)
+        .unwrap();
 
     // Bob decrypts the message
-    let decrypted_msg = bob_session.decrypt_event(&bob_group_id, &encrypted_msg.ciphertext).unwrap().into_result();
-    assert_eq!(decrypted_msg.event.kind, EventKind::Message);
+    let decrypted_msg = bob_session
+        .decrypt_event(&bob_group_id, &encrypted_msg.ciphertext)
+        .unwrap()
+        .into_result();
+    assert!(matches!(decrypted_msg.event.kind, EventKind::Message(_)));
     assert_eq!(decrypted_msg.event.message_id.as_ref().unwrap(), &msg_id);
 
     // Bob reacts to Alice's message with 👍
     let reaction = Event::reaction(bob_group_id.clone(), 0, &msg_id, "👍");
-    let encrypted_reaction = bob_session.encrypt_event(&bob_group_id, &bob_bundle, &reaction).unwrap();
+    let encrypted_reaction = bob_session
+        .encrypt_event(&bob_group_id, &bob_bundle, &reaction)
+        .unwrap();
 
     // Alice decrypts the reaction
-    let decrypted_reaction = alice_session.decrypt_event(&group_id, &encrypted_reaction.ciphertext).unwrap().into_result();
-    assert_eq!(decrypted_reaction.event.kind, EventKind::Reaction);
+    let decrypted_reaction = alice_session
+        .decrypt_event(&group_id, &encrypted_reaction.ciphertext)
+        .unwrap()
+        .into_result();
+    assert!(matches!(
+        decrypted_reaction.event.kind,
+        EventKind::Modifier(ModifierKind::Reaction)
+    ));
 
     let rp = decrypted_reaction.event.reaction_payload().unwrap();
     assert_eq!(rp.emoji, "👍");
@@ -797,18 +964,169 @@ fn test_reaction_with_custom_emoji_string() {
 }
 
 #[test]
-fn test_reaction_fits_in_small_or_medium_padding_bucket() {
+fn test_reaction_fits_in_small_or_standard_padding_bucket() {
     let target_id = vec![0x01; 16];
     let reaction = Event::reaction(b"group-id".to_vec(), 0, &target_id, "👍");
 
     let event_bytes = reaction.to_bytes().unwrap();
     let padded = pad_to_bucket(&event_bytes);
-    assert!(padded.len() <= 1024, "Reactions should fit in small or medium bucket, got {}", padded.len());
+    assert!(
+        padded.len() <= 1024,
+        "Reactions should fit in small or standard bucket, got {}",
+        padded.len()
+    );
 }
 
 #[test]
 fn test_message_has_message_id() {
-    let msg = Event::message(b"group".to_vec(), 0, b"hello");
+    let msg = text_event(b"group".to_vec(), 0, "hello");
     assert!(msg.message_id.is_some());
     assert_eq!(msg.message_id.unwrap().len(), 16);
+}
+
+// --- External blob roundtrip tests ---
+
+fn test_blob() -> ExternalBlob {
+    ExternalBlob {
+        ciphertext_hash: vec![0xAA; 32],
+        ciphertext_size: 8192,
+        content_hash: vec![0xBB; 32],
+        uri: "at://did:plc:xyz/social.moat.blob/abc123".to_string(),
+        key: vec![0xCC; 32],
+    }
+}
+
+#[test]
+fn test_long_text_with_external_blob() {
+    let payload = MessagePayload::LongText(LongTextMessage {
+        preview_text: "Preview of a long document...".into(),
+        mime: Some("text/markdown".into()),
+        external: test_blob(),
+    });
+    let event = Event::message(b"group-lt".to_vec(), 3, &payload);
+    assert!(matches!(event.kind, EventKind::Message(MessageKind::LongText)));
+
+    let bytes = event.to_bytes().unwrap();
+    let recovered = Event::from_bytes(&bytes).unwrap();
+    assert!(matches!(recovered.kind, EventKind::Message(MessageKind::LongText)));
+
+    let parsed = recovered.parse_message_payload().unwrap();
+    match parsed {
+        ParsedMessagePayload::Structured(MessagePayload::LongText(msg)) => {
+            assert_eq!(msg.preview_text, "Preview of a long document...");
+            assert_eq!(msg.mime.as_deref(), Some("text/markdown"));
+            assert_eq!(msg.external.ciphertext_hash, vec![0xAA; 32]);
+            assert_eq!(msg.external.ciphertext_size, 8192);
+            assert_eq!(msg.external.content_hash, vec![0xBB; 32]);
+            assert_eq!(msg.external.uri, "at://did:plc:xyz/social.moat.blob/abc123");
+            assert_eq!(msg.external.key, vec![0xCC; 32]);
+        }
+        other => panic!("expected Structured(LongText), got {:?}", other),
+    }
+}
+
+#[test]
+fn test_image_with_external_blob() {
+    let payload = MessagePayload::Image(MediaMessage {
+        preview_thumbhash: vec![0x01; 28],
+        width: Some(1920),
+        height: Some(1080),
+        mime: Some("image/jpeg".into()),
+        external: test_blob(),
+    });
+    let event = Event::message(b"group-img".to_vec(), 5, &payload);
+    assert!(matches!(event.kind, EventKind::Message(MessageKind::Image)));
+
+    let bytes = event.to_bytes().unwrap();
+    let recovered = Event::from_bytes(&bytes).unwrap();
+    assert!(matches!(recovered.kind, EventKind::Message(MessageKind::Image)));
+
+    let parsed = recovered.parse_message_payload().unwrap();
+    match parsed {
+        ParsedMessagePayload::Structured(MessagePayload::Image(msg)) => {
+            assert_eq!(msg.preview_thumbhash, vec![0x01; 28]);
+            assert_eq!(msg.width, Some(1920));
+            assert_eq!(msg.height, Some(1080));
+            assert_eq!(msg.mime.as_deref(), Some("image/jpeg"));
+            assert_eq!(msg.external.ciphertext_size, 8192);
+            assert_eq!(msg.external.uri, "at://did:plc:xyz/social.moat.blob/abc123");
+        }
+        other => panic!("expected Structured(Image), got {:?}", other),
+    }
+}
+
+// --- ExternalBlob URI validation ---
+
+#[test]
+fn test_external_blob_uri_validation() {
+    let valid = ExternalBlob::new(
+        "at://did:plc:xyz/social.moat.blob/abc".into(),
+        vec![0; 32],
+        vec![0; 32],
+        1024,
+        vec![0; 32],
+    );
+    assert!(valid.is_ok());
+
+    let invalid = ExternalBlob::new(
+        "https://example.com/blob".into(),
+        vec![0; 32],
+        vec![0; 32],
+        1024,
+        vec![0; 32],
+    );
+    assert!(invalid.is_err());
+    assert!(matches!(
+        invalid.unwrap_err(),
+        Error::InvalidBlobUri(_)
+    ));
+
+    // Direct construction still works but validate() catches it
+    let blob = ExternalBlob {
+        uri: "ipfs://QmFoo".into(),
+        key: vec![],
+        ciphertext_hash: vec![],
+        ciphertext_size: 0,
+        content_hash: vec![],
+    };
+    assert!(blob.validate().is_err());
+}
+
+// --- Unknown event deserialization ---
+
+#[test]
+fn test_unknown_event_kind_roundtrip() {
+    let event = Event {
+        kind: EventKind::Unknown("future.new_thing".into()),
+        group_id: b"group-unk".to_vec(),
+        epoch: 7,
+        payload: b"opaque-data".to_vec(),
+        message_id: None,
+        prev_event_hash: None,
+        epoch_fingerprint: None,
+        sender_device_id: None,
+    };
+
+    let bytes = event.to_bytes().unwrap();
+    let recovered = Event::from_bytes(&bytes).unwrap();
+    assert_eq!(recovered.kind, EventKind::Unknown("future.new_thing".into()));
+    assert_eq!(recovered.group_id, b"group-unk");
+    assert_eq!(recovered.epoch, 7);
+    assert_eq!(recovered.payload, b"opaque-data");
+}
+
+#[test]
+fn test_unknown_domain_deserializes() {
+    // Unknown two-part kind
+    let json = r#"{"kind":"alien.zap","group_id":[],"epoch":0,"payload":[]}"#;
+    let event: Event = serde_json::from_str(json).unwrap();
+    assert_eq!(event.kind, EventKind::Unknown("alien.zap".into()));
+}
+
+#[test]
+fn test_unknown_single_token_deserializes() {
+    // Unknown single-token kind (not a legacy kind)
+    let json = r#"{"kind":"foobar","group_id":[],"epoch":0,"payload":[]}"#;
+    let event: Event = serde_json::from_str(json).unwrap();
+    assert_eq!(event.kind, EventKind::Unknown("foobar".into()));
 }

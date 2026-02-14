@@ -25,7 +25,7 @@
     "bucket": {
       "type": "string",
       "description": "Padding bucket sizes. Total padded size is always one of these values.",
-      "knownValues": ["small", "medium", "large"]
+      "knownValues": ["small", "standard", "control"]
     },
     "bucketSizes": {
       "type": "object",
@@ -33,18 +33,18 @@
       "properties": {
         "small": {
           "type": "integer",
-          "const": 256,
-          "description": "256 bytes - for payloads up to 252 bytes"
+          "const": 512,
+          "description": "512 bytes - reactions + short text (payloads up to 508 bytes)"
         },
-        "medium": {
+        "standard": {
           "type": "integer",
           "const": 1024,
-          "description": "1024 bytes - for payloads up to 1020 bytes"
+          "description": "1024 bytes - medium/long text previews and most control events (payloads up to 1020 bytes)"
         },
-        "large": {
+        "control": {
           "type": "integer",
           "const": 4096,
-          "description": "4096 bytes - for payloads up to 4092 bytes"
+          "description": "4096 bytes - overflow for commit/welcome/checkpoint control traffic (payloads up to 4092 bytes)"
         }
       }
     },
@@ -78,8 +78,17 @@
     },
     "eventKind": {
       "type": "string",
-      "description": "Discriminator for event payload interpretation",
-      "knownValues": ["message", "commit", "welcome", "checkpoint"]
+      "description": "Discriminator for event payload interpretation in the form <domain>.<variant>. Domains are: control.*, message.*, modifier.*",
+      "knownValues": [
+        "control.commit",
+        "control.welcome",
+        "control.checkpoint",
+        "message.short_text",
+        "message.medium_text",
+        "message.long_text",
+        "message.image",
+        "modifier.reaction"
+      ]
     }
   }
 }

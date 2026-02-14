@@ -1,7 +1,7 @@
 use flutter_rust_bridge::frb;
 use moat_core::{
-    self, EncryptResult, Event, EventKind, MoatCredential, MoatSession,
-    SenderInfo, WelcomeResult,
+    self, ControlKind, EncryptResult, Event, EventKind, MoatCredential, MoatSession,
+    ModifierKind, ReactionPayload as CoreReactionPayload, SenderInfo, WelcomeResult,
 };
 use std::sync::Mutex;
 
@@ -290,6 +290,7 @@ pub enum EventKindDto {
     Welcome,
     Checkpoint,
     Reaction,
+    Unknown,
 }
 
 pub struct EventDto {
@@ -310,20 +311,26 @@ pub struct ReactionPayloadDto {
 impl EventDto {
     fn into_core(self) -> Event {
         match self.kind {
-            EventKindDto::Message => Event::message(self.group_id, self.epoch, &self.payload),
+            EventKindDto::Message => {
+                Event::message_from_bytes(self.group_id, self.epoch, &self.payload)
+            }
             EventKindDto::Commit => Event::commit(self.group_id, self.epoch, self.payload),
             EventKindDto::Welcome => Event::welcome(self.group_id, self.epoch, self.payload),
             EventKindDto::Checkpoint => Event::checkpoint(self.group_id, self.epoch, self.payload),
             EventKindDto::Reaction => {
-                // payload is already a JSON-serialized ReactionPayload from the core Event
-                // We need to extract emoji and target_message_id to call Event::reaction
-                // Use the core's from_bytes to reconstruct, but payload is the reaction JSON
-                // Parse via core's Event::from_bytes won't work since payload is the inner JSON.
-                // Instead, reconstruct a core Event directly with the raw payload.
-                let mut event = Event::commit(self.group_id, self.epoch, self.payload);
-                event.kind = EventKind::Reaction;
+                let reaction: CoreReactionPayload =
+                    serde_json::from_slice(&self.payload).expect("invalid reaction payload");
+                let mut event = Event::reaction(
+                    self.group_id,
+                    self.epoch,
+                    &reaction.target_message_id,
+                    &reaction.emoji,
+                );
                 event.message_id = self.message_id;
                 event
+            }
+            EventKindDto::Unknown => {
+                panic!("cannot convert Unknown event to core Event")
             }
         }
     }
@@ -331,11 +338,14 @@ impl EventDto {
     fn from_core(e: Event) -> Self {
         EventDto {
             kind: match e.kind {
-                EventKind::Message => EventKindDto::Message,
-                EventKind::Commit => EventKindDto::Commit,
-                EventKind::Welcome => EventKindDto::Welcome,
-                EventKind::Checkpoint => EventKindDto::Checkpoint,
-                EventKind::Reaction => EventKindDto::Reaction,
+                EventKind::Message(_) => EventKindDto::Message,
+                EventKind::Control(ControlKind::Commit) => EventKindDto::Commit,
+                EventKind::Control(ControlKind::Welcome) => EventKindDto::Welcome,
+                EventKind::Control(ControlKind::Checkpoint) => EventKindDto::Checkpoint,
+                EventKind::Modifier(ModifierKind::Reaction) => EventKindDto::Reaction,
+                EventKind::Modifier(_) | EventKind::Control(_) | EventKind::Unknown(_) => {
+                    EventKindDto::Unknown
+                }
             },
             message_id: e.message_id,
             group_id: e.group_id,
@@ -353,7 +363,7 @@ impl EventDto {
         }
         // Reconstruct a temporary core Event to use its reaction_payload() parser
         let temp_event = Event {
-            kind: EventKind::Reaction,
+            kind: EventKind::Modifier(ModifierKind::Reaction),
             group_id: vec![],
             epoch: 0,
             payload: self.payload.clone(),
@@ -761,7 +771,7 @@ mod tests {
         let plaintext = b"Hello, world!".to_vec();
         let padded = pad_to_bucket(plaintext.clone());
 
-        assert_eq!(padded.len(), 256);
+        assert_eq!(padded.len(), 512);
         let unpadded = unpad(padded);
         assert_eq!(unpadded, plaintext);
     }
@@ -769,10 +779,10 @@ mod tests {
     #[test]
     fn test_pad_bucket_sizes() {
         let small = pad_to_bucket(vec![0x42; 100]);
-        assert_eq!(small.len(), 256);
+        assert_eq!(small.len(), 512);
 
-        let medium = pad_to_bucket(vec![0x42; 500]);
-        assert_eq!(medium.len(), 1024);
+        let standard = pad_to_bucket(vec![0x42; 600]);
+        assert_eq!(standard.len(), 1024);
 
         let large = pad_to_bucket(vec![0x42; 2000]);
         assert_eq!(large.len(), 4096);
@@ -781,7 +791,7 @@ mod tests {
     #[test]
     fn test_pad_empty() {
         let padded = pad_to_bucket(vec![]);
-        assert_eq!(padded.len(), 256);
+        assert_eq!(padded.len(), 512);
         let unpadded = unpad(padded);
         assert!(unpadded.is_empty());
     }
@@ -813,7 +823,10 @@ mod tests {
         let target_id = vec![0xAB; 16];
         // Create a reaction via core and convert to DTO
         let core_reaction = Event::reaction(vec![1, 2, 3], 5, &target_id, "👍");
-        assert_eq!(core_reaction.kind, EventKind::Reaction);
+        assert!(matches!(
+            core_reaction.kind,
+            EventKind::Modifier(ModifierKind::Reaction)
+        ));
 
         let rp = core_reaction.reaction_payload().unwrap();
         assert_eq!(rp.emoji, "👍");
@@ -830,9 +843,30 @@ mod tests {
 
         // Convert back to core
         let restored_core = dto.into_core();
-        assert_eq!(restored_core.kind, EventKind::Reaction);
+        assert!(matches!(
+            restored_core.kind,
+            EventKind::Modifier(ModifierKind::Reaction)
+        ));
         let restored_rp = restored_core.reaction_payload().unwrap();
         assert_eq!(restored_rp.emoji, "👍");
         assert_eq!(restored_rp.target_message_id, target_id);
+    }
+
+    #[test]
+    fn test_unknown_event_maps_to_unknown_dto() {
+        let event = Event {
+            kind: EventKind::Unknown("future.thing".into()),
+            group_id: vec![1, 2, 3],
+            epoch: 0,
+            payload: b"opaque".to_vec(),
+            message_id: None,
+            prev_event_hash: None,
+            epoch_fingerprint: None,
+            sender_device_id: None,
+        };
+        let dto = EventDto::from_core(event);
+        assert!(matches!(dto.kind, EventKindDto::Unknown));
+        assert_eq!(dto.group_id, vec![1, 2, 3]);
+        assert_eq!(dto.payload, b"opaque");
     }
 }

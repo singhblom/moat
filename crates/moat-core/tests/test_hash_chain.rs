@@ -96,9 +96,10 @@ fn test_replay_detected() {
     sim.inboxes[1].push_back(record);
 
     // Bob receives M1 again
-    let result = sim.participants[1]
-        .session
-        .decrypt_event(&sim.group_id, &sim.inboxes[1].pop_front().unwrap().ciphertext);
+    let result = sim.participants[1].session.decrypt_event(
+        &sim.group_id,
+        &sim.inboxes[1].pop_front().unwrap().ciphertext,
+    );
 
     match result {
         Err(_) => {
@@ -168,7 +169,7 @@ fn test_backward_compat_no_transcript_fields() {
     let json = r#"{"kind":"message","group_id":[1,2,3],"epoch":0,"payload":[104,105]}"#;
     let event: Event = serde_json::from_str(json).unwrap();
 
-    assert_eq!(event.kind, EventKind::Message);
+    assert!(matches!(event.kind, EventKind::Message(_)));
     assert!(event.prev_event_hash.is_none());
     assert!(event.epoch_fingerprint.is_none());
     assert!(event.sender_device_id.is_none());

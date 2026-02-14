@@ -33,6 +33,7 @@ pub enum ErrorCode {
     TagDerivation = 115,
     StealthEncryption = 116,
     RemoveMember = 117,
+    InvalidBlobUri = 118,
     // Transcript integrity error codes
     StateVersionMismatch = 200,
     StaleCommit = 201,
@@ -112,6 +113,9 @@ pub enum Error {
 
     #[error("commit conflict unresolved after retries: {0}")]
     ConflictUnresolved(String),
+
+    #[error("invalid blob URI (must start with at://): {0}")]
+    InvalidBlobUri(String),
 }
 
 impl Error {
@@ -141,6 +145,7 @@ impl Error {
             Error::StateDiverged(_) => ErrorCode::StateDiverged,
             Error::UnknownSender(_) => ErrorCode::UnknownSender,
             Error::ConflictUnresolved(_) => ErrorCode::ConflictUnresolved,
+            Error::InvalidBlobUri(_) => ErrorCode::InvalidBlobUri,
         }
     }
 
@@ -169,7 +174,8 @@ impl Error {
             | Error::StaleCommit(msg)
             | Error::StateDiverged(msg)
             | Error::UnknownSender(msg)
-            | Error::ConflictUnresolved(msg) => msg,
+            | Error::ConflictUnresolved(msg)
+            | Error::InvalidBlobUri(msg) => msg,
         }
     }
 }
