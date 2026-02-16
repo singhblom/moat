@@ -1,0 +1,6 @@
+drawbridge
+certs/
+*_test.go
+*.md
+fly.toml
+.dockerignore
