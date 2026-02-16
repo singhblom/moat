@@ -19,8 +19,20 @@ type AuthenticatedMsg struct {
 	Type string `json:"type"` // "authenticated"
 }
 
+type TicketAuthenticatedMsg struct {
+	Type string `json:"type"` // "ticket_authenticated"
+}
+
+type TicketRegisteredMsg struct {
+	Type string `json:"type"` // "ticket_registered"
+}
+
+type TicketRevokedMsg struct {
+	Type string `json:"type"` // "ticket_revoked"
+}
+
 type ErrorMsg struct {
-	Type    string `json:"type"`    // "error"
+	Type    string `json:"type"` // "error"
 	Message string `json:"message"`
 }
 
@@ -33,8 +45,12 @@ type NewEventMsg struct {
 
 // Client -> Server messages
 
+type RequestChallengeMsg struct {
+	Type string `json:"type"` // "request_challenge"
+}
+
 type ChallengeResponseMsg struct {
-	Type      string `json:"type"`      // "challenge_response"
+	Type      string `json:"type"` // "challenge_response"
 	DID       string `json:"did"`
 	Signature string `json:"signature"` // base64
 	Timestamp int64  `json:"timestamp"` // unix seconds
@@ -61,6 +77,21 @@ type RegisterPushMsg struct {
 	Type     string `json:"type"`     // "register_push"
 	Platform string `json:"platform"` // "fcm" or "apns"
 	Token    string `json:"token"`
+}
+
+type TicketAuthMsg struct {
+	Type   string `json:"type"`   // "ticket_auth"
+	Ticket string `json:"ticket"` // 32 bytes, hex-encoded
+}
+
+type RegisterTicketMsg struct {
+	Type   string `json:"type"`   // "register_ticket"
+	Ticket string `json:"ticket"` // 32 bytes, hex-encoded
+}
+
+type RevokeTicketMsg struct {
+	Type   string `json:"type"`   // "revoke_ticket"
+	Ticket string `json:"ticket"` // 32 bytes, hex-encoded
 }
 
 // parseMessage deserializes a raw JSON message into the appropriate typed struct.
@@ -97,6 +128,30 @@ func parseMessage(data []byte) (string, any, error) {
 		return env.Type, &msg, nil
 	case "register_push":
 		var msg RegisterPushMsg
+		if err := json.Unmarshal(data, &msg); err != nil {
+			return env.Type, nil, err
+		}
+		return env.Type, &msg, nil
+	case "request_challenge":
+		var msg RequestChallengeMsg
+		if err := json.Unmarshal(data, &msg); err != nil {
+			return env.Type, nil, err
+		}
+		return env.Type, &msg, nil
+	case "ticket_auth":
+		var msg TicketAuthMsg
+		if err := json.Unmarshal(data, &msg); err != nil {
+			return env.Type, nil, err
+		}
+		return env.Type, &msg, nil
+	case "register_ticket":
+		var msg RegisterTicketMsg
+		if err := json.Unmarshal(data, &msg); err != nil {
+			return env.Type, nil, err
+		}
+		return env.Type, &msg, nil
+	case "revoke_ticket":
+		var msg RevokeTicketMsg
 		if err := json.Unmarshal(data, &msg); err != nil {
 			return env.Type, nil, err
 		}

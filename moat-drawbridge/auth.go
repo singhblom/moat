@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	didCacheTTL    = 1 * time.Hour
+	didCacheTTL     = 1 * time.Hour
 	timestampWindow = 60 // seconds
 )
 

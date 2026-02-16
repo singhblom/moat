@@ -111,7 +111,7 @@ type RateLimiter struct {
 }
 
 type rateLimitEntry struct {
-	count    int
+	count      int
 	limitUntil time.Time
 }
 

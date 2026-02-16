@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -30,6 +31,11 @@ type Relay struct {
 	dedupMu sync.Mutex
 	dedup   map[string]time.Time
 
+	// Ticket registry: maps ticket (hex) -> owner DID
+	// Only the owner (sender) can register/revoke tickets
+	ticketsMu sync.RWMutex
+	tickets   map[string]string
+
 	resolver    DIDResolver
 	verifier    PDSVerifier
 	rateLimiter *RateLimiter
@@ -54,6 +60,7 @@ func NewRelay(relayURL string, resolver DIDResolver, verifier PDSVerifier, log *
 		byTag:       make(map[string]map[*Client]bool),
 		buffers:     make(map[string]*DisconnectBuffer),
 		dedup:       make(map[string]time.Time),
+		tickets:     make(map[string]string),
 		resolver:    resolver,
 		verifier:    verifier,
 		rateLimiter: NewRateLimiter(),
@@ -208,7 +215,7 @@ func (r *Relay) handleUpdateTags(c *Client, msg *UpdateTagsMsg) {
 		r.byTag[tag][c] = true
 	}
 
-	r.log.Info("tags updated", "did", c.did, "added", len(msg.Add), "removed", len(msg.Remove))
+	r.log.Debug("tags updated", "did", c.did, "added", len(msg.Add), "removed", len(msg.Remove))
 }
 
 func (r *Relay) handleEventPosted(c *Client, msg *EventPostedMsg) {
@@ -293,6 +300,70 @@ func (r *Relay) flushBuffer(c *Client) {
 	}
 }
 
+// authenticateTicket verifies a ticket and associates it with the client.
+func (r *Relay) authenticateTicket(c *Client, ticket string) error {
+	// Validate ticket format (should be 64 hex chars = 32 bytes)
+	if len(ticket) != 64 {
+		return fmt.Errorf("invalid ticket format")
+	}
+
+	r.ticketsMu.RLock()
+	_, exists := r.tickets[ticket]
+	r.ticketsMu.RUnlock()
+
+	if !exists {
+		return fmt.Errorf("invalid ticket")
+	}
+
+	c.ticket = ticket
+	return nil
+}
+
+// handleRegisterTicket registers a new ticket for the authenticated sender.
+func (r *Relay) handleRegisterTicket(c *Client, msg *RegisterTicketMsg) {
+	// Validate ticket format
+	if len(msg.Ticket) != 64 {
+		c.sendMsg(ErrorMsg{Type: "error", Message: "invalid ticket format: must be 64 hex characters"})
+		return
+	}
+
+	r.ticketsMu.Lock()
+	defer r.ticketsMu.Unlock()
+
+	// Check if ticket already exists
+	if owner, exists := r.tickets[msg.Ticket]; exists {
+		if owner != c.did {
+			c.sendMsg(ErrorMsg{Type: "error", Message: "ticket already registered by another user"})
+			return
+		}
+		// Re-registering own ticket is a no-op, but still confirm
+	}
+
+	r.tickets[msg.Ticket] = c.did
+	r.log.Info("ticket registered", "did", c.did, "ticket_prefix", msg.Ticket[:16])
+	c.sendMsg(TicketRegisteredMsg{Type: "ticket_registered"})
+}
+
+// handleRevokeTicket revokes a ticket owned by the authenticated sender.
+func (r *Relay) handleRevokeTicket(c *Client, msg *RevokeTicketMsg) {
+	r.ticketsMu.Lock()
+	defer r.ticketsMu.Unlock()
+
+	owner, exists := r.tickets[msg.Ticket]
+	if !exists {
+		c.sendMsg(ErrorMsg{Type: "error", Message: "ticket not found"})
+		return
+	}
+	if owner != c.did {
+		c.sendMsg(ErrorMsg{Type: "error", Message: "not your ticket"})
+		return
+	}
+
+	delete(r.tickets, msg.Ticket)
+	r.log.Info("ticket revoked", "did", c.did, "ticket_prefix", msg.Ticket[:16])
+	c.sendMsg(TicketRevokedMsg{Type: "ticket_revoked"})
+}
+
 func (r *Relay) asyncVerify(did, rkey, tag string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -349,11 +420,16 @@ func (r *Relay) healthHandler(w http.ResponseWriter, req *http.Request) {
 	tagCount := len(r.byTag)
 	r.mu.RUnlock()
 
+	r.ticketsMu.RLock()
+	ticketCount := len(r.tickets)
+	r.ticketsMu.RUnlock()
+
 	resp := map[string]any{
-		"status":         "ok",
-		"uptime_seconds": int(time.Since(r.startTime).Seconds()),
-		"connections":    connCount,
-		"tags_tracked":   tagCount,
+		"status":             "ok",
+		"uptime_seconds":     int(time.Since(r.startTime).Seconds()),
+		"connections":        connCount,
+		"tags_tracked":       tagCount,
+		"tickets_registered": ticketCount,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

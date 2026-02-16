@@ -162,6 +162,9 @@ func (env *testEnv) connect(did string) *testClient {
 	tc := &testClient{t: env.t, conn: conn, did: did, priv: priv}
 	env.t.Cleanup(func() { conn.Close() })
 
+	// Request challenge
+	tc.sendJSON(map[string]any{"type": "request_challenge"})
+
 	// Read challenge
 	challenge := tc.readMsgAs("challenge")
 	nonce := challenge["nonce"].(string)
@@ -291,6 +294,10 @@ func TestAuthReject_BadSignature(t *testing.T) {
 
 	conn := env.connectRaw()
 
+	// Request challenge
+	msg, _ := json.Marshal(map[string]any{"type": "request_challenge"})
+	conn.WriteMessage(websocket.TextMessage, msg)
+
 	// Read challenge
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	_, data, err := conn.ReadMessage()
@@ -301,7 +308,7 @@ func TestAuthReject_BadSignature(t *testing.T) {
 	json.Unmarshal(data, &challenge)
 
 	// Send bad signature
-	msg, _ := json.Marshal(map[string]any{
+	msg, _ = json.Marshal(map[string]any{
 		"type":      "challenge_response",
 		"did":       "did:plc:bad",
 		"signature": "aW52YWxpZA==", // "invalid" in base64
@@ -330,6 +337,10 @@ func TestAuthReject_ExpiredTimestamp(t *testing.T) {
 
 	conn := env.connectRaw()
 
+	// Request challenge
+	msg, _ := json.Marshal(map[string]any{"type": "request_challenge"})
+	conn.WriteMessage(websocket.TextMessage, msg)
+
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	_, data, _ := conn.ReadMessage()
 	var challenge map[string]any
@@ -340,7 +351,7 @@ func TestAuthReject_ExpiredTimestamp(t *testing.T) {
 	timestamp := time.Now().Add(-2 * time.Minute).Unix()
 	sig := signChallengeEd25519(priv, nonce, "ws://test-relay", timestamp)
 
-	msg, _ := json.Marshal(map[string]any{
+	msg, _ = json.Marshal(map[string]any{
 		"type":      "challenge_response",
 		"did":       "did:plc:expired",
 		"signature": sig,
@@ -593,10 +604,6 @@ func TestPreAuthRejectsOtherMessages(t *testing.T) {
 	env := newTestEnv(t)
 	conn := env.connectRaw()
 
-	// Read challenge
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	conn.ReadMessage()
-
 	// Try sending watch_tags before auth
 	msg, _ := json.Marshal(map[string]any{"type": "watch_tags", "tags": []string{"abc"}})
 	conn.WriteMessage(websocket.TextMessage, msg)
@@ -612,7 +619,322 @@ func TestPreAuthRejectsOtherMessages(t *testing.T) {
 	if resp["type"] != "error" {
 		t.Fatalf("expected error, got %v", resp)
 	}
-	if msg := resp["message"].(string); !strings.Contains(msg, "authenticate") {
-		t.Fatalf("expected auth error message, got: %s", msg)
+	if errMsg := resp["message"].(string); !strings.Contains(errMsg, "authenticate") {
+		t.Fatalf("expected auth error message, got: %s", errMsg)
+	}
+}
+
+func TestChallengeResponseWithoutRequest(t *testing.T) {
+	env := newTestEnv(t)
+
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	env.resolver.addDID("did:plc:noRequest", pub, "https://pds.example.com")
+
+	conn := env.connectRaw()
+
+	// Try to send challenge_response without requesting challenge first
+	timestamp := time.Now().Unix()
+	sig := signChallengeEd25519(priv, "fake-nonce", "ws://test-relay", timestamp)
+
+	msg, _ := json.Marshal(map[string]any{
+		"type":      "challenge_response",
+		"did":       "did:plc:noRequest",
+		"signature": sig,
+		"timestamp": timestamp,
+	})
+	conn.WriteMessage(websocket.TextMessage, msg)
+
+	// Should get error about requesting challenge first
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, data, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resp map[string]any
+	json.Unmarshal(data, &resp)
+	if resp["type"] != "error" {
+		t.Fatalf("expected error, got %v", resp)
+	}
+	if !strings.Contains(resp["message"].(string), "request challenge") {
+		t.Fatalf("expected 'must request challenge' error, got: %v", resp["message"])
+	}
+}
+
+// --- Ticket Authentication Tests ---
+
+func TestTicketRegistration(t *testing.T) {
+	env := newTestEnv(t)
+	alice := env.connect("did:plc:alice")
+
+	ticket := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	alice.sendJSON(map[string]any{"type": "register_ticket", "ticket": ticket})
+
+	msg := alice.readMsgAs("ticket_registered")
+	_ = msg
+
+	// Verify ticket is in relay
+	env.relay.ticketsMu.RLock()
+	owner, exists := env.relay.tickets[ticket]
+	env.relay.ticketsMu.RUnlock()
+
+	if !exists {
+		t.Fatal("ticket not registered")
+	}
+	if owner != "did:plc:alice" {
+		t.Fatalf("expected owner did:plc:alice, got %s", owner)
+	}
+}
+
+func TestTicketAuth(t *testing.T) {
+	env := newTestEnv(t)
+
+	// Alice registers a ticket
+	alice := env.connect("did:plc:alice")
+	ticket := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	alice.sendJSON(map[string]any{"type": "register_ticket", "ticket": ticket})
+	alice.readMsgAs("ticket_registered")
+
+	// Bob connects with ticket auth
+	conn := env.connectRaw()
+
+	// Authenticate with ticket directly (no challenge needed)
+	msg, _ := json.Marshal(map[string]any{"type": "ticket_auth", "ticket": ticket})
+	conn.WriteMessage(websocket.TextMessage, msg)
+
+	// Should receive ticket_authenticated
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, data, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resp map[string]any
+	json.Unmarshal(data, &resp)
+	if resp["type"] != "ticket_authenticated" {
+		t.Fatalf("expected ticket_authenticated, got %v", resp)
+	}
+}
+
+func TestTicketAuthInvalidTicket(t *testing.T) {
+	env := newTestEnv(t)
+	conn := env.connectRaw()
+
+	// Try to auth with unregistered ticket
+	ticket := "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	msg, _ := json.Marshal(map[string]any{"type": "ticket_auth", "ticket": ticket})
+	conn.WriteMessage(websocket.TextMessage, msg)
+
+	// Should get error
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, data, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resp map[string]any
+	json.Unmarshal(data, &resp)
+	if resp["type"] != "error" {
+		t.Fatalf("expected error, got %v", resp)
+	}
+}
+
+func TestTicketRevocation(t *testing.T) {
+	env := newTestEnv(t)
+	alice := env.connect("did:plc:alice")
+
+	ticket := "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	alice.sendJSON(map[string]any{"type": "register_ticket", "ticket": ticket})
+	alice.readMsgAs("ticket_registered")
+
+	// Revoke the ticket
+	alice.sendJSON(map[string]any{"type": "revoke_ticket", "ticket": ticket})
+	alice.readMsgAs("ticket_revoked")
+
+	// Verify ticket is removed
+	env.relay.ticketsMu.RLock()
+	_, exists := env.relay.tickets[ticket]
+	env.relay.ticketsMu.RUnlock()
+
+	if exists {
+		t.Fatal("ticket should have been revoked")
+	}
+}
+
+func TestTicketRevocationByNonOwner(t *testing.T) {
+	env := newTestEnv(t)
+	alice := env.connect("did:plc:alice")
+	bob := env.connect("did:plc:bob")
+
+	ticket := "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	alice.sendJSON(map[string]any{"type": "register_ticket", "ticket": ticket})
+	alice.readMsgAs("ticket_registered")
+
+	// Bob tries to revoke Alice's ticket
+	bob.sendJSON(map[string]any{"type": "revoke_ticket", "ticket": ticket})
+	msg := bob.readMsgAs("error")
+	if !strings.Contains(msg["message"].(string), "not your ticket") {
+		t.Fatalf("expected 'not your ticket' error, got: %v", msg["message"])
+	}
+
+	// Ticket should still exist
+	env.relay.ticketsMu.RLock()
+	_, exists := env.relay.tickets[ticket]
+	env.relay.ticketsMu.RUnlock()
+
+	if !exists {
+		t.Fatal("ticket should not have been revoked by non-owner")
+	}
+}
+
+func TestRecipientCannotEventPosted(t *testing.T) {
+	env := newTestEnv(t)
+
+	// Alice registers a ticket
+	alice := env.connect("did:plc:alice")
+	ticket := "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	alice.sendJSON(map[string]any{"type": "register_ticket", "ticket": ticket})
+	alice.readMsgAs("ticket_registered")
+
+	// Bob connects with ticket auth
+	conn := env.connectRaw()
+
+	msg, _ := json.Marshal(map[string]any{"type": "ticket_auth", "ticket": ticket})
+	conn.WriteMessage(websocket.TextMessage, msg)
+
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	conn.ReadMessage() // ticket_authenticated
+
+	// Bob (recipient) tries to send event_posted
+	msg, _ = json.Marshal(map[string]any{
+		"type": "event_posted",
+		"tag":  "aabbccdd00112233aabbccdd00112233",
+		"rkey": "abc123",
+	})
+	conn.WriteMessage(websocket.TextMessage, msg)
+
+	// Should get error
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, data, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resp map[string]any
+	json.Unmarshal(data, &resp)
+	if resp["type"] != "error" {
+		t.Fatalf("expected error, got %v", resp)
+	}
+	if !strings.Contains(resp["message"].(string), "DID authentication") {
+		t.Fatalf("expected DID auth required error, got: %v", resp["message"])
+	}
+}
+
+func TestRecipientCanWatchTags(t *testing.T) {
+	env := newTestEnv(t)
+
+	// Alice registers a ticket and posts events
+	alice := env.connect("did:plc:alice")
+	ticket := "1111111111111111111111111111111111111111111111111111111111111111"
+	alice.sendJSON(map[string]any{"type": "register_ticket", "ticket": ticket})
+	alice.readMsgAs("ticket_registered")
+
+	// Bob connects with ticket auth
+	conn := env.connectRaw()
+
+	msg, _ := json.Marshal(map[string]any{"type": "ticket_auth", "ticket": ticket})
+	conn.WriteMessage(websocket.TextMessage, msg)
+
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	conn.ReadMessage() // ticket_authenticated
+
+	// Bob watches tags
+	tag := "aabbccdd00112233aabbccdd00112233"
+	msg, _ = json.Marshal(map[string]any{"type": "watch_tags", "tags": []string{tag}})
+	conn.WriteMessage(websocket.TextMessage, msg)
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Alice posts
+	alice.postEvent(tag, "rk-from-alice")
+
+	// Bob should receive
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, data, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resp map[string]any
+	json.Unmarshal(data, &resp)
+	if resp["type"] != "new_event" {
+		t.Fatalf("expected new_event, got %v", resp)
+	}
+	if resp["rkey"] != "rk-from-alice" {
+		t.Fatalf("expected rkey rk-from-alice, got %v", resp["rkey"])
+	}
+}
+
+func TestRecipientCannotRegisterTicket(t *testing.T) {
+	env := newTestEnv(t)
+
+	// Alice registers a ticket
+	alice := env.connect("did:plc:alice")
+	ticket := "2222222222222222222222222222222222222222222222222222222222222222"
+	alice.sendJSON(map[string]any{"type": "register_ticket", "ticket": ticket})
+	alice.readMsgAs("ticket_registered")
+
+	// Bob connects with ticket auth
+	conn := env.connectRaw()
+
+	msg, _ := json.Marshal(map[string]any{"type": "ticket_auth", "ticket": ticket})
+	conn.WriteMessage(websocket.TextMessage, msg)
+
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	conn.ReadMessage() // ticket_authenticated
+
+	// Bob (recipient) tries to register a ticket
+	newTicket := "3333333333333333333333333333333333333333333333333333333333333333"
+	msg, _ = json.Marshal(map[string]any{"type": "register_ticket", "ticket": newTicket})
+	conn.WriteMessage(websocket.TextMessage, msg)
+
+	// Should get error
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, data, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resp map[string]any
+	json.Unmarshal(data, &resp)
+	if resp["type"] != "error" {
+		t.Fatalf("expected error, got %v", resp)
+	}
+	if !strings.Contains(resp["message"].(string), "DID authentication") {
+		t.Fatalf("expected DID auth required error, got: %v", resp["message"])
+	}
+}
+
+func TestHealthEndpointIncludesTickets(t *testing.T) {
+	env := newTestEnv(t)
+
+	// Register a ticket
+	alice := env.connect("did:plc:alice")
+	ticket := "4444444444444444444444444444444444444444444444444444444444444444"
+	alice.sendJSON(map[string]any{"type": "register_ticket", "ticket": ticket})
+	alice.readMsgAs("ticket_registered")
+
+	// Check health endpoint
+	resp, err := http.Get(env.srv.URL + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+
+	ticketCount, ok := body["tickets_registered"].(float64)
+	if !ok {
+		t.Fatal("tickets_registered not in health response")
+	}
+	if ticketCount != 1 {
+		t.Fatalf("expected 1 ticket, got %v", ticketCount)
 	}
 }
