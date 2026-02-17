@@ -47,8 +47,8 @@ use std::sync::RwLock;
 pub use crate::credential::MoatCredential;
 pub use crate::error::{Error, ErrorCode, Result};
 pub use crate::event::{
-    ControlKind, DecryptOutcome, Event, EventKind, MessageKind, ModifierKind, ReactionPayload,
-    SenderInfo, TranscriptWarning,
+    ControlKind, DecryptOutcome, DrawbridgeHintPayload, Event, EventKind, MessageKind,
+    ModifierKind, ReactionPayload, SenderInfo, TranscriptWarning,
 };
 pub use crate::message::{
     ExternalBlob, LongTextMessage, MediaMessage, MessageBodyKind, MessagePayload,
@@ -1699,6 +1699,27 @@ impl MoatSession {
             .iter()
             .find(|m| m.signature_key == our_pubkey)
             .map(|m| m.index.u32()))
+    }
+
+    /// Generate a random 32-byte ticket for Drawbridge recipient authentication.
+    pub fn generate_drawbridge_ticket() -> [u8; 32] {
+        use rand::RngCore;
+        let mut ticket = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut ticket);
+        ticket
+    }
+
+    /// Create a DrawbridgeHint event for the current device.
+    pub fn create_drawbridge_hint(
+        &self,
+        group_id: &[u8],
+        url: &str,
+        ticket: &[u8; 32],
+    ) -> Result<Event> {
+        let epoch = self
+            .get_group_epoch(group_id)?
+            .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
+        Ok(Event::drawbridge_hint(group_id, epoch, url, &self.device_id, ticket))
     }
 
     /// Leave a group (remove self).

@@ -140,7 +140,7 @@ Every event’s `kind` is now namespaced as `<domain>.<variant>`:
 
 | Domain | Variants | Purpose |
 |--------|----------|---------|
-| `control.*` | `control.commit`, `control.welcome`, `control.checkpoint` | MLS state management; payload is TLS-serialized bytes and no `message_id` is present. |
+| `control.*` | `control.commit`, `control.welcome`, `control.checkpoint`, `control.drawbridge_hint` | MLS state management and coordination; payload is TLS-serialized bytes (commit/welcome/checkpoint) or structured JSON (drawbridge_hint). No `message_id` is present. |
 | `message.*` | `message.short_text`, `message.medium_text`, `message.long_text`, `message.image` | User-visible content plus optional previews/external blobs. Each carries a 16-byte `message_id`. |
 | `modifier.*` | `modifier.reaction` (more to follow) | Small toggles or annotations that reference an existing `message_id`. |
 
@@ -199,6 +199,39 @@ The symmetric `key` inside each `external` entry is forward-secret: it lives wit
 - Server-side blob expiry with configurable TTL.
 
 No specific retention policy is mandated in the current protocol version.
+
+## Drawbridge Hints
+
+A Drawbridge is a WebSocket relay that provides real-time push notifications for new events. Each user can run their own Drawbridge or use a shared one. The `control.drawbridge_hint` event tells conversation partners which Drawbridge to connect to and how to authenticate.
+
+### Payload Schema
+
+The `control.drawbridge_hint` event payload is JSON:
+
+```json
+{
+  "url": "wss://relay.example.com/ws",
+  "device_id": [16 bytes],
+  "ticket": [32 bytes]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `url` | String | WebSocket URL of the Drawbridge relay |
+| `device_id` | 16 bytes | Sender's device ID (identifies which device this hint applies to) |
+| `ticket` | 32 bytes | Random ticket for recipient authentication on the Drawbridge |
+
+### Lifecycle
+
+1. After creating a conversation (or when changing Drawbridge), the sender generates a random 32-byte ticket and registers it on their Drawbridge via `register_ticket`.
+2. The sender encrypts a `control.drawbridge_hint` event and publishes it to the group.
+3. Recipients decrypt the hint, connect to the specified Drawbridge URL, and authenticate with the ticket via `ticket_auth`.
+4. Recipients can then `watch_tags` on that Drawbridge to receive real-time `new_event` notifications.
+
+### Deduplication
+
+One hint per `(sender_did, device_id)` pair per group — the latest hint wins. If a sender changes their Drawbridge or rotates a ticket, they send a new hint; recipients replace the old one.
 
 ## Transcript Integrity
 

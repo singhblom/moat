@@ -20,12 +20,13 @@ pub enum EventKind {
     Unknown(String),
 }
 
-/// Control-plane events (MLS state mutations).
+/// Control-plane events (MLS state mutations and coordination).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlKind {
     Commit,
     Welcome,
     Checkpoint,
+    DrawbridgeHint,
     Unknown(String),
 }
 
@@ -100,6 +101,17 @@ pub struct ReactionPayload {
     pub emoji: String,
     /// The message_id of the target message (16 bytes)
     pub target_message_id: Vec<u8>,
+}
+
+/// Payload for a DrawbridgeHint event, serialized as JSON inside Event.payload.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DrawbridgeHintPayload {
+    /// WebSocket URL of the Drawbridge relay
+    pub url: String,
+    /// Device ID this hint applies to (16 bytes, the sender's own device)
+    pub device_id: Vec<u8>,
+    /// Ticket for recipient authentication (32 bytes)
+    pub ticket: Vec<u8>,
 }
 
 /// An event to be encrypted and published
@@ -283,6 +295,42 @@ impl Event {
             }
             _ => None,
         }
+    }
+
+    /// Create a DrawbridgeHint event.
+    pub fn drawbridge_hint(
+        group_id: &[u8],
+        epoch: u64,
+        url: &str,
+        device_id: &[u8; 16],
+        ticket: &[u8; 32],
+    ) -> Self {
+        let payload = DrawbridgeHintPayload {
+            url: url.to_string(),
+            device_id: device_id.to_vec(),
+            ticket: ticket.to_vec(),
+        };
+        let payload_bytes =
+            serde_json::to_vec(&payload).expect("DrawbridgeHintPayload serialization");
+        Self {
+            kind: EventKind::Control(ControlKind::DrawbridgeHint),
+            group_id: group_id.to_vec(),
+            epoch,
+            payload: payload_bytes,
+            message_id: None,
+            prev_event_hash: None,
+            epoch_fingerprint: None,
+            sender_device_id: None,
+        }
+    }
+
+    /// Parse the payload as a DrawbridgeHintPayload.
+    /// Returns None if this isn't a DrawbridgeHint or payload is malformed.
+    pub fn drawbridge_hint_payload(&self) -> Option<DrawbridgeHintPayload> {
+        if self.kind != EventKind::Control(ControlKind::DrawbridgeHint) {
+            return None;
+        }
+        serde_json::from_slice(&self.payload).ok()
     }
 
     /// Serialize this event to bytes for encryption
@@ -531,6 +579,40 @@ mod tests {
     }
 
     #[test]
+    fn test_drawbridge_hint_roundtrip() {
+        let event = Event::drawbridge_hint(
+            b"test-group",
+            5,
+            "wss://relay.example.com/ws",
+            &[1u8; 16],
+            &[2u8; 32],
+        );
+        let bytes = event.to_bytes().unwrap();
+        let recovered = Event::from_bytes(&bytes).unwrap();
+        assert_eq!(
+            recovered.kind,
+            EventKind::Control(ControlKind::DrawbridgeHint)
+        );
+        assert_eq!(recovered.group_id, b"test-group");
+        assert_eq!(recovered.epoch, 5);
+        assert!(recovered.message_id.is_none());
+
+        let payload = recovered.drawbridge_hint_payload().unwrap();
+        assert_eq!(payload.url, "wss://relay.example.com/ws");
+        assert_eq!(payload.device_id, vec![1u8; 16]);
+        assert_eq!(payload.ticket, vec![2u8; 32]);
+    }
+
+    #[test]
+    fn test_drawbridge_hint_payload_on_non_hint() {
+        let event = Event::commit(vec![], 0, vec![]);
+        assert!(event.drawbridge_hint_payload().is_none());
+
+        let msg = Event::legacy_message(vec![], 0, b"text");
+        assert!(msg.drawbridge_hint_payload().is_none());
+    }
+
+    #[test]
     fn test_backward_compat_no_message_id() {
         // Simulate a legacy event without message_id or transcript integrity fields
         let json = r#"{"kind":"message","group_id":[1,2,3],"epoch":0,"payload":[104,105]}"#;
@@ -573,6 +655,7 @@ impl<'de> Deserialize<'de> for EventKind {
                 "welcome" => EventKind::Control(ControlKind::Welcome),
                 "checkpoint" => EventKind::Control(ControlKind::Checkpoint),
                 "reaction" => EventKind::Modifier(ModifierKind::Reaction),
+                "drawbridge_hint" => EventKind::Control(ControlKind::DrawbridgeHint),
                 _ => EventKind::Unknown(raw),
             };
             Ok(legacy)
@@ -586,6 +669,7 @@ impl ControlKind {
             ControlKind::Commit => format!("{domain}.commit"),
             ControlKind::Welcome => format!("{domain}.welcome"),
             ControlKind::Checkpoint => format!("{domain}.checkpoint"),
+            ControlKind::DrawbridgeHint => format!("{domain}.drawbridge_hint"),
             ControlKind::Unknown(v) => format!("{domain}.{}", v),
         }
     }
@@ -595,6 +679,7 @@ impl ControlKind {
             "commit" => ControlKind::Commit,
             "welcome" => ControlKind::Welcome,
             "checkpoint" => ControlKind::Checkpoint,
+            "drawbridge_hint" => ControlKind::DrawbridgeHint,
             other => ControlKind::Unknown(other.to_string()),
         }
     }

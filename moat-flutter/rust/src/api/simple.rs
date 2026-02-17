@@ -1,7 +1,8 @@
 use flutter_rust_bridge::frb;
 use moat_core::{
-    self, ControlKind, EncryptResult, Event, EventKind, MoatCredential, MoatSession,
-    ModifierKind, ReactionPayload as CoreReactionPayload, SenderInfo, WelcomeResult,
+    self, ControlKind, DrawbridgeHintPayload as CoreDrawbridgeHintPayload, EncryptResult, Event,
+    EventKind, MoatCredential, MoatSession, ModifierKind,
+    ReactionPayload as CoreReactionPayload, SenderInfo, WelcomeResult,
 };
 use std::sync::Mutex;
 
@@ -290,6 +291,7 @@ pub enum EventKindDto {
     Welcome,
     Checkpoint,
     Reaction,
+    DrawbridgeHint,
     Unknown,
 }
 
@@ -306,6 +308,13 @@ pub struct EventDto {
 pub struct ReactionPayloadDto {
     pub emoji: String,
     pub target_message_id: Vec<u8>,
+}
+
+/// Drawbridge hint payload extracted from a DrawbridgeHint event.
+pub struct DrawbridgeHintPayloadDto {
+    pub url: String,
+    pub device_id: Vec<u8>,
+    pub ticket: Vec<u8>,
 }
 
 impl EventDto {
@@ -329,6 +338,17 @@ impl EventDto {
                 event.message_id = self.message_id;
                 event
             }
+            EventKindDto::DrawbridgeHint => {
+                let hint: CoreDrawbridgeHintPayload =
+                    serde_json::from_slice(&self.payload).expect("invalid drawbridge hint payload");
+                let device_id: [u8; 16] = hint
+                    .device_id
+                    .try_into()
+                    .expect("device_id must be 16 bytes");
+                let ticket: [u8; 32] =
+                    hint.ticket.try_into().expect("ticket must be 32 bytes");
+                Event::drawbridge_hint(&self.group_id, self.epoch, &hint.url, &device_id, &ticket)
+            }
             EventKindDto::Unknown => {
                 panic!("cannot convert Unknown event to core Event")
             }
@@ -342,6 +362,7 @@ impl EventDto {
                 EventKind::Control(ControlKind::Commit) => EventKindDto::Commit,
                 EventKind::Control(ControlKind::Welcome) => EventKindDto::Welcome,
                 EventKind::Control(ControlKind::Checkpoint) => EventKindDto::Checkpoint,
+                EventKind::Control(ControlKind::DrawbridgeHint) => EventKindDto::DrawbridgeHint,
                 EventKind::Modifier(ModifierKind::Reaction) => EventKindDto::Reaction,
                 EventKind::Modifier(_) | EventKind::Control(_) | EventKind::Unknown(_) => {
                     EventKindDto::Unknown
@@ -376,6 +397,21 @@ impl EventDto {
         Some(ReactionPayloadDto {
             emoji: rp.emoji,
             target_message_id: rp.target_message_id,
+        })
+    }
+
+    /// Parse the payload as a DrawbridgeHint. Only valid when kind is DrawbridgeHint.
+    /// Returns None if this is not a DrawbridgeHint event or if the payload is malformed.
+    #[frb(sync)]
+    pub fn drawbridge_hint_payload(&self) -> Option<DrawbridgeHintPayloadDto> {
+        if !matches!(self.kind, EventKindDto::DrawbridgeHint) {
+            return None;
+        }
+        let hint: CoreDrawbridgeHintPayload = serde_json::from_slice(&self.payload).ok()?;
+        Some(DrawbridgeHintPayloadDto {
+            url: hint.url,
+            device_id: hint.device_id,
+            ticket: hint.ticket,
         })
     }
 }
@@ -454,6 +490,30 @@ pub fn derive_next_tag(
         .derive_next_tag(&group_id, &key_bundle)
         .map(|t| t.to_vec())
         .map_err(|e| e.to_string())
+}
+
+/// Generate a random 32-byte Drawbridge ticket.
+#[frb(sync)]
+pub fn generate_drawbridge_ticket() -> Vec<u8> {
+    MoatSession::generate_drawbridge_ticket().to_vec()
+}
+
+/// Create a DrawbridgeHint event for the session's device.
+#[frb(sync)]
+pub fn create_drawbridge_hint(
+    handle: &MoatSessionHandle,
+    group_id: Vec<u8>,
+    url: String,
+    ticket: Vec<u8>,
+) -> Result<EventDto, String> {
+    let ticket_arr: [u8; 32] = ticket
+        .try_into()
+        .map_err(|_| "ticket must be 32 bytes".to_string())?;
+    let session = handle.inner.lock().unwrap();
+    let event = session
+        .create_drawbridge_hint(&group_id, &url, &ticket_arr)
+        .map_err(|e| e.to_string())?;
+    Ok(EventDto::from_core(event))
 }
 
 /// Pad plaintext to bucket size (256, 1024, or 4096 bytes).
@@ -850,6 +910,66 @@ mod tests {
         let restored_rp = restored_core.reaction_payload().unwrap();
         assert_eq!(restored_rp.emoji, "👍");
         assert_eq!(restored_rp.target_message_id, target_id);
+    }
+
+    #[test]
+    fn test_generate_drawbridge_ticket() {
+        let t1 = generate_drawbridge_ticket();
+        let t2 = generate_drawbridge_ticket();
+        assert_eq!(t1.len(), 32);
+        assert_eq!(t2.len(), 32);
+        assert_ne!(t1, t2);
+    }
+
+    #[test]
+    fn test_create_drawbridge_hint_dto() {
+        let handle = MoatSessionHandle::new_session();
+        let kp = handle
+            .generate_key_package("did:plc:alice".into(), "Desktop".into())
+            .unwrap();
+        let group_id = handle
+            .create_group("did:plc:alice".into(), "Desktop".into(), kp.key_bundle)
+            .unwrap();
+
+        let ticket = generate_drawbridge_ticket();
+        let dto = create_drawbridge_hint(
+            &handle,
+            group_id,
+            "wss://example.com/ws".to_string(),
+            ticket.clone(),
+        )
+        .unwrap();
+        assert!(matches!(dto.kind, EventKindDto::DrawbridgeHint));
+        assert!(dto.message_id.is_none());
+
+        let payload = dto.drawbridge_hint_payload().unwrap();
+        assert_eq!(payload.url, "wss://example.com/ws");
+        assert_eq!(payload.ticket, ticket);
+        assert_eq!(payload.device_id, handle.device_id());
+    }
+
+    #[test]
+    fn test_drawbridge_hint_dto_conversion_roundtrip() {
+        let event = Event::drawbridge_hint(b"group", 3, "wss://relay.example.com", &[7u8; 16], &[9u8; 32]);
+        let dto = EventDto::from_core(event.clone());
+        assert!(matches!(dto.kind, EventKindDto::DrawbridgeHint));
+
+        let back = dto.into_core();
+        assert_eq!(back.kind, event.kind);
+        assert_eq!(back.group_id, event.group_id);
+        assert_eq!(back.payload, event.payload);
+    }
+
+    #[test]
+    fn test_drawbridge_hint_payload_on_non_hint_dto() {
+        let dto = EventDto {
+            kind: EventKindDto::Message,
+            group_id: vec![1, 2, 3],
+            epoch: 0,
+            payload: b"text".to_vec(),
+            message_id: None,
+        };
+        assert!(dto.drawbridge_hint_payload().is_none());
     }
 
     #[test]
