@@ -367,100 +367,256 @@ fn test_drawbridge_hint_roundtrip() {
 
 ---
 
-## Phase 3: CLI Multi-Drawbridge Support (moat-cli)
+## Phase 3: CLI Multi-Drawbridge Support (moat-cli + moat-drawbridge)
 
-### 3.1 Drawbridge Connection State
+Phase 3 adds full Drawbridge WebSocket support to the CLI: connecting to your own Drawbridge as a sender (DID-authenticated, `event_posted` + ticket management), and connecting to partners' Drawbridges as a recipient (ticket-authenticated, `watch_tags` + `new_event` notifications). It also includes a Drawbridge server auth change to verify signatures against MLS key packages.
+
+**Key design decisions:**
+- **Per-device tickets**: Each device generates its own ticket independently. One connection per (URL, ticket) pair. Avoids cross-device ticket coordination.
+- **One connection per ticket**: A single WebSocket per (URL, ticket). Future optimization: multi-ticket per connection via an `add_ticket` message (noted but not implemented here — would slightly degrade privacy since the Drawbridge could correlate tickets on the same connection).
+- **Immediate targeted fetch**: On `new_event`, fetch from the sender's PDS using the existing `fetch_events_from_did` cursor (not single-rkey fetch). Catches any events posted since last cursor.
+- **Reduced polling**: Background poll interval increases from 5s to 30s when Drawbridge connections are active.
+- **Self-sync deferred**: Multi-device sync via Drawbridge (watching your own other devices) is deferred to a later phase. Polling handles it for now.
+- **tokio-tungstenite**: WebSocket library for async compatibility with existing Tokio runtime.
+
+### 3.1 Drawbridge Server Auth Change (moat-drawbridge)
+
+Replace DID document verification with MLS key package verification for sender authentication.
+
+#### 3.1.1 Protocol Change
+
+Extend `challenge_response` to include the Ed25519 public key:
+
+```go
+// Updated in messages.go
+type ChallengeResponseMsg struct {
+    Type      string `json:"type"`       // "challenge_response"
+    DID       string `json:"did"`
+    Signature string `json:"signature"`  // base64
+    Timestamp int64  `json:"timestamp"`
+    PublicKey string `json:"public_key"` // base64 Ed25519 public key (NEW)
+}
+```
+
+#### 3.1.2 Auth Flow
+
+1. Client sends `request_challenge`
+2. Server sends `challenge{nonce}`
+3. Client signs `nonce + "\n" + relay_url + "\n" + timestamp + "\n"` with MLS identity key (Ed25519)
+4. Client sends `challenge_response{did, signature, timestamp, public_key}`
+5. Server verifies signature against the provided public key (fast, local)
+6. Server sends `authenticated` immediately
+7. Server async-verifies the public key exists in the DID's `social.moat.keyPackage` PDS records (same pattern as existing async PDS verification for `event_posted`)
+
+#### 3.1.3 Key Package Verification (Go)
+
+Add to `verify.go` or new `key_verify.go`:
+
+```go
+func (r *Relay) asyncVerifyKeyPackage(did string, claimedPubKey []byte) {
+    // 1. Resolve DID -> PDS endpoint (reuse existing DID resolution)
+    // 2. Fetch com.atproto.repo.listRecords for social.moat.keyPackage
+    // 3. For each key package record, search for the claimedPubKey bytes
+    //    within the serialized key package blob (byte substring search)
+    // 4. If found in any key package: verification passes
+    // 5. If not found: apply soft rate limit (same as event_posted verification failure)
+}
+```
+
+The Ed25519 public key is 32 bytes and appears as a raw substring in the serialized MLS key package. No MLS parsing library needed — a byte-level search suffices.
+
+#### 3.1.4 Remove Old Auth
+
+Remove the DID document `#atproto` verification method lookup from `auth.go`. The only verification path is now key package-based.
+
+### 3.2 CLI Drawbridge Module
+
+Add new dependency to `crates/moat-cli/Cargo.toml`:
+
+```toml
+tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
+futures-util = "0.3"
+```
 
 Add new module `src/drawbridge.rs`:
 
 ```rust
 use std::collections::HashMap;
 use tokio::sync::mpsc;
-use tokio_tungstenite::tungstenite::Message;
 
-/// Manages connections to multiple Drawbridges
+/// Manages connections to multiple Drawbridges.
+///
+/// Architecture:
+/// - Field on App struct (not a standalone service)
+/// - WebSocket read loops run as tokio::spawn tasks
+/// - Notifications flow back through the existing BgEvent channel
+/// - Write operations (event_posted, watch_tags, etc.) go through
+///   stored write-halves of the WebSocket splits
 pub struct DrawbridgeManager {
     /// Our own Drawbridge (sender mode, DID-authenticated)
-    own_drawbridge: Option<OwnDrawbridge>,
+    own: Option<OwnDrawbridge>,
 
     /// Partner Drawbridges (recipient mode, ticket-authenticated)
-    /// Key: Drawbridge URL
-    partner_drawbridges: HashMap<String, PartnerDrawbridge>,
+    /// Key: (URL, ticket_hex) — one connection per (URL, ticket) pair
+    /// Note: a future optimization could multiplex tickets on a single
+    /// connection via an `add_ticket` protocol message. This would reduce
+    /// connection count but slightly degrade privacy, since the Drawbridge
+    /// operator could correlate which tickets belong to the same recipient.
+    partners: HashMap<(String, String), PartnerDrawbridge>,
 
-    /// Mapping: (DID, DeviceId) -> (URL, Ticket)
-    hints: HashMap<(String, [u8; 16]), DrawbridgeHint>,
+    /// Received hints: (DID, device_id_hex) -> hint
+    /// Used to look up which partner Drawbridge to contact for a given sender device
+    hints: HashMap<(String, String), StoredHint>,
+
+    /// Channel for sending BgEvents back to the main App loop
+    bg_tx: mpsc::UnboundedSender<BgEvent>,
 }
 
-pub struct OwnDrawbridge {
+struct OwnDrawbridge {
     url: String,
-    connection: WebSocketConnection,
-    registered_tickets: HashMap<Vec<u8>, String>, // ticket -> conversation_id (for tracking)
+    /// Write half of the WebSocket (read half runs in a spawned task)
+    writer: SplitSink<WebSocketStream, Message>,
+    /// Tickets registered on this Drawbridge: ticket_hex -> group_id_hex
+    registered_tickets: HashMap<String, String>,
 }
 
-pub struct PartnerDrawbridge {
+struct PartnerDrawbridge {
     url: String,
-    connection: WebSocketConnection,
     ticket: [u8; 32],
-    watching_dids: Vec<String>, // which DIDs we're watching on this Drawbridge
+    /// Write half of the WebSocket
+    writer: SplitSink<WebSocketStream, Message>,
+    /// Which (DID, device_id_hex) pair this connection is for
+    partner_did: String,
+    partner_device_id: [u8; 16],
+    /// Tags currently being watched on this connection
+    watching_tags: Vec<[u8; 16]>,
+    /// Connection state for reconnect
+    state: ConnectionState,
 }
 
-#[derive(Clone)]
-pub struct DrawbridgeHint {
+enum ConnectionState {
+    Connected,
+    Reconnecting { attempt: u32, next_retry: Instant },
+    Failed,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct StoredHint {
     pub url: String,
-    pub device_id: [u8; 16],
-    pub ticket: [u8; 32],
+    pub device_id_hex: String,
+    pub ticket_hex: String,
+    pub partner_did: String,
+    pub group_id_hex: String,
 }
 ```
 
-### 3.2 Connection Lifecycle
+### 3.3 Connection Lifecycle
 
 ```rust
 impl DrawbridgeManager {
-    /// Connect to our own Drawbridge as sender
-    pub async fn connect_own(&mut self, url: &str, credential: &MoatCredential, key_bundle: &KeyBundle) -> Result<()> {
-        // 1. WebSocket connect
-        // 2. Receive challenge
-        // 3. Sign challenge with identity key
-        // 4. Send challenge_response
-        // 5. Receive authenticated
-    }
+    /// Connect to our own Drawbridge as sender (DID challenge-response).
+    ///
+    /// Called after login if a Drawbridge URL is configured.
+    /// 1. WebSocket connect to url
+    /// 2. Send request_challenge
+    /// 3. Receive challenge{nonce}
+    /// 4. Sign: nonce + "\n" + url + "\n" + timestamp + "\n" with MLS identity key
+    /// 5. Send challenge_response{did, signature, timestamp, public_key}
+    /// 6. Receive authenticated
+    /// 7. Split WebSocket: spawn read loop (sends BgEvents), store write half
+    /// 8. Re-register all persisted tickets
+    pub async fn connect_own(
+        &mut self,
+        url: &str,
+        did: &str,
+        identity_key: &[u8], // Ed25519 private key from KeyBundle
+    ) -> Result<()>
 
-    /// Register a ticket on our own Drawbridge
-    pub async fn register_ticket(&mut self, ticket: &[u8; 32], conversation_id: &str) -> Result<()> {
-        // Send register_ticket message
-    }
+    /// Connect to a partner's Drawbridge as recipient (ticket auth).
+    ///
+    /// Called when a DrawbridgeHint is received or on startup from persisted hints.
+    /// 1. WebSocket connect to url
+    /// 2. Send ticket_auth{ticket}
+    /// 3. Receive ticket_authenticated
+    /// 4. Split WebSocket: spawn read loop, store write half
+    /// 5. Send watch_tags with relevant tags for this partner's device
+    ///
+    /// On connection failure: silent retry with exponential backoff
+    /// (5s, 10s, 30s, 60s, max 5min). Continue polling PDS as fallback.
+    /// No UI error unless persistent failure.
+    async fn connect_partner(&mut self, hint: &StoredHint) -> Result<()>
 
-    /// Handle incoming DrawbridgeHint from a partner
-    pub async fn handle_hint(&mut self, hint: DrawbridgeHint, partner_did: &str) -> Result<()> {
-        let key = (partner_did.to_string(), hint.device_id);
-        self.hints.insert(key, hint.clone());
+    /// Handle incoming DrawbridgeHint from a decrypted MLS event.
+    ///
+    /// Stores the hint, connects to the partner's Drawbridge if not
+    /// already connected, and registers tags for that partner device.
+    pub async fn handle_hint(
+        &mut self,
+        partner_did: &str,
+        device_id: &[u8; 16],
+        url: &str,
+        ticket: &[u8; 32],
+        group_id: &str,
+    ) -> Result<()>
 
-        // Connect to this Drawbridge if not already connected
-        if !self.partner_drawbridges.contains_key(&hint.url) {
-            self.connect_partner(&hint.url, &hint.ticket).await?;
-        }
+    /// Register a ticket on our own Drawbridge.
+    /// Called after creating a conversation or on reconnect.
+    pub async fn register_ticket(&mut self, ticket: &[u8; 32], group_id: &str) -> Result<()>
 
-        // Register tags for this partner on that Drawbridge
-        self.update_partner_tags(&hint.url, partner_did).await?;
+    /// Send event_posted on our own Drawbridge.
+    /// Called from the publish background task after PDS publish succeeds.
+    pub async fn notify_event_posted(&mut self, tag: &[u8; 16], rkey: &str) -> Result<()>
 
-        Ok(())
-    }
+    /// Update watched tags for a specific partner Drawbridge connection.
+    /// Called after populate_candidate_tags when epoch changes.
+    /// Sends the full set of relevant tags via watch_tags (replace, not incremental).
+    pub async fn update_tags_for_partner(
+        &mut self,
+        partner_did: &str,
+        device_id: &[u8; 16],
+        tags: &[[u8; 16]],
+    ) -> Result<()>
 
-    /// Connect to a partner's Drawbridge as recipient
-    async fn connect_partner(&mut self, url: &str, ticket: &[u8; 32]) -> Result<()> {
-        // 1. WebSocket connect
-        // 2. Send ticket_auth
-        // 3. Receive ticket_authenticated
-    }
+    /// Reconnect logic for disconnected partner Drawbridges.
+    /// Called periodically from tick(). Retries with exponential backoff.
+    pub async fn retry_disconnected(&mut self) -> Result<()>
 
-    /// Send event_posted on our own Drawbridge
-    pub async fn notify_event_posted(&mut self, tag: &[u8; 16], rkey: &str) -> Result<()> {
-        // Only works if we have an own_drawbridge connection
-    }
+    /// Get the number of active connections (for status bar).
+    pub fn active_connection_count(&self) -> usize
 }
 ```
 
-### 3.3 Integration with App
+### 3.4 BgEvent Extensions
+
+Add new variants to `BgEvent` in `app.rs`:
+
+```rust
+pub(crate) enum BgEvent {
+    // ... existing variants ...
+
+    /// Drawbridge new_event notification received from a partner's Drawbridge.
+    DrawbridgeNewEvent {
+        tag: [u8; 16],
+        rkey: String,
+        did: String,
+    },
+
+    /// A partner Drawbridge connection was lost.
+    DrawbridgeDisconnected {
+        url: String,
+        ticket_hex: String,
+        reason: String,
+    },
+
+    /// A partner Drawbridge connection was (re)established.
+    DrawbridgeConnected {
+        url: String,
+        ticket_hex: String,
+    },
+}
+```
+
+### 3.5 Integration with App
 
 Modify `src/app.rs`:
 
@@ -470,63 +626,320 @@ pub struct App {
 
     /// Drawbridge connection manager
     drawbridge: DrawbridgeManager,
-}
 
-impl App {
-    /// Called when we decrypt a DrawbridgeHint event
-    async fn handle_drawbridge_hint(&mut self, event: &Event, sender_did: &str) {
-        if let EventKind::DrawbridgeHint { url, device_id, ticket } = &event.kind {
-            let hint = DrawbridgeHint {
-                url: url.clone(),
-                device_id: device_id.clone().try_into().unwrap(),
-                ticket: ticket.clone().try_into().unwrap(),
-            };
-            self.drawbridge.handle_hint(hint, sender_did).await.ok();
-        }
-    }
-
-    /// Called after creating a new conversation
-    async fn send_drawbridge_hint(&mut self, group_id: &[u8]) -> Result<()> {
-        if let Some(own) = &self.drawbridge.own_drawbridge {
-            // Generate ticket for this conversation
-            let ticket = MoatSession::generate_drawbridge_ticket();
-
-            // Register with our Drawbridge
-            self.drawbridge.register_ticket(&ticket, &hex::encode(group_id)).await?;
-
-            // Create and send the hint as an MLS message
-            let hint_event = self.session.create_drawbridge_hint(
-                group_id,
-                &own.url,
-                &ticket,
-            );
-            // ... encrypt and publish ...
-        }
-        Ok(())
-    }
+    /// Drawbridge URL for this device (persisted via --drawbridge-url flag)
+    drawbridge_url: Option<String>,
 }
 ```
 
-### 3.4 Persistence
+#### 3.5.1 Handling DrawbridgeHint Events
 
-Add to `KeyStore`:
+In `process_poll_results`, when decrypting an event with `EventKind::Control(ControlKind::DrawbridgeHint)`:
 
 ```rust
-/// Stored Drawbridge hints from conversation partners
-#[derive(Serialize, Deserialize)]
-pub struct StoredDrawbridgeHints {
-    /// (DID, DeviceId hex) -> hint
-    hints: HashMap<(String, String), StoredHint>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct StoredHint {
-    url: String,
-    ticket_hex: String,
+ControlKind::DrawbridgeHint => {
+    if let Some(payload) = event.drawbridge_hint_payload() {
+        self.drawbridge.handle_hint(
+            &sender_did,
+            &payload.device_id.try_into().unwrap(),
+            &payload.url,
+            &payload.ticket.try_into().unwrap(),
+            &conv_id,
+        ).await.ok();
+        self.save_drawbridge_state();
+    }
 }
 ```
 
-Save to `~/.moat/drawbridge_hints.json`.
+#### 3.5.2 Auto-Send DrawbridgeHint on Conversation Creation
+
+In `start_new_conversation`, after publishing the Welcome:
+
+```rust
+// 10. If Drawbridge is configured, send DrawbridgeHint to the new conversation
+if let Some(ref url) = self.drawbridge_url {
+    let ticket = MoatSession::generate_drawbridge_ticket();
+
+    // Register ticket on our own Drawbridge
+    self.drawbridge.register_ticket(&ticket, &conv_id).await?;
+
+    // Create and encrypt the hint
+    let hint_event = self.mls.create_drawbridge_hint(&group_id, url, &ticket)?;
+    let encrypted = self.mls.encrypt_event(&group_id, &key_bundle, &hint_event)?;
+    self.save_mls_state()?;
+    self.keys.store_group_state(&conv_id, &encrypted.new_group_state)?;
+
+    // Publish the hint
+    self.client.as_ref().unwrap()
+        .publish_event(&encrypted.tag, &encrypted.ciphertext).await?;
+
+    self.save_drawbridge_state();
+}
+```
+
+#### 3.5.3 Handling new_event Notifications
+
+In `handle_bg_event`:
+
+```rust
+BgEvent::DrawbridgeNewEvent { tag, rkey, did } => {
+    self.debug_log.log(&format!(
+        "drawbridge: new_event tag={:02x?} rkey={} did={}",
+        &tag[..4], &rkey, &did[..20]
+    ));
+    // Trigger an immediate fetch from this DID using existing cursor
+    // (fetch_events_from_did with last_rkey, same as poll but targeted)
+    self.spawn_targeted_fetch(&did);
+}
+
+BgEvent::DrawbridgeDisconnected { url, ticket_hex, reason } => {
+    self.debug_log.log(&format!(
+        "drawbridge: disconnected from {} (ticket {}...): {}",
+        url, &ticket_hex[..8], reason
+    ));
+}
+
+BgEvent::DrawbridgeConnected { url, ticket_hex } => {
+    self.debug_log.log(&format!(
+        "drawbridge: connected to {} (ticket {}...)",
+        url, &ticket_hex[..8]
+    ));
+}
+```
+
+#### 3.5.4 event_posted After Publishing
+
+In the `tokio::spawn` task within `send_message_nonblocking`, after `publish_event` succeeds:
+
+```rust
+tokio::spawn(async move {
+    match client.publish_event(&tag, &ciphertext).await {
+        Ok(uri) => {
+            // Extract rkey from URI (format: at://did/collection/rkey)
+            let rkey = uri.split('/').last().unwrap_or("").to_string();
+
+            // Notify Drawbridge immediately (lowest latency)
+            if let Some(ref mut own) = drawbridge_writer {
+                let msg = serde_json::json!({
+                    "type": "event_posted",
+                    "tag": hex::encode(&tag),
+                    "rkey": &rkey,
+                });
+                let _ = own.send(Message::Text(msg.to_string())).await;
+            }
+
+            let _ = tx.send(BgEvent::SendPublished { uri, conv_id: conv_id_clone, tag });
+        }
+        Err(e) => {
+            let _ = tx.send(BgEvent::SendFailed(format!("{e}")));
+        }
+    }
+});
+```
+
+#### 3.5.5 Polling Interval Change
+
+In `tick()`, increase the poll interval when Drawbridge connections are active:
+
+```rust
+let poll_interval = if self.drawbridge.active_connection_count() > 0 {
+    Duration::from_secs(30) // Reduced polling when Drawbridge is active
+} else {
+    Duration::from_secs(5)  // Original polling interval
+};
+```
+
+#### 3.5.6 Tag Updates After Epoch Change
+
+After processing a Commit event (epoch change) in `process_poll_results`, update tags on the relevant partner Drawbridge:
+
+```rust
+ControlKind::Commit => {
+    // ... existing epoch update and populate_candidate_tags ...
+
+    // Update tags on partner Drawbridge connections for this conversation
+    self.update_drawbridge_tags_for_conversation(&conv_id);
+}
+```
+
+Where `update_drawbridge_tags_for_conversation` filters `tag_map` to find tags relevant to each partner device in this conversation and sends `watch_tags` to their respective Drawbridge connections.
+
+#### 3.5.7 Startup Reconnection
+
+After successful login (in `handle_bg_event` for `BgEvent::LoggedIn`):
+
+```rust
+BgEvent::LoggedIn { client, did, .. } => {
+    // ... existing login handling ...
+
+    // Connect to own Drawbridge if configured
+    if let Some(ref url) = self.drawbridge_url {
+        self.drawbridge.connect_own(url, &did, &identity_key).await.ok();
+    }
+
+    // Reconnect to all persisted partner Drawbridges
+    self.drawbridge.reconnect_all_partners().await;
+}
+```
+
+### 3.6 CLI Configuration
+
+Add `--drawbridge-url` flag to `Args` in `main.rs`:
+
+```rust
+#[derive(Parser)]
+struct Args {
+    /// Custom storage directory (default: ~/.moat)
+    #[arg(short = 's', long = "storage-dir", global = true)]
+    storage_dir: Option<PathBuf>,
+
+    /// Drawbridge WebSocket URL (e.g., wss://drawbridge.moat.social/ws)
+    /// Persisted after first use.
+    #[arg(long = "drawbridge-url", global = true)]
+    drawbridge_url: Option<String>,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+```
+
+On first use, the URL is saved to `drawbridge.json` and reused for subsequent sessions. The flag overrides the persisted value.
+
+### 3.7 Persistence
+
+All Drawbridge state is stored in a single file `~/.moat/drawbridge.json`:
+
+```rust
+#[derive(Serialize, Deserialize, Default)]
+pub struct DrawbridgeState {
+    /// Our own Drawbridge URL (set via --drawbridge-url)
+    pub own_url: Option<String>,
+
+    /// Tickets we've registered on our own Drawbridge
+    /// Key: group_id_hex, Value: ticket_hex
+    pub own_tickets: HashMap<String, String>,
+
+    /// Received DrawbridgeHints from conversation partners
+    /// Key: (partner_did, device_id_hex)
+    pub partner_hints: HashMap<(String, String), StoredHint>,
+}
+```
+
+Methods added to `KeyStore`:
+
+```rust
+impl KeyStore {
+    pub fn load_drawbridge_state(&self) -> Result<DrawbridgeState>
+    pub fn store_drawbridge_state(&self, state: &DrawbridgeState) -> Result<()>
+}
+```
+
+### 3.8 UI Changes
+
+#### 3.8.1 Status Bar
+
+Add a Drawbridge connection indicator to the status bar in `ui.rs`:
+
+```
+⚡ 3 relays | alice.bsky.social | 5 conversations
+```
+
+Shows the count of active Drawbridge connections (own + partner). When no Drawbridge is configured, the indicator is absent.
+
+#### 3.8.2 Debug Logging
+
+All Drawbridge connection events, auth flows, tag updates, and errors are logged to `debug.log` via the existing `DebugLog`.
+
+### 3.9 Testing
+
+#### 3.9.1 Go Server Tests
+
+Add to `relay_test.go`:
+
+```go
+func TestKeyPackageAuth(t *testing.T) {
+    // 1. Start relay
+    // 2. Connect, request_challenge
+    // 3. Sign with Ed25519 key, send challenge_response with public_key
+    // 4. Verify authenticated response
+    // 5. Verify async key package check runs
+}
+
+func TestTicketAuthFlow(t *testing.T) {
+    // 1. Sender connects with key package auth
+    // 2. Sender registers ticket
+    // 3. Recipient connects with ticket
+    // 4. Verify recipient can watch_tags but not event_posted
+    // 5. Verify recipient receives new_event when sender posts
+}
+
+func TestTicketRevocationReconnect(t *testing.T) {
+    // 1. Register ticket, recipient connects
+    // 2. Revoke ticket
+    // 3. Recipient disconnects
+    // 4. Recipient reconnects — verify rejected
+}
+```
+
+#### 3.9.2 Rust Unit Tests
+
+Add to `crates/moat-cli/src/drawbridge.rs`:
+
+```rust
+#[cfg(test)]
+mod tests {
+    // Test DrawbridgeState serialization/deserialization roundtrip
+    // Test hint storage and lookup
+    // Test tag filtering for a specific partner device
+    // Test connection state transitions
+    // Test exponential backoff timing
+}
+```
+
+#### 3.9.3 Integration Tests
+
+Automated integration test that spins up a local Drawbridge server and tests the full flow:
+
+```rust
+// In crates/moat-cli/tests/drawbridge_integration.rs or similar
+
+#[tokio::test]
+async fn test_drawbridge_end_to_end() {
+    // 1. Start a local Drawbridge server (Go binary or in-process mock)
+    // 2. Alice CLI: connect as sender, register ticket
+    // 3. Bob CLI: connect as recipient with ticket, watch tags
+    // 4. Alice: publish event, send event_posted
+    // 5. Bob: verify new_event received
+    // 6. Bob: fetch and decrypt event
+}
+```
+
+### 3.10 File Changes Summary
+
+| File | Changes |
+|------|---------|
+| `moat-drawbridge/messages.go` | Add `public_key` field to `ChallengeResponseMsg` |
+| `moat-drawbridge/auth.go` | Replace DID document verification with provided-pubkey verification |
+| `moat-drawbridge/verify.go` | Add `asyncVerifyKeyPackage` (fetch key packages from PDS, check pubkey exists) |
+| `crates/moat-cli/Cargo.toml` | Add `tokio-tungstenite`, `futures-util` dependencies |
+| `crates/moat-cli/src/drawbridge.rs` | **New file**: `DrawbridgeManager`, connection lifecycle, reconnect logic |
+| `crates/moat-cli/src/app.rs` | Add `drawbridge` field, handle DrawbridgeHint events, auto-send hints, handle new_event, event_posted in publish task, adjust poll interval |
+| `crates/moat-cli/src/main.rs` | Add `--drawbridge-url` CLI flag, pass to App |
+| `crates/moat-cli/src/keystore.rs` | Add `DrawbridgeState` persistence (load/store `drawbridge.json`) |
+| `crates/moat-cli/src/ui.rs` | Add relay count to status bar |
+
+### 3.11 Implementation Order
+
+1. **Drawbridge server auth change** — Update Go server to accept `public_key` in `challenge_response`, remove old DID doc verification, add async key package verification
+2. **CLI drawbridge module** — `DrawbridgeManager` struct, WebSocket connect/auth for both modes, read/write split, BgEvent integration
+3. **Persistence** — `DrawbridgeState` in KeyStore, `drawbridge.json` file
+4. **CLI flag + startup** — `--drawbridge-url`, auto-connect on login, reconnect from persisted state
+5. **Sender integration** — `event_posted` in publish task, `register_ticket` on conversation creation, auto-send DrawbridgeHint
+6. **Recipient integration** — Handle DrawbridgeHint events, connect to partner Drawbridges, `watch_tags`, handle `new_event`
+7. **Tag updates** — Update partner Drawbridge tags after epoch changes
+8. **Reconnect + backoff** — Exponential backoff for failed partner connections
+9. **UI** — Status bar relay indicator
+10. **Tests** — Go server tests, Rust unit tests, integration tests
 
 ---
 

@@ -1,0 +1,34 @@
+[
+  {
+    "message_hex": "6162633132330a7773733a2f2f72656c61792e6578616d706c652e636f6d2f77730a313730303030303030300a",
+    "nonce": "abc123",
+    "public_key_b64": "GX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE=",
+    "signature_b64": "O/YUtG+5d9DizJ1etSa3B6EOL/DpOhrbXzWUIMufI7p8+zJjF4B00WPFQQ1GBSJ8HJI2zN45TT44vGN9MtDqBw==",
+    "timestamp": 1700000000,
+    "url": "wss://relay.example.com/ws"
+  },
+  {
+    "message_hex": "6e6f6e63655f78797a5f3738390a7773733a2f2f647261776272696467652e6d6f61742e736f6369616c2f77730a313730303030303030310a",
+    "nonce": "nonce_xyz_789",
+    "public_key_b64": "GX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE=",
+    "signature_b64": "5T/EnRlnYMySxruYZoWhQvl0hH8N8a7mUmTTsWzvqEk+LQye/4iocS4HSij5P0j8cQeo/DDYsMuL6a3CW3lvDw==",
+    "timestamp": 1700000001,
+    "url": "wss://drawbridge.moat.social/ws"
+  },
+  {
+    "message_hex": "73686f72740a7773733a2f2f612e622f77730a300a",
+    "nonce": "short",
+    "public_key_b64": "GX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE=",
+    "signature_b64": "2h+yuYqWeZ0cGnyLjcG8uJR5tHetSU5H09djc85No+4BdBSHaF/xruR+zvzJ+ScU3jGogny6m5cDBQ/LjprTCw==",
+    "timestamp": 0,
+    "url": "wss://a.b/ws"
+  },
+  {
+    "message_hex": "612d6c6f6e672d6e6f6e63652d76616c75652d666f722d74657374696e672d707572706f7365730a7773733a2f2f72656c61792e6578616d706c652e636f6d2f77730a313939393939393939390a",
+    "nonce": "a-long-nonce-value-for-testing-purposes",
+    "public_key_b64": "GX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE=",
+    "signature_b64": "LsFnGEB9jMSChsD4jqqeiE+vR/cWijS0if6XsMnKDGneThnL6GjfDwd01Z0bEGZHeYATmwclYz/0s4kis4YvCQ==",
+    "timestamp": 1999999999,
+    "url": "wss://relay.example.com/ws"
+  }
+]

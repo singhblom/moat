@@ -27,6 +27,11 @@ rand = { workspace = true }
 sha2 = { workspace = true }
 hex = "0.4"
 hostname = "0.4"
+tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
+futures-util = "0.3"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+base64 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+proptest = "1"

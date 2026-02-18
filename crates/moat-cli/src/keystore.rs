@@ -347,6 +347,29 @@ impl KeyStore {
         Ok(device_name)
     }
 
+    /// Load Drawbridge state from drawbridge.json
+    pub fn load_drawbridge_state(
+        &self,
+    ) -> Result<crate::drawbridge::DrawbridgeState> {
+        let path = self.base_path.join("drawbridge.json");
+        if !path.exists() {
+            return Ok(crate::drawbridge::DrawbridgeState::default());
+        }
+        let data = fs::read(&path)?;
+        let state: crate::drawbridge::DrawbridgeState = serde_json::from_slice(&data)?;
+        Ok(state)
+    }
+
+    /// Store Drawbridge state to drawbridge.json
+    pub fn store_drawbridge_state(
+        &self,
+        state: &crate::drawbridge::DrawbridgeState,
+    ) -> Result<()> {
+        let path = self.base_path.join("drawbridge.json");
+        let json = serde_json::to_vec_pretty(state)?;
+        self.write_key_file(&path, &json)
+    }
+
     // Internal helpers
 
     fn write_key_file(&self, path: &PathBuf, data: &[u8]) -> Result<()> {

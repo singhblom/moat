@@ -206,8 +206,15 @@ fn draw_conversations(frame: &mut Frame, app: &App, area: Rect) {
     };
     let style = Style::default().fg(color);
 
+    let relay_count = app.drawbridge.active_connection_count();
+    let title = if relay_count > 0 {
+        format!(" Conversations  [relay:{}] ", relay_count)
+    } else {
+        " Conversations ".to_string()
+    };
+
     let block = Block::default()
-        .title(" Conversations ")
+        .title(title)
         .title_style(style.add_modifier(Modifier::BOLD))
         .borders(Borders::ALL)
         .style(style);

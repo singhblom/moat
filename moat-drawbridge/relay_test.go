@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -38,9 +39,6 @@ func (r *mockResolver) Resolve(_ context.Context, did string) (*DIDDocument, err
 }
 
 func (r *mockResolver) addDID(did string, pubKey ed25519.PublicKey, pdsURL string) {
-	raw := append([]byte{0xed, 0x01}, pubKey...)
-	multibase := "z" + encodeBase58(raw)
-
 	doc := &DIDDocument{
 		ID: did,
 		VerificationMethod: []VerificationMethod{
@@ -48,7 +46,7 @@ func (r *mockResolver) addDID(did string, pubKey ed25519.PublicKey, pdsURL strin
 				ID:                 did + "#atproto",
 				Type:               "Multikey",
 				Controller:         did,
-				PublicKeyMultibase: multibase,
+				PublicKeyMultibase: "z" + base64.StdEncoding.EncodeToString(pubKey),
 			},
 		},
 		Service: []Service{
@@ -173,10 +171,11 @@ func (env *testEnv) connect(did string) *testClient {
 	timestamp := time.Now().Unix()
 	sig := signChallengeEd25519(priv, nonce, "ws://test-relay", timestamp)
 	tc.sendJSON(map[string]any{
-		"type":      "challenge_response",
-		"did":       did,
-		"signature": sig,
-		"timestamp": timestamp,
+		"type":       "challenge_response",
+		"did":        did,
+		"signature":  sig,
+		"timestamp":  timestamp,
+		"public_key": encodePublicKey(pub),
 	})
 
 	// Read authenticated
@@ -309,10 +308,11 @@ func TestAuthReject_BadSignature(t *testing.T) {
 
 	// Send bad signature
 	msg, _ = json.Marshal(map[string]any{
-		"type":      "challenge_response",
-		"did":       "did:plc:bad",
-		"signature": "aW52YWxpZA==", // "invalid" in base64
-		"timestamp": time.Now().Unix(),
+		"type":       "challenge_response",
+		"did":        "did:plc:bad",
+		"signature":  "aW52YWxpZA==", // "invalid" in base64
+		"timestamp":  time.Now().Unix(),
+		"public_key": encodePublicKey(pub),
 	})
 	conn.WriteMessage(websocket.TextMessage, msg)
 
@@ -352,10 +352,11 @@ func TestAuthReject_ExpiredTimestamp(t *testing.T) {
 	sig := signChallengeEd25519(priv, nonce, "ws://test-relay", timestamp)
 
 	msg, _ = json.Marshal(map[string]any{
-		"type":      "challenge_response",
-		"did":       "did:plc:expired",
-		"signature": sig,
-		"timestamp": timestamp,
+		"type":       "challenge_response",
+		"did":        "did:plc:expired",
+		"signature":  sig,
+		"timestamp":  timestamp,
+		"public_key": encodePublicKey(pub),
 	})
 	conn.WriteMessage(websocket.TextMessage, msg)
 
@@ -637,10 +638,11 @@ func TestChallengeResponseWithoutRequest(t *testing.T) {
 	sig := signChallengeEd25519(priv, "fake-nonce", "ws://test-relay", timestamp)
 
 	msg, _ := json.Marshal(map[string]any{
-		"type":      "challenge_response",
-		"did":       "did:plc:noRequest",
-		"signature": sig,
-		"timestamp": timestamp,
+		"type":       "challenge_response",
+		"did":        "did:plc:noRequest",
+		"signature":  sig,
+		"timestamp":  timestamp,
+		"public_key": encodePublicKey(pub),
 	})
 	conn.WriteMessage(websocket.TextMessage, msg)
 

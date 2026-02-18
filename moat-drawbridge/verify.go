@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/hex"
@@ -102,6 +103,89 @@ func decodeBytesField(raw json.RawMessage) ([]byte, error) {
 		return nil, err
 	}
 	return base64.StdEncoding.DecodeString(bytesObj.Bytes)
+}
+
+// asyncVerifyKeyPackage verifies that a claimed public key exists in the DID's
+// key package records on their PDS. This runs asynchronously after authentication
+// succeeds (same pattern as asyncVerify for event_posted).
+//
+// The Ed25519 public key (32 bytes) appears as a raw subsequence in the
+// serialized MLS key package blob. We do a byte-level search rather than
+// parsing the MLS structure.
+func (r *Relay) asyncVerifyKeyPackage(did string, claimedPubKey []byte) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Resolve DID to get PDS endpoint
+	doc, err := r.resolver.Resolve(ctx, did)
+	if err != nil {
+		r.log.Warn("key package verification: DID resolution failed", "did", did, "error", err)
+		r.rateLimiter.RecordFailure(did)
+		return
+	}
+
+	pdsURL, err := doc.GetPDSEndpoint()
+	if err != nil {
+		r.log.Warn("key package verification: no PDS endpoint", "did", did, "error", err)
+		r.rateLimiter.RecordFailure(did)
+		return
+	}
+
+	// Fetch key package records
+	reqURL := fmt.Sprintf("%s/xrpc/com.atproto.repo.listRecords?repo=%s&collection=%s&limit=50",
+		pdsURL,
+		url.QueryEscape(did),
+		url.QueryEscape("social.moat.keyPackage"),
+	)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+	if err != nil {
+		r.log.Warn("key package verification: request build failed", "did", did, "error", err)
+		r.rateLimiter.RecordFailure(did)
+		return
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		r.log.Warn("key package verification: PDS request failed", "did", did, "error", err)
+		r.rateLimiter.RecordFailure(did)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		r.log.Warn("key package verification: PDS returned error", "did", did, "status", resp.StatusCode)
+		r.rateLimiter.RecordFailure(did)
+		return
+	}
+
+	var result struct {
+		Records []struct {
+			Value struct {
+				KeyPackage json.RawMessage `json:"keyPackage"`
+			} `json:"value"`
+		} `json:"records"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		r.log.Warn("key package verification: failed to parse response", "did", did, "error", err)
+		r.rateLimiter.RecordFailure(did)
+		return
+	}
+
+	// Search for the claimed public key in any key package record
+	for _, record := range result.Records {
+		kpBytes, err := decodeBytesField(record.Value.KeyPackage)
+		if err != nil {
+			continue
+		}
+		if bytes.Contains(kpBytes, claimedPubKey) {
+			r.log.Info("key package verification passed", "did", did)
+			return
+		}
+	}
+
+	r.log.Warn("key package verification failed: public key not found in any key package", "did", did)
+	r.rateLimiter.RecordFailure(did)
 }
 
 // RateLimiter tracks per-DID verification failures and applies soft rate limits.

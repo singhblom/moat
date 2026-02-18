@@ -1,6 +1,7 @@
 //! Application state and logic
 
 use crate::{
+    drawbridge::DrawbridgeManager,
     keystore::{hex, GroupMetadata, KeyStore, StoredSession},
     message_helpers::{build_text_payload, render_message_preview},
 };
@@ -169,6 +170,59 @@ pub(crate) enum BgEvent {
     LoginFailed(String),
     /// Background poll error (non-fatal).
     PollError(String),
+
+    /// Drawbridge new_event notification received from a partner's Drawbridge.
+    DrawbridgeNewEvent {
+        tag: [u8; 16],
+        rkey: String,
+        did: String,
+    },
+
+    /// A partner Drawbridge connection was lost.
+    DrawbridgeDisconnected {
+        url: String,
+        ticket_hex: String,
+        reason: String,
+    },
+
+    /// A partner Drawbridge connection was (re)established.
+    DrawbridgeConnected {
+        url: String,
+        ticket_hex: String,
+    },
+
+    /// Signal to connect to own Drawbridge (async, handled in main loop).
+    DrawbridgeConnectOwn {
+        url: String,
+        did: String,
+        signature_key: Vec<u8>,
+        persisted_tickets: std::collections::HashMap<String, String>,
+    },
+
+    /// Signal to notify own Drawbridge about a published event (async).
+    DrawbridgeNotifyEventPosted {
+        tag: [u8; 16],
+        rkey: String,
+    },
+
+    /// Signal to update tags on a partner Drawbridge (async, handled in main loop).
+    DrawbridgeUpdateTags {
+        partner_did: String,
+        device_id_hex: String,
+        tags: Vec<[u8; 16]>,
+    },
+
+    /// Signal to handle a DrawbridgeHint (async, handled in main loop).
+    DrawbridgeHandleHint {
+        partner_did: String,
+        device_id: Vec<u8>,
+        url: String,
+        ticket: Vec<u8>,
+        group_id_hex: String,
+    },
+
+    /// Signal to retry disconnected partner Drawbridges (async).
+    DrawbridgeRetryDisconnected,
 }
 
 /// Main application state
@@ -223,13 +277,23 @@ pub struct App {
 
     // Prevent overlapping background tasks
     poll_in_flight: bool,
+
+    // Drawbridge connection manager
+    pub(crate) drawbridge: DrawbridgeManager,
+    /// Drawbridge URL for this device (from --drawbridge-url or persisted state)
+    pub(crate) drawbridge_url: Option<String>,
+    /// Last time we tried to reconnect disconnected partner Drawbridges
+    last_drawbridge_retry: Option<Instant>,
 }
 
 impl App {
     /// Create a new App instance
     ///
     /// If `storage_dir` is `None`, uses the default `~/.moat` directory.
-    pub fn new(storage_dir: Option<std::path::PathBuf>) -> Result<Self> {
+    pub fn new(
+        storage_dir: Option<std::path::PathBuf>,
+        drawbridge_url: Option<String>,
+    ) -> Result<Self> {
         // Determine the base storage directory
         let base_dir = match storage_dir {
             Some(dir) => dir,
@@ -267,6 +331,13 @@ impl App {
 
         let (bg_tx, bg_rx) = mpsc::unbounded_channel();
 
+        // Load Drawbridge state, preferring CLI flag over persisted URL
+        let drawbridge_state = keys.load_drawbridge_state().unwrap_or_default();
+        let resolved_drawbridge_url = drawbridge_url.or(drawbridge_state.own_url.clone());
+
+        let mut drawbridge = DrawbridgeManager::new(bg_tx.clone());
+        drawbridge.load_state(&drawbridge_state);
+
         Ok(Self {
             keys,
             client: None,
@@ -296,6 +367,9 @@ impl App {
             bg_tx,
             bg_rx,
             poll_in_flight: false,
+            drawbridge,
+            drawbridge_url: resolved_drawbridge_url,
+            last_drawbridge_retry: None,
         })
     }
 
@@ -353,16 +427,34 @@ impl App {
             self.spawn_auto_login();
         }
 
-        // Spawn background poll for new messages (every 5 seconds)
+        // Spawn background poll for new messages
+        // Use 30s interval when Drawbridge connections are active, 5s otherwise
         if self.client.is_some() && !self.poll_in_flight {
+            let poll_interval_secs = if self.drawbridge.active_connection_count() > 0 {
+                30
+            } else {
+                5
+            };
             let should_poll = self
                 .last_poll
-                .map(|t| t.elapsed().as_secs() >= 5)
+                .map(|t| t.elapsed().as_secs() >= poll_interval_secs)
                 .unwrap_or(true);
 
             if should_poll {
                 self.last_poll = Some(Instant::now());
                 self.spawn_poll_messages();
+            }
+        }
+
+        // Retry disconnected partner Drawbridges every 30s
+        if self.drawbridge.has_own_connection() {
+            let should_retry = self
+                .last_drawbridge_retry
+                .map(|t| t.elapsed().as_secs() >= 30)
+                .unwrap_or(true);
+            if should_retry {
+                self.last_drawbridge_retry = Some(Instant::now());
+                let _ = self.bg_tx.send(BgEvent::DrawbridgeRetryDisconnected);
             }
         }
 
@@ -570,13 +662,30 @@ impl App {
             } => {
                 self.poll_in_flight = false;
                 let _ = self.keys.store_session(&StoredSession {
-                    did,
+                    did: did.clone(),
                     access_jwt,
                     refresh_jwt,
                 });
                 self.client = Some(client);
                 self.status_message = None;
                 self.load_conversations_sync();
+
+                // Connect to own Drawbridge if configured (async, via BgEvent signal)
+                if let Some(ref url) = self.drawbridge_url.clone() {
+                    if let Ok(sig_key) = self.keys.load_identity_key() {
+                        let persisted_tickets = self
+                            .keys
+                            .load_drawbridge_state()
+                            .unwrap_or_default()
+                            .own_tickets;
+                        let _ = self.bg_tx.send(BgEvent::DrawbridgeConnectOwn {
+                            url: url.clone(),
+                            did,
+                            signature_key: sig_key,
+                            persisted_tickets,
+                        });
+                    }
+                }
             }
             BgEvent::LoginFailed(e) => {
                 self.poll_in_flight = false;
@@ -601,6 +710,15 @@ impl App {
                 self.debug_log
                     .log(&format!("send_message: published to PDS, uri={}", uri));
                 self.tag_map.insert(tag, conv_id);
+
+                // Notify Drawbridge about the published event
+                if self.drawbridge.has_own_connection() {
+                    let rkey = uri.split('/').last().unwrap_or("").to_string();
+                    let _ = self.bg_tx.send(BgEvent::DrawbridgeNotifyEventPosted {
+                        tag,
+                        rkey,
+                    });
+                }
             }
             BgEvent::SendFailed(e) => {
                 self.set_error(format!("Send error: {e}"));
@@ -612,6 +730,252 @@ impl App {
             } => {
                 self.finish_load_messages(conv_idx, their_events, &my_did);
             }
+
+            BgEvent::DrawbridgeNewEvent { tag, rkey, did } => {
+                self.debug_log.log(&format!(
+                    "drawbridge: new_event tag={} rkey={} did={}",
+                    hex::encode(&tag),
+                    &rkey,
+                    &did[..20.min(did.len())]
+                ));
+                // Trigger an immediate fetch from this DID
+                self.spawn_targeted_fetch(&did);
+            }
+
+            BgEvent::DrawbridgeDisconnected {
+                url,
+                ticket_hex,
+                reason,
+            } => {
+                self.debug_log.log(&format!(
+                    "drawbridge: disconnected from {} (ticket {}): {}",
+                    url,
+                    &ticket_hex[..8.min(ticket_hex.len())],
+                    reason
+                ));
+            }
+
+            BgEvent::DrawbridgeConnected { url, ticket_hex } => {
+                self.debug_log.log(&format!(
+                    "drawbridge: connected to {} (ticket {})",
+                    url,
+                    &ticket_hex[..8.min(ticket_hex.len())]
+                ));
+            }
+
+            // Async Drawbridge events are handled by handle_bg_event_async
+            BgEvent::DrawbridgeConnectOwn { .. } => {}
+            BgEvent::DrawbridgeHandleHint { .. } => {}
+            BgEvent::DrawbridgeUpdateTags { .. } => {}
+            BgEvent::DrawbridgeNotifyEventPosted { .. } => {}
+            BgEvent::DrawbridgeRetryDisconnected => {}
+        }
+    }
+
+    /// Handle async BgEvents that require await (called from the main loop).
+    pub async fn handle_bg_event_async(&mut self, event: BgEvent) {
+        match event {
+            BgEvent::DrawbridgeConnectOwn {
+                url,
+                did,
+                signature_key,
+                persisted_tickets,
+            } => {
+                self.debug_log.log(&format!(
+                    "drawbridge: connecting to own relay at {}",
+                    url
+                ));
+                match self
+                    .drawbridge
+                    .connect_own(&url, &did, &signature_key, &persisted_tickets)
+                    .await
+                {
+                    Ok(()) => {
+                        self.debug_log
+                            .log(&format!("drawbridge: connected to own relay at {}", url));
+                        self.save_drawbridge_state();
+                        // Reconnect to all persisted partner Drawbridges
+                        self.drawbridge.reconnect_all_partners().await;
+                    }
+                    Err(e) => {
+                        self.debug_log
+                            .log(&format!("drawbridge: failed to connect to {}: {}", url, e));
+                    }
+                }
+            }
+            BgEvent::DrawbridgeNotifyEventPosted { tag, rkey } => {
+                if let Err(e) = self.drawbridge.notify_event_posted(&tag, &rkey).await {
+                    self.debug_log
+                        .log(&format!("drawbridge: event_posted failed: {}", e));
+                }
+            }
+            BgEvent::DrawbridgeUpdateTags {
+                partner_did,
+                device_id_hex,
+                tags,
+            } => {
+                if let Err(e) = self
+                    .drawbridge
+                    .update_tags_for_partner(&partner_did, &device_id_hex, &tags)
+                    .await
+                {
+                    self.debug_log.log(&format!(
+                        "drawbridge: failed to update tags for {} {}: {}",
+                        &partner_did[..20.min(partner_did.len())],
+                        &device_id_hex[..8.min(device_id_hex.len())],
+                        e
+                    ));
+                }
+            }
+            BgEvent::DrawbridgeHandleHint {
+                partner_did,
+                device_id,
+                url,
+                ticket,
+                group_id_hex,
+            } => {
+                self.drawbridge
+                    .handle_hint(&partner_did, &device_id, &url, &ticket, &group_id_hex)
+                    .await;
+                self.save_drawbridge_state();
+
+                // Send initial watch_tags for this partner device
+                let tags = self.get_tags_for_conversation(&group_id_hex);
+                if !tags.is_empty() {
+                    let device_id_hex = hex::encode(&device_id);
+                    let _ = self
+                        .drawbridge
+                        .update_tags_for_partner(&partner_did, &device_id_hex, &tags)
+                        .await;
+                }
+            }
+            BgEvent::DrawbridgeRetryDisconnected => {
+                self.drawbridge.retry_disconnected().await;
+            }
+            _ => {} // Non-async events handled by handle_bg_event
+        }
+    }
+
+    /// Spawn an immediate targeted fetch for a specific DID (triggered by Drawbridge notification).
+    fn spawn_targeted_fetch(&mut self, did: &str) {
+        let client = match self.client.as_ref() {
+            Some(c) => c.clone(),
+            None => return,
+        };
+
+        let did = did.to_string();
+        let last_rkey = self.keys.get_last_rkey(&did).ok().flatten();
+
+        // Find conversation indices for this DID
+        let conv_indices: Vec<usize> = self
+            .conversations
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.participant_did == did)
+            .map(|(i, _)| i)
+            .collect();
+
+        let tx = self.bg_tx.clone();
+
+        tokio::spawn(async move {
+            match client
+                .fetch_events_from_did(&did, last_rkey.as_deref())
+                .await
+            {
+                Ok(events) => {
+                    let mut max_rkey = last_rkey.clone();
+                    let mut participant_events = Vec::new();
+
+                    for event in events {
+                        if let Some(ref last) = last_rkey {
+                            if event.rkey <= *last {
+                                continue;
+                            }
+                        }
+                        if max_rkey.as_ref().map_or(true, |m| event.rkey > *m) {
+                            max_rkey = Some(event.rkey.clone());
+                        }
+                        participant_events.push((conv_indices.clone(), event, did.clone()));
+                    }
+
+                    let mut new_rkeys = Vec::new();
+                    if let Some(rkey) = max_rkey {
+                        new_rkeys.push((did, rkey));
+                    }
+
+                    let _ = tx.send(BgEvent::PollFetched {
+                        participant_events,
+                        watched_events: Vec::new(),
+                        new_rkeys,
+                    });
+                }
+                Err(e) => {
+                    let _ = tx.send(BgEvent::PollError(format!(
+                        "Targeted fetch for {} failed: {}",
+                        did, e
+                    )));
+                }
+            }
+        });
+    }
+
+    /// Save Drawbridge state to disk.
+    fn save_drawbridge_state(&self) {
+        let state = self.drawbridge.export_state(&self.drawbridge_url);
+        if let Err(e) = self.keys.store_drawbridge_state(&state) {
+            self.debug_log
+                .log(&format!("drawbridge: failed to save state: {}", e));
+        }
+    }
+
+    /// Get all tags relevant to a specific conversation.
+    fn get_tags_for_conversation(&self, conv_id: &str) -> Vec<[u8; 16]> {
+        self.tag_map
+            .iter()
+            .filter(|(_, cid)| *cid == conv_id)
+            .map(|(tag, _)| *tag)
+            .collect()
+    }
+
+    /// Update tags on partner Drawbridge connections for a specific conversation.
+    /// Called after epoch changes (Commit events) when tags are regenerated.
+    fn update_drawbridge_tags_for_conversation(&mut self, conv_id: &str) {
+        let tags = self.get_tags_for_conversation(conv_id);
+        if tags.is_empty() {
+            return;
+        }
+
+        // Find partner devices in this conversation
+        let partners: Vec<(String, String)> = self
+            .drawbridge
+            .get_partner_for_group(conv_id)
+            .into_iter()
+            .map(|(did, dev)| (did.to_string(), dev.to_string()))
+            .collect();
+
+        for (partner_did, device_id_hex) in partners {
+            let tags_clone = tags.clone();
+            let partner_did_clone = partner_did.clone();
+            let device_id_hex_clone = device_id_hex.clone();
+            let bg_tx = self.bg_tx.clone();
+
+            // We can't call async from here, so just log and schedule
+            // The tag update will happen on next tick when we process retry_disconnected
+            // For now, log the intent and do it best-effort
+            self.debug_log.log(&format!(
+                "drawbridge: need to update {} tags for partner {} device {} in conv {}",
+                tags_clone.len(),
+                &partner_did[..20.min(partner_did.len())],
+                &device_id_hex[..8.min(device_id_hex.len())],
+                &conv_id[..16.min(conv_id.len())]
+            ));
+
+            // Schedule tag update via BgEvent
+            let _ = bg_tx.send(BgEvent::DrawbridgeUpdateTags {
+                partner_did: partner_did_clone,
+                device_id_hex: device_id_hex_clone,
+                tags: tags_clone,
+            });
         }
     }
 
@@ -758,6 +1122,30 @@ impl App {
                                 }
                                 // Regenerate candidate tags for the new epoch
                                 self.populate_candidate_tags(&conv_id, &group_id);
+
+                                // Update tags on partner Drawbridge connections for this conversation
+                                self.update_drawbridge_tags_for_conversation(&conv_id);
+                            }
+                            EventKind::Control(ControlKind::DrawbridgeHint) => {
+                                if let Some(payload) = decrypted.event.drawbridge_hint_payload() {
+                                    let sender_did = decrypted
+                                        .sender
+                                        .map(|s| s.did)
+                                        .unwrap_or_default();
+                                    self.debug_log.log(&format!(
+                                        "poll: received DrawbridgeHint from {} for conv {}",
+                                        &sender_did[..20.min(sender_did.len())],
+                                        &conv_id[..16.min(conv_id.len())]
+                                    ));
+                                    // Store hint and schedule connection (async via BgEvent)
+                                    let _ = self.bg_tx.send(BgEvent::DrawbridgeHandleHint {
+                                        partner_did: sender_did,
+                                        device_id: payload.device_id,
+                                        url: payload.url,
+                                        ticket: payload.ticket,
+                                        group_id_hex: conv_id.clone(),
+                                    });
+                                }
                             }
                             EventKind::Modifier(ModifierKind::Reaction) => {
                                 if let Some(rp) = decrypted.event.reaction_payload() {
@@ -1235,7 +1623,45 @@ impl App {
             &conv_id[..16]
         ));
 
-        // 12. Select the new conversation and switch to input mode
+        // 12. If Drawbridge is configured, send DrawbridgeHint and register ticket
+        if self.drawbridge_url.is_some() && self.drawbridge.has_own_connection() {
+            let ticket = MoatSession::generate_drawbridge_ticket();
+            let ticket_hex = hex::encode(&ticket);
+
+            // Register ticket on our own Drawbridge
+            if let Err(e) = self.drawbridge.register_ticket(&ticket, &conv_id).await {
+                self.debug_log
+                    .log(&format!("start_conv: register_ticket failed: {}", e));
+            }
+
+            // Create and encrypt DrawbridgeHint event
+            let hint_event = self.mls.create_drawbridge_hint(
+                &group_id,
+                self.drawbridge_url.as_ref().unwrap(),
+                &ticket,
+            )?;
+            let encrypted = self.mls.encrypt_event(&group_id, &key_bundle, &hint_event)?;
+            self.save_mls_state()?;
+            self.keys
+                .store_group_state(&conv_id, &encrypted.new_group_state)?;
+
+            // Publish the hint
+            self.client
+                .as_ref()
+                .unwrap()
+                .publish_event(&encrypted.tag, &encrypted.ciphertext)
+                .await?;
+
+            self.debug_log.log(&format!(
+                "start_conv: sent DrawbridgeHint for conv {}, ticket {}...",
+                &conv_id[..16],
+                &ticket_hex[..8]
+            ));
+
+            self.save_drawbridge_state();
+        }
+
+        // 13. Select the new conversation and switch to input mode
         self.active_conversation = Some(self.conversations.len() - 1);
         self.focus = Focus::Input;
         self.new_conv_handle.clear();

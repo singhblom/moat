@@ -1,6 +1,7 @@
 //! Moat CLI - Terminal UI for encrypted ATProto messaging
 
 mod app;
+mod drawbridge;
 mod keystore;
 mod message_helpers;
 mod ui;
@@ -26,6 +27,11 @@ struct Args {
     /// Custom storage directory (default: ~/.moat)
     #[arg(short = 's', long = "storage-dir", global = true)]
     storage_dir: Option<PathBuf>,
+
+    /// Drawbridge WebSocket URL (e.g., wss://drawbridge.moat.social/ws).
+    /// Persisted after first use.
+    #[arg(long = "drawbridge-url", global = true)]
+    drawbridge_url: Option<String>,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -118,7 +124,7 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     match args.command {
-        None => run_tui(args.storage_dir).await,
+        None => run_tui(args.storage_dir, args.drawbridge_url).await,
         Some(Command::Fetch { repository }) => cmd_fetch(args.storage_dir, &repository).await,
         Some(Command::Status) => cmd_status(args.storage_dir).await,
         Some(Command::SendTest { tag, message }) => {
@@ -146,14 +152,17 @@ async fn main() -> anyhow::Result<()> {
 
 // ── TUI (default) ──────────────────────────────────────────────────
 
-async fn run_tui(storage_dir: Option<PathBuf>) -> anyhow::Result<()> {
+async fn run_tui(
+    storage_dir: Option<PathBuf>,
+    drawbridge_url: Option<String>,
+) -> anyhow::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_app(&mut terminal, storage_dir).await;
+    let result = run_app(&mut terminal, storage_dir, drawbridge_url).await;
 
     disable_raw_mode()?;
     execute!(
@@ -173,15 +182,25 @@ async fn run_tui(storage_dir: Option<PathBuf>) -> anyhow::Result<()> {
 async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     storage_dir: Option<PathBuf>,
+    drawbridge_url: Option<String>,
 ) -> anyhow::Result<()> {
-    let mut app = App::new(storage_dir)?;
+    let mut app = App::new(storage_dir, drawbridge_url)?;
 
     loop {
         terminal.draw(|f| ui::draw(f, &app))?;
 
         // Drain all pending background events (non-blocking)
+        // Separate async events from sync events
+        let mut async_events = Vec::new();
         while let Ok(bg_event) = app.bg_rx.try_recv() {
-            app.handle_bg_event(bg_event);
+            if matches!(bg_event, app::BgEvent::DrawbridgeConnectOwn { .. } | app::BgEvent::DrawbridgeHandleHint { .. } | app::BgEvent::DrawbridgeUpdateTags { .. } | app::BgEvent::DrawbridgeNotifyEventPosted { .. } | app::BgEvent::DrawbridgeRetryDisconnected) {
+                async_events.push(bg_event);
+            } else {
+                app.handle_bg_event(bg_event);
+            }
+        }
+        for event in async_events {
+            app.handle_bg_event_async(event).await;
         }
 
         // Poll for terminal input (16ms = ~60fps)

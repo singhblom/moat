@@ -52,8 +52,9 @@ type RequestChallengeMsg struct {
 type ChallengeResponseMsg struct {
 	Type      string `json:"type"` // "challenge_response"
 	DID       string `json:"did"`
-	Signature string `json:"signature"` // base64
-	Timestamp int64  `json:"timestamp"` // unix seconds
+	Signature string `json:"signature"`  // base64
+	Timestamp int64  `json:"timestamp"`  // unix seconds
+	PublicKey string `json:"public_key"` // base64 Ed25519 public key
 }
 
 type WatchTagsMsg struct {
