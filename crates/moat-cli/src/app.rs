@@ -238,6 +238,8 @@ pub struct App {
     pub login_form: LoginForm,
     pub error_message: Option<String>,
     pub status_message: Option<String>,
+    /// Cached handle of the logged-in user (for the info bar)
+    pub logged_in_handle: Option<String>,
 
     // Conversations
     pub conversations: Vec<Conversation>,
@@ -323,7 +325,21 @@ impl App {
 
         let debug_log = DebugLog::new(&base_dir);
 
-        let focus = if keys.has_credentials() {
+        // If credentials.txt exists and no credentials are stored yet, import them
+        let credentials_txt_drawbridge = if !keys.has_credentials() {
+            if let Ok(creds) = keys.load_credentials_txt() {
+                let _ = keys.store_credentials(&creds.handle, &creds.password);
+                creds.drawbridge
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let logged_in_handle = keys.load_credentials().ok().map(|(h, _)| h);
+
+        let focus = if logged_in_handle.is_some() {
             Focus::Conversations
         } else {
             Focus::Login
@@ -331,9 +347,11 @@ impl App {
 
         let (bg_tx, bg_rx) = mpsc::unbounded_channel();
 
-        // Load Drawbridge state, preferring CLI flag over persisted URL
+        // Load Drawbridge state, preferring CLI flag > credentials.txt > persisted state
         let drawbridge_state = keys.load_drawbridge_state().unwrap_or_default();
-        let resolved_drawbridge_url = drawbridge_url.or(drawbridge_state.own_url.clone());
+        let resolved_drawbridge_url = drawbridge_url
+            .or(credentials_txt_drawbridge)
+            .or(drawbridge_state.own_url.clone());
 
         let mut drawbridge = DrawbridgeManager::new(bg_tx.clone());
         drawbridge.load_state(&drawbridge_state);
@@ -348,6 +366,7 @@ impl App {
             login_form: LoginForm::default(),
             error_message: None,
             status_message: None,
+            logged_in_handle,
             conversations: Vec::new(),
             active_conversation: None,
             messages: Vec::new(),
@@ -382,6 +401,87 @@ impl App {
         std::fs::rename(&temp_path, &self.mls_path)
             .map_err(|e| AppError::Other(format!("Failed to rename MLS state: {e}")))?;
         Ok(())
+    }
+
+    /// Ensure identity key and stealth address are generated locally and published to PDS.
+    /// Called from the auto-login path where do_login()'s provisioning may have been skipped.
+    fn ensure_keys_provisioned(&mut self, client: &MoatAtprotoClient, did: &str) {
+        let mut key_package_to_publish: Option<(Vec<u8>, String)> = None;
+        let mut stealth_to_publish: Option<([u8; 32], String)> = None;
+
+        // Generate identity key if missing
+        if !self.keys.has_identity_key() {
+            self.debug_log
+                .log("ensure_keys_provisioned: generating missing identity key");
+            let device_name = match self.keys.get_or_create_device_name() {
+                Ok(n) => n,
+                Err(e) => {
+                    self.debug_log
+                        .log(&format!("ensure_keys_provisioned: device name error: {e}"));
+                    return;
+                }
+            };
+            let credential = MoatCredential::new(did, &device_name, *self.mls.device_id());
+            match self.mls.generate_key_package(&credential) {
+                Ok((key_package, key_bundle)) => {
+                    let _ = self.save_mls_state();
+                    let _ = self.keys.store_identity_key(&key_bundle);
+                    let ciphersuite_name = format!("{:?}", CIPHERSUITE);
+                    key_package_to_publish = Some((key_package, ciphersuite_name));
+                }
+                Err(e) => {
+                    self.debug_log
+                        .log(&format!("ensure_keys_provisioned: key gen error: {e}"));
+                    return;
+                }
+            }
+        }
+
+        // Generate stealth address if missing
+        if !self.keys.has_stealth_key() {
+            self.debug_log
+                .log("ensure_keys_provisioned: generating missing stealth address");
+            let (stealth_privkey, stealth_pubkey) = generate_stealth_keypair();
+            if let Err(e) = self.keys.store_stealth_key(&stealth_privkey) {
+                self.debug_log
+                    .log(&format!("ensure_keys_provisioned: store stealth key error: {e}"));
+                return;
+            }
+            let device_name = match self.keys.get_or_create_device_name() {
+                Ok(n) => n,
+                Err(e) => {
+                    self.debug_log
+                        .log(&format!("ensure_keys_provisioned: device name error: {e}"));
+                    return;
+                }
+            };
+            stealth_to_publish = Some((stealth_pubkey, device_name));
+        }
+
+        // Publish to PDS in a background task if anything needs publishing
+        if key_package_to_publish.is_some() || stealth_to_publish.is_some() {
+            let client = client.clone();
+            let tx = self.bg_tx.clone();
+            tokio::spawn(async move {
+                if let Some((key_package, ciphersuite)) = key_package_to_publish {
+                    if let Err(e) = client.publish_key_package(&key_package, &ciphersuite).await {
+                        let _ = tx.send(BgEvent::PollError(format!(
+                            "Failed to publish key package: {e}"
+                        )));
+                    }
+                }
+                if let Some((stealth_pubkey, device_name)) = stealth_to_publish {
+                    if let Err(e) = client
+                        .publish_stealth_address(&stealth_pubkey, &device_name)
+                        .await
+                    {
+                        let _ = tx.send(BgEvent::PollError(format!(
+                            "Failed to publish stealth address: {e}"
+                        )));
+                    }
+                }
+            });
+        }
     }
 
     /// Set an error message to display
@@ -666,9 +766,14 @@ impl App {
                     access_jwt,
                     refresh_jwt,
                 });
-                self.client = Some(client);
+                self.client = Some(client.clone());
                 self.status_message = None;
                 self.load_conversations_sync();
+
+                // Ensure identity key + stealth address are provisioned.
+                // These may be missing if the initial do_login() was interrupted
+                // or if auto-login resumed a session before they were published.
+                self.ensure_keys_provisioned(&client, &did);
 
                 // Connect to own Drawbridge if configured (async, via BgEvent signal)
                 if let Some(ref url) = self.drawbridge_url.clone() {
@@ -1369,6 +1474,7 @@ impl App {
 
         self.client = Some(client);
         self.status_message = None;
+        self.logged_in_handle = Some(handle);
         self.focus = Focus::Conversations;
 
         self.load_conversations_sync();

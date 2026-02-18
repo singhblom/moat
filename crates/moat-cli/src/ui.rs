@@ -71,9 +71,16 @@ pub fn draw(frame: &mut Frame, app: &App) {
         draw_error_popup(frame, error);
     }
 
-    // Draw status if present
+    // Draw bottom info bar: status message takes priority, otherwise show user info
     if let Some(ref status) = app.status_message {
         draw_status(frame, status);
+    } else if let Some(ref handle) = app.logged_in_handle {
+        let info = if let Some(ref url) = app.drawbridge_url {
+            format!("{handle}  ::  {url}")
+        } else {
+            handle.clone()
+        };
+        draw_info_bar(frame, &info);
     }
 }
 
@@ -178,11 +185,28 @@ fn draw_login(frame: &mut Frame, app: &App) {
 fn draw_main(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
+    // Reserve a row at the bottom for the info bar when logged in
+    let has_info_bar = app.logged_in_handle.is_some();
+    let outer = if has_info_bar {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(5), Constraint::Length(1)])
+            .split(area)
+    } else {
+        // No info bar — give all space to content
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(5), Constraint::Length(0)])
+            .split(area)
+    };
+
+    let content_area = outer[0];
+
     // Main layout: conversations | messages
     let horizontal = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-        .split(area);
+        .split(content_area);
 
     // Conversations panel
     draw_conversations(frame, app, horizontal[0]);
@@ -486,6 +510,15 @@ fn draw_status(frame: &mut Frame, status: &str) {
     let text = Paragraph::new(status).style(Style::default().fg(Color::Yellow).bg(Color::Gray));
 
     frame.render_widget(text, status_area);
+}
+
+fn draw_info_bar(frame: &mut Frame, info: &str) {
+    let area = frame.area();
+    let bar_area = Rect::new(0, area.height - 1, area.width, 1);
+
+    let text = Paragraph::new(info).style(Style::default().fg(Color::DarkGray));
+
+    frame.render_widget(text, bar_area);
 }
 
 fn draw_handle_input_popup(frame: &mut Frame, title: &str, label: &str, input: &str) {

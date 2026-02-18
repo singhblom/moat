@@ -71,6 +71,13 @@ pub struct ConversationMessages {
 
 pub type Result<T> = std::result::Result<T, KeyStoreError>;
 
+/// Credentials parsed from a credentials.txt file in the moat directory
+pub struct CredentialsTxt {
+    pub handle: String,
+    pub password: String,
+    pub drawbridge: Option<String>,
+}
+
 /// Local key storage
 pub struct KeyStore {
     base_path: PathBuf,
@@ -286,6 +293,52 @@ impl KeyStore {
     /// Check if credentials are stored
     pub fn has_credentials(&self) -> bool {
         self.base_path.join("credentials").exists()
+    }
+
+    /// Load credentials from a credentials.txt file in the parent directory (e.g. ~/.moat/credentials.txt).
+    ///
+    /// Expected format (drawbridge line is optional):
+    /// ```text
+    /// handle: example.bsky.social
+    /// app-password: aaaa-bbbb-cccc-dddd
+    /// drawbridge: wss://example.drawbridge.com/ws
+    /// ```
+    pub fn load_credentials_txt(&self) -> Result<CredentialsTxt> {
+        let path = self.base_path.join("..").join("credentials.txt");
+        if !path.exists() {
+            return Err(KeyStoreError::NotFound("credentials.txt".to_string()));
+        }
+        let text = fs::read_to_string(&path)?;
+
+        let mut handle = None;
+        let mut password = None;
+        let mut drawbridge = None;
+
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if let Some((key, value)) = line.split_once(':') {
+                let key = key.trim();
+                let value = value.trim();
+                match key {
+                    "handle" => handle = Some(value.to_string()),
+                    "app-password" => password = Some(value.to_string()),
+                    "drawbridge" => drawbridge = Some(value.to_string()),
+                    _ => {} // ignore unknown keys
+                }
+            }
+        }
+
+        let handle = handle.ok_or(KeyStoreError::InvalidData)?;
+        let password = password.ok_or(KeyStoreError::InvalidData)?;
+
+        Ok(CredentialsTxt {
+            handle,
+            password,
+            drawbridge,
+        })
     }
 
     /// Store device name
