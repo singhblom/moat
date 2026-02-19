@@ -1672,7 +1672,6 @@ dependencies = [
  "clap",
  "crossterm",
  "dirs",
- "ed25519-dalek",
  "futures-util",
  "hex",
  "hostname",
@@ -1695,6 +1694,7 @@ name = "moat-core"
 version = "0.1.0"
 dependencies = [
  "chacha20poly1305",
+ "ed25519-dalek",
  "getrandom 0.2.17",
  "hkdf",
  "openmls",

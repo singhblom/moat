@@ -72,6 +72,8 @@ pub struct KeyBundle {
     pub init_private_key: Vec<u8>,
     pub encryption_private_key: Vec<u8>,
     pub signature_key: Vec<u8>,
+    /// Raw Ed25519 private key seed (32 bytes). Used for Drawbridge challenge-response auth.
+    pub signature_private_key: Vec<u8>,
 }
 
 /// Result of creating a welcome message for a new member
@@ -399,9 +401,19 @@ impl MoatSession {
             .to_bytes()
             .map_err(|e| Error::Serialization(e.to_string()))?;
 
-        // Generate signature keypair
-        let signature_keys = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm())
-            .map_err(|e| Error::KeyGeneration(e.to_string()))?;
+        // Generate Ed25519 keypair directly so we can capture the raw private key seed.
+        // We use ed25519_dalek to generate the key, then hand the raw bytes to OpenMLS
+        // via SignatureKeyPair::from_raw. This avoids relying on the `test-utils` feature
+        // gate on SignatureKeyPair::private().
+        let ed25519_signing_key =
+            ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+        let ed25519_private_seed = ed25519_signing_key.to_bytes(); // [u8; 32]
+        let ed25519_public = ed25519_signing_key.verifying_key().to_bytes().to_vec();
+        let signature_keys = SignatureKeyPair::from_raw(
+            CIPHERSUITE.signature_algorithm(),
+            ed25519_private_seed.to_vec(),
+            ed25519_public,
+        );
 
         // Store the signature keys (persisted to file)
         signature_keys
@@ -450,6 +462,7 @@ impl MoatSession {
             init_private_key: init_private_key_bytes,
             encryption_private_key: Vec::new(), // Stored in provider
             signature_key: signature_key_bytes,
+            signature_private_key: ed25519_private_seed.to_vec(),
         };
 
         let key_bundle_bytes =
@@ -1707,6 +1720,35 @@ impl MoatSession {
         let mut ticket = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut ticket);
         ticket
+    }
+
+    /// Sign a Drawbridge challenge message with the Ed25519 identity key from a key bundle.
+    ///
+    /// Returns `(signature_bytes, public_key_bytes)` as raw bytes (64 and 32 bytes respectively).
+    /// The caller is responsible for encoding these as needed (e.g., base64 for JSON transport).
+    ///
+    /// The `message` is typically `"{nonce}\n{relay_url}\n{timestamp}\n"`.
+    pub fn sign_drawbridge_challenge(
+        key_bundle: &[u8],
+        message: &[u8],
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
+        use ed25519_dalek::Signer;
+
+        let bundle: KeyBundle = serde_json::from_slice(key_bundle)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
+
+        let seed: [u8; 32] = bundle
+            .signature_private_key
+            .try_into()
+            .map_err(|_| Error::KeyGeneration(
+                "signature_private_key must be 32 bytes; re-generate your key package".to_string(),
+            ))?;
+
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+        let signature = signing_key.sign(message);
+        let public_key = signing_key.verifying_key().to_bytes().to_vec();
+
+        Ok((signature.to_bytes().to_vec(), public_key))
     }
 
     /// Create a DrawbridgeHint event for the current device.

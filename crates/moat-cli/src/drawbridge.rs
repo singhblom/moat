@@ -158,7 +158,7 @@ impl DrawbridgeManager {
         &mut self,
         url: &str,
         did: &str,
-        signature_key: &[u8],
+        identity_key_bundle: &[u8],
         persisted_tickets: &HashMap<String, String>,
     ) -> Result<(), String> {
         let (ws_stream, _) = tokio_tungstenite::connect_async(url)
@@ -196,7 +196,11 @@ impl DrawbridgeManager {
             .as_secs() as i64;
 
         let message_bytes = format!("{}\n{}\n{}\n", nonce, url, timestamp);
-        let (sig_b64, pub_b64) = sign_challenge(signature_key, message_bytes.as_bytes())?;
+        let (sig_bytes, pub_bytes) =
+            moat_core::MoatSession::sign_drawbridge_challenge(identity_key_bundle, message_bytes.as_bytes())
+                .map_err(|e| format!("signing failed: {e}"))?;
+        let sig_b64 = base64_encode(&sig_bytes);
+        let pub_b64 = base64_encode(&pub_bytes);
 
         // 4. Send challenge_response
         let resp = serde_json::json!({
@@ -725,52 +729,6 @@ async fn partner_read_loop(
             _ => continue,
         }
     }
-}
-
-/// Sign a challenge with an Ed25519 key from the MLS KeyBundle's signature_key.
-///
-/// The signature_key field is a TLS-serialized SignatureKeyPair. We extract
-/// the Ed25519 private key from it.
-fn sign_challenge(signature_key: &[u8], message: &[u8]) -> Result<(String, String), String> {
-    use ed25519_dalek::{Signer, SigningKey};
-
-    // The MLS SignatureKeyPair is TLS-serialized. The Ed25519 private key
-    // (32 bytes) is stored with a 2-byte TLS length prefix for the private part
-    // and then the public part. We need to extract just the 32-byte seed.
-    //
-    // TLS format for SignatureKeyPair:
-    //   [2-byte length][private_key_bytes][2-byte length][public_key_bytes]
-    if signature_key.len() < 4 {
-        return Err("signature_key too short".to_string());
-    }
-
-    let priv_len = u16::from_be_bytes([signature_key[0], signature_key[1]]) as usize;
-    if signature_key.len() < 2 + priv_len + 2 {
-        return Err("signature_key too short for private key".to_string());
-    }
-
-    let priv_bytes = &signature_key[2..2 + priv_len];
-
-    // Ed25519 private key seed is 32 bytes
-    // OpenMLS stores the full 64-byte expanded key (seed + public) in some versions,
-    // or just the 32-byte seed. Handle both.
-    let signing_key = if priv_bytes.len() == 32 {
-        SigningKey::from_bytes(priv_bytes.try_into().unwrap())
-    } else if priv_bytes.len() == 64 {
-        // First 32 bytes are the seed
-        SigningKey::from_bytes(priv_bytes[..32].try_into().unwrap())
-    } else {
-        return Err(format!(
-            "unexpected private key length: {}",
-            priv_bytes.len()
-        ));
-    };
-
-    let signature = signing_key.sign(message);
-    let sig_b64 = base64_encode(signature.to_bytes().as_ref());
-    let pub_b64 = base64_encode(signing_key.verifying_key().as_bytes());
-
-    Ok((sig_b64, pub_b64))
 }
 
 fn base64_encode(data: &[u8]) -> String {

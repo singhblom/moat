@@ -1130,3 +1130,61 @@ fn test_unknown_single_token_deserializes() {
     let event: Event = serde_json::from_str(json).unwrap();
     assert_eq!(event.kind, EventKind::Unknown("foobar".into()));
 }
+
+// --- Drawbridge signing ---
+
+#[test]
+fn test_sign_drawbridge_challenge_end_to_end() {
+    // Generate a real key bundle (exercises the full generate_key_package path)
+    let session = MoatSession::new();
+    let credential = MoatCredential::new("did:plc:alice", "laptop", [1u8; 16]);
+    let (_key_package, key_bundle_bytes) = session.generate_key_package(&credential).unwrap();
+
+    // Simulate the challenge message the server would send
+    let message = "some-nonce-abc123\nwss://relay.example.com\n1700000000\n";
+
+    let (sig_bytes, pub_bytes) = MoatSession::sign_drawbridge_challenge(&key_bundle_bytes, message.as_bytes()).unwrap();
+
+    assert_eq!(sig_bytes.len(), 64, "Ed25519 signature must be 64 bytes");
+    assert_eq!(pub_bytes.len(), 32, "Ed25519 public key must be 32 bytes");
+
+    // Verify the signature using ed25519_dalek directly
+    use ed25519_dalek::{Verifier, VerifyingKey, Signature};
+    let vk = VerifyingKey::from_bytes(&pub_bytes.try_into().unwrap()).unwrap();
+    let sig = Signature::from_bytes(&sig_bytes.try_into().unwrap());
+    vk.verify(message.as_bytes(), &sig).expect("signature should verify");
+}
+
+#[test]
+fn test_sign_drawbridge_challenge_wrong_message_fails() {
+    let session = MoatSession::new();
+    let credential = MoatCredential::new("did:plc:bob", "phone", [2u8; 16]);
+    let (_key_package, key_bundle_bytes) = session.generate_key_package(&credential).unwrap();
+
+    let (sig_bytes, pub_bytes) =
+        MoatSession::sign_drawbridge_challenge(&key_bundle_bytes, b"correct-message").unwrap();
+
+    use ed25519_dalek::{Verifier, VerifyingKey, Signature};
+    let vk = VerifyingKey::from_bytes(&pub_bytes.try_into().unwrap()).unwrap();
+    let sig = Signature::from_bytes(&sig_bytes.try_into().unwrap());
+    assert!(vk.verify(b"wrong-message", &sig).is_err(), "signature over different message must not verify");
+}
+
+#[test]
+fn test_sign_drawbridge_challenge_old_keybundle_errors() {
+    // A key bundle JSON missing signature_private_key should produce a clear error.
+    // (Simulates bundles stored before the field was added — serde default gives empty vec.)
+    let old_bundle = serde_json::json!({
+        "key_package": [],
+        "init_private_key": [],
+        "encryption_private_key": [],
+        "signature_key": [],
+        // signature_private_key intentionally absent
+    });
+    let bytes = serde_json::to_vec(&old_bundle).unwrap();
+    let err = MoatSession::sign_drawbridge_challenge(&bytes, b"nonce").unwrap_err();
+    assert!(
+        err.to_string().contains("32 bytes") || err.to_string().contains("re-generate"),
+        "error should hint at re-generating: {err}"
+    );
+}
