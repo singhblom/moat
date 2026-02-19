@@ -172,7 +172,7 @@ func (r *Relay) authenticate(c *Client, resp *ChallengeResponseMsg) error {
 	}
 
 	// Verify challenge signature against the provided public key
-	if err := verifyChallenge(pubKey, c.nonce, r.relayURL, resp.Timestamp, sig); err != nil {
+	if err := verifyChallenge(pubKey, c.nonce, c.relayURL, resp.Timestamp, sig); err != nil {
 		return fmt.Errorf("signature verification failed: %w", err)
 	}
 

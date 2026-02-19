@@ -40,6 +40,12 @@ type Relay struct {
 	verifier    PDSVerifier
 	rateLimiter *RateLimiter
 
+	// publicURL is an explicit override for the relay's public-facing URL.
+	// Set from RELAY_PUBLIC_URL env var. When non-empty, it wins over header
+	// derivation and the fallback URL.
+	publicURL string
+	// relayURL is the fallback relay URL derived from TLS/addr config.
+	// Used when no explicit publicURL is set and no proxy headers are present.
 	relayURL  string
 	startTime time.Time
 	log       *slog.Logger
@@ -53,7 +59,9 @@ type DisconnectBuffer struct {
 }
 
 // NewRelay creates a new Relay instance.
-func NewRelay(relayURL string, resolver DIDResolver, verifier PDSVerifier, log *slog.Logger) *Relay {
+// publicURL is an explicit override (from RELAY_PUBLIC_URL); pass "" to derive
+// the relay URL from request headers or the TLS-based fallbackURL.
+func NewRelay(publicURL, fallbackURL string, resolver DIDResolver, verifier PDSVerifier, log *slog.Logger) *Relay {
 	return &Relay{
 		clients:     make(map[*Client]bool),
 		byDID:       make(map[string]map[*Client]bool),
@@ -64,10 +72,31 @@ func NewRelay(relayURL string, resolver DIDResolver, verifier PDSVerifier, log *
 		resolver:    resolver,
 		verifier:    verifier,
 		rateLimiter: NewRateLimiter(),
-		relayURL:    relayURL,
+		publicURL:   publicURL,
+		relayURL:    fallbackURL,
 		startTime:   time.Now(),
 		log:         log,
 	}
+}
+
+// clientRelayURL returns the relay URL to use for challenge verification for a
+// given incoming request. Priority:
+//  1. RELAY_PUBLIC_URL (explicit config) — works everywhere, no header needed
+//  2. X-Forwarded-Proto + Host headers — works on Fly.io, AWS, Railway, Render,
+//     Traefik, Caddy, HAProxy, and any properly configured Nginx
+//  3. TLS-based fallback URL — used in local dev and when running without a proxy
+func (r *Relay) clientRelayURL(req *http.Request) string {
+	if r.publicURL != "" {
+		return r.publicURL
+	}
+	host := req.Host
+	switch req.Header.Get("X-Forwarded-Proto") {
+	case "https":
+		return "wss://" + host
+	case "http":
+		return "ws://" + host
+	}
+	return r.relayURL
 }
 
 // Handler returns an http.Handler with the relay's endpoints.
@@ -90,7 +119,7 @@ func (r *Relay) serveWS(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	client := NewClient(r, conn)
+	client := NewClient(r, conn, r.clientRelayURL(req))
 	r.register(client)
 
 	go client.writePump()

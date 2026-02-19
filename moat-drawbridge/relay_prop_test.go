@@ -16,7 +16,7 @@ type propEnv struct {
 
 func newPropEnv() *propEnv {
 	log := slog.New(slog.NewTextHandler(&discardWriter{}, &slog.HandlerOptions{Level: slog.LevelError}))
-	relay := NewRelay("ws://test", nil, nil, log)
+	relay := NewRelay("", "ws://test", nil, nil, log)
 	ctx, cancel := context.WithCancel(context.Background())
 	relay.Run(ctx)
 	go func() {

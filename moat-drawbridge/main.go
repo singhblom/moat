@@ -21,7 +21,7 @@ func main() {
 	resolver := NewPLCResolver(cache)
 	verifier := NewPDSVerifier(resolver)
 
-	relay := NewRelay(cfg.RelayURL(), resolver, verifier, log)
+	relay := NewRelay(cfg.PublicURL, cfg.RelayURL(), resolver, verifier, log)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -75,8 +75,14 @@ type Config struct {
 	Domain    string
 	Addr      string
 	LogFormat string
+	// PublicURL overrides the computed relay URL used for challenge signing.
+	// Required when TLS is terminated by a proxy (e.g. Fly.io) so the server
+	// knows its public-facing wss:// address even though it listens on plain ws://.
+	PublicURL string
 }
 
+// RelayURL returns the TLS-based fallback relay URL, used when no explicit
+// PublicURL is configured and no proxy headers are available.
 func (c *Config) RelayURL() string {
 	if c.TLS {
 		return "wss://" + c.Domain
@@ -93,6 +99,7 @@ func loadConfig() Config {
 	cfg := Config{
 		TLS:       envOrDefault("RELAY_TLS", "true") == "true",
 		Domain:    os.Getenv("RELAY_DOMAIN"),
+		PublicURL: os.Getenv("RELAY_PUBLIC_URL"),
 		LogFormat: envOrDefault("LOG_FORMAT", "json"),
 	}
 

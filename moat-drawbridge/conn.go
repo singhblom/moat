@@ -44,6 +44,10 @@ type Client struct {
 	authMode  AuthMode
 	log       *slog.Logger
 
+	// relayURL is the public-facing relay URL used for challenge verification,
+	// derived per-connection from request headers or relay config.
+	relayURL string
+
 	// Sender-specific (AuthModeSender)
 	did           string // set after DID authentication
 	nonce         string // challenge nonce, set when challenge is requested
@@ -54,13 +58,14 @@ type Client struct {
 }
 
 // NewClient creates a new Client.
-func NewClient(relay *Relay, conn *websocket.Conn) *Client {
+func NewClient(relay *Relay, conn *websocket.Conn, relayURL string) *Client {
 	return &Client{
-		relay: relay,
-		conn:  conn,
-		tags:  make(map[string]bool),
-		send:  make(chan []byte, sendBufSize),
-		log:   relay.log,
+		relay:    relay,
+		conn:     conn,
+		tags:     make(map[string]bool),
+		send:     make(chan []byte, sendBufSize),
+		log:      relay.log,
+		relayURL: relayURL,
 	}
 }
 
