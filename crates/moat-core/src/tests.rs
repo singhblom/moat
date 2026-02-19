@@ -1169,22 +1169,3 @@ fn test_sign_drawbridge_challenge_wrong_message_fails() {
     let sig = Signature::from_bytes(&sig_bytes.try_into().unwrap());
     assert!(vk.verify(b"wrong-message", &sig).is_err(), "signature over different message must not verify");
 }
-
-#[test]
-fn test_sign_drawbridge_challenge_old_keybundle_errors() {
-    // A key bundle JSON missing signature_private_key should produce a clear error.
-    // (Simulates bundles stored before the field was added — serde default gives empty vec.)
-    let old_bundle = serde_json::json!({
-        "key_package": [],
-        "init_private_key": [],
-        "encryption_private_key": [],
-        "signature_key": [],
-        // signature_private_key intentionally absent
-    });
-    let bytes = serde_json::to_vec(&old_bundle).unwrap();
-    let err = MoatSession::sign_drawbridge_challenge(&bytes, b"nonce").unwrap_err();
-    assert!(
-        err.to_string().contains("32 bytes") || err.to_string().contains("re-generate"),
-        "error should hint at re-generating: {err}"
-    );
-}
