@@ -233,15 +233,20 @@ async fn run_app(
     }
 }
 
-// ── Helper: resolve storage dir ────────────────────────────────────
+// ── Helpers: resolve directories ───────────────────────────────────
 
-fn resolve_storage_dir(storage_dir: Option<PathBuf>) -> anyhow::Result<PathBuf> {
-    match storage_dir {
-        Some(dir) => Ok(dir),
+/// Resolves the moat base directory (~/.moat or custom -s path) and its
+/// data/ subdirectory. User-managed files (e.g. credentials.txt) live in
+/// moat_dir; all app-generated state lives in data_dir.
+fn resolve_data_dir(storage_dir: Option<PathBuf>) -> anyhow::Result<(PathBuf, PathBuf)> {
+    let moat_dir = match storage_dir {
+        Some(dir) => dir,
         None => dirs::home_dir()
             .map(|h| h.join(".moat"))
-            .ok_or_else(|| anyhow::anyhow!("home directory not found")),
-    }
+            .ok_or_else(|| anyhow::anyhow!("home directory not found"))?,
+    };
+    let data_dir = moat_dir.join("data");
+    Ok((moat_dir, data_dir))
 }
 
 // ── Helper: login from stored credentials ──────────────────────────
@@ -259,12 +264,12 @@ async fn login_from_keystore(
 // ── fetch ──────────────────────────────────────────────────────────
 
 async fn cmd_fetch(storage_dir: Option<PathBuf>, repository: &str) -> anyhow::Result<()> {
-    let base_dir = resolve_storage_dir(storage_dir)?;
-    let keys = keystore::KeyStore::with_path(base_dir.join("keys"))?;
+    let (_moat_dir, data_dir) = resolve_data_dir(storage_dir)?;
+    let keys = keystore::KeyStore::with_path(data_dir.join("keys"))?;
     let client = login_from_keystore(&keys).await?;
 
     // Load MLS session for decryption attempts
-    let mls_path = base_dir.join("mls.bin");
+    let mls_path = data_dir.join("mls.bin");
     let mls = if mls_path.exists() {
         let bytes = std::fs::read(&mls_path)?;
         moat_core::MoatSession::from_state(&bytes)?
@@ -315,7 +320,7 @@ async fn cmd_fetch(storage_dir: Option<PathBuf>, repository: &str) -> anyhow::Re
     }
 
     // Log to debug.log
-    let log_path = base_dir.join("debug.log");
+    let log_path = data_dir.join("debug.log");
     let mut log_file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -374,8 +379,8 @@ async fn cmd_fetch(storage_dir: Option<PathBuf>, repository: &str) -> anyhow::Re
 // ── status ─────────────────────────────────────────────────────────
 
 async fn cmd_status(storage_dir: Option<PathBuf>) -> anyhow::Result<()> {
-    let base_dir = resolve_storage_dir(storage_dir)?;
-    let keys = keystore::KeyStore::with_path(base_dir.join("keys"))?;
+    let (moat_dir, data_dir) = resolve_data_dir(storage_dir)?;
+    let keys = keystore::KeyStore::with_path(data_dir.join("keys"))?;
 
     // Account info
     if let Ok((handle, _)) = keys.load_credentials() {
@@ -407,9 +412,9 @@ async fn cmd_status(storage_dir: Option<PathBuf>) -> anyhow::Result<()> {
     }
 
     // Storage size
-    let size = dir_size(&base_dir).unwrap_or(0);
+    let size = dir_size(&moat_dir).unwrap_or(0);
     println!("Storage:         {} ({} bytes)", human_size(size), size);
-    println!("Storage path:    {}", base_dir.display());
+    println!("Storage path:    {}", moat_dir.display());
 
     Ok(())
 }
@@ -451,8 +456,8 @@ async fn cmd_send_test(
     tag_hex: &str,
     message: &str,
 ) -> anyhow::Result<()> {
-    let base_dir = resolve_storage_dir(storage_dir)?;
-    let keys = keystore::KeyStore::with_path(base_dir.join("keys"))?;
+    let (_moat_dir, data_dir) = resolve_data_dir(storage_dir)?;
+    let keys = keystore::KeyStore::with_path(data_dir.join("keys"))?;
     let client = login_from_keystore(&keys).await?;
 
     // Parse tag
@@ -467,7 +472,7 @@ async fn cmd_send_test(
     tag.copy_from_slice(&tag_bytes);
 
     // Load MLS state
-    let mls_path = base_dir.join("mls.bin");
+    let mls_path = data_dir.join("mls.bin");
     let mls = if mls_path.exists() {
         let bytes = std::fs::read(&mls_path)?;
         moat_core::MoatSession::from_state(&bytes)?
@@ -539,11 +544,11 @@ async fn cmd_export(
         anyhow::bail!("At least one of --log or --events must be provided");
     }
 
-    let base_dir = resolve_storage_dir(storage_dir)?;
+    let (_moat_dir, data_dir) = resolve_data_dir(storage_dir)?;
 
     // Export debug log
     if let Some(dest) = &log_path {
-        let src = base_dir.join("debug.log");
+        let src = data_dir.join("debug.log");
         if src.exists() {
             std::fs::copy(&src, dest)?;
             println!("Exported debug log to {}", dest.display());
@@ -558,7 +563,7 @@ async fn cmd_export(
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("--repository is required when using --events"))?;
 
-        let keys = keystore::KeyStore::with_path(base_dir.join("keys"))?;
+        let keys = keystore::KeyStore::with_path(data_dir.join("keys"))?;
         let client = login_from_keystore(&keys).await?;
         let did = client.resolve_did(repo).await?;
         let events = client.fetch_events_from_did(&did, None).await?;
@@ -592,11 +597,11 @@ async fn cmd_export(
 // ── devices ─────────────────────────────────────────────────────────
 
 async fn cmd_devices(storage_dir: Option<PathBuf>, conversation: &str) -> anyhow::Result<()> {
-    let base_dir = resolve_storage_dir(storage_dir)?;
-    let keys = keystore::KeyStore::with_path(base_dir.join("keys"))?;
+    let (_moat_dir, data_dir) = resolve_data_dir(storage_dir)?;
+    let keys = keystore::KeyStore::with_path(data_dir.join("keys"))?;
 
     // Load MLS state
-    let mls_path = base_dir.join("mls.bin");
+    let mls_path = data_dir.join("mls.bin");
     let mls = if mls_path.exists() {
         let bytes = std::fs::read(&mls_path)?;
         moat_core::MoatSession::from_state(&bytes)?
@@ -651,12 +656,12 @@ async fn cmd_remove_device(
     conversation: &str,
     leaf_index: u32,
 ) -> anyhow::Result<()> {
-    let base_dir = resolve_storage_dir(storage_dir)?;
-    let keys = keystore::KeyStore::with_path(base_dir.join("keys"))?;
+    let (_moat_dir, data_dir) = resolve_data_dir(storage_dir)?;
+    let keys = keystore::KeyStore::with_path(data_dir.join("keys"))?;
     let client = login_from_keystore(&keys).await?;
 
     // Load MLS state
-    let mls_path = base_dir.join("mls.bin");
+    let mls_path = data_dir.join("mls.bin");
     let mls = if mls_path.exists() {
         let bytes = std::fs::read(&mls_path)?;
         moat_core::MoatSession::from_state(&bytes)?
@@ -700,12 +705,12 @@ async fn cmd_kick(
     conversation: &str,
     did_to_kick: &str,
 ) -> anyhow::Result<()> {
-    let base_dir = resolve_storage_dir(storage_dir)?;
-    let keys = keystore::KeyStore::with_path(base_dir.join("keys"))?;
+    let (_moat_dir, data_dir) = resolve_data_dir(storage_dir)?;
+    let keys = keystore::KeyStore::with_path(data_dir.join("keys"))?;
     let client = login_from_keystore(&keys).await?;
 
     // Load MLS state
-    let mls_path = base_dir.join("mls.bin");
+    let mls_path = data_dir.join("mls.bin");
     let mls = if mls_path.exists() {
         let bytes = std::fs::read(&mls_path)?;
         moat_core::MoatSession::from_state(&bytes)?
@@ -745,12 +750,12 @@ async fn cmd_kick(
 // ── leave ───────────────────────────────────────────────────────────
 
 async fn cmd_leave(storage_dir: Option<PathBuf>, conversation: &str) -> anyhow::Result<()> {
-    let base_dir = resolve_storage_dir(storage_dir)?;
-    let keys = keystore::KeyStore::with_path(base_dir.join("keys"))?;
+    let (_moat_dir, data_dir) = resolve_data_dir(storage_dir)?;
+    let keys = keystore::KeyStore::with_path(data_dir.join("keys"))?;
     let client = login_from_keystore(&keys).await?;
 
     // Load MLS state
-    let mls_path = base_dir.join("mls.bin");
+    let mls_path = data_dir.join("mls.bin");
     let mls = if mls_path.exists() {
         let bytes = std::fs::read(&mls_path)?;
         moat_core::MoatSession::from_state(&bytes)?
@@ -796,7 +801,7 @@ async fn cmd_leave(storage_dir: Option<PathBuf>, conversation: &str) -> anyhow::
 // ── delete-all ──────────────────────────────────────────────────────
 
 async fn cmd_delete_all(storage_dir: Option<PathBuf>, force: bool) -> anyhow::Result<()> {
-    let base_dir = resolve_storage_dir(storage_dir)?;
+    let (moat_dir, data_dir) = resolve_data_dir(storage_dir)?;
 
     if !force {
         eprintln!("WARNING: This will delete:");
@@ -805,7 +810,7 @@ async fn cmd_delete_all(storage_dir: Option<PathBuf>, force: bool) -> anyhow::Re
         eprintln!("  - All key packages and stealth addresses from your PDS");
         eprintln!("  - All events you have published");
         eprintln!();
-        eprintln!("Storage directory: {}", base_dir.display());
+        eprintln!("Storage directory: {}", moat_dir.display());
         eprintln!();
         eprint!("Type 'DELETE' to confirm: ");
         use std::io::Write;
@@ -820,7 +825,7 @@ async fn cmd_delete_all(storage_dir: Option<PathBuf>, force: bool) -> anyhow::Re
     }
 
     // Try to delete PDS records if we can log in
-    let keys_path = base_dir.join("keys");
+    let keys_path = data_dir.join("keys");
     if keys_path.exists() {
         let keys = keystore::KeyStore::with_path(keys_path)?;
         match login_from_keystore(&keys).await {
@@ -836,10 +841,10 @@ async fn cmd_delete_all(storage_dir: Option<PathBuf>, force: bool) -> anyhow::Re
         }
     }
 
-    // Delete local storage
-    eprintln!("Deleting local storage: {}", base_dir.display());
-    if base_dir.exists() {
-        std::fs::remove_dir_all(&base_dir)?;
+    // Delete local app state (preserves credentials.txt and other user files in moat_dir)
+    eprintln!("Deleting local storage: {}", data_dir.display());
+    if data_dir.exists() {
+        std::fs::remove_dir_all(&data_dir)?;
     }
 
     eprintln!("Done. All data deleted.");

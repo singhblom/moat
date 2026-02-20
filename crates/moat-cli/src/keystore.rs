@@ -304,7 +304,7 @@ impl KeyStore {
     /// drawbridge: wss://example.drawbridge.com/ws
     /// ```
     pub fn load_credentials_txt(&self) -> Result<CredentialsTxt> {
-        let path = self.base_path.join("..").join("credentials.txt");
+        let path = self.base_path.join("../..").join("credentials.txt");
         if !path.exists() {
             return Err(KeyStoreError::NotFound("credentials.txt".to_string()));
         }

@@ -296,23 +296,27 @@ impl App {
         storage_dir: Option<std::path::PathBuf>,
         drawbridge_url: Option<String>,
     ) -> Result<Self> {
-        // Determine the base storage directory
-        let base_dir = match storage_dir {
+        // Determine the moat base directory (~/.moat or custom -s path).
+        // User-managed files (e.g. credentials.txt) live here.
+        let moat_dir = match storage_dir {
             Some(dir) => dir,
             None => dirs::home_dir()
                 .ok_or_else(|| AppError::Other("home directory not found".to_string()))?
                 .join(".moat"),
         };
 
-        let keys = KeyStore::with_path(base_dir.join("keys"))?;
+        // All app-generated state lives in the data/ subdirectory.
+        let data_dir = moat_dir.join("data");
+
+        let keys = KeyStore::with_path(data_dir.join("keys"))?;
 
         // Initialize MoatSession - load from file if it exists, otherwise start fresh
-        let mls_path = base_dir.join("mls.bin");
+        let mls_path = data_dir.join("mls.bin");
 
         // Ensure parent directory exists
         if let Some(parent) = mls_path.parent() {
             std::fs::create_dir_all(parent)
-                .map_err(|e| AppError::Other(format!("Failed to create .moat directory: {e}")))?;
+                .map_err(|e| AppError::Other(format!("Failed to create data directory: {e}")))?;
         }
 
         let mls = if mls_path.exists() {
@@ -323,7 +327,7 @@ impl App {
             MoatSession::new()
         };
 
-        let debug_log = DebugLog::new(&base_dir);
+        let debug_log = DebugLog::new(&data_dir);
 
         // If credentials.txt exists and no credentials are stored yet, import them
         let credentials_txt_drawbridge = if !keys.has_credentials() {
