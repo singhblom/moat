@@ -120,6 +120,11 @@ impl DrawbridgeManager {
         }
     }
 
+    /// Check if there are any persisted partner hints.
+    pub fn hints_empty(&self) -> bool {
+        self.hints.is_empty()
+    }
+
     /// Load persisted state into the manager (hints only — connections are made later).
     pub fn load_state(&mut self, state: &DrawbridgeState) {
         self.hints.clear();

@@ -45,7 +45,7 @@ pub struct StoredSession {
     pub refresh_jwt: String,
 }
 
-/// A locally stored message (for sent messages we can't decrypt from PDS)
+/// A locally stored message (both sent and received)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredMessage {
     /// The rkey of the published record (for ordering)
@@ -58,9 +58,11 @@ pub struct StoredMessage {
     pub is_own: bool,
     /// Unique message identifier (16 bytes, for reaction targeting).
     /// Option + serde(default) for backwards compat with existing stored JSON.
-    /// Can be made non-optional (Vec<u8>) once there are no pre-existing users.
-    #[serde(default)]
     pub message_id: Option<Vec<u8>>,
+    /// Sender DID (for received messages)
+    pub sender_did: Option<String>,
+    /// Sender device name (for received messages)
+    pub sender_device: Option<String>,
 }
 
 /// All stored messages for a conversation

@@ -11,7 +11,7 @@ use moat_core::{
     encrypt_for_stealth, generate_stealth_keypair, try_decrypt_stealth, ControlKind, Event,
     EventKind, MoatCredential, MoatSession, ModifierKind, ParsedMessagePayload, CIPHERSUITE,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -153,12 +153,6 @@ pub(crate) enum BgEvent {
     },
     /// Network publish for send_message failed.
     SendFailed(String),
-    /// Network fetch for load_messages completed.
-    MessagesFetched {
-        conv_idx: usize,
-        their_events: Vec<moat_atproto::EventRecord>,
-        my_did: String,
-    },
     /// Background auto-login completed.
     LoggedIn {
         client: MoatAtprotoClient,
@@ -223,6 +217,16 @@ pub(crate) enum BgEvent {
 
     /// Signal to retry disconnected partner Drawbridges (async).
     DrawbridgeRetryDisconnected,
+
+    /// Handle resolution completed for a welcome-joined conversation.
+    HandleResolved {
+        conv_id: String,
+        did: String,
+        handle: String,
+    },
+
+    /// Connect to all persisted partner Drawbridges on startup.
+    DrawbridgeReconnectPartners,
 }
 
 /// Main application state
@@ -264,6 +268,11 @@ pub struct App {
 
     // Tag -> conversation mapping (tag -> hex-encoded group_id)
     pub tag_map: HashMap<[u8; 16], String>,
+
+    // Tags published by this device — skip these during polling to avoid
+    // self-decryption errors. Using tags rather than rkeys because we know
+    // the tag before the network publish completes.
+    own_published_tags: HashSet<[u8; 16]>,
 
     // Polling state
     last_poll: Option<Instant>,
@@ -383,6 +392,7 @@ impl App {
             cursor_position: 0,
             new_conv_handle: String::new(),
             tag_map: HashMap::new(),
+            own_published_tags: HashSet::new(),
             last_poll: None,
             last_device_poll: None,
             watched_dids: std::collections::HashSet::new(),
@@ -774,6 +784,11 @@ impl App {
                 self.status_message = None;
                 self.load_conversations_sync();
 
+                // Resolve handles for all conversations on login
+                for conv in self.conversations.clone() {
+                    self.resolve_conversation_handle(&conv);
+                }
+
                 // Ensure identity key + stealth address are provisioned.
                 // These may be missing if the initial do_login() was interrupted
                 // or if auto-login resumed a session before they were published.
@@ -794,6 +809,11 @@ impl App {
                             persisted_tickets,
                         });
                     }
+                }
+
+                // Reconnect to partner Drawbridges from persisted hints
+                if !self.drawbridge.hints_empty() {
+                    let _ = self.bg_tx.send(BgEvent::DrawbridgeReconnectPartners);
                 }
             }
             BgEvent::LoginFailed(e) => {
@@ -832,14 +852,6 @@ impl App {
             BgEvent::SendFailed(e) => {
                 self.set_error(format!("Send error: {e}"));
             }
-            BgEvent::MessagesFetched {
-                conv_idx,
-                their_events,
-                my_did,
-            } => {
-                self.finish_load_messages(conv_idx, their_events, &my_did);
-            }
-
             BgEvent::DrawbridgeNewEvent { tag, rkey, did } => {
                 self.debug_log.log(&format!(
                     "drawbridge: new_event tag={} rkey={} did={}",
@@ -878,6 +890,24 @@ impl App {
             BgEvent::DrawbridgeUpdateTags { .. } => {}
             BgEvent::DrawbridgeNotifyEventPosted { .. } => {}
             BgEvent::DrawbridgeRetryDisconnected => {}
+            BgEvent::DrawbridgeReconnectPartners => {}
+            BgEvent::HandleResolved {
+                conv_id,
+                did,
+                handle,
+            } => {
+                // Update conversation name and stored metadata
+                if let Some(conv) = self.conversations.iter_mut().find(|c| c.id == conv_id) {
+                    conv.name = handle.clone();
+                }
+                let _ = self.keys.store_group_metadata(
+                    &conv_id,
+                    &GroupMetadata {
+                        participant_did: did,
+                        participant_handle: handle,
+                    },
+                );
+            }
         }
     }
 
@@ -903,8 +933,6 @@ impl App {
                         self.debug_log
                             .log(&format!("drawbridge: connected to own relay at {}", url));
                         self.save_drawbridge_state();
-                        // Reconnect to all persisted partner Drawbridges
-                        self.drawbridge.reconnect_all_partners().await;
                     }
                     Err(e) => {
                         self.debug_log
@@ -960,6 +988,10 @@ impl App {
             }
             BgEvent::DrawbridgeRetryDisconnected => {
                 self.drawbridge.retry_disconnected().await;
+            }
+            BgEvent::DrawbridgeReconnectPartners => {
+                self.drawbridge.reconnect_all_partners().await;
+                self.save_drawbridge_state();
             }
             _ => {} // Non-async events handled by handle_bg_event
         }
@@ -1088,6 +1120,29 @@ impl App {
         }
     }
 
+    /// Spawn background handle resolution for a single conversation.
+    fn resolve_conversation_handle(&self, conv: &Conversation) {
+        let client = match self.client.as_ref() {
+            Some(c) => c.clone(),
+            None => return,
+        };
+        if conv.participant_did.is_empty() {
+            return;
+        }
+        let tx = self.bg_tx.clone();
+        let did = conv.participant_did.clone();
+        let conv_id = conv.id.clone();
+        tokio::spawn(async move {
+            if let Ok(handle) = client.resolve_handle(&did).await {
+                let _ = tx.send(BgEvent::HandleResolved {
+                    conv_id,
+                    did,
+                    handle,
+                });
+            }
+        });
+    }
+
     /// Synchronous version of load_conversations (no network calls).
     fn load_conversations_sync(&mut self) {
         let group_ids = match self.keys.list_groups() {
@@ -1149,7 +1204,7 @@ impl App {
     fn process_poll_results(
         &mut self,
         participant_events: Vec<(Vec<usize>, moat_atproto::EventRecord, String)>,
-        watched_events: Vec<(String, moat_atproto::EventRecord)>,
+        mut watched_events: Vec<(String, moat_atproto::EventRecord)>,
         new_rkeys: Vec<(String, String)>,
     ) {
         let my_did = self
@@ -1159,133 +1214,15 @@ impl App {
             .unwrap_or_default();
 
         for (conv_indices, event_record, _did) in participant_events {
-            if let Some(conv_id) = self.tag_map.get(&event_record.tag).cloned() {
-                self.mls.mark_tag_seen(&event_record.tag);
-                let group_id = match hex::decode(&conv_id) {
-                    Ok(id) => id,
-                    Err(_) => continue,
-                };
-
-                match self.mls.decrypt_event(&group_id, &event_record.ciphertext) {
-                    Ok(outcome) => {
-                        // Log any transcript integrity warnings
-                        for w in outcome.warnings() {
-                            self.debug_log
-                                .log(&format!("poll: transcript warning: {}", w));
-                        }
-                        let decrypted = outcome.into_result();
-
-                        if let Err(e) = self
-                            .keys
-                            .store_group_state(&conv_id, &decrypted.new_group_state)
-                        {
-                            self.debug_log
-                                .log(&format!("poll: failed to store group state: {}", e));
-                        }
-
-                        let conv_idx = conv_indices.first().copied();
-
-                        match decrypted.event.kind {
-                            EventKind::Message(_) => {
-                                let content = decrypted
-                                    .event
-                                    .parse_message_payload()
-                                    .map(|parsed| render_message_preview(&parsed))
-                                    .unwrap_or_else(|| "(invalid message payload)".to_string());
-                                let from = conv_idx
-                                    .and_then(|idx| self.conversations.get(idx))
-                                    .map(|c| c.name.clone())
-                                    .unwrap_or_else(|| "Unknown".to_string());
-
-                                let (sender_did, sender_device) = decrypted
-                                    .sender
-                                    .map(|s| (Some(s.did), Some(s.device_name)))
-                                    .unwrap_or((None, None));
-
-                                let is_own =
-                                    sender_did.as_ref().map_or(false, |did| did == &my_did);
-
-                                if self.active_conversation == conv_idx {
-                                    self.messages.push(DisplayMessage {
-                                        from,
-                                        content,
-                                        timestamp: event_record.created_at,
-                                        is_own,
-                                        sender_did,
-                                        sender_device,
-                                        message_id: decrypted.event.message_id,
-                                        reactions: vec![],
-                                    });
-                                } else if let Some(idx) = conv_idx {
-                                    if let Some(conv) = self.conversations.get_mut(idx) {
-                                        conv.unread += 1;
-                                    }
-                                }
-                            }
-                            EventKind::Control(ControlKind::Commit) => {
-                                let new_epoch = decrypted.event.epoch;
-                                if let Some(conv) =
-                                    self.conversations.iter_mut().find(|c| c.id == conv_id)
-                                {
-                                    conv.current_epoch = new_epoch;
-                                }
-                                // Regenerate candidate tags for the new epoch
-                                self.populate_candidate_tags(&conv_id, &group_id);
-
-                                // Update tags on partner Drawbridge connections for this conversation
-                                self.update_drawbridge_tags_for_conversation(&conv_id);
-                            }
-                            EventKind::Control(ControlKind::DrawbridgeHint) => {
-                                if let Some(payload) = decrypted.event.drawbridge_hint_payload() {
-                                    let sender_did = decrypted
-                                        .sender
-                                        .map(|s| s.did)
-                                        .unwrap_or_default();
-                                    self.debug_log.log(&format!(
-                                        "poll: received DrawbridgeHint from {} for conv {}",
-                                        &sender_did[..20.min(sender_did.len())],
-                                        &conv_id[..16.min(conv_id.len())]
-                                    ));
-                                    // Store hint and schedule connection (async via BgEvent)
-                                    let _ = self.bg_tx.send(BgEvent::DrawbridgeHandleHint {
-                                        partner_did: sender_did,
-                                        device_id: payload.device_id,
-                                        url: payload.url,
-                                        ticket: payload.ticket,
-                                        group_id_hex: conv_id.clone(),
-                                    });
-                                }
-                            }
-                            EventKind::Modifier(ModifierKind::Reaction) => {
-                                if let Some(rp) = decrypted.event.reaction_payload() {
-                                    let sender_did =
-                                        decrypted.sender.map(|s| s.did).unwrap_or_default();
-                                    if self.active_conversation == conv_idx {
-                                        if let Some(msg) = self.messages.iter_mut().find(|m| {
-                                            m.message_id.as_ref() == Some(&rp.target_message_id)
-                                        }) {
-                                            if let Some(pos) = msg.reactions.iter().position(|r| {
-                                                r.emoji == rp.emoji && r.sender_did == sender_did
-                                            }) {
-                                                msg.reactions.remove(pos);
-                                            } else {
-                                                msg.reactions.push(DisplayReaction {
-                                                    emoji: rp.emoji,
-                                                    sender_did,
-                                                });
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    Err(e) => {
-                        self.debug_log
-                            .log(&format!("poll: decryption failed: {}", e));
-                    }
-                }
+            // Skip events this device published — MLS cannot decrypt messages
+            // from our own sender ratchet, and we already display them
+            // optimistically on send. Events from other devices (same DID) are
+            // fine to decrypt.
+            if self.own_published_tags.contains(&event_record.tag) {
+                continue;
+            }
+            if self.tag_map.contains_key(&event_record.tag) {
+                self.process_matched_event(&conv_indices, &event_record, &my_did);
             } else {
                 // Unknown tag — try as welcome (sync crypto, only resolve_handle is async)
                 self.try_process_welcome_sync(
@@ -1296,9 +1233,24 @@ impl App {
             }
         }
 
-        // Process watched DID events
+        // Sort watched events by rkey (ascending) so Welcomes are processed
+        // before derived-tag events like DrawbridgeHint.
+        watched_events.sort_by(|a, b| a.1.rkey.cmp(&b.1.rkey));
+
+        let mut reprocess = Vec::new();
         for (did, event_record) in watched_events {
             if self.tag_map.contains_key(&event_record.tag) {
+                // Tag matched a known conversation — decrypt instead of trying as Welcome.
+                let conv_indices: Vec<usize> = self
+                    .conversations
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| c.participant_did == did)
+                    .map(|(i, _)| i)
+                    .collect();
+                if !conv_indices.is_empty() {
+                    reprocess.push((conv_indices, event_record, did));
+                }
                 continue;
             }
             if self.try_process_welcome_sync(
@@ -1308,6 +1260,14 @@ impl App {
             ) {
                 self.watched_dids.remove(&did);
             }
+        }
+        // Decrypt watched events that matched the tag_map (e.g. DrawbridgeHint
+        // arriving in the same batch as the Welcome that created the conversation).
+        for (conv_indices, event_record, _did) in reprocess {
+            if self.own_published_tags.contains(&event_record.tag) {
+                continue;
+            }
+            self.process_matched_event(&conv_indices, &event_record, &my_did);
         }
 
         // Save MLS state if modified
@@ -1326,6 +1286,158 @@ impl App {
                     &did[..20.min(did.len())],
                     e
                 ));
+            }
+        }
+    }
+
+    /// Decrypt and handle a single event whose tag matched the tag_map.
+    fn process_matched_event(
+        &mut self,
+        conv_indices: &[usize],
+        event_record: &moat_atproto::EventRecord,
+        my_did: &str,
+    ) {
+        let conv_id = match self.tag_map.get(&event_record.tag).cloned() {
+            Some(id) => id,
+            None => return,
+        };
+        self.mls.mark_tag_seen(&event_record.tag);
+        let group_id = match hex::decode(&conv_id) {
+            Ok(id) => id,
+            Err(_) => return,
+        };
+
+        match self.mls.decrypt_event(&group_id, &event_record.ciphertext) {
+            Ok(outcome) => {
+                for w in outcome.warnings() {
+                    self.debug_log
+                        .log(&format!("poll: transcript warning: {}", w));
+                }
+                let decrypted = outcome.into_result();
+
+                if let Err(e) = self
+                    .keys
+                    .store_group_state(&conv_id, &decrypted.new_group_state)
+                {
+                    self.debug_log
+                        .log(&format!("poll: failed to store group state: {}", e));
+                }
+
+                let conv_idx = conv_indices.first().copied();
+
+                match decrypted.event.kind {
+                    EventKind::Message(_) => {
+                        let content = decrypted
+                            .event
+                            .parse_message_payload()
+                            .map(|parsed| render_message_preview(&parsed))
+                            .unwrap_or_else(|| "(invalid message payload)".to_string());
+                        let from = conv_idx
+                            .and_then(|idx| self.conversations.get(idx))
+                            .map(|c| c.name.clone())
+                            .unwrap_or_else(|| "Unknown".to_string());
+
+                        let (sender_did, sender_device) = decrypted
+                            .sender
+                            .map(|s| (Some(s.did), Some(s.device_name)))
+                            .unwrap_or((None, None));
+
+                        let is_own =
+                            sender_did.as_ref().map_or(false, |did| did == my_did);
+
+                        // Persist received message locally
+                        let stored_msg = crate::keystore::StoredMessage {
+                            rkey: event_record.rkey.clone(),
+                            content: content.clone(),
+                            timestamp: event_record.created_at,
+                            is_own,
+                            message_id: decrypted.event.message_id.clone(),
+                            sender_did: sender_did.clone(),
+                            sender_device: sender_device.clone(),
+                        };
+                        if let Err(e) = self.keys.append_message(&conv_id, stored_msg) {
+                            self.debug_log
+                                .log(&format!("poll: failed to store message: {}", e));
+                        }
+
+                        if self.active_conversation == conv_idx {
+                            self.messages.push(DisplayMessage {
+                                from,
+                                content,
+                                timestamp: event_record.created_at,
+                                is_own,
+                                sender_did,
+                                sender_device,
+                                message_id: decrypted.event.message_id,
+                                reactions: vec![],
+                            });
+                        } else if let Some(idx) = conv_idx {
+                            if let Some(conv) = self.conversations.get_mut(idx) {
+                                conv.unread += 1;
+                            }
+                        }
+                    }
+                    EventKind::Control(ControlKind::Commit) => {
+                        let new_epoch = decrypted.event.epoch;
+                        if let Some(conv) =
+                            self.conversations.iter_mut().find(|c| c.id == conv_id)
+                        {
+                            conv.current_epoch = new_epoch;
+                        }
+                        // Regenerate candidate tags for the new epoch
+                        self.populate_candidate_tags(&conv_id, &group_id);
+
+                        // Update tags on partner Drawbridge connections for this conversation
+                        self.update_drawbridge_tags_for_conversation(&conv_id);
+                    }
+                    EventKind::Control(ControlKind::DrawbridgeHint) => {
+                        if let Some(payload) = decrypted.event.drawbridge_hint_payload() {
+                            let sender_did = decrypted
+                                .sender
+                                .map(|s| s.did)
+                                .unwrap_or_default();
+                            self.debug_log.log(&format!(
+                                "poll: received DrawbridgeHint from {} for conv {}",
+                                &sender_did[..20.min(sender_did.len())],
+                                &conv_id[..16.min(conv_id.len())]
+                            ));
+                            let _ = self.bg_tx.send(BgEvent::DrawbridgeHandleHint {
+                                partner_did: sender_did,
+                                device_id: payload.device_id,
+                                url: payload.url,
+                                ticket: payload.ticket,
+                                group_id_hex: conv_id.clone(),
+                            });
+                        }
+                    }
+                    EventKind::Modifier(ModifierKind::Reaction) => {
+                        if let Some(rp) = decrypted.event.reaction_payload() {
+                            let sender_did =
+                                decrypted.sender.map(|s| s.did).unwrap_or_default();
+                            if self.active_conversation == conv_idx {
+                                if let Some(msg) = self.messages.iter_mut().find(|m| {
+                                    m.message_id.as_ref() == Some(&rp.target_message_id)
+                                }) {
+                                    if let Some(pos) = msg.reactions.iter().position(|r| {
+                                        r.emoji == rp.emoji && r.sender_did == sender_did
+                                    }) {
+                                        msg.reactions.remove(pos);
+                                    } else {
+                                        msg.reactions.push(DisplayReaction {
+                                            emoji: rp.emoji,
+                                            sender_did,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Err(e) => {
+                self.debug_log
+                    .log(&format!("poll: decryption failed: {}", e));
             }
         }
     }
@@ -1374,6 +1486,11 @@ impl App {
         });
 
         self.populate_candidate_tags(&conv_id, &group_id);
+
+        // Resolve DID → handle in background
+        if let Some(conv) = self.conversations.last() {
+            self.resolve_conversation_handle(conv);
+        }
 
         self.debug_log
             .log("process_welcome: successfully joined group");
@@ -1513,7 +1630,10 @@ impl App {
                 }
             }
             KeyCode::Enter => {
-                if self.active_conversation.is_some() {
+                if let Some(idx) = self.active_conversation {
+                    if let Some(conv) = self.conversations.get(idx) {
+                        self.resolve_conversation_handle(conv);
+                    }
                     self.load_messages()?;
                     self.message_scroll = 0;
                     self.focus = Focus::Input;
@@ -1751,6 +1871,7 @@ impl App {
                 &ticket,
             )?;
             let encrypted = self.mls.encrypt_event(&group_id, &key_bundle, &hint_event)?;
+            self.own_published_tags.insert(encrypted.tag);
             self.save_mls_state()?;
             self.keys
                 .store_group_state(&conv_id, &encrypted.new_group_state)?;
@@ -1796,7 +1917,7 @@ impl App {
         Ok(())
     }
 
-    /// Load messages: show local messages immediately, spawn network fetch.
+    /// Load messages from local storage.
     fn load_messages(&mut self) -> Result<()> {
         self.messages.clear();
 
@@ -1805,23 +1926,22 @@ impl App {
         };
 
         let conv_id = self.conversations[idx].id.clone();
-        let participant_did = self.conversations[idx].participant_did.clone();
-        let my_did = self
-            .client
-            .as_ref()
-            .map(|c| c.did().to_string())
-            .unwrap_or_default();
+        let conv_name = self.conversations[idx].name.clone();
 
-        // Show locally stored messages immediately (no network wait)
         let local_messages = self.keys.load_messages(&conv_id).unwrap_or_default();
         for stored in &local_messages.messages {
+            let from = if stored.is_own {
+                "You".to_string()
+            } else {
+                conv_name.clone()
+            };
             self.messages.push(DisplayMessage {
-                from: "You".to_string(),
+                from,
                 content: stored.content.clone(),
                 timestamp: stored.timestamp,
-                is_own: true,
-                sender_did: Some(my_did.clone()),
-                sender_device: self.keys.get_or_create_device_name().ok(),
+                is_own: stored.is_own,
+                sender_did: stored.sender_did.clone(),
+                sender_device: stored.sender_device.clone(),
                 message_id: stored.message_id.clone(),
                 reactions: vec![],
             });
@@ -1832,184 +1952,7 @@ impl App {
             conv.unread = 0;
         }
 
-        // Spawn network fetch in background
-        let client = match self.client.as_ref() {
-            Some(c) => c.clone(),
-            None => return Ok(()),
-        };
-        let tx = self.bg_tx.clone();
-
-        tokio::spawn(async move {
-            match client.fetch_events_from_did(&participant_did, None).await {
-                Ok(events) => {
-                    let _ = tx.send(BgEvent::MessagesFetched {
-                        conv_idx: idx,
-                        their_events: events,
-                        my_did,
-                    });
-                }
-                Err(e) => {
-                    let _ = tx.send(BgEvent::PollError(format!("Failed to fetch messages: {e}")));
-                }
-            }
-        });
-
         Ok(())
-    }
-
-    /// Process fetched messages (decrypt and merge with local).
-    fn finish_load_messages(
-        &mut self,
-        conv_idx: usize,
-        their_events: Vec<moat_atproto::EventRecord>,
-        _my_did: &str,
-    ) {
-        // Only process if this conversation is still active
-        if self.active_conversation != Some(conv_idx) {
-            return;
-        }
-
-        let conv = match self.conversations.get(conv_idx) {
-            Some(c) => c,
-            None => return,
-        };
-        let conv_id = conv.id.clone();
-        let participant_did = conv.participant_did.clone();
-        let participant_name = conv.name.clone();
-        let group_id = match hex::decode(&conv_id) {
-            Ok(id) => id,
-            Err(_) => return,
-        };
-
-        // Collect valid tags from the tag_map (already populated by populate_candidate_tags)
-        let valid_tags: std::collections::HashSet<[u8; 16]> = self
-            .tag_map
-            .iter()
-            .filter(|(_, cid)| *cid == &conv_id)
-            .map(|(tag, _)| *tag)
-            .collect();
-
-        // Get local rkeys to avoid duplicates
-        let local_messages = self.keys.load_messages(&conv_id).unwrap_or_default();
-        let local_rkeys: std::collections::HashSet<String> = local_messages
-            .messages
-            .iter()
-            .map(|m| m.rkey.clone())
-            .collect();
-
-        // Start with existing local messages already in display
-        let mut all_messages: Vec<(String, DisplayMessage)> = self
-            .messages
-            .drain(..)
-            .enumerate()
-            .map(|(i, msg)| (format!("local_{:06}", i), msg))
-            .collect();
-
-        let mut pending_reactions: Vec<(Vec<u8>, String, String)> = Vec::new();
-        let mut max_rkey: Option<String> = None;
-
-        // Filter and decrypt
-        let their_events: Vec<_> = their_events
-            .into_iter()
-            .filter(|e| {
-                if max_rkey.as_ref().map_or(true, |m| e.rkey > *m) {
-                    max_rkey = Some(e.rkey.clone());
-                }
-                valid_tags.contains(&e.tag)
-            })
-            .collect();
-
-        for event_record in their_events {
-            if local_rkeys.contains(&event_record.rkey) {
-                continue;
-            }
-
-            match self.mls.decrypt_event(&group_id, &event_record.ciphertext) {
-                Ok(outcome) => {
-                    for w in outcome.warnings() {
-                        self.debug_log
-                            .log(&format!("load_messages: transcript warning: {}", w));
-                    }
-                    let decrypted = outcome.into_result();
-                    match decrypted.event.kind {
-                        EventKind::Message(_) => {
-                            let content = decrypted
-                                .event
-                                .parse_message_payload()
-                                .map(|parsed| render_message_preview(&parsed))
-                                .unwrap_or_else(|| "(invalid message payload)".to_string());
-                            let (sender_did, sender_device) = decrypted
-                                .sender
-                                .map(|s| (Some(s.did), Some(s.device_name)))
-                                .unwrap_or((Some(participant_did.clone()), None));
-
-                            all_messages.push((
-                                event_record.rkey.clone(),
-                                DisplayMessage {
-                                    from: participant_name.clone(),
-                                    content,
-                                    timestamp: event_record.created_at,
-                                    is_own: false,
-                                    sender_did,
-                                    sender_device,
-                                    message_id: decrypted.event.message_id,
-                                    reactions: vec![],
-                                },
-                            ));
-                        }
-                        EventKind::Modifier(ModifierKind::Reaction) => {
-                            if let Some(rp) = decrypted.event.reaction_payload() {
-                                let sender_did = decrypted
-                                    .sender
-                                    .map(|s| s.did)
-                                    .unwrap_or_else(|| participant_did.clone());
-                                pending_reactions.push((
-                                    rp.target_message_id,
-                                    rp.emoji,
-                                    sender_did,
-                                ));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                Err(e) => {
-                    self.debug_log.log(&format!(
-                        "load_messages: failed to decrypt event {}: {}",
-                        &event_record.rkey, e
-                    ));
-                }
-            }
-        }
-
-        if self.mls.has_pending_changes() {
-            let _ = self.save_mls_state();
-        }
-
-        all_messages.sort_by(|a, b| a.0.cmp(&b.0));
-
-        for (target_id, emoji, sender_did) in pending_reactions {
-            if let Some((_, msg)) = all_messages
-                .iter_mut()
-                .find(|(_, m)| m.message_id.as_ref() == Some(&target_id))
-            {
-                if let Some(pos) = msg
-                    .reactions
-                    .iter()
-                    .position(|r| r.emoji == emoji && r.sender_did == sender_did)
-                {
-                    msg.reactions.remove(pos);
-                } else {
-                    msg.reactions.push(DisplayReaction { emoji, sender_did });
-                }
-            }
-        }
-
-        self.messages = all_messages.into_iter().map(|(_, msg)| msg).collect();
-
-        if let Some(rkey) = max_rkey {
-            let _ = self.keys.set_last_rkey(&participant_did, &rkey);
-        }
     }
 
     async fn handle_messages_key(&mut self, key: KeyEvent) -> Result<bool> {
@@ -2155,6 +2098,7 @@ impl App {
 
         // Encrypt synchronously (fast — pure crypto, no I/O)
         let encrypted = self.mls.encrypt_event(&group_id, &key_bundle, &event)?;
+        self.own_published_tags.insert(encrypted.tag);
         self.save_mls_state()?;
 
         self.debug_log.log(&format!(
@@ -2173,7 +2117,7 @@ impl App {
             content: preview.clone(),
             timestamp,
             is_own: true,
-            sender_did: Some(my_did),
+            sender_did: Some(my_did.clone()),
             sender_device: self.keys.get_or_create_device_name().ok(),
             message_id: event.message_id.clone(),
             reactions: vec![],
@@ -2186,6 +2130,8 @@ impl App {
             timestamp,
             is_own: true,
             message_id: encrypted.message_id.clone(),
+            sender_did: Some(my_did),
+            sender_device: self.keys.get_or_create_device_name().ok(),
         };
         if let Err(e) = self.keys.append_message(&conv_id, stored_msg) {
             self.debug_log
@@ -2260,6 +2206,7 @@ impl App {
         let event = Event::reaction(group_id.clone(), current_epoch, &target_message_id, emoji);
 
         let encrypted = self.mls.encrypt_event(&group_id, &key_bundle, &event)?;
+        self.own_published_tags.insert(encrypted.tag);
         self.save_mls_state()?;
 
         // Update stored group state
@@ -2552,5 +2499,53 @@ impl App {
         if !self.device_alerts.is_empty() {
             self.device_alerts.remove(0);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use moat_atproto::EventRecord;
+
+    fn make_event(rkey: &str, tag: [u8; 16]) -> EventRecord {
+        EventRecord {
+            uri: String::new(),
+            rkey: rkey.to_string(),
+            author_did: "did:plc:test".to_string(),
+            v: 1,
+            tag,
+            ciphertext: vec![],
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn watched_events_sorted_by_rkey_ascending() {
+        // Simulate PDS returning events in descending rkey order (newest first),
+        // which caused DrawbridgeHint to be processed before the Welcome.
+        let welcome_tag = [0xc8, 0xff, 0xc6, 0xc1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let hint_tag = [0x11, 0x57, 0x50, 0x99, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let msg_tag = [0xda, 0x5f, 0x62, 0x9c, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+        let did = "did:plc:alice".to_string();
+
+        // Events in descending rkey order (as returned by PDS)
+        let mut watched_events: Vec<(String, EventRecord)> = vec![
+            (did.clone(), make_event("3mfcetibqab2v", hint_tag)),  // highest rkey
+            (did.clone(), make_event("3mfcetf53sx23", msg_tag)),
+            (did.clone(), make_event("3mfcetex5yg2i", welcome_tag)), // lowest rkey
+        ];
+
+        // Apply the same sort used in process_poll_results
+        watched_events.sort_by(|a, b| a.1.rkey.cmp(&b.1.rkey));
+
+        // Welcome (lowest rkey) should now be first
+        assert_eq!(watched_events[0].1.tag, welcome_tag);
+        assert_eq!(watched_events[0].1.rkey, "3mfcetex5yg2i");
+
+        assert_eq!(watched_events[1].1.tag, msg_tag);
+        assert_eq!(watched_events[1].1.rkey, "3mfcetf53sx23");
+
+        assert_eq!(watched_events[2].1.tag, hint_tag);
+        assert_eq!(watched_events[2].1.rkey, "3mfcetibqab2v");
     }
 }
