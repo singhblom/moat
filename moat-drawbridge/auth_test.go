@@ -16,7 +16,7 @@ func TestVerifyChallenge_Ed25519(t *testing.T) {
 	}
 
 	nonce := "abc123"
-	relayURL := "wss://relay.example.com"
+	relayURL := "wss://relay.example.com/ws"
 	timestamp := time.Now().Unix()
 
 	message := []byte(nonce + "\n" + relayURL + "\n" + strconv.FormatInt(timestamp, 10) + "\n")

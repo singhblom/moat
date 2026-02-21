@@ -113,6 +113,9 @@ func newTestEnv(t *testing.T) *testEnv {
 
 	srv := httptest.NewServer(relay.Handler())
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+	// Set publicURL so the server's challenge verification uses the same
+	// base URL that test clients connect to (httptest assigns a random port).
+	relay.publicURL = "ws" + strings.TrimPrefix(srv.URL, "http")
 
 	t.Cleanup(func() {
 		cancel()
@@ -167,9 +170,9 @@ func (env *testEnv) connect(did string) *testClient {
 	challenge := tc.readMsgAs("challenge")
 	nonce := challenge["nonce"].(string)
 
-	// Authenticate
+	// Authenticate — sign the full connection URL (including path)
 	timestamp := time.Now().Unix()
-	sig := signChallengeEd25519(priv, nonce, "ws://test-relay", timestamp)
+	sig := signChallengeEd25519(priv, nonce, env.wsURL, timestamp)
 	tc.sendJSON(map[string]any{
 		"type":       "challenge_response",
 		"did":        did,
@@ -349,7 +352,7 @@ func TestAuthReject_ExpiredTimestamp(t *testing.T) {
 
 	// Use timestamp from 2 minutes ago
 	timestamp := time.Now().Add(-2 * time.Minute).Unix()
-	sig := signChallengeEd25519(priv, nonce, "ws://test-relay", timestamp)
+	sig := signChallengeEd25519(priv, nonce, env.wsURL, timestamp)
 
 	msg, _ = json.Marshal(map[string]any{
 		"type":       "challenge_response",
@@ -635,7 +638,7 @@ func TestChallengeResponseWithoutRequest(t *testing.T) {
 
 	// Try to send challenge_response without requesting challenge first
 	timestamp := time.Now().Unix()
-	sig := signChallengeEd25519(priv, "fake-nonce", "ws://test-relay", timestamp)
+	sig := signChallengeEd25519(priv, "fake-nonce", env.wsURL, timestamp)
 
 	msg, _ := json.Marshal(map[string]any{
 		"type":       "challenge_response",

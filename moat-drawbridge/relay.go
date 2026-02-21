@@ -86,17 +86,18 @@ func NewRelay(publicURL, fallbackURL string, resolver DIDResolver, verifier PDSV
 //     Traefik, Caddy, HAProxy, and any properly configured Nginx
 //  3. TLS-based fallback URL — used in local dev and when running without a proxy
 func (r *Relay) clientRelayURL(req *http.Request) string {
+	path := req.URL.Path
 	if r.publicURL != "" {
-		return r.publicURL
+		return r.publicURL + path
 	}
 	host := req.Host
 	switch req.Header.Get("X-Forwarded-Proto") {
 	case "https":
-		return "wss://" + host
+		return "wss://" + host + path
 	case "http":
-		return "ws://" + host
+		return "ws://" + host + path
 	}
-	return r.relayURL
+	return r.relayURL + path
 }
 
 // Handler returns an http.Handler with the relay's endpoints.

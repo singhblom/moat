@@ -17,10 +17,10 @@ proptest! {
         host in "[a-z]{3,10}\\.[a-z]{2,4}",
         timestamp in 1_700_000_000i64..1_900_000_000,
     ) {
-        // The server strips the path, so we sign with scheme+host only
-        let base_url = format!("wss://{}", host);
-        let msg1 = format!("{}\n{}\n{}\n", nonce, base_url, timestamp);
-        let msg2 = format!("{}\n{}\n{}\n", nonce, base_url, timestamp);
+        // Server includes the request path in its relay URL, so we sign the full URL
+        let url = format!("wss://{}/ws", host);
+        let msg1 = format!("{}\n{}\n{}\n", nonce, url, timestamp);
+        let msg2 = format!("{}\n{}\n{}\n", nonce, url, timestamp);
         prop_assert_eq!(msg1, msg2);
     }
 

@@ -195,16 +195,14 @@ impl DrawbridgeManager {
             .to_string();
 
         // 3. Sign: nonce + "\n" + relay_url + "\n" + timestamp + "\n"
-        // The server's relayURL is scheme+host only (no path), e.g. "wss://relay.example.com".
-        // Strip any path from the connection URL to match what the server constructs.
-        let relay_url_for_signing = strip_url_path(url);
-
+        // The server includes the request path in its relay URL, so we sign
+        // the full connection URL as-is.
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
 
-        let message_bytes = format!("{}\n{}\n{}\n", nonce, relay_url_for_signing, timestamp);
+        let message_bytes = format!("{}\n{}\n{}\n", nonce, url, timestamp);
         let (sig_bytes, pub_bytes) =
             moat_core::MoatSession::sign_drawbridge_challenge(identity_key_bundle, message_bytes.as_bytes())
                 .map_err(|e| format!("signing failed: {e}"))?;
@@ -745,25 +743,6 @@ fn base64_encode(data: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(data)
 }
 
-/// Return just the scheme+host portion of a WebSocket URL, stripping any path.
-///
-/// The server builds its relay URL as `wss://hostname` (no path), so the
-/// signed message must use the same form regardless of the connection URL path.
-///
-/// Examples:
-///   "wss://relay.example.com/ws"  → "wss://relay.example.com"
-///   "wss://relay.example.com"     → "wss://relay.example.com"
-///   "ws://localhost:8080/ws"      → "ws://localhost:8080"
-fn strip_url_path(url: &str) -> &str {
-    // Find the end of "scheme://"
-    let host_start = url.find("://").map(|i| i + 3).unwrap_or(0);
-    // Find the first '/' after the host
-    match url[host_start..].find('/') {
-        Some(slash) => &url[..host_start + slash],
-        None => url,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -838,15 +817,4 @@ mod tests {
         assert_eq!(exported.partner_hints.len(), 2);
     }
 
-    #[test]
-    fn test_strip_url_path() {
-        // The common case: deployed server with /ws path
-        assert_eq!(strip_url_path("wss://moat-drawbridge.fly.dev/ws"), "wss://moat-drawbridge.fly.dev");
-        // No path — should be returned unchanged
-        assert_eq!(strip_url_path("wss://relay.example.com"), "wss://relay.example.com");
-        // Local dev with port and path
-        assert_eq!(strip_url_path("ws://localhost:8080/ws"), "ws://localhost:8080");
-        // Deeper path
-        assert_eq!(strip_url_path("wss://host.example.com/drawbridge/ws"), "wss://host.example.com");
-    }
 }
