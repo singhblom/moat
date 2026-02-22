@@ -1902,11 +1902,12 @@ impl App {
             .map(|c| c.did().to_string())
             .unwrap_or_default();
 
-        self.debug_log.log(&format!(
-            "poll: processing {} participant events, tag_map has {} entries",
-            participant_events.len(),
-            self.tag_map.len()
-        ));
+        if !participant_events.is_empty() {
+            self.debug_log.log(&format!(
+                "poll: processing {} participant events",
+                participant_events.len(),
+            ));
+        }
         for (conv_indices, event_record, _did) in participant_events {
             // Skip events this device published — MLS cannot decrypt messages
             // from our own sender ratchet, and we already display them

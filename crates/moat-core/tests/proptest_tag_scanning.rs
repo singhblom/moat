@@ -460,7 +460,7 @@ proptest! {
     /// P14: Exceeding GAP_LIMIT skips causes scan failure.
     /// The message's tag falls outside the recipient's scanning window.
     #[test]
-    fn skips_beyond_gap_limit_fail(n_skips in 5usize..10) {
+    fn skips_beyond_gap_limit_fail(n_skips in 50usize..60) {
         let mut sim = ConversationSim::new(&["Alice", "Bob"]);
         let mut scanner = TagScanner::new(2);
         scanner.rebuild_all(&sim);

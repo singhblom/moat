@@ -16,8 +16,15 @@ use crate::Result;
 /// Domain separation label for v2 tag derivation
 const TAG_LABEL_V2: &[u8] = b"moat-event-tag-v2";
 
-/// Default gap limit for recipient scanning
-pub const TAG_GAP_LIMIT: u64 = 5;
+/// Default gap limit for recipient scanning.
+///
+/// The candidate tag set lives in a local HashMap (O(1) lookup) and each
+/// entry costs one HKDF derivation at populate time — negligible compared
+/// to the network cost of fetching events from PDS. A generous window
+/// avoids missed messages when the recipient was offline for a while.
+/// Drawbridge subscriptions handle real-time delivery; PDS polling with
+/// tag scanning is the catch-all fallback.
+pub const TAG_GAP_LIMIT: u64 = 50;
 
 /// MLS export_secret label for tag derivation keying material
 pub const TAG_EXPORT_SECRET_LABEL: &str = "moat-event-tag-v2";

@@ -1520,6 +1520,70 @@ impl MoatSession {
         true
     }
 
+    /// Scan ahead with a wider window to try matching an unknown tag.
+    ///
+    /// When `populate_candidate_tags` misses because the sender's counter advanced
+    /// beyond the gap limit, this method scans a much larger range (up to `scan_limit`)
+    /// for all devices in the given group. Returns the matching tag metadata if found,
+    /// and updates `tag_metadata` and `seen_counters` accordingly.
+    pub fn try_scan_ahead_tag(
+        &self,
+        group_id: &[u8],
+        target_tag: &[u8; 16],
+        scan_limit: u64,
+    ) -> Result<bool> {
+        let group = self
+            .load_group(group_id)?
+            .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
+        let export_secret = self.derive_tag_export_secret(&group)?;
+        let members = self.get_group_members(group_id)?;
+        let seen = self.seen_counters.read().unwrap();
+
+        for (_leaf_idx, cred) in &members {
+            let cred = match cred {
+                Some(c) => c,
+                None => continue,
+            };
+            let device_id = cred.device_id();
+            let key = (group_id.to_vec(), cred.did().to_string(), *device_id);
+            let from_counter = seen.get(&key).map_or(0, |&c| c + 1);
+
+            let tags = tag::generate_candidate_tags(
+                &export_secret,
+                group_id,
+                cred.did(),
+                device_id,
+                from_counter,
+                scan_limit,
+            )?;
+            for (tag, counter) in tags {
+                if &tag == target_tag {
+                    // Found it — update metadata and seen counter
+                    let mut metadata = self.tag_metadata.write().unwrap();
+                    metadata.insert(
+                        tag,
+                        (
+                            group_id.to_vec(),
+                            cred.did().to_string(),
+                            *device_id,
+                            counter,
+                        ),
+                    );
+                    drop(metadata);
+                    drop(seen);
+                    // Advance seen counter to this position
+                    let mut seen_w = self.seen_counters.write().unwrap();
+                    let current = seen_w.entry(key).or_insert(0);
+                    if counter >= *current {
+                        *current = counter;
+                    }
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
     /// Add a new device (key package) to a group for an existing member's DID.
     ///
     /// This is used when a user adds a new device. The new device must have the same
