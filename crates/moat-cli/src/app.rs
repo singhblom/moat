@@ -1376,18 +1376,34 @@ impl App {
         // Optimistic UI.
         let timestamp = chrono::Utc::now();
         let my_did = self.client.as_ref().unwrap().did().to_string();
+        let device_name = self.keys.get_or_create_device_name().ok();
         self.messages.push(DisplayMessage {
             from: "You".to_string(),
             content: "[image — processing…]".to_string(),
             timestamp,
             is_own: true,
-            sender_did: Some(my_did),
-            sender_device: self.keys.get_or_create_device_name().ok(),
+            sender_did: Some(my_did.clone()),
+            sender_device: device_name.clone(),
             message_id: Some(pending_message_id.clone()),
             reactions: vec![],
             image_proto: None,
             image_loading: true,
         });
+
+        // Persist the placeholder so the message survives a restart.
+        let stored_msg = crate::keystore::StoredMessage {
+            rkey: "pending".to_string(),
+            content: "[image — processing…]".to_string(),
+            timestamp,
+            is_own: true,
+            message_id: Some(pending_message_id.clone()),
+            sender_did: Some(my_did),
+            sender_device: device_name,
+        };
+        if let Err(e) = self.keys.append_message(&conv_id, stored_msg) {
+            self.debug_log
+                .log(&format!("send_image: failed to store locally: {e}"));
+        }
 
         self.input_buffer.clear();
         self.cursor_position = 0;
@@ -1551,8 +1567,21 @@ impl App {
             .rev()
             .find(|m| m.message_id.as_ref() == Some(&pending_message_id))
         {
-            msg.content = display_content;
+            msg.content = display_content.clone();
             msg.image_loading = false;
+            // Update the locally stored entry with the final display string.
+            let _ = self.keys.append_message(
+                &conv_id,
+                crate::keystore::StoredMessage {
+                    rkey: "pending".to_string(),
+                    content: display_content,
+                    timestamp: msg.timestamp,
+                    is_own: true,
+                    message_id: Some(pending_message_id.clone()),
+                    sender_did: msg.sender_did.clone(),
+                    sender_device: msg.sender_device.clone(),
+                },
+            );
             if let Some(thumb_img) = image_processing::decode_thumbhash(&thumbhash) {
                 msg.image_proto = Some(ImageProto(self.picker.new_resize_protocol(thumb_img)));
             }
