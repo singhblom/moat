@@ -40,9 +40,11 @@ const PLC_DIRECTORY_URL: &str = "https://plc.directory";
 pub struct MoatAtprotoClient {
     /// Authenticated agent for the user's PDS (used for writes)
     agent: std::sync::Arc<AtpAgent<MemorySessionStore, ReqwestClient>>,
-    /// HTTP client for PLC directory lookups
+    /// HTTP client for PLC directory lookups and raw blob operations
     http_client: reqwest::Client,
     did: String,
+    /// Base URL of the user's own PDS (e.g. "https://bsky.social")
+    pds_url: String,
 }
 
 impl MoatAtprotoClient {
@@ -79,6 +81,7 @@ impl MoatAtprotoClient {
             agent: std::sync::Arc::new(agent),
             http_client,
             did: session.did.to_string(),
+            pds_url: pds_url.to_string(),
         })
     }
 
@@ -132,6 +135,7 @@ impl MoatAtprotoClient {
             agent: std::sync::Arc::new(agent),
             http_client,
             did: did.to_string(),
+            pds_url: pds_url.to_string(),
         })
     }
 
@@ -697,6 +701,96 @@ impl MoatAtprotoClient {
         }
 
         Ok(deleted)
+    }
+
+    /// Upload an encrypted blob to the user's own PDS.
+    ///
+    /// The caller is responsible for encrypting the blob before calling this.
+    /// Uses `com.atproto.repo.uploadBlob` with `application/octet-stream`.
+    ///
+    /// **Important**: the blob is garbage-collected by the PDS until it is
+    /// referenced by a record. Create the event record referencing this blob
+    /// immediately after upload.
+    ///
+    /// # Returns
+    ///
+    /// The CID string (e.g. `bafkreixxxxxxxx`). Callers typically construct
+    /// the `ExternalBlob.uri` as `at://{own_did}/{cid}`.
+    pub async fn upload_blob(&self, data: &[u8]) -> Result<String> {
+        let session = self
+            .agent
+            .get_session()
+            .await
+            .ok_or_else(|| Error::Authentication("no active session".to_string()))?;
+
+        let url = format!("{}/xrpc/com.atproto.repo.uploadBlob", self.pds_url);
+        let response = self
+            .http_client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", session.access_jwt))
+            .header("Content-Type", "application/octet-stream")
+            .body(data.to_vec())
+            .send()
+            .await
+            .map_err(|e| Error::Pds(format!("blob upload request failed: {e}")))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Pds(format!("uploadBlob returned {status}: {body}")));
+        }
+
+        let json: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| Error::Serialization(format!("failed to parse uploadBlob response: {e}")))?;
+
+        // Extract CID from: {"blob": {"$type": "blob", "ref": {"$link": "<cid>"}, ...}}
+        let cid = json
+            .get("blob")
+            .and_then(|b| b.get("ref"))
+            .and_then(|r| r.get("$link"))
+            .and_then(|l| l.as_str())
+            .ok_or_else(|| Error::Serialization("uploadBlob response missing blob.ref.$link".to_string()))?;
+
+        Ok(cid.to_string())
+    }
+
+    /// Download a blob from a remote DID's PDS.
+    ///
+    /// Resolves the sender's PDS endpoint from their DID, then fetches the blob
+    /// via `com.atproto.sync.getBlob`. The returned bytes are the raw encrypted
+    /// blob (`nonce || ciphertext`) — callers must decrypt with `blob_decrypt`.
+    pub async fn fetch_blob(&self, did: &str, cid: &str) -> Result<Vec<u8>> {
+        let pds_url = self.resolve_pds_endpoint(did).await?;
+        let url = format!(
+            "{}/xrpc/com.atproto.sync.getBlob?did={}&cid={}",
+            pds_url, did, cid
+        );
+
+        let response = self
+            .http_client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| Error::Pds(format!("blob fetch request failed: {e}")))?;
+
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(Error::NotFound(format!("blob not found: did={did} cid={cid}")));
+        }
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Pds(format!("getBlob returned {status}: {body}")));
+        }
+
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| Error::Pds(format!("failed to read blob response body: {e}")))?;
+
+        Ok(bytes.to_vec())
     }
 }
 

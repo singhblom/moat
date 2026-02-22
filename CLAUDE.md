@@ -13,7 +13,7 @@ The full protocol is documented in `PROTOCOL.md`. **When making changes that aff
 ```bash
 cargo build                  # Build all crates
 cargo test                   # Run all tests
-cargo test -p moat-core      # Run core crypto tests (73 unit + 8 proptest)
+cargo test -p moat-core      # Run core crypto tests
 cargo test -p moat-atproto   # Run ATProto tests only (3 tests)
 cargo run -p moat-cli        # Run the TUI (default, no subcommand)
 
@@ -84,6 +84,8 @@ Located in `lexicons/social/moat/`:
 ~/.moat/
 ├── mls.bin           # MoatSession's FileStorage (MLS state)
 ├── debug.log
+├── data/
+│   └── blobs/        # BlobCache — keyed by hex(content_hash), one file per blob
 └── keys/
     ├── credentials.json
     ├── identity.key
@@ -156,13 +158,13 @@ cargo install -f wasm-bindgen-cli  # version must match Cargo.lock (currently 0.
 
 ### Test Layout
 
-- **moat-core** — 73 unit tests inline (`#[cfg(test)]` in each module) + 8 property-based tests in `crates/moat-core/tests/proptest_padding_tag.rs` using `proptest` crate. Covers padding roundtrips, bucket selection, tag derivation properties (determinism, uniqueness across epochs/groups).
-- **moat-atproto** — 3 serialization tests in `src/records.rs`.
-- **moat-cli** — 5 keystore persistence tests in `src/keystore.rs`.
-- **moat-flutter (Dart)** — 52 unit tests in `moat-flutter/test/`:
+- **moat-core** — Extensive inline unit tests (`#[cfg(test)]` in each module) covering all crypto primitives. Property-based tests in `crates/moat-core/tests/` using the `proptest` crate, covering blob crypto, padding, tag derivation, message events, transcript integrity, tag scanning, and Drawbridge signatures.
+- **moat-atproto** — Serialization tests in `src/records.rs`.
+- **moat-cli** — Unit tests inline in `src/blob_cache.rs`, `src/message_helpers.rs`, `src/keystore.rs`, and property-based tests in `tests/proptest_drawbridge.rs`.
+- **moat-flutter (Dart)** — Unit tests in `moat-flutter/test/`:
   - `test/models/` — `Message`, `Conversation`, `BlueskyProfile` JSON roundtrips, `copyWith`, `groupIdHex`, status parsing, `isStale`, `fromApiResponse`.
   - `test/services/` — `ConversationStorage` and `MessageStorage` JSON format tests (save/load, add-or-update, dedup, timestamp sorting, per-group file isolation).
-- **moat-flutter (Rust FFI)** — 21 tests in `moat-flutter/rust/src/api/simple.rs`. Covers `MoatSessionHandle` lifecycle (create, export/import, device ID), key package generation, group creation, two-party encrypt/decrypt, stealth keypair/encrypt/decrypt, tag derivation, padding, `EventDto` conversions.
+- **moat-flutter (Rust FFI)** — Tests in `moat-flutter/rust/src/api/simple.rs`. Covers `MoatSessionHandle` lifecycle (create, export/import, device ID), key package generation, group creation, two-party encrypt/decrypt, stealth keypair/encrypt/decrypt, tag derivation, padding, `EventDto` conversions.
 
 ### Testing Conventions
 

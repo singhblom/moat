@@ -1,6 +1,7 @@
 //! Moat CLI - Terminal UI for encrypted ATProto messaging
 
 mod app;
+mod blob_cache;
 mod drawbridge;
 mod keystore;
 mod message_helpers;

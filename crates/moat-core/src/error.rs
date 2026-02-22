@@ -34,6 +34,9 @@ pub enum ErrorCode {
     StealthEncryption = 116,
     RemoveMember = 117,
     InvalidBlobUri = 118,
+    CiphertextHashMismatch = 119,
+    BlobDecryptionFailed = 120,
+    ContentHashMismatch = 121,
     // Transcript integrity error codes
     StateVersionMismatch = 200,
     StaleCommit = 201,
@@ -116,6 +119,15 @@ pub enum Error {
 
     #[error("invalid blob URI (must start with at://): {0}")]
     InvalidBlobUri(String),
+
+    #[error("blob ciphertext hash mismatch: {0}")]
+    CiphertextHashMismatch(String),
+
+    #[error("blob decryption failed: {0}")]
+    BlobDecryptionFailed(String),
+
+    #[error("blob content hash mismatch: {0}")]
+    ContentHashMismatch(String),
 }
 
 impl Error {
@@ -146,6 +158,9 @@ impl Error {
             Error::UnknownSender(_) => ErrorCode::UnknownSender,
             Error::ConflictUnresolved(_) => ErrorCode::ConflictUnresolved,
             Error::InvalidBlobUri(_) => ErrorCode::InvalidBlobUri,
+            Error::CiphertextHashMismatch(_) => ErrorCode::CiphertextHashMismatch,
+            Error::BlobDecryptionFailed(_) => ErrorCode::BlobDecryptionFailed,
+            Error::ContentHashMismatch(_) => ErrorCode::ContentHashMismatch,
         }
     }
 
@@ -175,7 +190,10 @@ impl Error {
             | Error::StateDiverged(msg)
             | Error::UnknownSender(msg)
             | Error::ConflictUnresolved(msg)
-            | Error::InvalidBlobUri(msg) => msg,
+            | Error::InvalidBlobUri(msg)
+            | Error::CiphertextHashMismatch(msg)
+            | Error::BlobDecryptionFailed(msg)
+            | Error::ContentHashMismatch(msg) => msg,
         }
     }
 }

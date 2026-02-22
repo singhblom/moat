@@ -1,15 +1,17 @@
 //! Application state and logic
 
 use crate::{
+    blob_cache::BlobCache,
     drawbridge::DrawbridgeManager,
     keystore::{hex, GroupMetadata, KeyStore, StoredSession},
-    message_helpers::{build_text_payload, render_message_preview},
+    message_helpers::{build_text_payload, needs_blob_upload, render_message_preview, truncate_to_preview},
 };
 use crossterm::event::{KeyCode, KeyEvent};
 use moat_atproto::MoatAtprotoClient;
 use moat_core::{
-    encrypt_for_stealth, generate_stealth_keypair, try_decrypt_stealth, ControlKind, Event,
-    EventKind, MoatCredential, MoatSession, ModifierKind, ParsedMessagePayload, CIPHERSUITE,
+    blob_decrypt, blob_encrypt, encrypt_for_stealth, generate_stealth_keypair,
+    try_decrypt_stealth, ControlKind, Event, EventKind, ExternalBlob, LongTextMessage,
+    MessagePayload, MoatCredential, MoatSession, ModifierKind, ParsedMessagePayload, CIPHERSUITE,
 };
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -227,6 +229,32 @@ pub(crate) enum BgEvent {
 
     /// Connect to all persisted partner Drawbridges on startup.
     DrawbridgeReconnectPartners,
+
+    /// Blob upload completed — MLS-encrypt and publish the long-text event.
+    BlobUploaded {
+        cid: String,
+        key: Vec<u8>,
+        ciphertext_hash: Vec<u8>,
+        ciphertext_size: u64,
+        content_hash: Vec<u8>,
+        /// Full original text (kept for future use, e.g. offline retransmit).
+        #[allow(dead_code)]
+        full_text: String,
+        preview_text: String,
+        conv_id: String,
+    },
+
+    /// Blob fetch succeeded — update the in-memory message with full text.
+    BlobFetched {
+        message_id: Vec<u8>,
+        full_text: String,
+    },
+
+    /// Blob fetch failed — show an inline error on the message.
+    BlobFetchFailed {
+        message_id: Vec<u8>,
+        error: String,
+    },
 }
 
 /// Main application state
@@ -235,6 +263,8 @@ pub struct App {
     pub client: Option<MoatAtprotoClient>,
     pub mls: MoatSession,
     mls_path: std::path::PathBuf,
+    /// Persistent disk cache for decrypted blob content, keyed by content_hash.
+    blob_cache: BlobCache,
     debug_log: DebugLog,
 
     // UI state
@@ -336,6 +366,9 @@ impl App {
             MoatSession::new()
         };
 
+        let blob_cache = BlobCache::new(data_dir.join("blobs"))
+            .map_err(|e| AppError::Other(format!("Failed to create blob cache: {e}")))?;
+
         let debug_log = DebugLog::new(&data_dir);
 
         // If credentials.txt exists and no credentials are stored yet, import them
@@ -374,6 +407,7 @@ impl App {
             client: None,
             mls,
             mls_path,
+            blob_cache,
             debug_log,
             focus,
             login_form: LoginForm::default(),
@@ -908,7 +942,150 @@ impl App {
                     },
                 );
             }
+
+            BgEvent::BlobUploaded {
+                cid,
+                key,
+                ciphertext_hash,
+                ciphertext_size,
+                content_hash,
+                full_text: _,
+                preview_text,
+                conv_id,
+            } => {
+                self.handle_blob_uploaded(
+                    cid,
+                    key,
+                    ciphertext_hash,
+                    ciphertext_size,
+                    content_hash,
+                    preview_text,
+                    conv_id,
+                );
+            }
+
+            BgEvent::BlobFetched { message_id, full_text } => {
+                // Update the in-memory DisplayMessage to show full text.
+                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id.as_ref() == Some(&message_id)) {
+                    msg.content = full_text;
+                }
+            }
+
+            BgEvent::BlobFetchFailed { message_id, error } => {
+                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id.as_ref() == Some(&message_id)) {
+                    msg.content = format!("{} [download failed: {}]", msg.content, error);
+                }
+            }
         }
+    }
+
+    /// MLS-encrypt a long-text event after blob upload succeeded, then publish.
+    fn handle_blob_uploaded(
+        &mut self,
+        cid: String,
+        key: Vec<u8>,
+        ciphertext_hash: Vec<u8>,
+        ciphertext_size: u64,
+        content_hash: Vec<u8>,
+        preview_text: String,
+        conv_id: String,
+    ) {
+        let Some(client) = self.client.as_ref() else {
+            self.set_error("blob uploaded but client is gone".to_string());
+            return;
+        };
+
+        let uri = format!("at://{}/{}", client.did(), cid);
+
+        let key_arr: [u8; 32] = match key.try_into() {
+            Ok(k) => k,
+            Err(_) => {
+                self.set_error("blob key has wrong length".to_string());
+                return;
+            }
+        };
+
+        let external = match ExternalBlob::new(uri, key_arr.to_vec(), ciphertext_hash, ciphertext_size, content_hash) {
+            Ok(e) => e,
+            Err(e) => {
+                self.set_error(format!("failed to build ExternalBlob: {e}"));
+                return;
+            }
+        };
+
+        let payload = MessagePayload::LongText(LongTextMessage {
+            preview_text: preview_text.clone(),
+            mime: None,
+            external,
+        });
+
+        let group_id = match hex::decode(&conv_id) {
+            Ok(id) => id,
+            Err(e) => {
+                self.set_error(format!("invalid conv_id in BlobUploaded: {e}"));
+                return;
+            }
+        };
+
+        let key_bundle = match self.keys.load_identity_key() {
+            Ok(k) => k,
+            Err(e) => {
+                self.set_error(format!("failed to load identity key: {e}"));
+                return;
+            }
+        };
+
+        let current_epoch = self.mls.get_group_epoch(&group_id).ok().flatten().unwrap_or(1);
+        let event = Event::message(group_id.clone(), current_epoch, &payload);
+
+        let encrypted = match self.mls.encrypt_event(&group_id, &key_bundle, &event) {
+            Ok(e) => e,
+            Err(e) => {
+                self.set_error(format!("MLS encrypt failed for long text: {e}"));
+                return;
+            }
+        };
+
+        self.own_published_tags.insert(encrypted.tag);
+        if let Err(e) = self.save_mls_state() {
+            self.debug_log.log(&format!("blob_uploaded: failed to save MLS state: {e}"));
+        }
+        if let Err(e) = self.keys.store_group_state(&conv_id, &encrypted.new_group_state) {
+            self.debug_log.log(&format!("blob_uploaded: failed to store group state: {e}"));
+        }
+
+        // Update the pending optimistic message to the real preview.
+        let display_content = format!("{preview_text} [long text]");
+        if let Some(msg) = self.messages.iter_mut().rev().find(|m| m.is_own && m.content.contains("[long text — uploading…]")) {
+            msg.content = display_content.clone();
+            if let Some(msg_id) = &msg.message_id {
+                let _ = self.keys.append_message(&conv_id, crate::keystore::StoredMessage {
+                    rkey: "pending".to_string(),
+                    content: display_content,
+                    timestamp: msg.timestamp,
+                    is_own: true,
+                    message_id: Some(msg_id.clone()),
+                    sender_did: msg.sender_did.clone(),
+                    sender_device: msg.sender_device.clone(),
+                });
+            }
+        }
+
+        // Publish the MLS-encrypted event.
+        let client = self.client.as_ref().unwrap().clone();
+        let tag = encrypted.tag;
+        let ciphertext = encrypted.ciphertext;
+        let tx = self.bg_tx.clone();
+        tokio::spawn(async move {
+            match client.publish_event(&tag, &ciphertext).await {
+                Ok(uri) => {
+                    let _ = tx.send(BgEvent::SendPublished { uri, conv_id, tag });
+                }
+                Err(e) => {
+                    let _ = tx.send(BgEvent::SendFailed(format!("{e}")));
+                }
+            }
+        });
     }
 
     /// Handle async BgEvents that require await (called from the main loop).
@@ -998,6 +1175,99 @@ impl App {
     }
 
     /// Spawn an immediate targeted fetch for a specific DID (triggered by Drawbridge notification).
+    /// Spawn an async task to fetch, decrypt, and cache the blob for a received
+    /// `LongText` message. When done, sends `BgEvent::BlobFetched` or
+    /// `BgEvent::BlobFetchFailed` with the `message_id` for in-place UI update.
+    fn spawn_blob_fetch_long_text(
+        &mut self,
+        external: &moat_core::ExternalBlob,
+        message_id: Option<Vec<u8>>,
+    ) {
+        let message_id = match message_id {
+            Some(id) => id,
+            None => return, // no ID to update — skip
+        };
+
+        // Check disk cache first.
+        if let Some(cached) = self.blob_cache.get(&external.content_hash) {
+            if let Ok(text) = String::from_utf8(cached) {
+                let _ = self.bg_tx.send(BgEvent::BlobFetched {
+                    message_id,
+                    full_text: text,
+                });
+                return;
+            }
+        }
+
+        let Some(client) = self.client.as_ref() else { return };
+
+        // Parse `at://{did}/{cid}` URI.
+        let uri = external.uri.clone();
+        let (did, cid) = match uri.strip_prefix("at://").and_then(|s| {
+            let pos = s.find('/')?;
+            Some((s[..pos].to_string(), s[pos + 1..].to_string()))
+        }) {
+            Some(pair) => pair,
+            None => {
+                self.debug_log.log(&format!("blob_fetch: invalid URI: {}", uri));
+                return;
+            }
+        };
+
+        let key: [u8; 32] = match external.key.as_slice().try_into() {
+            Ok(k) => k,
+            Err(_) => {
+                self.debug_log.log("blob_fetch: blob key has wrong length");
+                return;
+            }
+        };
+        let ciphertext_hash = external.ciphertext_hash.clone();
+        let content_hash = external.content_hash.clone();
+
+        let client = client.clone();
+        let tx = self.bg_tx.clone();
+        let blob_cache_dir = self.blob_cache.dir.clone();
+
+        tokio::spawn(async move {
+            let blob = match client.fetch_blob(&did, &cid).await {
+                Ok(b) => b,
+                Err(e) => {
+                    let _ = tx.send(BgEvent::BlobFetchFailed {
+                        message_id,
+                        error: e.to_string(),
+                    });
+                    return;
+                }
+            };
+
+            match blob_decrypt(&blob, &key, &ciphertext_hash, &content_hash) {
+                Ok(plaintext) => {
+                    // Cache to disk.
+                    let cache = BlobCache { dir: blob_cache_dir };
+                    let _ = cache.put(&content_hash, &plaintext);
+
+                    match String::from_utf8(plaintext) {
+                        Ok(text) => {
+                            let _ = tx.send(BgEvent::BlobFetched { message_id, full_text: text });
+                        }
+                        Err(e) => {
+                            let _ = tx.send(BgEvent::BlobFetchFailed {
+                                message_id,
+                                error: format!("blob is not valid UTF-8: {e}"),
+                            });
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(BgEvent::BlobFetchFailed {
+                        message_id,
+                        error: e.to_string(),
+                    });
+                }
+            }
+        });
+    }
+
     fn spawn_targeted_fetch(&mut self, did: &str) {
         let client = match self.client.as_ref() {
             Some(c) => c.clone(),
@@ -1327,10 +1597,10 @@ impl App {
 
                 match decrypted.event.kind {
                     EventKind::Message(_) => {
-                        let content = decrypted
-                            .event
-                            .parse_message_payload()
-                            .map(|parsed| render_message_preview(&parsed))
+                        let parsed = decrypted.event.parse_message_payload();
+                        let content = parsed
+                            .as_ref()
+                            .map(|p| render_message_preview(p))
                             .unwrap_or_else(|| "(invalid message payload)".to_string());
                         let from = conv_idx
                             .and_then(|idx| self.conversations.get(idx))
@@ -1368,13 +1638,23 @@ impl App {
                                 is_own,
                                 sender_did,
                                 sender_device,
-                                message_id: decrypted.event.message_id,
+                                message_id: decrypted.event.message_id.clone(),
                                 reactions: vec![],
                             });
                         } else if let Some(idx) = conv_idx {
                             if let Some(conv) = self.conversations.get_mut(idx) {
                                 conv.unread += 1;
                             }
+                        }
+
+                        // Eagerly fetch the blob for LongText and Image messages.
+                        if let Some(moat_core::ParsedMessagePayload::Structured(
+                            moat_core::MessagePayload::LongText(ref msg)
+                        )) = parsed {
+                            self.spawn_blob_fetch_long_text(
+                                &msg.external,
+                                decrypted.event.message_id.clone(),
+                            );
                         }
                     }
                     EventKind::Control(ControlKind::Commit) => {
@@ -2091,6 +2371,84 @@ impl App {
             .map_err(|e| AppError::Other(format!("Invalid group ID: {}", e)))?;
 
         let current_epoch = self.mls.get_group_epoch(&group_id)?.unwrap_or(1);
+
+        // Long text: encrypt blob, upload async, then MLS-encrypt on callback.
+        if needs_blob_upload(&self.input_buffer) {
+            let full_text = self.input_buffer.clone();
+            let preview_text = truncate_to_preview(&full_text);
+
+            // Blob-encrypt synchronously (fast — no I/O).
+            let (blob_bytes, key, ciphertext_hash, content_hash) = blob_encrypt(full_text.as_bytes())
+                .map_err(|e| AppError::Other(format!("blob encrypt failed: {e}")))?;
+            let ciphertext_size = blob_bytes.len() as u64;
+
+            // Optimistic UI: show preview + uploading indicator.
+            let timestamp = chrono::Utc::now();
+            let my_did = self.client.as_ref().unwrap().did().to_string();
+            let pending_message_id: Vec<u8> = {
+                use rand::RngCore;
+                let mut id = vec![0u8; 16];
+                rand::thread_rng().fill_bytes(&mut id);
+                id
+            };
+            let optimistic_content = format!("{preview_text} [long text — uploading…]");
+            self.messages.push(DisplayMessage {
+                from: "You".to_string(),
+                content: optimistic_content.clone(),
+                timestamp,
+                is_own: true,
+                sender_did: Some(my_did.clone()),
+                sender_device: self.keys.get_or_create_device_name().ok(),
+                message_id: Some(pending_message_id.clone()),
+                reactions: vec![],
+            });
+
+            let stored_msg = crate::keystore::StoredMessage {
+                rkey: "pending".to_string(),
+                content: optimistic_content,
+                timestamp,
+                is_own: true,
+                message_id: Some(pending_message_id.clone()),
+                sender_did: Some(my_did),
+                sender_device: self.keys.get_or_create_device_name().ok(),
+            };
+            if let Err(e) = self.keys.append_message(&conv_id, stored_msg) {
+                self.debug_log
+                    .log(&format!("send_message: failed to store locally: {e}"));
+            }
+
+            self.input_buffer.clear();
+            self.cursor_position = 0;
+
+            // Upload blob in background; BgEvent::BlobUploaded triggers MLS-encrypt + publish.
+            let client = self.client.as_ref().unwrap().clone();
+            let tx = self.bg_tx.clone();
+            let conv_id_clone = conv_id;
+
+            tokio::spawn(async move {
+                match client.upload_blob(&blob_bytes).await {
+                    Ok(cid) => {
+                        let _ = tx.send(BgEvent::BlobUploaded {
+                            cid,
+                            key: key.to_vec(),
+                            ciphertext_hash,
+                            ciphertext_size,
+                            content_hash,
+                            full_text,
+                            preview_text,
+                            conv_id: conv_id_clone,
+                        });
+                    }
+                    Err(e) => {
+                        let _ = tx.send(BgEvent::SendFailed(format!("blob upload failed: {e}")));
+                    }
+                }
+            });
+
+            return Ok(());
+        }
+
+        // Short / medium text: existing synchronous-crypto + async-publish path.
         let text_payload = build_text_payload(&self.input_buffer);
         let event = Event::message(group_id.clone(), current_epoch, &text_payload);
         let preview_payload = ParsedMessagePayload::Structured(text_payload.clone());

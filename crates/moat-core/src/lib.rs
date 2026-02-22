@@ -22,6 +22,7 @@
 //! let state = session.export_state().unwrap();
 //! ```
 
+pub mod blob;
 pub(crate) mod credential;
 pub(crate) mod error;
 pub(crate) mod event;
@@ -54,6 +55,7 @@ pub use crate::message::{
     ExternalBlob, LongTextMessage, MediaMessage, MessageBodyKind, MessagePayload,
     ParsedMessagePayload, TextMessage, MEDIUM_TEXT_MAX_BYTES, SHORT_TEXT_MAX_BYTES,
 };
+pub use crate::blob::{blob_decrypt, blob_encrypt};
 pub use crate::padding::{pad_to_bucket, unpad, Bucket};
 pub use crate::stealth::{encrypt_for_stealth, generate_stealth_keypair, try_decrypt_stealth};
 pub(crate) use crate::storage::MoatProvider;

@@ -1,6 +1,7 @@
 //! Integration tests for moat-core
 
 use crate::{
+    blob::{blob_decrypt, blob_encrypt},
     event::{ControlKind, MessageKind, ModifierKind},
     message::{ExternalBlob, LongTextMessage, MediaMessage, MessagePayload, TextMessage},
     pad_to_bucket,
@@ -1168,4 +1169,107 @@ fn test_sign_drawbridge_challenge_wrong_message_fails() {
     let vk = VerifyingKey::from_bytes(&pub_bytes.try_into().unwrap()).unwrap();
     let sig = Signature::from_bytes(&sig_bytes.try_into().unwrap());
     assert!(vk.verify(b"wrong-message", &sig).is_err(), "signature over different message must not verify");
+}
+
+// ─── ExternalBlob + blob crypto integration ──────────────────────────────────
+
+#[test]
+fn test_blob_encrypt_decrypt_roundtrip_via_external_blob() {
+    let plaintext = b"This is a long message that would be stored off-chain as a blob.";
+
+    let (blob_bytes, key, ciphertext_hash, content_hash) =
+        blob_encrypt(plaintext).expect("blob_encrypt must succeed");
+
+    // Store metadata in ExternalBlob as the protocol does.
+    let external = ExternalBlob::new(
+        "at://did:plc:alice/bafyreiabc123".to_string(),
+        key.to_vec(),
+        ciphertext_hash,
+        blob_bytes.len() as u64,
+        content_hash,
+    )
+    .expect("ExternalBlob::new must succeed for valid at:// URI");
+
+    // Reconstruct the key array and decrypt using the stored hashes.
+    let key_arr: [u8; 32] = external.key.as_slice().try_into().expect("key must be 32 bytes");
+    let decrypted = blob_decrypt(
+        &blob_bytes,
+        &key_arr,
+        &external.ciphertext_hash,
+        &external.content_hash,
+    )
+    .expect("blob_decrypt must succeed with correct metadata");
+
+    assert_eq!(decrypted, plaintext);
+    assert_eq!(external.ciphertext_size, blob_bytes.len() as u64);
+}
+
+#[test]
+fn test_external_blob_invalid_uri_rejected() {
+    let (_, key, ciphertext_hash, content_hash) =
+        blob_encrypt(b"test").expect("blob_encrypt must succeed");
+
+    let result = ExternalBlob::new(
+        "https://example.com/not-atproto".to_string(),
+        key.to_vec(),
+        ciphertext_hash,
+        0,
+        content_hash,
+    );
+
+    assert!(
+        matches!(result, Err(Error::InvalidBlobUri(_))),
+        "non-at:// URI must be rejected"
+    );
+}
+
+#[test]
+fn test_long_text_message_with_external_blob() {
+    let plaintext = "A".repeat(2000);
+
+    let (blob_bytes, key, ciphertext_hash, content_hash) =
+        blob_encrypt(plaintext.as_bytes()).expect("blob_encrypt must succeed");
+
+    let external = ExternalBlob::new(
+        "at://did:plc:bob/bafyxyz".to_string(),
+        key.to_vec(),
+        ciphertext_hash,
+        blob_bytes.len() as u64,
+        content_hash,
+    )
+    .expect("ExternalBlob::new must succeed");
+
+    let msg = LongTextMessage {
+        preview_text: plaintext[..100].to_string(),
+        mime: Some("text/plain".to_string()),
+        external,
+    };
+
+    // Verify the payload round-trips through MessagePayload serialization.
+    let payload = MessagePayload::LongText(msg);
+    let serialized = payload.to_bytes().expect("serialization must succeed");
+    let deserialized: MessagePayload =
+        serde_json::from_slice(&serialized).expect("deserialization must succeed");
+
+    if let MessagePayload::LongText(restored) = deserialized {
+        assert_eq!(&restored.preview_text, &plaintext[..100]);
+        assert_eq!(restored.mime.as_deref(), Some("text/plain"));
+        assert_eq!(restored.external.uri, "at://did:plc:bob/bafyxyz");
+        assert_eq!(restored.external.key, key.to_vec());
+
+        // Decrypt using the round-tripped metadata.
+        let key_arr: [u8; 32] =
+            restored.external.key.as_slice().try_into().expect("key must be 32 bytes");
+        let decrypted = blob_decrypt(
+            &blob_bytes,
+            &key_arr,
+            &restored.external.ciphertext_hash,
+            &restored.external.content_hash,
+        )
+        .expect("decrypt must succeed after payload serialization round-trip");
+
+        assert_eq!(decrypted, plaintext.as_bytes());
+    } else {
+        panic!("expected LongText payload after deserialization");
+    }
 }

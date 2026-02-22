@@ -165,7 +165,7 @@ When `event.kind` starts with `message.`, the payload is a structured JSON objec
 | `ciphertext_hash` | SHA-256 of the stored blob (`nonce || ciphertext`) |
 | `ciphertext_size` | Size in bytes of the stored blob |
 | `content_hash` | SHA-256 of the plaintext after decrypting |
-| `uri` | Repo-local address resolvable through `com.atproto.repo.getBlob` |
+| `uri` | Repo-local address (`at://{did}/{cid}`) fetched via `com.atproto.sync.getBlob?did=&cid=` |
 | `key` | Symmetric key (XChaCha20-Poly1305) for decrypting the blob (`nonce` lives alongside the ciphertext) |
 | Optional `mime`, `width`, `height`, `duration_ms` | Media metadata for UX and validation |
 
@@ -176,9 +176,9 @@ Blobs are stored as `nonce || ciphertext` where the nonce is a 24-byte random va
 1. Attempt to decrypt every 1 KB envelope as usual. If the payload contains `external`, surface the preview immediately (e.g., ThumbHash, `preview_text`, waveform).
 2. Fetch the blob lazily from the sender's PDS using existing repo auth. Hash the downloaded bytes before decrypting and compare to `ciphertext_hash`. Reject on mismatch.
 3. Decrypt using the provided `key` and the nonce prefix stored with the blob (`blob = nonce || ciphertext`). After decrypting, hash the plaintext and compare to `content_hash`.
-4. Cache blobs by `content_hash` (stable across re-encryptions). Maintain a secondary cache mapping `ciphertext_hash → content_hash` to avoid reprocessing duplicates.
+4. Cache blobs by `content_hash` (stable across re-encryptions). _(Future: maintain a secondary cache mapping `ciphertext_hash → content_hash` to avoid reprocessing duplicates.)_
 
-If a blob moves or is re-encrypted, the sender emits a follow-up event referencing the original `message_id` with updated `uri`/`ciphertext_hash`. Receivers keep previews visible, automatically retarget pointers, and classify transient fetch failures (`Timeout`, `Unauthorized`, `NotFound`, `RateLimited`) separately from integrity errors (`CiphertextHashMismatch`, `DecryptionFailed`, `ContentHashMismatch`).
+_(Future: If a blob moves or is re-encrypted, the sender emits a follow-up event referencing the original `message_id` with updated `uri`/`ciphertext_hash`. Receivers keep previews visible, automatically retarget pointers, and classify transient fetch failures (`Timeout`, `Unauthorized`, `NotFound`, `RateLimited`) separately from integrity errors.)_
 
 ### Preview & Bucket Policy
 
