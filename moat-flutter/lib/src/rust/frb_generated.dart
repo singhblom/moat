@@ -66,7 +66,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => 225147553;
+  int get rustContentHash => 1480322503;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -153,6 +153,13 @@ abstract class RustLibApi extends BaseApi {
     required List<int> welcomeBytes,
   });
 
+  EventDto crateApiSimpleCreateDrawbridgeHint({
+    required MoatSessionHandle handle,
+    required List<int> groupId,
+    required String url,
+    required List<int> ticket,
+  });
+
   Uint8List crateApiSimpleDeriveNextTag({
     required MoatSessionHandle handle,
     required List<int> groupId,
@@ -162,6 +169,10 @@ abstract class RustLibApi extends BaseApi {
   Future<Uint8List> crateApiSimpleEncryptForStealth({
     required List<Uint8List> recipientScanPubkeys,
     required List<int> welcomeBytes,
+  });
+
+  DrawbridgeHintPayloadDto? crateApiSimpleEventDtoDrawbridgeHintPayload({
+    required EventDto that,
   });
 
   ReactionPayloadDto? crateApiSimpleEventDtoReactionPayload({
@@ -177,11 +188,18 @@ abstract class RustLibApi extends BaseApi {
     required BigInt count,
   });
 
+  Uint8List crateApiSimpleGenerateDrawbridgeTicket();
+
   StealthKeypair crateApiSimpleGenerateStealthKeypair();
 
   Future<void> crateApiSimpleInitApp();
 
   Uint8List crateApiSimplePadToBucket({required List<int> plaintext});
+
+  Future<DrawbridgeChallengeSignature> crateApiSimpleSignDrawbridgeChallenge({
+    required List<int> keyBundle,
+    required List<int> message,
+  });
 
   Uint8List? crateApiSimpleTryDecryptStealth({
     required List<int> scanPrivkey,
@@ -757,6 +775,43 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  EventDto crateApiSimpleCreateDrawbridgeHint({
+    required MoatSessionHandle handle,
+    required List<int> groupId,
+    required String url,
+    required List<int> ticket,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+            handle,
+            serializer,
+          );
+          sse_encode_list_prim_u_8_loose(groupId, serializer);
+          sse_encode_String(url, serializer);
+          sse_encode_list_prim_u_8_loose(ticket, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 16)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_event_dto,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiSimpleCreateDrawbridgeHintConstMeta,
+        argValues: [handle, groupId, url, ticket],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSimpleCreateDrawbridgeHintConstMeta =>
+      const TaskConstMeta(
+        debugName: "create_drawbridge_hint",
+        argNames: ["handle", "groupId", "url", "ticket"],
+      );
+
+  @override
   Uint8List crateApiSimpleDeriveNextTag({
     required MoatSessionHandle handle,
     required List<int> groupId,
@@ -772,7 +827,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
           sse_encode_list_prim_u_8_loose(groupId, serializer);
           sse_encode_list_prim_u_8_loose(keyBundle, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 16)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 17)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -808,7 +863,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 17,
+            funcId: 18,
             port: port_,
           );
         },
@@ -830,6 +885,35 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  DrawbridgeHintPayloadDto? crateApiSimpleEventDtoDrawbridgeHintPayload({
+    required EventDto that,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_box_autoadd_event_dto(that, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 19)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData:
+              sse_decode_opt_box_autoadd_drawbridge_hint_payload_dto,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiSimpleEventDtoDrawbridgeHintPayloadConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSimpleEventDtoDrawbridgeHintPayloadConstMeta =>
+      const TaskConstMeta(
+        debugName: "event_dto_drawbridge_hint_payload",
+        argNames: ["that"],
+      );
+
+  @override
   ReactionPayloadDto? crateApiSimpleEventDtoReactionPayload({
     required EventDto that,
   }) {
@@ -838,7 +922,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_box_autoadd_event_dto(that, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 18)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 20)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_opt_box_autoadd_reaction_payload_dto,
@@ -879,7 +963,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_list_prim_u_8_loose(senderDeviceId, serializer);
           sse_encode_u_64(fromCounter, serializer);
           sse_encode_u_64(count, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 19)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 21)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_list_list_prim_u_8_strict,
@@ -913,12 +997,37 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Uint8List crateApiSimpleGenerateDrawbridgeTicket() {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 22)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_prim_u_8_strict,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiSimpleGenerateDrawbridgeTicketConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSimpleGenerateDrawbridgeTicketConstMeta =>
+      const TaskConstMeta(
+        debugName: "generate_drawbridge_ticket",
+        argNames: [],
+      );
+
+  @override
   StealthKeypair crateApiSimpleGenerateStealthKeypair() {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 20)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 23)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_stealth_keypair,
@@ -943,7 +1052,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 21,
+            funcId: 24,
             port: port_,
           );
         },
@@ -968,7 +1077,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_list_prim_u_8_loose(plaintext, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 22)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 25)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -985,6 +1094,41 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "pad_to_bucket", argNames: ["plaintext"]);
 
   @override
+  Future<DrawbridgeChallengeSignature> crateApiSimpleSignDrawbridgeChallenge({
+    required List<int> keyBundle,
+    required List<int> message,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_list_prim_u_8_loose(keyBundle, serializer);
+          sse_encode_list_prim_u_8_loose(message, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 26,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_drawbridge_challenge_signature,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiSimpleSignDrawbridgeChallengeConstMeta,
+        argValues: [keyBundle, message],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSimpleSignDrawbridgeChallengeConstMeta =>
+      const TaskConstMeta(
+        debugName: "sign_drawbridge_challenge",
+        argNames: ["keyBundle", "message"],
+      );
+
+  @override
   Uint8List? crateApiSimpleTryDecryptStealth({
     required List<int> scanPrivkey,
     required List<int> payload,
@@ -995,7 +1139,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_list_prim_u_8_loose(scanPrivkey, serializer);
           sse_encode_list_prim_u_8_loose(payload, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 23)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 27)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_opt_list_prim_u_8_strict,
@@ -1021,7 +1165,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_list_prim_u_8_loose(padded, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 24)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 28)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -1085,6 +1229,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  DrawbridgeHintPayloadDto dco_decode_box_autoadd_drawbridge_hint_payload_dto(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_drawbridge_hint_payload_dto(raw);
+  }
+
+  @protected
   EventDto dco_decode_box_autoadd_event_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_event_dto(raw);
@@ -1119,6 +1271,33 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       event: dco_decode_event_dto(arr[1]),
       sender: dco_decode_opt_box_autoadd_sender_info_dto(arr[2]),
       warnings: dco_decode_list_String(arr[3]),
+    );
+  }
+
+  @protected
+  DrawbridgeChallengeSignature dco_decode_drawbridge_challenge_signature(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return DrawbridgeChallengeSignature(
+      signature: dco_decode_list_prim_u_8_strict(arr[0]),
+      publicKey: dco_decode_list_prim_u_8_strict(arr[1]),
+    );
+  }
+
+  @protected
+  DrawbridgeHintPayloadDto dco_decode_drawbridge_hint_payload_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return DrawbridgeHintPayloadDto(
+      url: dco_decode_String(arr[0]),
+      deviceId: dco_decode_list_prim_u_8_strict(arr[1]),
+      ticket: dco_decode_list_prim_u_8_strict(arr[2]),
     );
   }
 
@@ -1197,6 +1376,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as Uint8List;
+  }
+
+  @protected
+  DrawbridgeHintPayloadDto?
+  dco_decode_opt_box_autoadd_drawbridge_hint_payload_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null
+        ? null
+        : dco_decode_box_autoadd_drawbridge_hint_payload_dto(raw);
   }
 
   @protected
@@ -1351,6 +1539,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  DrawbridgeHintPayloadDto sse_decode_box_autoadd_drawbridge_hint_payload_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_drawbridge_hint_payload_dto(deserializer));
+  }
+
+  @protected
   EventDto sse_decode_box_autoadd_event_dto(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_event_dto(deserializer));
@@ -1390,6 +1586,34 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       event: var_event,
       sender: var_sender,
       warnings: var_warnings,
+    );
+  }
+
+  @protected
+  DrawbridgeChallengeSignature sse_decode_drawbridge_challenge_signature(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_signature = sse_decode_list_prim_u_8_strict(deserializer);
+    var var_publicKey = sse_decode_list_prim_u_8_strict(deserializer);
+    return DrawbridgeChallengeSignature(
+      signature: var_signature,
+      publicKey: var_publicKey,
+    );
+  }
+
+  @protected
+  DrawbridgeHintPayloadDto sse_decode_drawbridge_hint_payload_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_url = sse_decode_String(deserializer);
+    var var_deviceId = sse_decode_list_prim_u_8_strict(deserializer);
+    var var_ticket = sse_decode_list_prim_u_8_strict(deserializer);
+    return DrawbridgeHintPayloadDto(
+      url: var_url,
+      deviceId: var_deviceId,
+      ticket: var_ticket,
     );
   }
 
@@ -1487,6 +1711,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var len_ = sse_decode_i_32(deserializer);
     return deserializer.buffer.getUint8List(len_);
+  }
+
+  @protected
+  DrawbridgeHintPayloadDto?
+  sse_decode_opt_box_autoadd_drawbridge_hint_payload_dto(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_drawbridge_hint_payload_dto(deserializer));
+    } else {
+      return null;
+    }
   }
 
   @protected
@@ -1656,6 +1894,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_drawbridge_hint_payload_dto(
+    DrawbridgeHintPayloadDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_drawbridge_hint_payload_dto(self, serializer);
+  }
+
+  @protected
   void sse_encode_box_autoadd_event_dto(
     EventDto self,
     SseSerializer serializer,
@@ -1698,6 +1945,27 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_event_dto(self.event, serializer);
     sse_encode_opt_box_autoadd_sender_info_dto(self.sender, serializer);
     sse_encode_list_String(self.warnings, serializer);
+  }
+
+  @protected
+  void sse_encode_drawbridge_challenge_signature(
+    DrawbridgeChallengeSignature self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_list_prim_u_8_strict(self.signature, serializer);
+    sse_encode_list_prim_u_8_strict(self.publicKey, serializer);
+  }
+
+  @protected
+  void sse_encode_drawbridge_hint_payload_dto(
+    DrawbridgeHintPayloadDto self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.url, serializer);
+    sse_encode_list_prim_u_8_strict(self.deviceId, serializer);
+    sse_encode_list_prim_u_8_strict(self.ticket, serializer);
   }
 
   @protected
@@ -1785,6 +2053,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     serializer.buffer.putUint8List(self);
+  }
+
+  @protected
+  void sse_encode_opt_box_autoadd_drawbridge_hint_payload_dto(
+    DrawbridgeHintPayloadDto? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_drawbridge_hint_payload_dto(self, serializer);
+    }
   }
 
   @protected

@@ -1902,6 +1902,11 @@ impl App {
             .map(|c| c.did().to_string())
             .unwrap_or_default();
 
+        self.debug_log.log(&format!(
+            "poll: processing {} participant events, tag_map has {} entries",
+            participant_events.len(),
+            self.tag_map.len()
+        ));
         for (conv_indices, event_record, _did) in participant_events {
             // Skip events this device published — MLS cannot decrypt messages
             // from our own sender ratchet, and we already display them
@@ -1910,9 +1915,17 @@ impl App {
             if self.own_published_tags.contains(&event_record.tag) {
                 continue;
             }
+            let tag_hex: String = event_record.tag.iter().map(|b| format!("{b:02x}")).collect();
             if self.tag_map.contains_key(&event_record.tag) {
+                self.debug_log.log(&format!(
+                    "poll: tag matched: {} rkey={}", tag_hex, event_record.rkey
+                ));
                 self.process_matched_event(&conv_indices, &event_record, &my_did);
             } else {
+                self.debug_log.log(&format!(
+                    "poll: unknown tag {} rkey={} from {}, trying as welcome",
+                    tag_hex, event_record.rkey, event_record.author_did
+                ));
                 // Unknown tag — try as welcome (sync crypto, only resolve_handle is async)
                 self.try_process_welcome_sync(
                     &event_record.ciphertext,

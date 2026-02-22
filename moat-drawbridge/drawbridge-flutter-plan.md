@@ -4,7 +4,7 @@ Informed by CLI integration learnings (see `drawbridge-cli-learnings.md`).
 
 ---
 
-## Phase 0: Server-Side Fix (moat-drawbridge)
+## Phase 0: Server-Side Fix (moat-drawbridge) ✅
 
 ### 0.1 Include Request Path in Relay URL
 
@@ -25,7 +25,7 @@ No CORS changes needed now (WebSocket upgrade bypasses CORS on native platforms)
 
 ---
 
-## Phase 1: FFI Bindings (moat-flutter/rust)
+## Phase 1: FFI Bindings (moat-flutter/rust) ✅
 
 ### 1.1 Add Signing FFI
 
@@ -53,7 +53,7 @@ No additional FFI functions needed beyond 1.1.
 
 ---
 
-## Phase 2: Dart Service
+## Phase 2: Dart Service ✅
 
 ### 2.1 DrawbridgeService (Standalone Singleton)
 
@@ -111,13 +111,14 @@ Ship with a hardcoded default: `wss://moat-drawbridge.fly.dev/ws`. Allow overrid
 
 ### 2.4 Hint Storage (Conversation Metadata)
 
-Store Drawbridge hints as part of each conversation's existing metadata rather than a separate file. A Drawbridge ticket is bound to a specific conversation partner in a specific conversation, so the lifecycle is naturally coupled.
+Store Drawbridge hints as part of each conversation's existing metadata rather than a separate file. Hints are **per leaf node (per device)**, not per conversation — each partner device has its own relay URL + ticket. Keyed by `(partnerDid, deviceIdHex)`.
 
-Add to the conversation metadata (already stored per-group by `KeyStore`/`ConversationStorage`):
-- `drawbridgeUrl: String?`
-- `drawbridgeTicketHex: String?`
-- `drawbridgeDeviceIdHex: String?`
-- `ownTicketHex: String?` (the ticket we registered for this conversation on our own relay)
+Added to `Conversation`:
+- `List<StoredDrawbridgeHint> partnerDrawbridgeHints` — one per partner device
+- `String? ownDrawbridgeTicketHex` — the ticket we registered on our own relay
+- `upsertPartnerHint(StoredDrawbridgeHint)` — insert-or-update keyed by `(partnerDid, deviceIdHex)`
+
+`StoredDrawbridgeHint` fields: `url`, `deviceIdHex`, `ticketHex`, `partnerDid` (with JSON roundtrip).
 
 ### 2.5 Automatic Ticket Registration
 
@@ -147,11 +148,11 @@ Use `WidgetsBindingObserver.didChangeAppLifecycleState` to detect background/res
 
 ---
 
-## Phase 3: Integration with Existing Services
+## Phase 3: Integration with Existing Services ✅ (completed as part of Phase 2)
 
 ### 3.1 PollingService Integration
 
-`PollingService` needs a `pollNow()` method (or equivalent) that `DrawbridgeService` can call when a `new_event` notification arrives. This skips the 5-second timer wait.
+`DrawbridgeService.onNewEvent` callback calls `poll()` directly on `PollingService` (no `pollNow()` wrapper — unnecessary indirection).
 
 ### 3.2 SendService Integration
 
@@ -170,7 +171,7 @@ When `PollingService` decrypts a `DrawbridgeHint` event from a partner:
 
 ---
 
-## Phase 4: Testing
+## Phase 4: Testing ✅
 
 ### 4.1 Unit Tests (Dart)
 

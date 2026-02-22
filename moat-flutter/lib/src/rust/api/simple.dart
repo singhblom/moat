@@ -63,6 +63,37 @@ Uint8List deriveNextTag({
   keyBundle: keyBundle,
 );
 
+/// Generate a random 32-byte Drawbridge ticket.
+Uint8List generateDrawbridgeTicket() =>
+    RustLib.instance.api.crateApiSimpleGenerateDrawbridgeTicket();
+
+/// Create a DrawbridgeHint event for the session's device.
+EventDto createDrawbridgeHint({
+  required MoatSessionHandle handle,
+  required List<int> groupId,
+  required String url,
+  required List<int> ticket,
+}) => RustLib.instance.api.crateApiSimpleCreateDrawbridgeHint(
+  handle: handle,
+  groupId: groupId,
+  url: url,
+  ticket: ticket,
+);
+
+/// Sign a Drawbridge challenge with the Ed25519 identity key from a key bundle.
+///
+/// Returns (signature_bytes, public_key_bytes) as raw bytes (64 and 32 bytes).
+/// The caller is responsible for base64-encoding for JSON transport.
+///
+/// `message` is typically `"{nonce}\n{relay_url}\n{timestamp}\n"`.
+Future<DrawbridgeChallengeSignature> signDrawbridgeChallenge({
+  required List<int> keyBundle,
+  required List<int> message,
+}) => RustLib.instance.api.crateApiSimpleSignDrawbridgeChallenge(
+  keyBundle: keyBundle,
+  message: message,
+);
+
 /// Pad plaintext to bucket size (256, 1024, or 4096 bytes).
 Uint8List padToBucket({required List<int> plaintext}) =>
     RustLib.instance.api.crateApiSimplePadToBucket(plaintext: plaintext);
@@ -180,6 +211,56 @@ class DecryptResultDto {
           warnings == other.warnings;
 }
 
+/// Result of signing a Drawbridge challenge.
+class DrawbridgeChallengeSignature {
+  /// Ed25519 signature (64 bytes)
+  final Uint8List signature;
+
+  /// Ed25519 public key (32 bytes)
+  final Uint8List publicKey;
+
+  const DrawbridgeChallengeSignature({
+    required this.signature,
+    required this.publicKey,
+  });
+
+  @override
+  int get hashCode => signature.hashCode ^ publicKey.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DrawbridgeChallengeSignature &&
+          runtimeType == other.runtimeType &&
+          signature == other.signature &&
+          publicKey == other.publicKey;
+}
+
+/// Drawbridge hint payload extracted from a DrawbridgeHint event.
+class DrawbridgeHintPayloadDto {
+  final String url;
+  final Uint8List deviceId;
+  final Uint8List ticket;
+
+  const DrawbridgeHintPayloadDto({
+    required this.url,
+    required this.deviceId,
+    required this.ticket,
+  });
+
+  @override
+  int get hashCode => url.hashCode ^ deviceId.hashCode ^ ticket.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DrawbridgeHintPayloadDto &&
+          runtimeType == other.runtimeType &&
+          url == other.url &&
+          deviceId == other.deviceId &&
+          ticket == other.ticket;
+}
+
 class EncryptResultDto {
   final Uint8List newGroupState;
   final Uint8List tag;
@@ -230,6 +311,11 @@ class EventDto {
     this.messageId,
   });
 
+  /// Parse the payload as a DrawbridgeHint. Only valid when kind is DrawbridgeHint.
+  /// Returns None if this is not a DrawbridgeHint event or if the payload is malformed.
+  DrawbridgeHintPayloadDto? drawbridgeHintPayload() => RustLib.instance.api
+      .crateApiSimpleEventDtoDrawbridgeHintPayload(that: this);
+
   /// Parse the payload as a reaction. Only valid when kind is Reaction.
   /// Returns None if this is not a Reaction event or if the payload is malformed.
   ReactionPayloadDto? reactionPayload() =>
@@ -255,7 +341,15 @@ class EventDto {
           messageId == other.messageId;
 }
 
-enum EventKindDto { message, commit, welcome, checkpoint, reaction }
+enum EventKindDto {
+  message,
+  commit,
+  welcome,
+  checkpoint,
+  reaction,
+  drawbridgeHint,
+  unknown,
+}
 
 class KeyPackageResult {
   final Uint8List keyPackage;

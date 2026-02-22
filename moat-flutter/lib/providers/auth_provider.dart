@@ -30,7 +30,13 @@ class AuthProvider extends ChangeNotifier {
     AtprotoClient? atprotoClient,
     SecureStorageService? secureStorage,
   })  : _atprotoClient = atprotoClient ?? AtprotoClient(),
-        _secureStorage = secureStorage ?? SecureStorageService();
+        _secureStorage = secureStorage ?? SecureStorageService() {
+    // Persist session tokens when auto-refresh occurs
+    _atprotoClient.onSessionRefreshed = (session) {
+      _secureStorage.saveSession(session);
+      moatLog('AuthProvider: Auto-refreshed session persisted');
+    };
+  }
 
   AuthState get state => _state;
   bool get isAuthenticated => _state == AuthState.authenticated;

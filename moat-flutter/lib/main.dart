@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'providers/auth_provider.dart';
@@ -7,6 +8,7 @@ import 'providers/theme_provider.dart';
 import 'providers/watch_list_provider.dart';
 import 'screens/login_screen.dart';
 import 'screens/conversations_screen.dart';
+import 'services/drawbridge_service.dart';
 import 'services/polling_service.dart';
 import 'services/conversation_manager.dart';
 import 'services/debug_log.dart';
@@ -142,14 +144,80 @@ class AuthGate extends StatefulWidget {
   State<AuthGate> createState() => _AuthGateState();
 }
 
-class _AuthGateState extends State<AuthGate> {
+class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   PollingService? _pollingService;
   bool _pollingStarted = false;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _pollingService?.dispose();
+    DrawbridgeService.instance.disconnectAll();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        // Tear down WebSockets on background
+        DrawbridgeService.instance.disconnectAll();
+        _pollingService?.stopPolling();
+        debugPrint('App backgrounded: Drawbridge disconnected, polling stopped');
+      case AppLifecycleState.resumed:
+        // Reconnect on resume
+        _pollingService?.startPolling();
+        final auth = context.read<AuthProvider>();
+        if (auth.isAuthenticated) {
+          _initDrawbridge(auth);
+        }
+        debugPrint('App resumed: reconnecting Drawbridge, polling restarted');
+      default:
+        break;
+    }
+  }
+
+  /// Reconnect partner relays and re-register tickets from persisted hints.
+  /// Does NOT call connectOwn — the caller is responsible for that.
+  Future<void> _reconnectDrawbridge() async {
+    final auth = context.read<AuthProvider>();
+    final conversations = context.read<ConversationsProvider>().conversations;
+    if (!auth.isAuthenticated) return;
+
+    final db = DrawbridgeService.instance;
+
+    // Reconnect partner relays from persisted hints
+    final session = auth.moatSession;
+    if (session == null) return;
+
+    final hintsWithTags = <({String url, String ticketHex, List<Uint8List> tags})>[];
+    for (final conv in conversations) {
+      if (conv.partnerDrawbridgeHints.isEmpty) continue;
+      final tags = session.populateCandidateTags(groupId: conv.groupId);
+      for (final hint in conv.partnerDrawbridgeHints) {
+        hintsWithTags.add((
+          url: hint.url,
+          ticketHex: hint.ticketHex,
+          tags: tags.map((t) => Uint8List.fromList(t)).toList(),
+        ));
+      }
+    }
+
+    // Re-register own tickets
+    for (final conv in conversations) {
+      if (conv.ownDrawbridgeTicketHex != null) {
+        db.registerTicket(conv.groupIdHex, conv.ownDrawbridgeTicketHex!);
+      }
+    }
+
+    await db.reconnectPartners(hintsWithTags);
   }
 
   void _startPollingIfNeeded(AuthProvider auth) {
@@ -170,14 +238,37 @@ class _AuthGateState extends State<AuthGate> {
       };
       _pollingService!.startPolling();
       debugPrint('PollingService started');
+
+      // Initialize Drawbridge
+      _initDrawbridge(auth);
     } else if (!auth.isAuthenticated && _pollingStarted) {
       // Stop polling when logged out
       _pollingService?.dispose();
       _pollingService = null;
       _pollingStarted = false;
       ConversationManager.instance.clear();
-      debugPrint('PollingService stopped');
+      DrawbridgeService.instance.reset();
+      debugPrint('PollingService stopped, Drawbridge reset');
     }
+  }
+
+  Future<void> _initDrawbridge(AuthProvider auth) async {
+    final keyBundle = await auth.getKeyBundle();
+    if (keyBundle == null || auth.did == null) return;
+
+    final db = DrawbridgeService.instance;
+    db.init(did: auth.did!, keyBundle: Uint8List.fromList(keyBundle));
+
+    // Wire up new_event → pollNow
+    db.onNewEvent = () {
+      _pollingService?.poll();
+    };
+
+    // Connect to own relay
+    await db.connectOwn(defaultDrawbridgeUrl);
+
+    // Reconnect partner relays from persisted conversation hints
+    await _reconnectDrawbridge();
   }
 
   @override

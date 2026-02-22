@@ -516,6 +516,32 @@ pub fn create_drawbridge_hint(
     Ok(EventDto::from_core(event))
 }
 
+/// Sign a Drawbridge challenge with the Ed25519 identity key from a key bundle.
+///
+/// Returns (signature_bytes, public_key_bytes) as raw bytes (64 and 32 bytes).
+/// The caller is responsible for base64-encoding for JSON transport.
+///
+/// `message` is typically `"{nonce}\n{relay_url}\n{timestamp}\n"`.
+pub fn sign_drawbridge_challenge(
+    key_bundle: Vec<u8>,
+    message: Vec<u8>,
+) -> Result<DrawbridgeChallengeSignature, String> {
+    let (sig, pubkey) = MoatSession::sign_drawbridge_challenge(&key_bundle, &message)
+        .map_err(|e| e.to_string())?;
+    Ok(DrawbridgeChallengeSignature {
+        signature: sig,
+        public_key: pubkey,
+    })
+}
+
+/// Result of signing a Drawbridge challenge.
+pub struct DrawbridgeChallengeSignature {
+    /// Ed25519 signature (64 bytes)
+    pub signature: Vec<u8>,
+    /// Ed25519 public key (32 bytes)
+    pub public_key: Vec<u8>,
+}
+
 /// Pad plaintext to bucket size (256, 1024, or 4096 bytes).
 #[frb(sync)]
 pub fn pad_to_bucket(plaintext: Vec<u8>) -> Vec<u8> {
@@ -973,6 +999,48 @@ mod tests {
     }
 
     #[test]
+    fn test_sign_drawbridge_challenge() {
+        let handle = MoatSessionHandle::new_session();
+        let kp = handle
+            .generate_key_package("did:plc:alice".into(), "Desktop".into())
+            .unwrap();
+
+        let message = b"nonce123\nwss://relay.example.com/ws\n1700000000\n".to_vec();
+        let result = sign_drawbridge_challenge(kp.key_bundle.clone(), message.clone())
+            .expect("signing should succeed");
+
+        assert_eq!(result.signature.len(), 64);
+        assert_eq!(result.public_key.len(), 32);
+
+        // Verify signature with ed25519_dalek
+        use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+        let vk = VerifyingKey::from_bytes(&result.public_key.try_into().unwrap()).unwrap();
+        let sig = Signature::from_bytes(&result.signature.try_into().unwrap());
+        vk.verify(&message, &sig).expect("signature should verify");
+    }
+
+    #[test]
+    fn test_sign_drawbridge_challenge_wrong_message_fails() {
+        let handle = MoatSessionHandle::new_session();
+        let kp = handle
+            .generate_key_package("did:plc:bob".into(), "Phone".into())
+            .unwrap();
+
+        let result = sign_drawbridge_challenge(kp.key_bundle, b"correct".to_vec()).unwrap();
+
+        use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+        let vk = VerifyingKey::from_bytes(&result.public_key.try_into().unwrap()).unwrap();
+        let sig = Signature::from_bytes(&result.signature.try_into().unwrap());
+        assert!(vk.verify(b"wrong", &sig).is_err());
+    }
+
+    #[test]
+    fn test_sign_drawbridge_challenge_invalid_bundle() {
+        let result = sign_drawbridge_challenge(b"not-json".to_vec(), b"msg".to_vec());
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_unknown_event_maps_to_unknown_dto() {
         let event = Event {
             kind: EventKind::Unknown("future.thing".into()),
@@ -988,5 +1056,76 @@ mod tests {
         assert!(matches!(dto.kind, EventKindDto::Unknown));
         assert_eq!(dto.group_id, vec![1, 2, 3]);
         assert_eq!(dto.payload, b"opaque");
+    }
+}
+
+#[cfg(test)]
+mod proptest_drawbridge {
+    use super::*;
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    use proptest::prelude::*;
+
+    /// Helper: create a fresh key bundle for each test case.
+    fn fresh_key_bundle() -> Vec<u8> {
+        let handle = MoatSessionHandle::new_session();
+        let kp = handle
+            .generate_key_package("did:plc:proptest".into(), "device".into())
+            .unwrap();
+        kp.key_bundle
+    }
+
+    proptest! {
+        /// For any random message, signing produces a 64-byte signature that
+        /// verifies against the returned 32-byte public key.
+        #[test]
+        fn sign_produces_valid_signature(message in proptest::collection::vec(any::<u8>(), 1..256)) {
+            let kb = fresh_key_bundle();
+            let result = sign_drawbridge_challenge(kb, message.clone())
+                .expect("signing should succeed");
+
+            prop_assert_eq!(result.signature.len(), 64);
+            prop_assert_eq!(result.public_key.len(), 32);
+
+            let vk = VerifyingKey::from_bytes(&result.public_key.try_into().unwrap()).unwrap();
+            let sig = Signature::from_bytes(&result.signature.try_into().unwrap());
+            prop_assert!(vk.verify(&message, &sig).is_ok());
+        }
+
+        /// The same key bundle always produces the same public key.
+        #[test]
+        fn same_bundle_same_pubkey(
+            msg_a in proptest::collection::vec(any::<u8>(), 1..64),
+            msg_b in proptest::collection::vec(any::<u8>(), 1..64),
+        ) {
+            let kb = fresh_key_bundle();
+            let res_a = sign_drawbridge_challenge(kb.clone(), msg_a).unwrap();
+            let res_b = sign_drawbridge_challenge(kb, msg_b).unwrap();
+            prop_assert_eq!(res_a.public_key, res_b.public_key);
+        }
+
+        /// Different key bundles produce different public keys.
+        #[test]
+        fn different_bundles_different_pubkeys(_ in 0..50u32) {
+            let kb_a = fresh_key_bundle();
+            let kb_b = fresh_key_bundle();
+            let res_a = sign_drawbridge_challenge(kb_a, b"msg".to_vec()).unwrap();
+            let res_b = sign_drawbridge_challenge(kb_b, b"msg".to_vec()).unwrap();
+            prop_assert_ne!(res_a.public_key, res_b.public_key);
+        }
+
+        /// Signature does not verify against a different message.
+        #[test]
+        fn signature_rejects_wrong_message(
+            correct in proptest::collection::vec(any::<u8>(), 1..128),
+            wrong in proptest::collection::vec(any::<u8>(), 1..128),
+        ) {
+            prop_assume!(correct != wrong);
+            let kb = fresh_key_bundle();
+            let result = sign_drawbridge_challenge(kb, correct).unwrap();
+
+            let vk = VerifyingKey::from_bytes(&result.public_key.try_into().unwrap()).unwrap();
+            let sig = Signature::from_bytes(&result.signature.try_into().unwrap());
+            prop_assert!(vk.verify(&wrong, &sig).is_err());
+        }
     }
 }

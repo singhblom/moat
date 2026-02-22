@@ -5,6 +5,7 @@ import '../models/message.dart';
 import '../providers/auth_provider.dart';
 import '../src/rust/api/simple.dart';
 import '../utils/message_payload.dart';
+import 'drawbridge_service.dart';
 import 'debug_log.dart';
 
 /// Service for sending encrypted messages
@@ -80,10 +81,14 @@ class SendService {
     );
 
     moatLog('SendService: Message published: $uri');
-    moatLog('SendService: Send complete for localId=$localId');
 
     // Extract rkey from URI
     final rkey = _extractRkey(uri);
+
+    // Notify Drawbridge relay so partner gets real-time push
+    DrawbridgeService.instance.notifyEventPosted(result.tag, rkey);
+
+    moatLog('SendService: Send complete for localId=$localId');
 
     // Create the final message (include messageId for reaction targeting)
     final message = Message(
@@ -149,10 +154,14 @@ class SendService {
     await _authProvider.saveMlsState();
 
     // Publish to PDS
-    await _authProvider.atprotoClient.publishEvent(
+    final uri = await _authProvider.atprotoClient.publishEvent(
       result.tag,
       result.ciphertext,
     );
+
+    // Notify Drawbridge relay so partner gets real-time push
+    final rkey = _extractRkey(uri);
+    DrawbridgeService.instance.notifyEventPosted(result.tag, rkey);
 
     moatLog('SendService: Reaction "$emoji" published');
   }

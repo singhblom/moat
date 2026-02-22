@@ -49,6 +49,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool dco_decode_bool(dynamic raw);
 
   @protected
+  DrawbridgeHintPayloadDto dco_decode_box_autoadd_drawbridge_hint_payload_dto(
+    dynamic raw,
+  );
+
+  @protected
   EventDto dco_decode_box_autoadd_event_dto(dynamic raw);
 
   @protected
@@ -62,6 +67,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   DecryptResultDto dco_decode_decrypt_result_dto(dynamic raw);
+
+  @protected
+  DrawbridgeChallengeSignature dco_decode_drawbridge_challenge_signature(
+    dynamic raw,
+  );
+
+  @protected
+  DrawbridgeHintPayloadDto dco_decode_drawbridge_hint_payload_dto(dynamic raw);
 
   @protected
   EncryptResultDto dco_decode_encrypt_result_dto(dynamic raw);
@@ -89,6 +102,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
+
+  @protected
+  DrawbridgeHintPayloadDto?
+  dco_decode_opt_box_autoadd_drawbridge_hint_payload_dto(dynamic raw);
 
   @protected
   ReactionPayloadDto? dco_decode_opt_box_autoadd_reaction_payload_dto(
@@ -153,6 +170,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
+  DrawbridgeHintPayloadDto sse_decode_box_autoadd_drawbridge_hint_payload_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   EventDto sse_decode_box_autoadd_event_dto(SseDeserializer deserializer);
 
   @protected
@@ -170,6 +192,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   DecryptResultDto sse_decode_decrypt_result_dto(SseDeserializer deserializer);
+
+  @protected
+  DrawbridgeChallengeSignature sse_decode_drawbridge_challenge_signature(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  DrawbridgeHintPayloadDto sse_decode_drawbridge_hint_payload_dto(
+    SseDeserializer deserializer,
+  );
 
   @protected
   EncryptResultDto sse_decode_encrypt_result_dto(SseDeserializer deserializer);
@@ -199,6 +231,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
+
+  @protected
+  DrawbridgeHintPayloadDto?
+  sse_decode_opt_box_autoadd_drawbridge_hint_payload_dto(
+    SseDeserializer deserializer,
+  );
 
   @protected
   ReactionPayloadDto? sse_decode_opt_box_autoadd_reaction_payload_dto(
@@ -270,6 +308,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_drawbridge_hint_payload_dto(
+    DrawbridgeHintPayloadDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_event_dto(
     EventDto self,
     SseSerializer serializer,
@@ -293,6 +337,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_decrypt_result_dto(
     DecryptResultDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_drawbridge_challenge_signature(
+    DrawbridgeChallengeSignature self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_drawbridge_hint_payload_dto(
+    DrawbridgeHintPayloadDto self,
     SseSerializer serializer,
   );
 
@@ -332,6 +388,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_prim_u_8_strict(
     Uint8List self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_drawbridge_hint_payload_dto(
+    DrawbridgeHintPayloadDto? self,
     SseSerializer serializer,
   );
 

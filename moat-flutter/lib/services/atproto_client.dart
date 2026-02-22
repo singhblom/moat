@@ -141,6 +141,10 @@ class AtprotoClient {
   final http.Client _httpClient;
   AtprotoSession? _session;
 
+  /// Called after a successful automatic token refresh so the caller can
+  /// persist the new session tokens.
+  void Function(AtprotoSession)? onSessionRefreshed;
+
   AtprotoClient({http.Client? httpClient})
       : _httpClient = httpClient ?? http.Client();
 
@@ -271,14 +275,13 @@ class AtprotoClient {
       'createdAt': now.toIso8601String(),
     };
 
-    final response = await _post(
+    final response = await _authedPost(
       '${_session!.pdsUrl}/xrpc/com.atproto.repo.createRecord',
       body: {
         'repo': _session!.did,
         'collection': keyPackageNsid,
         'record': record,
       },
-      authToken: _session!.accessJwt,
     );
 
     return response['uri'] as String;
@@ -332,14 +335,13 @@ class AtprotoClient {
       'createdAt': now.toIso8601String(),
     };
 
-    final response = await _post(
+    final response = await _authedPost(
       '${_session!.pdsUrl}/xrpc/com.atproto.repo.createRecord',
       body: {
         'repo': _session!.did,
         'collection': stealthAddressNsid,
         'record': record,
       },
-      authToken: _session!.accessJwt,
     );
 
     return response['uri'] as String;
@@ -400,14 +402,13 @@ class AtprotoClient {
       'createdAt': now.toIso8601String(),
     };
 
-    final response = await _post(
+    final response = await _authedPost(
       '${_session!.pdsUrl}/xrpc/com.atproto.repo.createRecord',
       body: {
         'repo': _session!.did,
         'collection': eventNsid,
         'record': record,
       },
-      authToken: _session!.accessJwt,
     );
 
     return response['uri'] as String;
@@ -525,6 +526,40 @@ class AtprotoClient {
   void _requireSession() {
     if (_session == null) {
       throw AtprotoException('Not logged in');
+    }
+  }
+
+  /// Authenticated GET with automatic token refresh on 401.
+  Future<Map<String, dynamic>> _authedGet(
+    String url, {
+    Map<String, String>? queryParams,
+  }) async {
+    try {
+      return await _get(url, queryParams: queryParams, authToken: _session!.accessJwt);
+    } on AtprotoException catch (e) {
+      if (e.statusCode == 401 || (e.message.contains('Token') && e.message.contains('expired'))) {
+        await refreshSession();
+        onSessionRefreshed?.call(_session!);
+        return await _get(url, queryParams: queryParams, authToken: _session!.accessJwt);
+      }
+      rethrow;
+    }
+  }
+
+  /// Authenticated POST with automatic token refresh on 401.
+  Future<Map<String, dynamic>> _authedPost(
+    String url, {
+    Map<String, dynamic>? body,
+  }) async {
+    try {
+      return await _post(url, body: body, authToken: _session!.accessJwt);
+    } on AtprotoException catch (e) {
+      if (e.statusCode == 401 || (e.message.contains('Token') && e.message.contains('expired'))) {
+        await refreshSession();
+        onSessionRefreshed?.call(_session!);
+        return await _post(url, body: body, authToken: _session!.accessJwt);
+      }
+      rethrow;
     }
   }
 

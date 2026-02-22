@@ -3,6 +3,8 @@ import 'package:provider/provider.dart';
 import '../models/conversation.dart';
 import '../providers/auth_provider.dart';
 import '../providers/conversations_provider.dart';
+import '../services/drawbridge_service.dart';
+import '../src/rust/api/simple.dart' as ffi;
 
 class NewConversationScreen extends StatefulWidget {
   const NewConversationScreen({super.key});
@@ -94,11 +96,46 @@ class _NewConversationScreenState extends State<NewConversationScreen> {
       // 6. Register candidate tags for this conversation
       await auth.populateConversationTags(result.groupId);
 
-      // 7. Create and save conversation locally
+      // 7. Register Drawbridge ticket and publish hint
+      final ticket = ffi.generateDrawbridgeTicket();
+      final ticketHex = ticket
+          .map((b) => b.toRadixString(16).padLeft(2, '0'))
+          .join();
       final groupIdHex = result.groupId
           .map((b) => b.toRadixString(16).padLeft(2, '0'))
           .join();
 
+      // Register ticket on our own relay
+      DrawbridgeService.instance.registerTicket(groupIdHex, ticketHex);
+
+      // Create and publish DrawbridgeHint event so partner can connect
+      final session = auth.moatSession;
+      final keyBundle = await auth.getKeyBundle();
+      if (session != null && keyBundle != null) {
+        final hintEvent = ffi.createDrawbridgeHint(
+          handle: session,
+          groupId: result.groupId,
+          url: defaultDrawbridgeUrl,
+          ticket: ticket,
+        );
+
+        // Encrypt and publish the hint as a conversation event
+        final encResult = await session.encryptEvent(
+          groupId: result.groupId,
+          keyBundle: keyBundle,
+          event: hintEvent,
+        );
+        final hintUri = await client.publishEvent(
+            encResult.tag, encResult.ciphertext);
+        await auth.saveMlsState();
+
+        // Notify relay about the hint event
+        final hintRkey = hintUri.split('/').last;
+        DrawbridgeService.instance
+            .notifyEventPosted(encResult.tag, hintRkey);
+      }
+
+      // 8. Create and save conversation locally
       final conversation = Conversation(
         groupId: result.groupId,
         displayName: handle,
@@ -106,6 +143,7 @@ class _NewConversationScreenState extends State<NewConversationScreen> {
         epoch: result.epoch,
         keyBundleRef: 'key_bundle_$groupIdHex',
         createdAt: DateTime.now(),
+        ownDrawbridgeTicketHex: ticketHex,
       );
 
       await conversations.saveConversation(conversation);

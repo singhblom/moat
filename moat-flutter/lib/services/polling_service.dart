@@ -9,6 +9,7 @@ import '../src/rust/api/simple.dart';
 import '../utils/message_payload.dart';
 import 'atproto_client.dart';
 import 'conversation_manager.dart';
+import 'drawbridge_service.dart';
 import 'secure_storage.dart';
 import 'debug_log.dart';
 
@@ -361,8 +362,40 @@ class PollingService {
             );
           }
 
+        case EventKindDto.drawbridgeHint:
+          final hint = result.event.drawbridgeHintPayload();
+          if (hint != null) {
+            final ticketHex = hint.ticket
+                .map((b) => b.toRadixString(16).padLeft(2, '0'))
+                .join();
+            final deviceIdHex = hint.deviceId
+                .map((b) => b.toRadixString(16).padLeft(2, '0'))
+                .join();
+            final hintSenderDid = result.sender?.did ?? senderDid;
+            moatLog('DrawbridgeHint from $hintSenderDid device=$deviceIdHex: url=${hint.url}');
+
+            // Store hint in conversation metadata (keyed by partner DID + device ID)
+            conversation.upsertPartnerHint(StoredDrawbridgeHint(
+              url: hint.url,
+              deviceIdHex: deviceIdHex,
+              ticketHex: ticketHex,
+              partnerDid: hintSenderDid,
+            ));
+            await _conversationsProvider.saveConversation(conversation);
+
+            // Connect to this partner device's relay
+            final tags = session.populateCandidateTags(
+                groupId: conversation.groupId);
+            await DrawbridgeService.instance.connectPartner(
+              url: hint.url,
+              ticketHex: ticketHex,
+              tags: tags.map((t) => Uint8List.fromList(t)).toList(),
+            );
+          }
+
         case EventKindDto.welcome:
         case EventKindDto.checkpoint:
+        case EventKindDto.unknown:
           // Not displayable, state already updated
           break;
       }
