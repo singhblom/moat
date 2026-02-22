@@ -3,6 +3,7 @@
 mod app;
 mod blob_cache;
 mod drawbridge;
+mod image_processing;
 mod keystore;
 mod message_helpers;
 mod ui;
@@ -157,13 +158,18 @@ async fn run_tui(
     storage_dir: Option<PathBuf>,
     drawbridge_url: Option<String>,
 ) -> anyhow::Result<()> {
+    // Picker must be initialised *before* raw mode — it queries the terminal
+    // using escape codes and needs to read the response in cooked mode.
+    let picker = ratatui_image::picker::Picker::from_query_stdio()
+        .unwrap_or_else(|_| ratatui_image::picker::Picker::halfblocks());
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_app(&mut terminal, storage_dir, drawbridge_url).await;
+    let result = run_app(&mut terminal, storage_dir, drawbridge_url, picker).await;
 
     disable_raw_mode()?;
     execute!(
@@ -184,11 +190,12 @@ async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     storage_dir: Option<PathBuf>,
     drawbridge_url: Option<String>,
+    picker: ratatui_image::picker::Picker,
 ) -> anyhow::Result<()> {
-    let mut app = App::new(storage_dir, drawbridge_url)?;
+    let mut app = App::new(storage_dir, drawbridge_url, picker)?;
 
     loop {
-        terminal.draw(|f| ui::draw(f, &app))?;
+        terminal.draw(|f| ui::draw(f, &mut app))?;
 
         // Drain all pending background events (non-blocking)
         // Separate async events from sync events

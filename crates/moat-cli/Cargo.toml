@@ -27,6 +27,9 @@ rand = { workspace = true }
 sha2 = { workspace = true }
 hex = "0.4"
 hostname = "0.4"
+image = { version = "0.25", features = ["jpeg", "png"] }
+thumbhash = "0.1"
+ratatui-image = { version = "10", default-features = false, features = ["tokio", "crossterm", "image-defaults"] }
 tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
 futures-util = "0.3"
 base64 = { workspace = true }

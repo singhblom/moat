@@ -147,21 +147,22 @@ New methods on `MoatAtprotoClient`:
 
 ### 2.1 Image Processing
 
-**New dependencies** (in moat-core or moat-cli as appropriate):
-- `image` crate — JPEG/PNG decode, resize, WebP encode
-- `thumbhash` crate — generate ThumbHash previews (~28 bytes)
+**Dependencies** (in `moat-cli` only — keeps moat-core lean):
+- `image = { version = "0.25", features = ["jpeg", "png"] }` — JPEG/PNG decode, resize
+- `thumbhash = "0.1"` — generate and decode ThumbHash previews (~28 bytes)
+
+**New module**: `crates/moat-cli/src/image_processing.rs`
 
 **Pipeline** (on send):
-1. Read file from local path (no URL fetching)
-2. Validate format: JPEG or PNG only (reject others with clear error)
+1. Read file from local path (no URL fetching); expand `~` to `$HOME`
+2. Validate format via `image::guess_format` — JPEG or PNG only (reject others with clear error)
 3. Decode image, extract dimensions (width, height)
-4. If longest edge > 2048px: resize proportionally so longest edge = 2048px
-5. Re-encode to WebP (lossy, reasonable quality — e.g., 80%)
-6. Generate ThumbHash from the (possibly resized) image
-7. Encrypt WebP bytes as blob, upload to PDS
-8. Build `Image` payload: `preview_thumbhash`, `width`, `height`, `mime: "image/webp"`, `ExternalBlob`
+4. If longest edge > 2048px: resize proportionally with `Lanczos3` so longest edge = 2048px; re-encode to original format (JPEG or PNG) — **no format conversion**
+5. Generate ThumbHash: scale a copy to ≤100×100 (fast `Triangle` filter), call `thumbhash::rgba_to_thumb_hash`
+6. Encrypt original-format bytes as blob, upload to PDS
+7. Build `Image` payload: `preview_thumbhash`, `width`, `height`, `mime: "image/jpeg"` or `"image/png"`, `ExternalBlob`
 
-**Note**: The `image` crate is a heavy dependency. Since this processing is I/O-bound and CLI-specific, it could live in `moat-cli` rather than `moat-core` to keep core lean. However, ThumbHash generation might be needed by Flutter's Rust FFI bridge too — revisit when Flutter is in scope.
+**Decision**: No re-encoding to WebP. Store bytes in original JPEG or PNG format after optional resize. Pure-Rust pipeline with no native library dependencies.
 
 ### 2.2 CLI Send UX
 
@@ -183,7 +184,7 @@ Protocol support (auto-detected via `Picker`):
 - iTerm2 protocol
 - Unicode half-block fallback for unsupported terminals
 
-Integration: create a `Picker` once at startup (queries the terminal for supported protocol and font pixel dimensions), then call `picker.new_resize_protocol(image)` to produce a `StatefulImage` state. Offload resize/encoding to a Tokio task (the crate has a `tokio` feature for this) to avoid blocking the render thread.
+Integration: create a `Picker` once at startup **before** raw mode is enabled (queries the terminal for supported protocol and font pixel dimensions), then call `picker.new_resize_protocol(image)` to produce a `Box<dyn StatefulProtocol>` state stored directly in `DisplayMessage.image_proto`. Offload image processing and blob upload to a Tokio task; protocol state is created on the main thread from `BgEvent` callbacks.
 
 **Receive flow**:
 1. Event decrypted, `Image` payload extracted
@@ -194,14 +195,14 @@ Integration: create a `Picker` once at startup (queries the terminal for support
 
 ### 2.4 Tests
 
-- **Unit tests**: image resize logic, WebP encode roundtrip, ThumbHash generation, format validation (reject GIF/BMP/etc.)
-- **Integration**: full image send/receive roundtrip
-- **Edge cases**: very small images (don't upscale), already-WebP input, corrupt JPEG, zero-byte file
+- **Unit tests** (`image_processing.rs`): format validation (GIF/BMP rejected), resize-only-when-needed, no upscaling of small images, ThumbHash round-trip (encode → decode → valid RGBA), correct mime strings, file-not-found error
+- **Integration**: full image send/receive roundtrip (requires live PDS)
+- **Edge cases**: very small images (1×1, no resize), corrupt JPEG, zero-byte file
 
 ### 2.5 Success Criteria
 
 - [ ] Alice runs `/image ~/photo.jpg` in the CLI
-- [ ] Image is resized if > 2048px, re-encoded to WebP
+- [ ] Image is resized if > 2048px (original JPEG/PNG format preserved)
 - [ ] ThumbHash is generated and embedded in the 1 KB envelope
 - [ ] Blob is encrypted and uploaded to PDS
 - [ ] Bob receives event, sees ThumbHash preview immediately
@@ -229,9 +230,9 @@ Integration: create a `Picker` once at startup (queries the terminal for support
 |-------|---------|--------|
 | `chacha20poly1305` (0.10) | Blob encryption (XChaCha20-Poly1305) | Already in workspace |
 | `sha2` | SHA-256 for blob integrity hashes | Check if already in workspace, else add |
-| `image` | JPEG/PNG decode, resize, WebP encode | New dependency |
-| `thumbhash` | Generate ThumbHash previews | New dependency |
-| `ratatui-image` | Terminal image rendering (Kitty/Sixel/iTerm2/half-blocks, native ratatui widget) | New dependency (Phase 2) |
+| `image` (0.25) | JPEG/PNG decode, resize (no WebP encode) | New dependency (moat-cli only) |
+| `thumbhash` (0.1) | Generate and decode ThumbHash previews | New dependency (moat-cli only) |
+| `ratatui-image` (10) | Terminal image rendering (Kitty/Sixel/iTerm2/half-blocks) | New dependency (moat-cli only, Phase 2) |
 
 ## Architecture Decisions
 
@@ -241,7 +242,7 @@ Integration: create a `Picker` once at startup (queries the terminal for support
 
 3. **Dynamic promotion threshold**: Instead of a fixed byte count, check whether the serialized payload fits the 1 KB bucket. This automatically accounts for envelope overhead and remains correct as fields are added.
 
-4. **Always re-encode to WebP**: Normalizes format, reduces size, keeps the pipeline simple. Accept JPEG/PNG input only.
+4. **No re-encoding**: Store JPEG/PNG bytes in their original format (after optional resize). Avoids native library dependencies (libwebp) and keeps the pipeline pure Rust. The `mime` field in `MediaMessage` reflects the actual format.
 
 5. **Eager blob fetch**: Download immediately on decrypt rather than lazily. Simpler UX — messages appear complete. Retry with exponential backoff handles transient failures.
 

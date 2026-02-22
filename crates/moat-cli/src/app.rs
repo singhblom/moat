@@ -3,6 +3,7 @@
 use crate::{
     blob_cache::BlobCache,
     drawbridge::DrawbridgeManager,
+    image_processing,
     keystore::{hex, GroupMetadata, KeyStore, StoredSession},
     message_helpers::{build_text_payload, needs_blob_upload, render_message_preview, truncate_to_preview},
 };
@@ -11,8 +12,10 @@ use moat_atproto::MoatAtprotoClient;
 use moat_core::{
     blob_decrypt, blob_encrypt, encrypt_for_stealth, generate_stealth_keypair,
     try_decrypt_stealth, ControlKind, Event, EventKind, ExternalBlob, LongTextMessage,
-    MessagePayload, MoatCredential, MoatSession, ModifierKind, ParsedMessagePayload, CIPHERSUITE,
+    MediaMessage, MessagePayload, MoatCredential, MoatSession, ModifierKind, ParsedMessagePayload,
+    CIPHERSUITE,
 };
+use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::PathBuf;
@@ -22,6 +25,15 @@ use tokio::sync::mpsc;
 
 /// Quick-reaction emojis (same as Flutter app)
 pub const QUICK_EMOJIS: &[&str] = &["👍", "❤️", "😂", "😮", "😢", "🙏"];
+
+/// Thin wrapper around `Box<dyn StatefulProtocol>` that implements `Debug`
+/// (needed because `DisplayMessage` derives `Debug`).
+pub struct ImageProto(pub StatefulProtocol);
+impl std::fmt::Debug for ImageProto {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ImageProto(..)")
+    }
+}
 
 /// Debug logger that writes to a file in the storage directory
 struct DebugLog {
@@ -114,7 +126,7 @@ pub struct DisplayReaction {
 }
 
 /// A display message
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DisplayMessage {
     pub from: String,
     pub content: String,
@@ -128,6 +140,10 @@ pub struct DisplayMessage {
     pub message_id: Option<Vec<u8>>,
     /// Reactions on this message (aggregated)
     pub reactions: Vec<DisplayReaction>,
+    /// ratatui-image render state; `Some` once image bytes are available.
+    pub image_proto: Option<ImageProto>,
+    /// `true` while the image blob is being fetched from the PDS.
+    pub image_loading: bool,
 }
 
 /// A notification about a new device joining a conversation
@@ -255,6 +271,28 @@ pub(crate) enum BgEvent {
         message_id: Vec<u8>,
         error: String,
     },
+
+    /// Image processed and blob uploaded — MLS-encrypt and publish the image event.
+    ImageUploaded {
+        cid: String,
+        key: Vec<u8>,
+        ciphertext_hash: Vec<u8>,
+        ciphertext_size: u64,
+        content_hash: Vec<u8>,
+        width: u32,
+        height: u32,
+        thumbhash: Vec<u8>,
+        mime: String,
+        pending_message_id: Vec<u8>,
+        conv_id: String,
+    },
+
+    /// Image blob fetch succeeded — decode and display the full image.
+    ImageBlobFetched {
+        message_id: Vec<u8>,
+        /// Decrypted image bytes (JPEG or PNG).
+        bytes: Vec<u8>,
+    },
 }
 
 /// Main application state
@@ -265,6 +303,8 @@ pub struct App {
     mls_path: std::path::PathBuf,
     /// Persistent disk cache for decrypted blob content, keyed by content_hash.
     blob_cache: BlobCache,
+    /// Terminal image renderer — auto-detects Kitty/Sixel/iTerm2/half-block protocol.
+    picker: Picker,
     debug_log: DebugLog,
 
     // UI state
@@ -334,6 +374,7 @@ impl App {
     pub fn new(
         storage_dir: Option<std::path::PathBuf>,
         drawbridge_url: Option<String>,
+        picker: Picker,
     ) -> Result<Self> {
         // Determine the moat base directory (~/.moat or custom -s path).
         // User-managed files (e.g. credentials.txt) live here.
@@ -408,6 +449,7 @@ impl App {
             mls,
             mls_path,
             blob_cache,
+            picker,
             debug_log,
             focus,
             login_form: LoginForm::default(),
@@ -972,8 +1014,55 @@ impl App {
             }
 
             BgEvent::BlobFetchFailed { message_id, error } => {
-                if let Some(msg) = self.messages.iter_mut().find(|m| m.message_id.as_ref() == Some(&message_id)) {
+                if let Some(msg) = self
+                    .messages
+                    .iter_mut()
+                    .find(|m| m.message_id.as_ref() == Some(&message_id))
+                {
                     msg.content = format!("{} [download failed: {}]", msg.content, error);
+                    msg.image_loading = false;
+                }
+            }
+
+            BgEvent::ImageUploaded {
+                cid,
+                key,
+                ciphertext_hash,
+                ciphertext_size,
+                content_hash,
+                width,
+                height,
+                thumbhash,
+                mime,
+                pending_message_id,
+                conv_id,
+            } => {
+                self.handle_image_uploaded(
+                    cid,
+                    key,
+                    ciphertext_hash,
+                    ciphertext_size,
+                    content_hash,
+                    width,
+                    height,
+                    thumbhash,
+                    mime,
+                    pending_message_id,
+                    conv_id,
+                );
+            }
+
+            BgEvent::ImageBlobFetched { message_id, bytes } => {
+                if let Ok(img) = image::load_from_memory(&bytes) {
+                    let proto = self.picker.new_resize_protocol(img);
+                    if let Some(msg) = self
+                        .messages
+                        .iter_mut()
+                        .find(|m| m.message_id.as_ref() == Some(&message_id))
+                    {
+                        msg.image_proto = Some(ImageProto(proto));
+                        msg.image_loading = false;
+                    }
                 }
             }
         }
@@ -1257,6 +1346,307 @@ impl App {
                             });
                         }
                     }
+                }
+                Err(e) => {
+                    let _ = tx.send(BgEvent::BlobFetchFailed {
+                        message_id,
+                        error: e.to_string(),
+                    });
+                }
+            }
+        });
+    }
+
+    /// Process and upload an image, then MLS-encrypt and publish an `Image` event.
+    fn send_image_nonblocking(&mut self, path: &str) -> Result<()> {
+        if self.client.is_none() {
+            return Err(AppError::NotLoggedIn);
+        }
+        let conv_idx = self.active_conversation.ok_or(AppError::NoConversation)?;
+        let conv_id = self.conversations[conv_idx].id.clone();
+
+        // Generate a temporary ID to match the optimistic DisplayMessage.
+        let pending_message_id: Vec<u8> = {
+            use rand::RngCore;
+            let mut id = vec![0u8; 16];
+            rand::thread_rng().fill_bytes(&mut id);
+            id
+        };
+
+        // Optimistic UI.
+        let timestamp = chrono::Utc::now();
+        let my_did = self.client.as_ref().unwrap().did().to_string();
+        self.messages.push(DisplayMessage {
+            from: "You".to_string(),
+            content: "[image — processing…]".to_string(),
+            timestamp,
+            is_own: true,
+            sender_did: Some(my_did),
+            sender_device: self.keys.get_or_create_device_name().ok(),
+            message_id: Some(pending_message_id.clone()),
+            reactions: vec![],
+            image_proto: None,
+            image_loading: true,
+        });
+
+        self.input_buffer.clear();
+        self.cursor_position = 0;
+
+        let client = self.client.as_ref().unwrap().clone();
+        let tx = self.bg_tx.clone();
+        let path = path.to_string();
+
+        tokio::spawn(async move {
+            // Image processing runs on the blocking thread pool.
+            let result = tokio::task::spawn_blocking(move || {
+                image_processing::process_image_for_send(&path)
+            })
+            .await;
+
+            let (image_bytes, width, height, thumbhash, mime) = match result {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => {
+                    let _ = tx.send(BgEvent::SendFailed(format!("image processing failed: {e}")));
+                    return;
+                }
+                Err(e) => {
+                    let _ = tx.send(BgEvent::SendFailed(format!("image task panicked: {e}")));
+                    return;
+                }
+            };
+
+            // Encrypt blob (fast, CPU-only).
+            let (blob_bytes, key, ciphertext_hash, content_hash) =
+                match moat_core::blob_encrypt(&image_bytes) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let _ =
+                            tx.send(BgEvent::SendFailed(format!("blob encrypt failed: {e}")));
+                        return;
+                    }
+                };
+            let ciphertext_size = blob_bytes.len() as u64;
+
+            // Upload blob to PDS.
+            let cid = match client.upload_blob(&blob_bytes).await {
+                Ok(cid) => cid,
+                Err(e) => {
+                    let _ = tx.send(BgEvent::SendFailed(format!("blob upload failed: {e}")));
+                    return;
+                }
+            };
+
+            let _ = tx.send(BgEvent::ImageUploaded {
+                cid,
+                key: key.to_vec(),
+                ciphertext_hash,
+                ciphertext_size,
+                content_hash,
+                width,
+                height,
+                thumbhash,
+                mime,
+                pending_message_id,
+                conv_id,
+            });
+        });
+
+        Ok(())
+    }
+
+    /// MLS-encrypt an image event after blob upload succeeded, then publish.
+    fn handle_image_uploaded(
+        &mut self,
+        cid: String,
+        key: Vec<u8>,
+        ciphertext_hash: Vec<u8>,
+        ciphertext_size: u64,
+        content_hash: Vec<u8>,
+        width: u32,
+        height: u32,
+        thumbhash: Vec<u8>,
+        mime: String,
+        pending_message_id: Vec<u8>,
+        conv_id: String,
+    ) {
+        let Some(client) = self.client.as_ref() else {
+            self.set_error("image uploaded but client is gone".to_string());
+            return;
+        };
+
+        let uri = format!("at://{}/{}", client.did(), cid);
+
+        let key_arr: [u8; 32] = match key.try_into() {
+            Ok(k) => k,
+            Err(_) => {
+                self.set_error("image blob key has wrong length".to_string());
+                return;
+            }
+        };
+
+        let external = match ExternalBlob::new(
+            uri,
+            key_arr.to_vec(),
+            ciphertext_hash,
+            ciphertext_size,
+            content_hash,
+        ) {
+            Ok(e) => e,
+            Err(e) => {
+                self.set_error(format!("failed to build ExternalBlob for image: {e}"));
+                return;
+            }
+        };
+
+        let payload = MessagePayload::Image(MediaMessage {
+            preview_thumbhash: thumbhash.clone(),
+            width: Some(width),
+            height: Some(height),
+            mime: Some(mime.clone()),
+            external,
+        });
+
+        let group_id = match hex::decode(&conv_id) {
+            Ok(id) => id,
+            Err(e) => {
+                self.set_error(format!("invalid conv_id in ImageUploaded: {e}"));
+                return;
+            }
+        };
+
+        let key_bundle = match self.keys.load_identity_key() {
+            Ok(k) => k,
+            Err(e) => {
+                self.set_error(format!("failed to load identity key for image: {e}"));
+                return;
+            }
+        };
+
+        let current_epoch = self.mls.get_group_epoch(&group_id).ok().flatten().unwrap_or(1);
+        let event = Event::message(group_id.clone(), current_epoch, &payload);
+
+        let encrypted = match self.mls.encrypt_event(&group_id, &key_bundle, &event) {
+            Ok(e) => e,
+            Err(e) => {
+                self.set_error(format!("MLS encrypt failed for image: {e}"));
+                return;
+            }
+        };
+
+        self.own_published_tags.insert(encrypted.tag);
+        if let Err(e) = self.save_mls_state() {
+            self.debug_log
+                .log(&format!("image_uploaded: failed to save MLS state: {e}"));
+        }
+        if let Err(e) = self.keys.store_group_state(&conv_id, &encrypted.new_group_state) {
+            self.debug_log
+                .log(&format!("image_uploaded: failed to store group state: {e}"));
+        }
+
+        // Decode ThumbHash for placeholder rendering and update the pending message.
+        let display_content = format!("[image {mime} {width}×{height}]");
+        if let Some(msg) = self
+            .messages
+            .iter_mut()
+            .rev()
+            .find(|m| m.message_id.as_ref() == Some(&pending_message_id))
+        {
+            msg.content = display_content;
+            msg.image_loading = false;
+            if let Some(thumb_img) = image_processing::decode_thumbhash(&thumbhash) {
+                msg.image_proto = Some(ImageProto(self.picker.new_resize_protocol(thumb_img)));
+            }
+        }
+
+        // Publish the MLS-encrypted event.
+        let client = self.client.as_ref().unwrap().clone();
+        let tag = encrypted.tag;
+        let ciphertext = encrypted.ciphertext;
+        let tx = self.bg_tx.clone();
+        tokio::spawn(async move {
+            match client.publish_event(&tag, &ciphertext).await {
+                Ok(uri) => {
+                    let _ = tx.send(BgEvent::SendPublished { uri, conv_id, tag });
+                }
+                Err(e) => {
+                    let _ = tx.send(BgEvent::SendFailed(format!("{e}")));
+                }
+            }
+        });
+    }
+
+    /// Fetch an image blob for a received `Image` message.
+    fn spawn_blob_fetch_image(
+        &mut self,
+        external: &moat_core::ExternalBlob,
+        message_id: Option<Vec<u8>>,
+    ) {
+        let message_id = match message_id {
+            Some(id) => id,
+            None => return,
+        };
+
+        // Check disk cache first.
+        if let Some(cached) = self.blob_cache.get(&external.content_hash) {
+            let tx = self.bg_tx.clone();
+            let _ = tx.send(BgEvent::ImageBlobFetched {
+                message_id,
+                bytes: cached,
+            });
+            return;
+        }
+
+        let Some(client) = self.client.as_ref() else {
+            return;
+        };
+
+        let uri = external.uri.clone();
+        let (did, cid) = match uri.strip_prefix("at://").and_then(|s| {
+            let pos = s.find('/')?;
+            Some((s[..pos].to_string(), s[pos + 1..].to_string()))
+        }) {
+            Some(pair) => pair,
+            None => {
+                self.debug_log
+                    .log(&format!("image blob fetch: invalid URI: {}", uri));
+                return;
+            }
+        };
+
+        let key: [u8; 32] = match external.key.as_slice().try_into() {
+            Ok(k) => k,
+            Err(_) => {
+                self.debug_log.log("image blob fetch: key has wrong length");
+                return;
+            }
+        };
+        let ciphertext_hash = external.ciphertext_hash.clone();
+        let content_hash = external.content_hash.clone();
+
+        let client = client.clone();
+        let tx = self.bg_tx.clone();
+        let blob_cache_dir = self.blob_cache.dir.clone();
+
+        tokio::spawn(async move {
+            let blob = match client.fetch_blob(&did, &cid).await {
+                Ok(b) => b,
+                Err(e) => {
+                    let _ = tx.send(BgEvent::BlobFetchFailed {
+                        message_id,
+                        error: e.to_string(),
+                    });
+                    return;
+                }
+            };
+
+            match blob_decrypt(&blob, &key, &ciphertext_hash, &content_hash) {
+                Ok(plaintext) => {
+                    let cache = BlobCache { dir: blob_cache_dir };
+                    let _ = cache.put(&content_hash, &plaintext);
+                    let _ = tx.send(BgEvent::ImageBlobFetched {
+                        message_id,
+                        bytes: plaintext,
+                    });
                 }
                 Err(e) => {
                     let _ = tx.send(BgEvent::BlobFetchFailed {
@@ -1640,6 +2030,8 @@ impl App {
                                 sender_device,
                                 message_id: decrypted.event.message_id.clone(),
                                 reactions: vec![],
+                                image_proto: None,
+                                image_loading: false,
                             });
                         } else if let Some(idx) = conv_idx {
                             if let Some(conv) = self.conversations.get_mut(idx) {
@@ -1649,12 +2041,56 @@ impl App {
 
                         // Eagerly fetch the blob for LongText and Image messages.
                         if let Some(moat_core::ParsedMessagePayload::Structured(
-                            moat_core::MessagePayload::LongText(ref msg)
-                        )) = parsed {
+                            moat_core::MessagePayload::LongText(ref msg),
+                        )) = parsed
+                        {
                             self.spawn_blob_fetch_long_text(
                                 &msg.external,
                                 decrypted.event.message_id.clone(),
                             );
+                        }
+
+                        if let Some(moat_core::ParsedMessagePayload::Structured(
+                            moat_core::MessagePayload::Image(ref media_msg),
+                        )) = parsed
+                        {
+                            let mid = decrypted.event.message_id.clone();
+                            // Try disk cache first.
+                            let cached = self.blob_cache.get(&media_msg.external.content_hash);
+                            if let Some(bytes) = cached {
+                                if let Ok(img) = image::load_from_memory(&bytes) {
+                                    let proto = self.picker.new_resize_protocol(img);
+                                    if let Some(dm) = self
+                                        .messages
+                                        .iter_mut()
+                                        .rev()
+                                        .find(|m| m.message_id == mid)
+                                    {
+                                        dm.image_proto = Some(ImageProto(proto));
+                                        dm.image_loading = false;
+                                    }
+                                }
+                            } else {
+                                // No cache — show ThumbHash placeholder and fetch.
+                                if let Some(thumb_img) = image_processing::decode_thumbhash(
+                                    &media_msg.preview_thumbhash,
+                                ) {
+                                    let proto = self.picker.new_resize_protocol(thumb_img);
+                                    if let Some(dm) = self
+                                        .messages
+                                        .iter_mut()
+                                        .rev()
+                                        .find(|m| m.message_id == mid)
+                                    {
+                                        dm.image_proto = Some(ImageProto(proto));
+                                        dm.image_loading = true;
+                                    }
+                                }
+                                self.spawn_blob_fetch_image(
+                                    &media_msg.external,
+                                    decrypted.event.message_id.clone(),
+                                );
+                            }
                         }
                     }
                     EventKind::Control(ControlKind::Commit) => {
@@ -2192,6 +2628,8 @@ impl App {
             sender_device: None,
             message_id: None,
             reactions: vec![],
+            image_proto: None,
+            image_loading: false,
         });
 
         Ok(())
@@ -2224,6 +2662,8 @@ impl App {
                 sender_device: stored.sender_device.clone(),
                 message_id: stored.message_id.clone(),
                 reactions: vec![],
+                image_proto: None,
+                image_loading: false,
             });
         }
 
@@ -2308,7 +2748,10 @@ impl App {
     fn handle_input_key(&mut self, key: KeyEvent) -> Result<bool> {
         match key.code {
             KeyCode::Enter => {
-                if !self.input_buffer.is_empty() {
+                if self.input_buffer.starts_with("/image ") {
+                    let path = self.input_buffer["/image ".len()..].trim().to_string();
+                    self.send_image_nonblocking(&path)?;
+                } else if !self.input_buffer.is_empty() {
                     self.send_message_nonblocking()?;
                 }
             }
@@ -2401,6 +2844,8 @@ impl App {
                 sender_device: self.keys.get_or_create_device_name().ok(),
                 message_id: Some(pending_message_id.clone()),
                 reactions: vec![],
+                image_proto: None,
+                image_loading: false,
             });
 
             let stored_msg = crate::keystore::StoredMessage {
@@ -2479,6 +2924,8 @@ impl App {
             sender_device: self.keys.get_or_create_device_name().ok(),
             message_id: event.message_id.clone(),
             reactions: vec![],
+            image_proto: None,
+            image_loading: false,
         });
 
         // Store locally with placeholder rkey (will be real once publish completes)

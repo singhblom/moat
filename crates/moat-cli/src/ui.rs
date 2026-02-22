@@ -1,6 +1,6 @@
 //! Terminal UI rendering with Ratatui
 
-use crate::app::{App, DeviceAlert, Focus, LoginField, QUICK_EMOJIS};
+use crate::app::{App, DeviceAlert, DisplayMessage, Focus, LoginField, QUICK_EMOJIS};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -8,7 +8,11 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame,
 };
+use ratatui_image::StatefulImage;
 use std::{sync::LazyLock, time::Instant};
+
+/// Number of terminal rows reserved for rendering an inline image.
+const IMAGE_RENDER_ROWS: u16 = 16;
 
 static START_TIME: LazyLock<Instant> = LazyLock::new(Instant::now);
 
@@ -31,7 +35,7 @@ fn color_pulse(
 }
 
 /// Main draw function
-pub fn draw(frame: &mut Frame, app: &App) {
+pub fn draw(frame: &mut Frame, app: &mut App) {
     match app.focus {
         Focus::Login => draw_login(frame, app),
         _ => draw_main(frame, app),
@@ -182,7 +186,7 @@ fn draw_login(frame: &mut Frame, app: &App) {
     frame.set_cursor_position(cursor_pos);
 }
 
-fn draw_main(frame: &mut Frame, app: &App) {
+fn draw_main(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
 
     // Reserve a row at the bottom for the info bar when logged in
@@ -285,7 +289,7 @@ fn draw_conversations(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let is_focused = app.focus == Focus::Messages;
     let color = if is_focused {
         color_pulse(38.0, 227.0, 195.0, 38.0, 195.0, 227.0, 5000)
@@ -305,148 +309,257 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .style(style);
 
-    // Show help if no active conversation
     if app.active_conversation.is_none() {
         let inner = block.inner(area);
         frame.render_widget(block, area);
         let help = Paragraph::new("Select a conversation\nor press 'n' to start one")
             .style(Style::default().fg(Color::Gray));
         frame.render_widget(help, inner);
-    } else {
-        let inner_width = area.width.saturating_sub(2) as usize; // subtract borders
-        let visible_height = area.height.saturating_sub(2) as usize;
+        return;
+    }
 
-        // Compute which message index is selected (selected_message is offset from bottom)
-        let selected_msg_index = app
-            .selected_message
-            .map(|offset| app.messages.len().saturating_sub(1).saturating_sub(offset));
+    let inner = block.inner(area);
+    let inner_width = inner.width;
+    let visible_height = inner.height;
+    let w = inner_width as usize;
 
-        // Build styled lines for each message
-        let mut lines: Vec<Line> = Vec::new();
-        for (msg_idx, msg) in app.messages.iter().enumerate() {
-            let is_selected = selected_msg_index == Some(msg_idx) && is_focused;
+    // Extract immutable values before any mutable borrow of app.messages.
+    let selected_msg_index = app
+        .selected_message
+        .map(|offset| app.messages.len().saturating_sub(1).saturating_sub(offset));
+    let reaction_picker = app.reaction_picker;
+    let message_scroll = app.message_scroll;
 
-            let msg_style = if msg.is_own {
-                Style::default().fg(Color::Green)
-            } else {
-                Style::default().fg(Color::White)
-            };
+    // Pre-compute per-message heights (immutable pass).
+    let heights: Vec<u16> = app
+        .messages
+        .iter()
+        .enumerate()
+        .map(|(i, msg)| {
+            let is_sel_with_picker =
+                selected_msg_index == Some(i) && reaction_picker.is_some();
+            let text_rows = compute_msg_text_rows(msg, w, is_sel_with_picker);
+            text_rows + if msg.image_proto.is_some() { IMAGE_RENDER_ROWS } else { 0 }
+        })
+        .collect();
 
-            // Selected message gets a background highlight
-            let msg_style = if is_selected {
-                msg_style.bg(Color::Rgb(40, 40, 60))
-            } else {
-                msg_style
-            };
+    let total_rows: u16 = heights.iter().sum();
+    let scroll_to_bottom = total_rows.saturating_sub(visible_height);
+    let scroll_y = scroll_to_bottom.saturating_sub(message_scroll as u16);
 
-            let time = msg.timestamp.format("%H:%M").to_string();
-            let prefix = format!("[{}] {}: ", time, msg.from);
-            let content = &msg.content;
+    // Render block border first (consumes `block`).
+    frame.render_widget(block, area);
 
-            // Selection indicator
-            let indicator = if is_selected { "▎" } else { " " };
-            let indicator_style = if is_selected {
-                Style::default().fg(Color::Cyan).bg(Color::Rgb(40, 40, 60))
-            } else {
-                Style::default()
-            };
+    // Render each message in its own sub-Rect.
+    let mut cumulative_y: u16 = 0;
+    for msg_idx in 0..app.messages.len() {
+        let h = heights[msg_idx];
+        let msg_top = cumulative_y;
+        cumulative_y += h;
 
-            let time_style = if is_selected {
-                Style::default().fg(Color::Gray).bg(Color::Rgb(40, 40, 60))
-            } else {
-                Style::default().fg(Color::Gray)
-            };
+        // Skip messages entirely above the viewport.
+        if cumulative_y <= scroll_y {
+            continue;
+        }
 
-            let name_style = if is_selected {
-                msg_style.add_modifier(Modifier::BOLD)
-            } else {
-                msg_style.add_modifier(Modifier::BOLD)
-            };
+        let vh = visible_height as i32;
+        let view_top = msg_top as i32 - scroll_y as i32;
 
-            // First visual line has the styled prefix
-            if inner_width > 0 {
-                let first_content_len = inner_width.saturating_sub(prefix.len() + 1); // +1 for indicator
-                let first_chunk: String = content.chars().take(first_content_len).collect();
-                lines.push(Line::from(vec![
-                    Span::styled(indicator, indicator_style),
-                    Span::styled(format!("[{}] ", time), time_style),
-                    Span::styled(format!("{}: ", msg.from), name_style),
-                    Span::styled(first_chunk, msg_style),
-                ]));
+        // Stop once we're past the bottom of the viewport.
+        if view_top >= vh {
+            break;
+        }
 
-                // Remaining content wraps onto continuation lines
-                let remaining: String = content.chars().skip(first_content_len).collect();
-                let wrap_width = inner_width.saturating_sub(1); // account for indicator column
-                for chunk in remaining.chars().collect::<Vec<_>>().chunks(wrap_width) {
-                    let s: String = chunk.iter().collect();
-                    lines.push(Line::from(vec![
-                        Span::styled(" ", indicator_style),
-                        Span::styled(s, msg_style),
-                    ]));
-                }
+        let is_selected = selected_msg_index == Some(msg_idx) && is_focused;
+        let is_sel_with_picker = is_selected && reaction_picker.is_some();
+        let text_rows =
+            compute_msg_text_rows(&app.messages[msg_idx], w, is_sel_with_picker) as i32;
 
-                // Show aggregated reactions below the message
-                if !msg.reactions.is_empty() {
-                    // Aggregate: count each emoji
-                    let mut counts: std::collections::BTreeMap<&str, usize> =
-                        std::collections::BTreeMap::new();
-                    for r in &msg.reactions {
-                        *counts.entry(&r.emoji).or_insert(0) += 1;
-                    }
-                    let reaction_chips: Vec<String> = counts
-                        .iter()
-                        .map(|(emoji, count)| {
-                            if *count > 1 {
-                                format!("{} {}", emoji, count)
-                            } else {
-                                emoji.to_string()
-                            }
-                        })
-                        .collect();
-                    let reaction_line = format!(" {}", reaction_chips.join("  "));
-                    let reaction_style = if is_selected {
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .bg(Color::Rgb(40, 40, 60))
-                    } else {
-                        Style::default().fg(Color::Yellow)
-                    };
-                    lines.push(Line::from(vec![
-                        Span::styled(" ", indicator_style),
-                        Span::styled(reaction_line, reaction_style),
-                    ]));
-                }
-
-                // Show inline emoji picker for selected message
-                if is_selected {
-                    if let Some(picker_idx) = app.reaction_picker {
-                        let mut spans: Vec<Span> =
-                            vec![Span::styled(" ", indicator_style), Span::raw(" ")];
-                        for (i, emoji) in QUICK_EMOJIS.iter().enumerate() {
-                            let style = if i == picker_idx {
-                                Style::default().bg(Color::Yellow).fg(Color::Black)
-                            } else {
-                                Style::default().fg(Color::Gray)
-                            };
-                            spans.push(Span::styled(format!(" {} ", emoji), style));
-                            if i + 1 < QUICK_EMOJIS.len() {
-                                spans.push(Span::raw(" "));
-                            }
-                        }
-                        lines.push(Line::from(spans));
-                    }
-                }
+        // ── Text portion ──────────────────────────────────────────────────────
+        let text_view_bottom = view_top + text_rows;
+        if text_view_bottom > 0 && view_top < vh {
+            let render_y = view_top.max(0) as u16;
+            let skip_rows = (-view_top).max(0) as u16;
+            let visible_rows = (vh.min(text_view_bottom) - render_y as i32) as u16;
+            if visible_rows > 0 {
+                let text_rect =
+                    Rect::new(inner.x, inner.y + render_y, inner_width, visible_rows);
+                let lines = build_msg_lines(
+                    &app.messages[msg_idx],
+                    w,
+                    is_selected,
+                    reaction_picker,
+                );
+                let para = if skip_rows > 0 {
+                    Paragraph::new(lines).scroll((skip_rows, 0))
+                } else {
+                    Paragraph::new(lines)
+                };
+                frame.render_widget(para, text_rect);
             }
         }
 
-        let total_lines = lines.len();
-        // message_scroll is offset from the bottom (0 = showing latest)
-        let scroll_to_bottom = total_lines.saturating_sub(visible_height);
-        let scroll_y = scroll_to_bottom.saturating_sub(app.message_scroll) as u16;
-
-        let paragraph = Paragraph::new(lines).block(block).scroll((scroll_y, 0));
-        frame.render_widget(paragraph, area);
+        // ── Image portion ─────────────────────────────────────────────────────
+        let img_view_top = view_top + text_rows;
+        let img_view_bottom = view_top + h as i32;
+        if img_view_bottom > 0 && img_view_top < vh && app.messages[msg_idx].image_proto.is_some()
+        {
+            let render_y = img_view_top.max(0) as u16;
+            let visible_rows = (vh.min(img_view_bottom) - render_y as i32) as u16;
+            if visible_rows > 0 {
+                let img_rect =
+                    Rect::new(inner.x, inner.y + render_y, inner_width, visible_rows);
+                let proto = app.messages[msg_idx].image_proto.as_mut().unwrap();
+                frame.render_stateful_widget(StatefulImage::default(), img_rect, &mut proto.0);
+            }
+        }
     }
+}
+
+/// Count how many terminal rows the text portion of a message occupies.
+fn compute_msg_text_rows(
+    msg: &DisplayMessage,
+    inner_width: usize,
+    is_selected_with_picker: bool,
+) -> u16 {
+    if inner_width == 0 {
+        return 1;
+    }
+    let time = msg.timestamp.format("%H:%M").to_string();
+    let prefix = format!("[{}] {}: ", time, msg.from);
+    // +1 for the indicator column
+    let first_content_len = inner_width.saturating_sub(prefix.len() + 1);
+
+    let content_chars = msg.content.chars().count();
+    let mut rows: u16 = 1;
+
+    if first_content_len > 0 && content_chars > first_content_len {
+        let remaining = content_chars - first_content_len;
+        let wrap_width = inner_width.saturating_sub(1); // indicator column
+        if wrap_width > 0 {
+            rows += ((remaining + wrap_width - 1) / wrap_width) as u16;
+        }
+    }
+
+    if !msg.reactions.is_empty() {
+        rows += 1;
+    }
+    if is_selected_with_picker {
+        rows += 1;
+    }
+    rows
+}
+
+/// Build the styled `Line`s for the text portion of a single message.
+fn build_msg_lines(
+    msg: &DisplayMessage,
+    inner_width: usize,
+    is_selected: bool,
+    reaction_picker: Option<usize>,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if inner_width == 0 {
+        return lines;
+    }
+
+    let msg_style = if msg.is_own {
+        Style::default().fg(Color::Green)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    let msg_style = if is_selected {
+        msg_style.bg(Color::Rgb(40, 40, 60))
+    } else {
+        msg_style
+    };
+
+    let time = msg.timestamp.format("%H:%M").to_string();
+    let indicator = if is_selected { "▎" } else { " " };
+    let indicator_style = if is_selected {
+        Style::default().fg(Color::Cyan).bg(Color::Rgb(40, 40, 60))
+    } else {
+        Style::default()
+    };
+    let time_style = if is_selected {
+        Style::default().fg(Color::Gray).bg(Color::Rgb(40, 40, 60))
+    } else {
+        Style::default().fg(Color::Gray)
+    };
+    let name_style = msg_style.add_modifier(Modifier::BOLD);
+
+    let prefix = format!("[{}] {}: ", time, msg.from);
+    let first_content_len = inner_width.saturating_sub(prefix.len() + 1);
+    let content = &msg.content;
+    let first_chunk: String = content.chars().take(first_content_len).collect();
+
+    lines.push(Line::from(vec![
+        Span::styled(indicator, indicator_style),
+        Span::styled(format!("[{}] ", time), time_style),
+        Span::styled(format!("{}: ", msg.from), name_style),
+        Span::styled(first_chunk, msg_style),
+    ]));
+
+    // Continuation lines for wrapped content.
+    let remaining: String = content.chars().skip(first_content_len).collect();
+    let wrap_width = inner_width.saturating_sub(1);
+    for chunk in remaining.chars().collect::<Vec<_>>().chunks(wrap_width) {
+        let s: String = chunk.iter().collect();
+        lines.push(Line::from(vec![
+            Span::styled(" ", indicator_style),
+            Span::styled(s, msg_style),
+        ]));
+    }
+
+    // Aggregated reactions.
+    if !msg.reactions.is_empty() {
+        let mut counts: std::collections::BTreeMap<&str, usize> =
+            std::collections::BTreeMap::new();
+        for r in &msg.reactions {
+            *counts.entry(r.emoji.as_str()).or_insert(0) += 1;
+        }
+        let reaction_chips: Vec<String> = counts
+            .iter()
+            .map(|(emoji, count)| {
+                if *count > 1 {
+                    format!("{} {}", emoji, count)
+                } else {
+                    emoji.to_string()
+                }
+            })
+            .collect();
+        let reaction_line = format!(" {}", reaction_chips.join("  "));
+        let reaction_style = if is_selected {
+            Style::default().fg(Color::Yellow).bg(Color::Rgb(40, 40, 60))
+        } else {
+            Style::default().fg(Color::Yellow)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(" ", indicator_style),
+            Span::styled(reaction_line, reaction_style),
+        ]));
+    }
+
+    // Inline emoji picker.
+    if is_selected {
+        if let Some(picker_idx) = reaction_picker {
+            let mut spans: Vec<Span> =
+                vec![Span::styled(" ", indicator_style), Span::raw(" ")];
+            for (i, emoji) in QUICK_EMOJIS.iter().enumerate() {
+                let style = if i == picker_idx {
+                    Style::default().bg(Color::Yellow).fg(Color::Black)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+                spans.push(Span::styled(format!(" {} ", emoji), style));
+                if i + 1 < QUICK_EMOJIS.len() {
+                    spans.push(Span::raw(" "));
+                }
+            }
+            lines.push(Line::from(spans));
+        }
+    }
+
+    lines
 }
 
 fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
