@@ -412,14 +412,13 @@ impl App {
 
         let debug_log = DebugLog::new(&data_dir);
 
-        // If credentials.txt exists and no credentials are stored yet, import them
-        let credentials_txt_drawbridge = if !keys.has_credentials() {
-            if let Ok(creds) = keys.load_credentials_txt() {
+        // If credentials.txt exists and no credentials are stored yet, import them.
+        // Always read drawbridge URL from credentials.txt as a fallback.
+        let credentials_txt_drawbridge = if let Ok(creds) = keys.load_credentials_txt() {
+            if !keys.has_credentials() {
                 let _ = keys.store_credentials(&creds.handle, &creds.password);
-                creds.drawbridge
-            } else {
-                None
             }
+            creds.drawbridge
         } else {
             None
         };
