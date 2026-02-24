@@ -4,6 +4,7 @@ members = [
     "crates/moat-core",
     "crates/moat-atproto",
     "crates/moat-cli",
+    "crates/moat-postern",
 ]
 exclude = [
     "moat-flutter/rust",
