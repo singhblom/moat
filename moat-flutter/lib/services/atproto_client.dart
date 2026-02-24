@@ -4,6 +4,18 @@ import 'package:http/http.dart' as http;
 
 import '../models/bluesky_profile.dart';
 
+/// Decode an ATProto IPLD bytes field: `{"$bytes": "<base64>"}`.
+///
+/// Per the ATProto data model spec, fields declared as `type: "bytes"` in a
+/// lexicon are JSON-encoded as a single-key object `{"$bytes": "<base64>"}`.
+Uint8List _decodeBytesField(dynamic field) {
+  if (field is Map) {
+    final b64 = field[r'$bytes'] as String?;
+    if (b64 != null) return base64Decode(b64);
+  }
+  throw FormatException('Expected ATProto bytes field {"\$bytes": "..."}, got: $field');
+}
+
 /// ATProto lexicon NSIDs
 const keyPackageNsid = 'social.moat.keyPackage';
 const eventNsid = 'social.moat.event';
@@ -85,7 +97,7 @@ class KeyPackageRecord {
   factory KeyPackageRecord.fromJson(Map<String, dynamic> json) {
     return KeyPackageRecord(
       ciphersuite: json['ciphersuite'] as String,
-      keyPackage: base64Decode(json['keyPackage'] as String),
+      keyPackage: _decodeBytesField(json['keyPackage']),
       expiresAt: DateTime.parse(json['expiresAt'] as String),
       createdAt: DateTime.parse(json['createdAt'] as String),
     );
@@ -129,8 +141,8 @@ class EventRecord {
     return EventRecord(
       uri: uri,
       rkey: rkey,
-      tag: base64Decode(value['tag'] as String),
-      ciphertext: base64Decode(value['ciphertext'] as String),
+      tag: _decodeBytesField(value['tag']),
+      ciphertext: _decodeBytesField(value['ciphertext']),
       createdAt: DateTime.parse(value['createdAt'] as String),
     );
   }
@@ -270,7 +282,7 @@ class AtprotoClient {
     final record = {
       'v': 1,
       'ciphersuite': mlsCiphersuite,
-      'keyPackage': base64Encode(keyPackage),
+      'keyPackage': {r'$bytes': base64Encode(keyPackage)},
       'expiresAt': expiresAt.toIso8601String(),
       'createdAt': now.toIso8601String(),
     };
@@ -330,7 +342,7 @@ class AtprotoClient {
     final now = DateTime.now().toUtc();
     final record = {
       'v': 2,
-      'scanPubkey': base64Encode(scanPubkey),
+      'scanPubkey': {r'$bytes': base64Encode(scanPubkey)},
       'deviceName': deviceName,
       'createdAt': now.toIso8601String(),
     };
@@ -371,7 +383,7 @@ class AtprotoClient {
         final v = value['v'] as int?;
         // Only accept v2 records (multi-device)
         if (v == 2) {
-          final scanPubkey = base64Decode(value['scanPubkey'] as String);
+          final scanPubkey = _decodeBytesField(value['scanPubkey']);
           final deviceName = value['deviceName'] as String? ?? 'Unknown';
           records.add(StealthAddressRecord(
             scanPubkey: scanPubkey,
@@ -397,8 +409,8 @@ class AtprotoClient {
     final now = DateTime.now().toUtc();
     final record = {
       'v': 1,
-      'tag': base64Encode(tag),
-      'ciphertext': base64Encode(ciphertext),
+      'tag': {r'$bytes': base64Encode(tag)},
+      'ciphertext': {r'$bytes': base64Encode(ciphertext)},
       'createdAt': now.toIso8601String(),
     };
 

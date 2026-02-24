@@ -176,10 +176,11 @@ GET /xrpc/com.atproto.repo.listRecords?repo=<did>&collection=social.moat.keyPack
 ```
 Expects `{ "records": [{ "value": { "keyPackage": { "$bytes": "<base64>" } } }] }`
 
-> ⚠️ **Known gap:** `moat-atproto` serialises byte fields as plain base64 strings
-> (`"tag": "AAAA…"`), while Drawbridge expects ATProto IPLD bytes format
-> (`"tag": {"$bytes": "AAAA…"}`). This mismatch needs to be resolved when writing the
-> `moat-integration-tests` Drawbridge compatibility test (item 10 below).
+> ✅ **Resolved:** Both `moat-atproto` (Rust) and `moat-flutter` (Dart) now serialise byte
+> fields using the ATProto IPLD bytes format (`"tag": {"$bytes": "AAAA…"}`), matching what
+> Drawbridge's `PDSVerifier` expects. The fix is in `crates/moat-atproto/src/records.rs`
+> (all three `base64_*` serde modules) and `moat-flutter/lib/services/atproto_client.dart`
+> (`_decodeBytesField` helper + all publish/parse call sites).
 
 ## What Remains
 

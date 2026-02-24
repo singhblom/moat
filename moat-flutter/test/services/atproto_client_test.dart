@@ -1,7 +1,10 @@
-/// Tests for AtprotoClient auto-refresh behavior.
+/// Tests for AtprotoClient auto-refresh behavior and ATProto wire format.
 ///
-/// Verifies that authenticated requests automatically refresh the access token
-/// when the PDS returns a 401 / "Token has expired" error, then retry.
+/// Verifies that:
+/// - Authenticated requests automatically refresh the access token
+///   when the PDS returns a 401 / "Token has expired" error, then retry.
+/// - Byte fields are serialized as ATProto IPLD `{"$bytes": "<base64>"}` objects.
+/// - Byte fields are deserialized from the `{"$bytes": "<base64>"}` format.
 library;
 
 import 'dart:convert';
@@ -200,6 +203,104 @@ void main() {
       final uri = await client.publishKeyPackage(Uint8List(64));
       expect(uri, isNotEmpty);
       expect(refreshed, true);
+    });
+  });
+
+  group('ATProto IPLD bytes wire format — publish', () {
+    late Map<String, dynamic> capturedRecord;
+
+    setUp(() {
+      capturedRecord = {};
+    });
+
+    MockClient _captureClient() => MockClient((request) async {
+          if (request.url.path.contains('createRecord')) {
+            final body = jsonDecode(request.body) as Map<String, dynamic>;
+            capturedRecord = body['record'] as Map<String, dynamic>;
+            return http.Response(_createRecordResponse(), 200);
+          }
+          fail('Unexpected: ${request.url}');
+        });
+
+    test('publishEvent serializes tag and ciphertext as {"\$bytes": "..."}', () async {
+      final client = AtprotoClient(httpClient: _captureClient());
+      client.restoreSession(_testSession());
+
+      final tag = Uint8List.fromList(List.generate(16, (i) => i));
+      final ciphertext = Uint8List.fromList([0xDE, 0xAD, 0xBE, 0xEF]);
+
+      await client.publishEvent(tag, ciphertext);
+
+      expect(capturedRecord['tag'], isA<Map>());
+      expect((capturedRecord['tag'] as Map)[r'$bytes'], isA<String>());
+      expect(capturedRecord['ciphertext'], isA<Map>());
+      expect((capturedRecord['ciphertext'] as Map)[r'$bytes'], isA<String>());
+
+      // Verify the base64 round-trips correctly
+      final decodedTag = base64Decode((capturedRecord['tag'] as Map)[r'$bytes'] as String);
+      expect(decodedTag, tag);
+    });
+
+    test('publishKeyPackage serializes keyPackage as {"\$bytes": "..."}', () async {
+      final client = AtprotoClient(httpClient: _captureClient());
+      client.restoreSession(_testSession());
+
+      final kp = Uint8List.fromList(List.generate(64, (i) => i));
+      await client.publishKeyPackage(kp);
+
+      expect(capturedRecord['keyPackage'], isA<Map>());
+      expect((capturedRecord['keyPackage'] as Map)[r'$bytes'], isA<String>());
+
+      final decoded = base64Decode((capturedRecord['keyPackage'] as Map)[r'$bytes'] as String);
+      expect(decoded, kp);
+    });
+
+    test('publishStealthAddress serializes scanPubkey as {"\$bytes": "..."}', () async {
+      final client = AtprotoClient(httpClient: _captureClient());
+      client.restoreSession(_testSession());
+
+      final pubkey = Uint8List.fromList(List.generate(32, (i) => i + 1));
+      await client.publishStealthAddress(pubkey, 'My Phone');
+
+      expect(capturedRecord['scanPubkey'], isA<Map>());
+      expect((capturedRecord['scanPubkey'] as Map)[r'$bytes'], isA<String>());
+
+      final decoded = base64Decode((capturedRecord['scanPubkey'] as Map)[r'$bytes'] as String);
+      expect(decoded, pubkey);
+    });
+  });
+
+  group('ATProto IPLD bytes wire format — parse', () {
+    test('EventRecord.fromJson parses {"\$bytes": "..."} tag and ciphertext', () {
+      final tag = Uint8List.fromList(List.generate(16, (i) => i));
+      final ciphertext = Uint8List.fromList([0xDE, 0xAD, 0xBE, 0xEF]);
+
+      final json = {
+        'uri': 'at://did:plc:test/social.moat.event/abc123',
+        'value': {
+          'tag': {r'$bytes': base64Encode(tag)},
+          'ciphertext': {r'$bytes': base64Encode(ciphertext)},
+          'createdAt': '2024-01-01T00:00:00.000Z',
+        },
+      };
+
+      final record = EventRecord.fromJson(json);
+      expect(record.tag, tag);
+      expect(record.ciphertext, ciphertext);
+    });
+
+    test('KeyPackageRecord.fromJson parses {"\$bytes": "..."} keyPackage', () {
+      final kp = Uint8List.fromList(List.generate(64, (i) => i));
+
+      final json = {
+        'ciphersuite': 'MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519',
+        'keyPackage': {r'$bytes': base64Encode(kp)},
+        'expiresAt': '2099-01-01T00:00:00.000Z',
+        'createdAt': '2024-01-01T00:00:00.000Z',
+      };
+
+      final record = KeyPackageRecord.fromJson(json);
+      expect(record.keyPackage, kp);
     });
   });
 }

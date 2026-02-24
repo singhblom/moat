@@ -113,7 +113,8 @@ pub struct StealthAddressData {
     pub created_at: DateTime<Utc>,
 }
 
-/// Helper module for base64 encoding/decoding of byte vectors
+/// Helper module for ATProto IPLD bytes encoding of byte vectors.
+/// Serializes as `{"$bytes": "<base64>"}` per the ATProto data model spec.
 mod base64_bytes {
     use base64::{engine::general_purpose::STANDARD, Engine};
     use serde::{Deserialize, Deserializer, Serializer};
@@ -122,19 +123,28 @@ mod base64_bytes {
     where
         S: Serializer,
     {
-        serializer.serialize_str(&STANDARD.encode(bytes))
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(1))?;
+        map.serialize_entry("$bytes", &STANDARD.encode(bytes))?;
+        map.end()
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let s = String::deserialize(deserializer)?;
-        STANDARD.decode(&s).map_err(serde::de::Error::custom)
+        #[derive(Deserialize)]
+        struct BytesWrapper {
+            #[serde(rename = "$bytes")]
+            bytes: String,
+        }
+        let wrapper = BytesWrapper::deserialize(deserializer)?;
+        STANDARD.decode(&wrapper.bytes).map_err(serde::de::Error::custom)
     }
 }
 
-/// Helper module for base64 encoding/decoding of 16-byte tags
+/// Helper module for ATProto IPLD bytes encoding of 16-byte tags.
+/// Serializes as `{"$bytes": "<base64>"}` per the ATProto data model spec.
 mod base64_tag {
     use base64::{engine::general_purpose::STANDARD, Engine};
     use serde::{Deserialize, Deserializer, Serializer};
@@ -143,15 +153,23 @@ mod base64_tag {
     where
         S: Serializer,
     {
-        serializer.serialize_str(&STANDARD.encode(bytes))
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(1))?;
+        map.serialize_entry("$bytes", &STANDARD.encode(bytes))?;
+        map.end()
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 16], D::Error>
     where
         D: Deserializer<'de>,
     {
-        let s = String::deserialize(deserializer)?;
-        let bytes = STANDARD.decode(&s).map_err(serde::de::Error::custom)?;
+        #[derive(Deserialize)]
+        struct BytesWrapper {
+            #[serde(rename = "$bytes")]
+            bytes: String,
+        }
+        let wrapper = BytesWrapper::deserialize(deserializer)?;
+        let bytes = STANDARD.decode(&wrapper.bytes).map_err(serde::de::Error::custom)?;
         if bytes.len() != 16 {
             return Err(serde::de::Error::custom("tag must be exactly 16 bytes"));
         }
@@ -161,7 +179,8 @@ mod base64_tag {
     }
 }
 
-/// Helper module for base64 encoding/decoding of 32-byte public keys
+/// Helper module for ATProto IPLD bytes encoding of 32-byte public keys.
+/// Serializes as `{"$bytes": "<base64>"}` per the ATProto data model spec.
 mod base64_pubkey {
     use base64::{engine::general_purpose::STANDARD, Engine};
     use serde::{Deserialize, Deserializer, Serializer};
@@ -170,15 +189,23 @@ mod base64_pubkey {
     where
         S: Serializer,
     {
-        serializer.serialize_str(&STANDARD.encode(bytes))
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(1))?;
+        map.serialize_entry("$bytes", &STANDARD.encode(bytes))?;
+        map.end()
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 32], D::Error>
     where
         D: Deserializer<'de>,
     {
-        let s = String::deserialize(deserializer)?;
-        let bytes = STANDARD.decode(&s).map_err(serde::de::Error::custom)?;
+        #[derive(Deserialize)]
+        struct BytesWrapper {
+            #[serde(rename = "$bytes")]
+            bytes: String,
+        }
+        let wrapper = BytesWrapper::deserialize(deserializer)?;
+        let bytes = STANDARD.decode(&wrapper.bytes).map_err(serde::de::Error::custom)?;
         if bytes.len() != 32 {
             return Err(serde::de::Error::custom("pubkey must be exactly 32 bytes"));
         }
@@ -207,6 +234,17 @@ mod tests {
         assert_eq!(parsed.v, data.v);
         assert_eq!(parsed.tag, data.tag);
         assert_eq!(parsed.ciphertext, data.ciphertext);
+
+        // Verify ATProto IPLD bytes format: {"$bytes": "<base64>"}
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(
+            value["tag"]["$bytes"].is_string(),
+            "tag must serialize as {{\"$bytes\": \"...\"}} per ATProto spec"
+        );
+        assert!(
+            value["ciphertext"]["$bytes"].is_string(),
+            "ciphertext must serialize as {{\"$bytes\": \"...\"}} per ATProto spec"
+        );
     }
 
     #[test]
@@ -225,6 +263,13 @@ mod tests {
         assert_eq!(parsed.v, data.v);
         assert_eq!(parsed.ciphersuite, data.ciphersuite);
         assert_eq!(parsed.key_package, data.key_package);
+
+        // Verify ATProto IPLD bytes format: {"$bytes": "<base64>"}
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(
+            value["keyPackage"]["$bytes"].is_string(),
+            "keyPackage must serialize as {{\"$bytes\": \"...\"}} per ATProto spec"
+        );
     }
 
     #[test]
@@ -245,5 +290,12 @@ mod tests {
         assert_eq!(parsed.v, data.v);
         assert_eq!(parsed.scan_pubkey, data.scan_pubkey);
         assert_eq!(parsed.device_name, data.device_name);
+
+        // Verify ATProto IPLD bytes format: {"$bytes": "<base64>"}
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(
+            value["scanPubkey"]["$bytes"].is_string(),
+            "scanPubkey must serialize as {{\"$bytes\": \"...\"}} per ATProto spec"
+        );
     }
 }
