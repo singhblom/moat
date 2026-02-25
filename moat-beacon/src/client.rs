@@ -183,6 +183,22 @@ impl MoatCliClient {
             .context("parse poll response")
     }
 
+    /// `POST /poll/:seconds` — set auto-poll interval; `0` disables polling.
+    pub async fn set_poll_interval(&self, seconds: u64) -> Result<()> {
+        let resp = self
+            .http
+            .post(format!("{}/poll/{seconds}", self.base_url))
+            .send()
+            .await
+            .context("POST /poll/:seconds")?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body: Value = resp.json().await.unwrap_or_default();
+            anyhow::bail!("set_poll_interval failed ({status}): {body}");
+        }
+        Ok(())
+    }
+
     /// `POST /watch`
     pub async fn watch_handle(&self, handle: &str) -> Result<()> {
         let resp = self

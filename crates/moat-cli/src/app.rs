@@ -383,6 +383,12 @@ pub struct App {
     /// instances use this URL for both authentication and peer DID resolution.
     /// Used for integration tests against a local Postern instance.
     pds_url: Option<String>,
+
+    /// Override for the automatic poll interval, set via `POST /poll/{seconds}`.
+    /// `None`  — use the default adaptive interval (5s idle, 30s with Drawbridge).
+    /// `Some(0)` — disable auto-polling entirely (push-only mode for tests).
+    /// `Some(n)` — poll every n seconds regardless of Drawbridge state.
+    pub(crate) poll_interval_override: Option<u64>,
 }
 
 impl App {
@@ -500,6 +506,7 @@ impl App {
             event_broadcast: None,
             pending_poll_result: None,
             pds_url,
+            poll_interval_override: None,
         })
     }
 
@@ -740,6 +747,12 @@ impl App {
         self.watched_dids.remove(did);
     }
 
+    /// HTTP: set the automatic poll interval in seconds.
+    /// `0` disables auto-polling (push-only mode); any positive value sets the interval.
+    pub fn api_set_poll_interval(&mut self, seconds: u64) {
+        self.poll_interval_override = Some(seconds);
+    }
+
     // ── End HTTP API methods ──────────────────────────────────────────
 
     /// Handle a key event, returns true if should quit
@@ -770,22 +783,29 @@ impl App {
             self.spawn_auto_login();
         }
 
-        // Spawn background poll for new messages
-        // Use 30s interval when Drawbridge connections are active, 5s otherwise
+        // Spawn background poll for new messages.
+        // Priority: poll_interval_override > adaptive (30s with Drawbridge, 5s idle).
+        // Some(0) disables auto-polling entirely (push-only mode).
         if self.client.is_some() && !self.poll_in_flight {
-            let poll_interval_secs = if self.drawbridge.active_connection_count() > 0 {
-                30
-            } else {
-                5
+            let poll_interval_secs = match self.poll_interval_override {
+                Some(0) => None, // disabled
+                Some(n) => Some(n),
+                None => Some(if self.drawbridge.active_connection_count() > 0 {
+                    30
+                } else {
+                    5
+                }),
             };
-            let should_poll = self
-                .last_poll
-                .map(|t| t.elapsed().as_secs() >= poll_interval_secs)
-                .unwrap_or(true);
+            if let Some(interval) = poll_interval_secs {
+                let should_poll = self
+                    .last_poll
+                    .map(|t| t.elapsed().as_secs() >= interval)
+                    .unwrap_or(true);
 
-            if should_poll {
-                self.last_poll = Some(Instant::now());
-                self.spawn_poll_messages();
+                if should_poll {
+                    self.last_poll = Some(Instant::now());
+                    self.spawn_poll_messages();
+                }
             }
         }
 

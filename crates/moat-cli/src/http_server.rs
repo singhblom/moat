@@ -250,6 +250,15 @@ async fn delete_watch(
     Json(json!({ "ok": true }))
 }
 
+async fn post_poll_interval(
+    State(state): State<Arc<ServerState>>,
+    Path(seconds): Path<u64>,
+) -> Json<Value> {
+    let mut app = state.app.lock().await;
+    app.api_set_poll_interval(seconds);
+    Json(json!({ "ok": true, "poll_interval_seconds": seconds }))
+}
+
 async fn post_poll(State(state): State<Arc<ServerState>>) -> impl IntoResponse {
     let rx = {
         let mut app = state.app.lock().await;
@@ -370,6 +379,7 @@ pub async fn run_http(
         .route("/watch", post(post_watch))
         .route("/watch/:did", delete(delete_watch))
         .route("/poll", post(post_poll))
+        .route("/poll/:seconds", post(post_poll_interval))
         .route("/events", get(get_events))
         .with_state(state);
 

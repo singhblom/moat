@@ -6,10 +6,12 @@
 //! - One **`moat-cli --http`** subprocess per participant, each connected to
 //!   Postern through the `proxy-pds` Toxiproxy proxy.
 //! - A typed [`MoatCliClient`] for each participant.
+//! - Optionally a **Drawbridge** WebSocket relay (via [`TestWorld::new_with_drawbridge`]).
 //!
 //! Everything is cleaned up when `TestWorld` is dropped.
 
 use crate::client::MoatCliClient;
+use crate::drawbridge::DrawbridgeProcess;
 use crate::toxiproxy::{ProxyHandle, ToxiproxyManager};
 use anyhow::{Context, Result};
 use moat_postern::{AccountConfig, PosternConfig, PosternHandle};
@@ -47,13 +49,19 @@ pub struct TestWorld {
     pub pds_proxy: ProxyHandle,
     /// Direct Postern URL (useful for out-of-band inspection).
     postern_url: String,
+    /// Optional Drawbridge relay (present when created via [`TestWorld::new_with_drawbridge`]).
+    _drawbridge: Option<DrawbridgeProcess>,
+    /// `proxy-db-verify` proxy: routes Drawbridge's PDS verification calls through
+    /// Toxiproxy so tests can inject faults on the Drawbridge → Postern path.
+    /// Only present when Drawbridge is enabled.
+    pub db_verify_proxy: Option<ProxyHandle>,
     participants: HashMap<String, ParticipantProcess>,
 }
 
 impl TestWorld {
-    /// Build a new `TestWorld` with the given participant handles.
+    /// Build a new `TestWorld` with the given participant handles (no Drawbridge).
     ///
-    /// Accounts are created on Postern using simple `did:test:<handle>` DIDs.
+    /// Accounts are created on Postern using `did:plc:<handle>` DIDs.
     /// All PDS traffic is routed through a `proxy-pds` Toxiproxy proxy so that
     /// tests can inject network faults via [`TestWorld::toxiproxy`].
     ///
@@ -62,11 +70,32 @@ impl TestWorld {
     ///
     /// `handle_suffix` is appended to every handle, e.g. `".postern.test"`.
     pub async fn new(handles: &[&str], handle_suffix: &str) -> Result<Self> {
-        // Build Postern accounts.
+        Self::build(handles, handle_suffix, false).await
+    }
+
+    /// Build a `TestWorld` with Drawbridge enabled.
+    ///
+    /// In addition to the base setup, this:
+    /// - Spawns a Drawbridge WebSocket relay.
+    /// - Creates a `proxy-db-verify` Toxiproxy proxy routing Drawbridge's
+    ///   DID-resolution + PDS-verification calls to Postern.
+    /// - Configures Postern's DID documents to advertise `proxy-db-verify` as
+    ///   the PDS endpoint.
+    /// - Passes `--drawbridge-url ws://drawbridge/ws` to each moat-cli process.
+    ///
+    /// Account DIDs use `did:plc:<handle>` format (required by Drawbridge's
+    /// `PLCResolver`).
+    pub async fn new_with_drawbridge(handles: &[&str], handle_suffix: &str) -> Result<Self> {
+        Self::build(handles, handle_suffix, true).await
+    }
+
+    async fn build(handles: &[&str], handle_suffix: &str, with_drawbridge: bool) -> Result<Self> {
+        // Build Postern accounts.  Use did:plc: format so Drawbridge's
+        // PLCResolver accepts them (it enforces the did:plc: prefix).
         let accounts: Vec<AccountConfig> = handles
             .iter()
             .map(|h| AccountConfig {
-                did: format!("did:test:{h}"),
+                did: format!("did:plc:{h}"),
                 handle: format!("{h}{handle_suffix}"),
             })
             .collect();
@@ -81,13 +110,10 @@ impl TestWorld {
         let postern_url = postern.url().to_string();
 
         // Spawn Toxiproxy and create a proxy in front of Postern.
-        // moat-cli processes will use the proxy URL instead of connecting
-        // directly to Postern, so tests can inject faults later.
         let toxiproxy = ToxiproxyManager::spawn()
             .await
             .context("spawn toxiproxy")?;
 
-        // Toxiproxy expects the upstream as "host:port" (no scheme).
         let postern_addr = postern_url
             .strip_prefix("http://")
             .unwrap_or(&postern_url)
@@ -97,20 +123,50 @@ impl TestWorld {
             .await
             .context("create proxy-pds")?;
 
+        // Optional Drawbridge setup.
+        let (drawbridge, db_verify_proxy, drawbridge_ws_endpoint) = if with_drawbridge {
+            // proxy-db-verify routes Drawbridge → Postern so we can fault-inject
+            // Drawbridge's DID resolution and key-package verification calls.
+            let db_verify = toxiproxy
+                .create_proxy("proxy-db-verify", &postern_addr)
+                .await
+                .context("create proxy-db-verify")?;
+
+            // Tell Postern to advertise proxy-db-verify as the PDS endpoint in
+            // all DID documents.  Drawbridge will resolve test DIDs and then call
+            // com.atproto.repo.listRecords through the proxy.
+            postern.set_pds_endpoint_override(&db_verify.url);
+
+            // Spawn Drawbridge with PLC_BASE_URL pointing at proxy-db-verify.
+            let db = DrawbridgeProcess::spawn(&db_verify.url)
+                .await
+                .context("spawn drawbridge")?;
+
+            let ws_endpoint = db.ws_endpoint();
+            (Some(db), Some(db_verify), Some(ws_endpoint))
+        } else {
+            (None, None, None)
+        };
+
         let mut world = Self {
             _postern: postern,
             toxiproxy,
             pds_proxy: pds_proxy.clone(),
             postern_url,
+            _drawbridge: drawbridge,
+            db_verify_proxy,
             participants: HashMap::new(),
         };
 
-        // Spawn a moat-cli --http process for each participant, configured to
-        // reach Postern through the proxy.
         for &handle in handles {
             let full_handle = format!("{handle}{handle_suffix}");
             world
-                .spawn_participant(handle, &full_handle, &pds_proxy.url.clone())
+                .spawn_participant(
+                    handle,
+                    &full_handle,
+                    &pds_proxy.url.clone(),
+                    drawbridge_ws_endpoint.as_deref(),
+                )
                 .await
                 .with_context(|| format!("spawning participant {handle}"))?;
         }
@@ -138,6 +194,7 @@ impl TestWorld {
         short_handle: &str,
         full_handle: &str,
         pds_url: &str,
+        drawbridge_ws: Option<&str>,
     ) -> Result<()> {
         let http_port = free_port()?;
         let http_addr = format!("127.0.0.1:{http_port}");
@@ -145,15 +202,21 @@ impl TestWorld {
 
         let moat_cli_bin = moat_cli_binary()?;
 
+        let mut args = vec![
+            "--storage-dir".to_string(),
+            storage.path().to_str().unwrap().to_string(),
+            "--pds-url".to_string(),
+            pds_url.to_string(),
+            "--http".to_string(),
+            http_addr.clone(),
+        ];
+        if let Some(db_url) = drawbridge_ws {
+            args.push("--drawbridge-url".to_string());
+            args.push(db_url.to_string());
+        }
+
         let child = Command::new(&moat_cli_bin)
-            .args([
-                "--storage-dir",
-                storage.path().to_str().unwrap(),
-                "--pds-url",
-                pds_url,
-                "--http",
-                &http_addr,
-            ])
+            .args(&args)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()

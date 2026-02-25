@@ -124,6 +124,11 @@ impl Store {
             .find(|(_, d)| d.as_str() == did)
             .map(|(h, _)| h.clone())
     }
+
+    /// Returns `true` if `did` is registered as any account's DID.
+    pub fn handles_contain_did(&self, did: &str) -> bool {
+        self.handles.values().any(|d| d.as_str() == did)
+    }
 }
 
 fn hex_encode(bytes: &[u8]) -> String {

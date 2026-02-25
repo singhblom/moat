@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -99,10 +100,18 @@ type PLCResolver struct {
 }
 
 // NewPLCResolver creates a new PLC directory resolver.
+//
+// If the PLC_BASE_URL environment variable is set, it overrides the default
+// https://plc.directory base URL.  This is used in integration tests where
+// Postern acts as a local PLC directory for test DIDs.
 func NewPLCResolver(cache *DIDCache) *PLCResolver {
+	baseURL := "https://plc.directory"
+	if v := os.Getenv("PLC_BASE_URL"); v != "" {
+		baseURL = v
+	}
 	return &PLCResolver{
 		client:  &http.Client{Timeout: 10 * time.Second},
-		baseURL: "https://plc.directory",
+		baseURL: baseURL,
 		cache:   cache,
 	}
 }

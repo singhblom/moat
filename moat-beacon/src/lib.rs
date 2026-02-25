@@ -18,12 +18,16 @@
 //! - [`actions`] — `Action` enum with `prop_flat_map` fold strategy.
 //! - [`invariants`] — `ScenarioState`, `drain_events`, invariant checkers.
 //!
+//! # Phase 4 (complete)
+//! - [`drawbridge`] — `DrawbridgeProcess`: build Go binary, spawn, health-check.
+//! - [`TestWorld::new_with_drawbridge`] — extended world with push delivery.
+//!
 //! # Future phases
-//! - Phase 4: Drawbridge subprocess management.
 //! - Phase 5: `beacon run <name>` / `beacon replay <seed>` CLI.
 
 pub mod actions;
 pub mod client;
+pub mod drawbridge;
 pub mod invariants;
 pub mod toxiproxy;
 pub mod world;

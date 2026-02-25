@@ -1,7 +1,7 @@
 //! axum HTTP server and all XRPC handlers.
 
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use axum::{
     body::Bytes,
@@ -68,6 +68,9 @@ fn base32_lower_nopad(data: &[u8]) -> String {
 struct AppState {
     store: SharedStore,
     server_url: String,
+    /// Shared override for the `serviceEndpoint` in DID documents.
+    /// Set via `PosternHandle::set_pds_endpoint_override` at runtime.
+    pds_endpoint_override: Arc<Mutex<Option<String>>>,
 }
 
 // ── Error helper ─────────────────────────────────────────────────────────────
@@ -84,6 +87,12 @@ async fn did_document(State(state): State<AppState>) -> Json<Value> {
         .strip_prefix("http://")
         .unwrap_or(&state.server_url);
     let did = format!("did:web:{}", host.replace(':', "%3A"));
+    let pds_url = state
+        .pds_endpoint_override
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or_else(|| state.server_url.clone());
 
     Json(json!({
         "@context": ["https://www.w3.org/ns/did/v1"],
@@ -91,9 +100,56 @@ async fn did_document(State(state): State<AppState>) -> Json<Value> {
         "service": [{
             "id": "#atproto_pds",
             "type": "AtprotoPersonalDataServer",
-            "serviceEndpoint": state.server_url,
+            "serviceEndpoint": pds_url,
         }]
     }))
+}
+
+// ── GET /:did — per-user DID document (PLC directory compatible) ──────────────
+//
+// Drawbridge's PLCResolver resolves `did:plc:*` DIDs by hitting
+// `{PLC_BASE_URL}/{did}`.  When `PLC_BASE_URL` is set to Postern's address
+// (via `proxy-db-verify`), this handler returns the DID document for any
+// pre-configured account DID.
+
+async fn did_document_for_user(
+    State(state): State<AppState>,
+    axum::extract::Path(did): axum::extract::Path<String>,
+) -> Response {
+    let store = match state.store.read() {
+        Ok(s) => s,
+        Err(_) => {
+            return atproto_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "InternalError",
+                "store lock poisoned",
+            )
+        }
+    };
+    let exists = store.handles_contain_did(&did);
+    drop(store);
+
+    if !exists {
+        return atproto_error(StatusCode::NOT_FOUND, "NotFound", "DID not found");
+    }
+
+    let pds_url = state
+        .pds_endpoint_override
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or_else(|| state.server_url.clone());
+
+    Json(json!({
+        "@context": ["https://www.w3.org/ns/did/v1"],
+        "id": did,
+        "service": [{
+            "id": "#atproto_pds",
+            "type": "AtprotoPersonalDataServer",
+            "serviceEndpoint": pds_url,
+        }]
+    }))
+    .into_response()
 }
 
 // ── GET /xrpc/com.atproto.identity.resolveHandle ─────────────────────────────
@@ -443,6 +499,9 @@ fn build_router(state: AppState) -> Router {
             post(upload_blob),
         )
         .route("/xrpc/com.atproto.sync.getBlob", get(get_blob))
+        // PLC-directory-compatible per-user DID document lookup.
+        // Drawbridge hits `{PLC_BASE_URL}/{did}` to resolve test DIDs.
+        .route("/{did}", get(did_document_for_user))
         .with_state(state)
 }
 
@@ -471,9 +530,12 @@ pub async fn spawn_postern(config: PosternConfig) -> PosternHandle {
     let local_addr = listener.local_addr().expect("no local address");
     let server_url = format!("http://127.0.0.1:{}", local_addr.port());
 
+    let pds_endpoint_override: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+
     let state = AppState {
         store,
         server_url: server_url.clone(),
+        pds_endpoint_override: pds_endpoint_override.clone(),
     };
     let app = build_router(state);
 
@@ -491,5 +553,6 @@ pub async fn spawn_postern(config: PosternConfig) -> PosternHandle {
         url: server_url,
         data_dir,
         shutdown: Some(shutdown_tx),
+        pds_endpoint_override,
     }
 }

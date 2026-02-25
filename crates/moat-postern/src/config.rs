@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 /// A pre-configured account on Postern.
 pub struct AccountConfig {
-    /// The account's ATProto DID (e.g. `"did:test:alice"`).
+    /// The account's ATProto DID (e.g. `"did:plc:alice"`).
     pub did: String,
     /// The account's handle (e.g. `"alice.postern.test"`).
     pub handle: String,
@@ -27,6 +28,13 @@ pub struct PosternHandle {
     pub(crate) data_dir: PathBuf,
     /// Sending on this channel signals the server to shut down.
     pub(crate) shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    /// Shared override for the `serviceEndpoint` field in DID documents.
+    ///
+    /// When `Some(url)`, all DID documents returned by Postern advertise
+    /// this URL as their PDS endpoint instead of Postern's own bind address.
+    /// Used by `TestWorld` to route Drawbridge's PDS verification calls
+    /// through a `proxy-db-verify` Toxiproxy proxy.
+    pub(crate) pds_endpoint_override: Arc<Mutex<Option<String>>>,
 }
 
 impl PosternHandle {
@@ -38,6 +46,14 @@ impl PosternHandle {
     /// Path to the on-disk state directory (timestamped under `/tmp/postern/`).
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
+    }
+
+    /// Override the `serviceEndpoint` advertised in all DID documents.
+    ///
+    /// Set this to the `proxy-db-verify` Toxiproxy URL so Drawbridge's
+    /// key-package verification calls are routed through the proxy.
+    pub fn set_pds_endpoint_override(&self, url: &str) {
+        *self.pds_endpoint_override.lock().unwrap() = Some(url.to_string());
     }
 }
 
