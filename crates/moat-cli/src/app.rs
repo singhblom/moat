@@ -295,6 +295,13 @@ pub(crate) enum BgEvent {
     },
 }
 
+/// Stats returned from a completed poll (for HTTP API awaitable poll).
+#[derive(Default)]
+pub(crate) struct PollStats {
+    pub new_messages: usize,
+    pub new_conversations: usize,
+}
+
 /// Main application state
 pub struct App {
     pub keys: KeyStore,
@@ -357,7 +364,7 @@ pub struct App {
     pub(crate) bg_rx: mpsc::UnboundedReceiver<BgEvent>,
 
     // Prevent overlapping background tasks
-    poll_in_flight: bool,
+    pub(crate) poll_in_flight: bool,
 
     // Drawbridge connection manager
     pub(crate) drawbridge: DrawbridgeManager,
@@ -365,6 +372,12 @@ pub struct App {
     pub(crate) drawbridge_url: Option<String>,
     /// Last time we tried to reconnect disconnected partner Drawbridges
     last_drawbridge_retry: Option<Instant>,
+
+    // HTTP API support (Some only when running in --http mode)
+    /// Broadcast channel for SSE events.
+    pub(crate) event_broadcast: Option<tokio::sync::broadcast::Sender<String>>,
+    /// Oneshot sender to resolve a pending POST /poll request.
+    pub(crate) pending_poll_result: Option<tokio::sync::oneshot::Sender<PollStats>>,
 }
 
 impl App {
@@ -478,6 +491,8 @@ impl App {
             drawbridge,
             drawbridge_url: resolved_drawbridge_url,
             last_drawbridge_retry: None,
+            event_broadcast: None,
+            pending_poll_result: None,
         })
     }
 
@@ -587,6 +602,135 @@ impl App {
     pub fn clear_error(&mut self) {
         self.error_message = None;
     }
+
+    // ── HTTP API methods ──────────────────────────────────────────────
+
+    /// HTTP: login with explicit credentials.
+    pub async fn api_login(&mut self, handle: &str, password: &str) -> Result<()> {
+        self.login_form.handle = handle.to_string();
+        self.login_form.password = password.to_string();
+        self.do_login().await
+    }
+
+    /// HTTP: set active conversation by group_id hex, loads messages.
+    pub fn api_set_active_conversation(&mut self, group_id_hex: Option<&str>) -> Result<()> {
+        match group_id_hex {
+            None => {
+                self.active_conversation = None;
+                self.messages.clear();
+                Ok(())
+            }
+            Some(id) => {
+                let idx = self
+                    .conversations
+                    .iter()
+                    .position(|c| c.id == id)
+                    .ok_or_else(|| AppError::Other(format!("conversation not found: {id}")))?;
+                self.active_conversation = Some(idx);
+                self.load_messages()
+            }
+        }
+    }
+
+    /// HTTP: read messages for any conversation without changing active state.
+    pub fn api_get_messages(&self, group_id_hex: &str) -> Vec<crate::keystore::StoredMessage> {
+        self.keys
+            .load_messages(group_id_hex)
+            .unwrap_or_default()
+            .messages
+    }
+
+    /// HTTP: send message to active conversation.
+    pub fn api_send_message(&mut self, text: String) -> Result<()> {
+        self.input_buffer = text;
+        self.cursor_position = 0;
+        self.send_message_nonblocking()
+    }
+
+    /// HTTP: send an emoji reaction by explicit message_id hex.
+    pub async fn api_send_reaction(&mut self, message_id_hex: &str, emoji: &str) -> Result<()> {
+        if self.client.is_none() {
+            return Err(AppError::NotLoggedIn);
+        }
+        let conv_idx = self.active_conversation.ok_or(AppError::NoConversation)?;
+        let conv_id = self.conversations[conv_idx].id.clone();
+
+        let target_message_id = hex::decode(message_id_hex)
+            .map_err(|e| AppError::Other(format!("Invalid message_id hex: {}", e)))?;
+
+        let key_bundle = self.keys.load_identity_key()?;
+        let group_id = hex::decode(&conv_id)
+            .map_err(|e| AppError::Other(format!("Invalid group ID: {}", e)))?;
+
+        let current_epoch = self.mls.get_group_epoch(&group_id)?.unwrap_or(1);
+        let event = moat_core::Event::reaction(
+            group_id.clone(),
+            current_epoch,
+            &target_message_id,
+            emoji,
+        );
+
+        let encrypted = self.mls.encrypt_event(&group_id, &key_bundle, &event)?;
+        self.own_published_tags.insert(encrypted.tag);
+        self.save_mls_state()?;
+        self.keys
+            .store_group_state(&conv_id, &encrypted.new_group_state)?;
+
+        let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
+        client
+            .publish_event(&encrypted.tag, &encrypted.ciphertext)
+            .await?;
+
+        self.tag_map.insert(encrypted.tag, conv_id);
+        Ok(())
+    }
+
+    /// HTTP: add a DID to the watch list.
+    pub async fn api_watch_handle(&mut self, handle: &str) -> Result<()> {
+        self.watch_handle(handle).await
+    }
+
+    /// HTTP: start a new conversation with recipient_handle.
+    pub async fn api_start_conversation(&mut self, recipient_handle: &str) -> Result<String> {
+        let conv_count_before = self.conversations.len();
+        self.start_new_conversation(recipient_handle).await?;
+        // Return the group_id of the newly created or selected conversation
+        let id = if self.conversations.len() > conv_count_before {
+            self.conversations.last().map(|c| c.id.clone())
+        } else {
+            self.active_conversation.and_then(|i| self.conversations.get(i).map(|c| c.id.clone()))
+        };
+        id.ok_or_else(|| AppError::Other("failed to determine conversation id".to_string()))
+    }
+
+    /// HTTP: delete a conversation locally.
+    pub fn api_delete_conversation(&mut self, group_id_hex: &str) -> Result<()> {
+        self.keys.delete_group_metadata(group_id_hex)?;
+        self.conversations.retain(|c| c.id != group_id_hex);
+        if let Some(idx) = self.active_conversation {
+            if idx >= self.conversations.len() {
+                self.active_conversation = if self.conversations.is_empty() {
+                    None
+                } else {
+                    Some(self.conversations.len() - 1)
+                };
+                self.messages.clear();
+            }
+        }
+        Ok(())
+    }
+
+    /// HTTP: list DIDs currently being watched for invites.
+    pub fn api_watched_dids(&self) -> Vec<String> {
+        self.watched_dids.iter().cloned().collect()
+    }
+
+    /// HTTP: remove a DID from the watch list.
+    pub fn api_unwatch_did(&mut self, did: &str) {
+        self.watched_dids.remove(did);
+    }
+
+    // ── End HTTP API methods ──────────────────────────────────────────
 
     /// Handle a key event, returns true if should quit
     pub async fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
@@ -714,7 +858,7 @@ impl App {
     }
 
     /// Spawn the network portion of message polling in a background task.
-    fn spawn_poll_messages(&mut self) {
+    pub(crate) fn spawn_poll_messages(&mut self) {
         let client = match self.client.as_ref() {
             Some(c) => c.clone(),
             None => return,
@@ -904,7 +1048,19 @@ impl App {
                 new_rkeys,
             } => {
                 self.poll_in_flight = false;
-                self.process_poll_results(participant_events, watched_events, new_rkeys);
+                let stats =
+                    self.process_poll_results(participant_events, watched_events, new_rkeys);
+                // Notify HTTP API waiter (if any).
+                if let Some(tx) = self.pending_poll_result.take() {
+                    let _ = tx.send(stats);
+                }
+                // Broadcast SSE poll_complete event.
+                if let Some(ref bcast) = self.event_broadcast {
+                    let payload = serde_json::json!({
+                        "type": "poll_complete",
+                    });
+                    let _ = bcast.send(payload.to_string());
+                }
             }
             BgEvent::PollError(e) => {
                 self.poll_in_flight = false;
@@ -1894,7 +2050,9 @@ impl App {
         participant_events: Vec<(Vec<usize>, moat_atproto::EventRecord, String)>,
         mut watched_events: Vec<(String, moat_atproto::EventRecord)>,
         new_rkeys: Vec<(String, String)>,
-    ) {
+    ) -> PollStats {
+        let conv_count_before = self.conversations.len();
+        let mut new_messages: usize = 0;
         let my_did = self
             .client
             .as_ref()
@@ -1920,7 +2078,9 @@ impl App {
                 self.debug_log.log(&format!(
                     "poll: tag matched: {} rkey={}", tag_hex, event_record.rkey
                 ));
-                self.process_matched_event(&conv_indices, &event_record, &my_did);
+                if self.process_matched_event(&conv_indices, &event_record, &my_did) {
+                    new_messages += 1;
+                }
             } else {
                 self.debug_log.log(&format!(
                     "poll: unknown tag {} rkey={} from {}, trying as welcome",
@@ -1969,7 +2129,9 @@ impl App {
             if self.own_published_tags.contains(&event_record.tag) {
                 continue;
             }
-            self.process_matched_event(&conv_indices, &event_record, &my_did);
+            if self.process_matched_event(&conv_indices, &event_record, &my_did) {
+                new_messages += 1;
+            }
         }
 
         // Save MLS state if modified
@@ -1990,25 +2152,32 @@ impl App {
                 ));
             }
         }
+
+        PollStats {
+            new_messages,
+            new_conversations: self.conversations.len().saturating_sub(conv_count_before),
+        }
     }
 
     /// Decrypt and handle a single event whose tag matched the tag_map.
+    /// Returns `true` if a new message was stored (for poll stats counting).
     fn process_matched_event(
         &mut self,
         conv_indices: &[usize],
         event_record: &moat_atproto::EventRecord,
         my_did: &str,
-    ) {
+    ) -> bool {
         let conv_id = match self.tag_map.get(&event_record.tag).cloned() {
             Some(id) => id,
-            None => return,
+            None => return false,
         };
         self.mls.mark_tag_seen(&event_record.tag);
         let group_id = match hex::decode(&conv_id) {
             Ok(id) => id,
-            Err(_) => return,
+            Err(_) => return false,
         };
 
+        let mut msg_stored = false;
         match self.mls.decrypt_event(&group_id, &event_record.ciphertext) {
             Ok(outcome) => {
                 for w in outcome.warnings() {
@@ -2060,6 +2229,8 @@ impl App {
                         if let Err(e) = self.keys.append_message(&conv_id, stored_msg) {
                             self.debug_log
                                 .log(&format!("poll: failed to store message: {}", e));
+                        } else {
+                            msg_stored = true;
                         }
 
                         if self.active_conversation == conv_idx {
@@ -2198,6 +2369,7 @@ impl App {
                     .log(&format!("poll: decryption failed: {}", e));
             }
         }
+        msg_stored
     }
 
     /// Synchronous welcome processing (no handle resolution — uses DID as name).

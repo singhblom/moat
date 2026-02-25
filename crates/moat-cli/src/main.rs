@@ -3,6 +3,7 @@
 mod app;
 mod blob_cache;
 mod drawbridge;
+mod http_server;
 mod image_processing;
 mod keystore;
 mod message_helpers;
@@ -34,6 +35,10 @@ struct Args {
     /// Persisted after first use.
     #[arg(long = "drawbridge-url", global = true)]
     drawbridge_url: Option<String>,
+
+    /// Run HTTP API server on this address instead of the TUI (e.g. 127.0.0.1:8080)
+    #[arg(long = "http", global = true)]
+    http: Option<String>,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -126,7 +131,13 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     match args.command {
-        None => run_tui(args.storage_dir, args.drawbridge_url).await,
+        None => {
+            if let Some(addr) = args.http {
+                http_server::run_http(args.storage_dir, args.drawbridge_url, &addr).await
+            } else {
+                run_tui(args.storage_dir, args.drawbridge_url).await
+            }
+        }
         Some(Command::Fetch { repository }) => cmd_fetch(args.storage_dir, &repository).await,
         Some(Command::Status) => cmd_status(args.storage_dir).await,
         Some(Command::SendTest { tag, message }) => {

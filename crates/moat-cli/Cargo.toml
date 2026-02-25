@@ -33,6 +33,8 @@ ratatui-image = { version = "10", default-features = false, features = ["tokio",
 tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
 futures-util = "0.3"
 base64 = { workspace = true }
+axum = { version = "0.7", features = ["json", "macros"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
