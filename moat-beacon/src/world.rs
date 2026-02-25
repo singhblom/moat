@@ -2,13 +2,15 @@
 //!
 //! Each `TestWorld` owns:
 //! - A **Postern** in-process PDS.
-//! - One **`moat-cli --http`** subprocess per participant, each with an
-//!   isolated temp storage directory.
+//! - A **Toxiproxy** subprocess with one named proxy per service.
+//! - One **`moat-cli --http`** subprocess per participant, each connected to
+//!   Postern through the `proxy-pds` Toxiproxy proxy.
 //! - A typed [`MoatCliClient`] for each participant.
 //!
 //! Everything is cleaned up when `TestWorld` is dropped.
 
 use crate::client::MoatCliClient;
+use crate::toxiproxy::{ProxyHandle, ToxiproxyManager};
 use anyhow::{Context, Result};
 use moat_postern::{AccountConfig, PosternConfig, PosternHandle};
 use std::{
@@ -39,6 +41,11 @@ impl Drop for ParticipantProcess {
 /// Central orchestrator for a beacon integration scenario.
 pub struct TestWorld {
     _postern: PosternHandle,
+    /// Toxiproxy subprocess — kept alive so proxies remain functional.
+    pub toxiproxy: ToxiproxyManager,
+    /// The `proxy-pds` proxy: all participants' PDS traffic passes through it.
+    pub pds_proxy: ProxyHandle,
+    /// Direct Postern URL (useful for out-of-band inspection).
     postern_url: String,
     participants: HashMap<String, ParticipantProcess>,
 }
@@ -47,6 +54,9 @@ impl TestWorld {
     /// Build a new `TestWorld` with the given participant handles.
     ///
     /// Accounts are created on Postern using simple `did:test:<handle>` DIDs.
+    /// All PDS traffic is routed through a `proxy-pds` Toxiproxy proxy so that
+    /// tests can inject network faults via [`TestWorld::toxiproxy`].
+    ///
     /// All processes are ready (have passed their health check) when this
     /// returns.
     ///
@@ -61,6 +71,7 @@ impl TestWorld {
             })
             .collect();
 
+        // Spawn the in-process PDS.
         let postern = moat_postern::spawn_postern(PosternConfig {
             accounts,
             port: None,
@@ -69,17 +80,37 @@ impl TestWorld {
         .await;
         let postern_url = postern.url().to_string();
 
+        // Spawn Toxiproxy and create a proxy in front of Postern.
+        // moat-cli processes will use the proxy URL instead of connecting
+        // directly to Postern, so tests can inject faults later.
+        let toxiproxy = ToxiproxyManager::spawn()
+            .await
+            .context("spawn toxiproxy")?;
+
+        // Toxiproxy expects the upstream as "host:port" (no scheme).
+        let postern_addr = postern_url
+            .strip_prefix("http://")
+            .unwrap_or(&postern_url)
+            .to_string();
+        let pds_proxy = toxiproxy
+            .create_proxy("proxy-pds", &postern_addr)
+            .await
+            .context("create proxy-pds")?;
+
         let mut world = Self {
             _postern: postern,
-            postern_url: postern_url.clone(),
+            toxiproxy,
+            pds_proxy: pds_proxy.clone(),
+            postern_url,
             participants: HashMap::new(),
         };
 
-        // Spawn a moat-cli --http process for each participant.
+        // Spawn a moat-cli --http process for each participant, configured to
+        // reach Postern through the proxy.
         for &handle in handles {
             let full_handle = format!("{handle}{handle_suffix}");
             world
-                .spawn_participant(handle, &full_handle, &postern_url.clone())
+                .spawn_participant(handle, &full_handle, &pds_proxy.url.clone())
                 .await
                 .with_context(|| format!("spawning participant {handle}"))?;
         }
@@ -92,7 +123,10 @@ impl TestWorld {
         &self.participants[handle].client
     }
 
-    /// The Postern base URL, e.g. `"http://127.0.0.1:PORT"`.
+    /// The direct Postern base URL, e.g. `"http://127.0.0.1:PORT"`.
+    ///
+    /// Useful for out-of-band PDS inspection; participants communicate through
+    /// `pds_proxy.url` instead.
     pub fn postern_url(&self) -> &str {
         &self.postern_url
     }
@@ -103,7 +137,7 @@ impl TestWorld {
         &mut self,
         short_handle: &str,
         full_handle: &str,
-        postern_url: &str,
+        pds_url: &str,
     ) -> Result<()> {
         let http_port = free_port()?;
         let http_addr = format!("127.0.0.1:{http_port}");
@@ -116,7 +150,7 @@ impl TestWorld {
                 "--storage-dir",
                 storage.path().to_str().unwrap(),
                 "--pds-url",
-                postern_url,
+                pds_url,
                 "--http",
                 &http_addr,
             ])

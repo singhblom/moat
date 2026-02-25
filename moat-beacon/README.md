@@ -10,22 +10,30 @@ invariants at each step.
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  Test process                                       │
-│                                                     │
-│  ┌──────────┐   HTTP    ┌────────────────────────┐  │
-│  │  beacon  │ ────────► │  moat-cli --http (alice)│  │
-│  │  test    │           └─────────────┬──────────┘  │
-│  │          │                         │ XRPC        │
-│  │          │   HTTP    ┌─────────────▼──────────┐  │
-│  │          │ ────────► │  moat-cli --http (bob)  │  │
-│  │          │           └─────────────┬──────────┘  │
-│  │          │                         │ XRPC        │
-│  │          │           ┌─────────────▼──────────┐  │
-│  │          │           │  Postern (in-process)   │  │
-│  └──────────┘           └────────────────────────┘  │
-└─────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  Test process                                                    │
+│                                                                  │
+│  ┌──────────┐   HTTP    ┌─────────────────────┐                  │
+│  │  beacon  │ ────────► │ moat-cli --http      │                  │
+│  │  test    │           │        (alice)       │                  │
+│  │          │           └──────────┬──────────┘                  │
+│  │          │   HTTP    ┌──────────▼──────────┐                  │
+│  │          │ ────────► │ moat-cli --http      │    ┌──────────┐  │
+│  │          │           │        (bob)         ├───►│Toxiproxy │  │
+│  │          │           └─────────────────────┘    │proxy-pds │  │
+│  └──────────┘                                      └────┬─────┘  │
+│                                                         │ XRPC   │
+│                                              ┌──────────▼──────┐ │
+│                                              │ Postern          │ │
+│                                              │ (in-process)     │ │
+│                                              └─────────────────┘ │
+└──────────────────────────────────────────────────────────────────┘
 ```
+
+All XRPC calls from `moat-cli` to Postern pass through the `proxy-pds`
+Toxiproxy proxy. Tests can inject latency, bandwidth limits, or connection
+resets via [`TestWorld::toxiproxy`](src/world.rs) without touching any
+application code.
 
 Each `moat-cli --http` process has an isolated temp storage directory and talks
 to the shared Postern instance. Tests control participants exclusively through
@@ -129,7 +137,7 @@ participant with no conversations must call `watch_handle` before their first
 | Phase | Status | Description |
 |-------|--------|-------------|
 | 1 | ✅ Done | Smoke test: Alice → Bob message delivery |
-| 2 | Planned | Network fault injection via [Toxiproxy](https://github.com/Shopify/toxiproxy) |
+| 2 | ✅ Done | Toxiproxy integration: all connections proxied, fault injection ready |
 | 3 | Planned | Property-based scenarios: random `Action` sequences with `proptest` |
 | 4 | Planned | Drawbridge (WebSocket) integration |
 | 5 | Planned | `beacon run <name>` / `beacon replay <seed>` CLI |
