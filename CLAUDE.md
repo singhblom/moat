@@ -15,6 +15,7 @@ cargo build                  # Build all crates
 cargo test                   # Run all tests
 cargo test -p moat-core      # Run core crypto tests
 cargo test -p moat-atproto   # Run ATProto tests only (3 tests)
+cargo test -p moat-beacon    # Run integration tests (spins up real moat-cli processes)
 cargo run -p moat-cli        # Run the TUI (default, no subcommand)
 
 # Flutter tests
@@ -35,11 +36,13 @@ cargo run -p moat-cli -- export --events /tmp/e.json --repository handle.bsky.so
 
 ## Workspace Structure
 
-Three-crate Rust workspace + Flutter app:
+Rust workspace + Flutter app:
 
 - **moat-core** - Pure MLS cryptography, no network/IO. Provides `MoatSession` API for all crypto operations.
-- **moat-atproto** - Async ATProto client for PDS interactions (key packages, events, stealth addresses).
-- **moat-cli** - Ratatui terminal UI that orchestrates core + atproto.
+- **moat-atproto** - Async ATProto client for PDS interactions (key packages, events, stealth addresses). Has `pds_override` field for routing all calls to a specific PDS (used in integration tests).
+- **moat-cli** - Ratatui terminal UI that orchestrates core + atproto. Also runs as a headless HTTP API server via `--http <addr>`. Accepts `--pds-url <url>` to override the PDS endpoint.
+- **moat-postern** - Minimal in-process ATProto PDS for integration testing. Implements record CRUD, blob upload/download, handle resolution, and session creation. No password validation. Returns real CIDv1 values.
+- **moat-beacon** - Integration test harness. `TestWorld` spins up Postern in-process and one `moat-cli --http` subprocess per participant. `MoatCliClient` provides typed HTTP wrappers for all API endpoints.
 - **moat-flutter/** - Flutter app (Android + Web). Contains its own Rust crate at `moat-flutter/rust/` that wraps moat-core via flutter_rust_bridge.
 
 ## Architecture Principles
@@ -161,6 +164,8 @@ cargo install -f wasm-bindgen-cli  # version must match Cargo.lock (currently 0.
 - **moat-core** — Extensive inline unit tests (`#[cfg(test)]` in each module) covering all crypto primitives. Property-based tests in `crates/moat-core/tests/` using the `proptest` crate, covering blob crypto, padding, tag derivation, message events, transcript integrity, tag scanning, and Drawbridge signatures.
 - **moat-atproto** — Serialization tests in `src/records.rs`.
 - **moat-cli** — Unit tests inline in `src/blob_cache.rs`, `src/message_helpers.rs`, `src/keystore.rs`, and property-based tests in `tests/proptest_drawbridge.rs`.
+- **moat-postern** — Unit tests in `src/store.rs` covering record CRUD, handle/DID resolution, blob storage, cursor-based pagination, and rkey filtering.
+- **moat-beacon** — Integration tests in `tests/`. Each test creates a `TestWorld`, drives participants via `MoatCliClient`, and asserts delivery invariants. Tests require the `moat` binary to be built (auto-built on first run).
 - **moat-flutter (Dart)** — Unit tests in `moat-flutter/test/`:
   - `test/models/` — `Message`, `Conversation`, `BlueskyProfile` JSON roundtrips, `copyWith`, `groupIdHex`, status parsing, `isStale`, `fromApiResponse`.
   - `test/services/` — `ConversationStorage` and `MessageStorage` JSON format tests (save/load, add-or-update, dedup, timestamp sorting, per-group file isolation).

@@ -11,7 +11,9 @@ moat/
 ├── crates/
 │   ├── moat-core/      # Pure MLS logic, no IO
 │   ├── moat-atproto/   # PDS interaction, ATProto client
-│   └── moat-cli/       # Ratatui terminal UI
+│   ├── moat-cli/       # Ratatui terminal UI + HTTP API mode
+│   └── moat-postern/   # Lightweight test PDS (ATProto)
+├── moat-beacon/        # Integration/property test runner
 ├── moat-flutter/       # Flutter app (Android + Web)
 ├── moat-drawbridge/    # Notification relay (Go) [WIP]
 └── lexicons/           # ATProto lexicon definitions
@@ -19,7 +21,9 @@ moat/
 
 - **moat-core** — Pure Rust MLS operations using OpenMLS. Key packages, group management, event encryption/decryption, tag derivation, padding, stealth address crypto.
 - **moat-atproto** — Async ATProto client. Authentication, publishing/fetching records (`social.moat.keyPackage`, `social.moat.event`, `social.moat.stealthAddress`), handle-to-DID resolution.
-- **moat-cli** — Ratatui terminal UI. Login, conversation list, message display, new conversation flow, background polling.
+- **moat-cli** — Ratatui terminal UI. Login, conversation list, message display, new conversation flow, background polling. Also supports `--http <addr>` for a headless HTTP API mode used by integration tests.
+- **moat-postern** — Minimal in-process ATProto PDS for integration testing. Implements just enough of the ATProto XRPC surface (record CRUD, blob upload, sessions) for moat-cli to communicate without hitting a real Bluesky PDS.
+- **moat-beacon** — Integration and property-based test runner. Spins up Postern in-process and moat-cli `--http` subprocesses per participant, drives them via typed HTTP clients, and verifies invariants (message delivery, ordering, no duplicates). Phase 2 will add network fault injection via Toxiproxy.
 - **moat-flutter** — Flutter app (Android + Web) with Rust FFI via flutter_rust_bridge. See [moat-flutter/README.md](moat-flutter/README.md) for build and usage instructions.
 - **moat-drawbridge** — (WIP) Notification relay service in Go. A lightweight WebSocket broker that tells clients *when* to poll, without storing or decrypting messages. Clients authenticate via DID-signed challenge. Supports FCM/APNs push for backgrounded mobile apps. See [notifications-plan.md](notifications-plan.md) for the full design.
 
@@ -37,6 +41,7 @@ Run tests for a specific crate:
 cargo test -p moat-core
 cargo test -p moat-atproto
 cargo test -p moat-cli
+cargo test -p moat-beacon    # Integration tests (spins up real processes)
 ```
 
 ## Usage
@@ -52,6 +57,8 @@ On first run, you'll be prompted to log in with your Bluesky handle and an app p
 | Option | Description |
 |--------|-------------|
 | `-s`, `--storage-dir <PATH>` | Custom storage directory (default: `~/.moat`) |
+| `--pds-url <URL>` | Override the PDS endpoint for all ATProto calls (used by integration tests with Postern) |
+| `--http <ADDR>` | Run as headless HTTP API server instead of TUI (e.g. `127.0.0.1:8080`) |
 
 Test with multiple identities:
 

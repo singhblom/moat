@@ -378,6 +378,11 @@ pub struct App {
     pub(crate) event_broadcast: Option<tokio::sync::broadcast::Sender<String>>,
     /// Oneshot sender to resolve a pending POST /poll request.
     pub(crate) pending_poll_result: Option<tokio::sync::oneshot::Sender<PollStats>>,
+
+    /// PDS URL override from `--pds-url`. When set, all ATProto client
+    /// instances use this URL for both authentication and peer DID resolution.
+    /// Used for integration tests against a local Postern instance.
+    pds_url: Option<String>,
 }
 
 impl App {
@@ -386,6 +391,7 @@ impl App {
     /// If `storage_dir` is `None`, uses the default `~/.moat` directory.
     pub fn new(
         storage_dir: Option<std::path::PathBuf>,
+        pds_url: Option<String>,
         drawbridge_url: Option<String>,
         picker: Picker,
     ) -> Result<Self> {
@@ -493,6 +499,7 @@ impl App {
             last_drawbridge_retry: None,
             event_broadcast: None,
             pending_poll_result: None,
+            pds_url,
         })
     }
 
@@ -807,17 +814,29 @@ impl App {
         };
         let credentials = self.keys.load_credentials().ok();
         let tx = self.bg_tx.clone();
+        let pds_url = self.pds_url.clone();
 
         tokio::spawn(async move {
             // Try session resume first
             if let Some(session) = stored_session {
-                match MoatAtprotoClient::resume_session(
-                    &session.did,
-                    &session.access_jwt,
-                    &session.refresh_jwt,
-                )
-                .await
-                {
+                let resume_result = if let Some(ref url) = pds_url {
+                    MoatAtprotoClient::resume_session_with_pds(
+                        &session.did,
+                        &session.access_jwt,
+                        &session.refresh_jwt,
+                        url,
+                    )
+                    .await
+                    .map(|c| c.with_pds_override(url.clone()))
+                } else {
+                    MoatAtprotoClient::resume_session(
+                        &session.did,
+                        &session.access_jwt,
+                        &session.refresh_jwt,
+                    )
+                    .await
+                };
+                match resume_result {
                     Ok(client) => {
                         let (aj, rj) = client
                             .get_session_tokens()
@@ -837,7 +856,14 @@ impl App {
 
             // Fresh login
             if let Some((handle, password)) = credentials {
-                match MoatAtprotoClient::login(&handle, &password).await {
+                let login_result = if let Some(ref url) = pds_url {
+                    MoatAtprotoClient::login_with_pds(&handle, &password, url)
+                        .await
+                        .map(|c| c.with_pds_override(url.clone()))
+                } else {
+                    MoatAtprotoClient::login(&handle, &password).await
+                };
+                match login_result {
                     Ok(client) => {
                         let (aj, rj) = client.get_session_tokens().await.unwrap_or_default();
                         let _ = tx.send(BgEvent::LoggedIn {
@@ -2468,7 +2494,13 @@ impl App {
 
         self.set_status("Logging in...".to_string());
 
-        let client = MoatAtprotoClient::login(&handle, &password).await?;
+        let client = if let Some(ref pds_url) = self.pds_url {
+            MoatAtprotoClient::login_with_pds(&handle, &password, pds_url)
+                .await?
+                .with_pds_override(pds_url.clone())
+        } else {
+            MoatAtprotoClient::login(&handle, &password).await?
+        };
 
         // Store credentials
         self.keys.store_credentials(&handle, &password)?;

@@ -116,6 +116,14 @@ impl Store {
     pub fn resolve_handle(&self, handle: &str) -> Option<&String> {
         self.handles.get(handle)
     }
+
+    /// Reverse-lookup: return the handle for a DID, or `None` if unknown.
+    pub fn resolve_did(&self, did: &str) -> Option<String> {
+        self.handles
+            .iter()
+            .find(|(_, d)| d.as_str() == did)
+            .map(|(h, _)| h.clone())
+    }
 }
 
 fn hex_encode(bytes: &[u8]) -> String {

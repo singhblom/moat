@@ -332,12 +332,13 @@ fn spawn_headless_loop(app: Arc<tokio::sync::Mutex<App>>) {
 
 pub async fn run_http(
     storage_dir: Option<PathBuf>,
+    pds_url: Option<String>,
     drawbridge_url: Option<String>,
     addr: &str,
 ) -> anyhow::Result<()> {
     // halfblocks picker doesn't query the terminal, safe for headless use
     let picker = ratatui_image::picker::Picker::halfblocks();
-    let mut app = App::new(storage_dir, drawbridge_url, picker)?;
+    let mut app = App::new(storage_dir, pds_url, drawbridge_url, picker)?;
 
     let (broadcast_tx, _) = tokio::sync::broadcast::channel::<String>(256);
     app.event_broadcast = Some(broadcast_tx.clone());

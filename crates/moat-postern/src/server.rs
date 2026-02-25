@@ -19,6 +19,49 @@ use tokio::net::TcpListener;
 use crate::config::{PosternConfig, PosternHandle};
 use crate::store::{SharedStore, Store};
 
+// ── CIDv1 helper ─────────────────────────────────────────────────────────────
+
+/// Compute a valid CIDv1 (raw codec, SHA-256 multihash) for the given bytes.
+///
+/// Returns a multibase base32-lowercase string (prefix `b`), e.g.
+/// `bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku`.
+///
+/// This is the format expected by the atrium library when it parses CID fields
+/// in ATProto XRPC responses.
+fn compute_cid(data: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+
+    let digest = Sha256::digest(data);
+
+    // CIDv1: [version=1][codec=raw(0x55)][sha2-256(0x12)][digest_len=32(0x20)][digest]
+    let mut cid_bytes = vec![0x01u8, 0x55, 0x12, 0x20];
+    cid_bytes.extend_from_slice(&digest);
+
+    // Multibase base32 lowercase (no padding), prefix 'b'.
+    let b32 = base32_lower_nopad(&cid_bytes);
+    format!("b{b32}")
+}
+
+/// Base32 lowercase (RFC 4648 alphabet `a–z`, `2–7`) without padding.
+fn base32_lower_nopad(data: &[u8]) -> String {
+    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz234567";
+    let mut out = String::with_capacity((data.len() * 8 + 4) / 5);
+    let mut buf: u64 = 0;
+    let mut bits: u32 = 0;
+    for &byte in data {
+        buf = (buf << 8) | u64::from(byte);
+        bits += 8;
+        while bits >= 5 {
+            bits -= 5;
+            out.push(ALPHABET[((buf >> bits) & 0x1F) as usize] as char);
+        }
+    }
+    if bits > 0 {
+        out.push(ALPHABET[((buf << (5 - bits)) & 0x1F) as usize] as char);
+    }
+    out
+}
+
 // ── Shared state ─────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -105,11 +148,13 @@ async fn create_record(
         }
     };
     let rkey = input.rkey.unwrap_or_else(|| store.next_rkey());
+    let record_json = serde_json::to_vec(&input.record).unwrap_or_default();
+    let cid = compute_cid(&record_json);
     store.put_record(&input.repo, &input.collection, &rkey, input.record);
     let uri = format!("at://{}/{}/{}", input.repo, input.collection, rkey);
     Json(json!({
         "uri": uri,
-        "cid": "bafyplaceholder",
+        "cid": cid,
         "validationStatus": "unknown",
     }))
     .into_response()
@@ -141,8 +186,8 @@ async fn get_record(
     match store.get_record(&p.repo, &p.collection, &p.rkey) {
         Some(value) => {
             let uri = format!("at://{}/{}/{}", p.repo, p.collection, p.rkey);
-            Json(json!({ "uri": uri, "cid": "bafyplaceholder", "value": value }))
-                .into_response()
+            let cid = compute_cid(&serde_json::to_vec(&value).unwrap_or_default());
+            Json(json!({ "uri": uri, "cid": cid, "value": value })).into_response()
         }
         None => atproto_error(StatusCode::NOT_FOUND, "RecordNotFound", "Record not found"),
     }
@@ -193,7 +238,8 @@ async fn list_records(
         .into_iter()
         .map(|(rkey, val)| {
             let uri = format!("at://{}/{}/{}", p.repo, p.collection, rkey);
-            json!({ "uri": uri, "cid": "bafyplaceholder", "value": val })
+            let cid = compute_cid(&serde_json::to_vec(&val).unwrap_or_default());
+            json!({ "uri": uri, "cid": cid, "value": val })
         })
         .collect();
 
@@ -296,6 +342,75 @@ async fn get_blob(
     }
 }
 
+// ── POST /xrpc/com.atproto.server.createSession ──────────────────────────────
+
+#[derive(Deserialize)]
+struct CreateSessionInput {
+    identifier: String,
+    password: Option<String>,
+}
+
+async fn create_session(
+    State(state): State<AppState>,
+    Json(input): Json<CreateSessionInput>,
+) -> Response {
+    let store = match state.store.read() {
+        Ok(s) => s,
+        Err(_) => {
+            return atproto_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "InternalError",
+                "store lock poisoned",
+            )
+        }
+    };
+
+    // Accept either handle or DID in `identifier`.
+    let (did, handle) = if input.identifier.starts_with("did:") {
+        // Reverse-lookup handle for the given DID
+        let handle = store
+            .resolve_did(&input.identifier)
+            .unwrap_or_else(|| input.identifier.clone());
+        (input.identifier.clone(), handle)
+    } else {
+        match store.resolve_handle(&input.identifier) {
+            Some(did) => (did.clone(), input.identifier.clone()),
+            None => {
+                return atproto_error(
+                    StatusCode::UNAUTHORIZED,
+                    "AuthenticationRequired",
+                    "Handle not found",
+                )
+            }
+        }
+    };
+
+    // No password validation — this is a test PDS.
+    let _ = input.password;
+
+    // Note: `didDoc` is intentionally omitted — atrium parses it via an
+    // IPLD-aware decoder that rejects non-CID strings, which would cause
+    // a multihash parse error for test DIDs like `did:test:alice`.
+    Json(serde_json::json!({
+        "did": did,
+        "handle": handle,
+        "accessJwt": "postern-access-jwt",
+        "refreshJwt": "postern-refresh-jwt",
+    }))
+    .into_response()
+}
+
+// ── POST /xrpc/com.atproto.server.refreshSession ─────────────────────────────
+
+async fn refresh_session() -> Response {
+    // Postern sessions never expire; just return a fresh token pair.
+    Json(serde_json::json!({
+        "accessJwt": "postern-access-jwt",
+        "refreshJwt": "postern-refresh-jwt",
+    }))
+    .into_response()
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 
 fn build_router(state: AppState) -> Router {
@@ -304,6 +419,14 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/xrpc/com.atproto.identity.resolveHandle",
             get(resolve_handle),
+        )
+        .route(
+            "/xrpc/com.atproto.server.createSession",
+            post(create_session),
+        )
+        .route(
+            "/xrpc/com.atproto.server.refreshSession",
+            post(refresh_session),
         )
         .route(
             "/xrpc/com.atproto.repo.createRecord",

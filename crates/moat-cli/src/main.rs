@@ -31,6 +31,12 @@ struct Args {
     #[arg(short = 's', long = "storage-dir", global = true)]
     storage_dir: Option<PathBuf>,
 
+    /// Override PDS base URL for all operations (e.g., http://127.0.0.1:8765).
+    /// When set, all DID resolution is bypassed and every peer lookup uses this
+    /// URL. Intended for integration tests against a local Postern instance.
+    #[arg(long = "pds-url", global = true)]
+    pds_url: Option<String>,
+
     /// Drawbridge WebSocket URL (e.g., wss://drawbridge.moat.social/ws).
     /// Persisted after first use.
     #[arg(long = "drawbridge-url", global = true)]
@@ -133,9 +139,10 @@ async fn main() -> anyhow::Result<()> {
     match args.command {
         None => {
             if let Some(addr) = args.http {
-                http_server::run_http(args.storage_dir, args.drawbridge_url, &addr).await
+                http_server::run_http(args.storage_dir, args.pds_url, args.drawbridge_url, &addr)
+                    .await
             } else {
-                run_tui(args.storage_dir, args.drawbridge_url).await
+                run_tui(args.storage_dir, args.pds_url, args.drawbridge_url).await
             }
         }
         Some(Command::Fetch { repository }) => cmd_fetch(args.storage_dir, &repository).await,
@@ -167,6 +174,7 @@ async fn main() -> anyhow::Result<()> {
 
 async fn run_tui(
     storage_dir: Option<PathBuf>,
+    pds_url: Option<String>,
     drawbridge_url: Option<String>,
 ) -> anyhow::Result<()> {
     // Picker must be initialised *before* raw mode — it queries the terminal
@@ -180,7 +188,7 @@ async fn run_tui(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_app(&mut terminal, storage_dir, drawbridge_url, picker).await;
+    let result = run_app(&mut terminal, storage_dir, pds_url, drawbridge_url, picker).await;
 
     disable_raw_mode()?;
     execute!(
@@ -200,10 +208,11 @@ async fn run_tui(
 async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     storage_dir: Option<PathBuf>,
+    pds_url: Option<String>,
     drawbridge_url: Option<String>,
     picker: ratatui_image::picker::Picker,
 ) -> anyhow::Result<()> {
-    let mut app = App::new(storage_dir, drawbridge_url, picker)?;
+    let mut app = App::new(storage_dir, pds_url, drawbridge_url, picker)?;
 
     loop {
         terminal.draw(|f| ui::draw(f, &mut app))?;

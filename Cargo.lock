@@ -2450,6 +2450,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "moat-beacon"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "moat-postern",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "moat-cli"
 version = "0.1.0"
 dependencies = [

@@ -45,6 +45,10 @@ pub struct MoatAtprotoClient {
     did: String,
     /// Base URL of the user's own PDS (e.g. "https://bsky.social")
     pds_url: String,
+    /// When set, `resolve_pds_endpoint` returns this URL for every DID
+    /// instead of performing real DID resolution. Used in integration tests
+    /// where all participants are on a single local PDS.
+    pds_override: Option<String>,
 }
 
 impl MoatAtprotoClient {
@@ -82,7 +86,16 @@ impl MoatAtprotoClient {
             http_client,
             did: session.did.to_string(),
             pds_url: pds_url.to_string(),
+            pds_override: None,
         })
+    }
+
+    /// Override PDS resolution: every `resolve_pds_endpoint` call returns this
+    /// URL regardless of the DID. Useful for integration tests where all
+    /// participants share a single local Postern instance.
+    pub fn with_pds_override(mut self, url: String) -> Self {
+        self.pds_override = Some(url);
+        self
     }
 
     /// Resume a session from stored tokens.
@@ -136,6 +149,7 @@ impl MoatAtprotoClient {
             http_client,
             did: did.to_string(),
             pds_url: pds_url.to_string(),
+            pds_override: None,
         })
     }
 
@@ -147,8 +161,24 @@ impl MoatAtprotoClient {
         Some((session.access_jwt.clone(), session.refresh_jwt.clone()))
     }
 
-    /// Resolve a DID's PDS endpoint from the PLC directory.
+    /// Resolve a DID's PDS endpoint.
+    ///
+    /// Resolution order:
+    /// 1. `pds_override` — returns it immediately (for integration tests).
+    /// 2. `did:web:` — fetches `/.well-known/did.json` from the encoded host.
+    /// 3. PLC directory — the default for `did:plc:` DIDs.
     async fn resolve_pds_endpoint(&self, did: &str) -> Result<String> {
+        // 1. Override: used in integration tests where all peers share one PDS.
+        if let Some(ref url) = self.pds_override {
+            return Ok(url.clone());
+        }
+
+        // 2. did:web: resolution.
+        if did.starts_with("did:web:") {
+            return self.resolve_did_web(did).await;
+        }
+
+        // 3. PLC directory (default for did:plc:).
         let url = format!("{}/{}", PLC_DIRECTORY_URL, did);
         let response = self
             .http_client
@@ -170,7 +200,61 @@ impl MoatAtprotoClient {
             .await
             .map_err(|e| Error::Pds(format!("Failed to parse DID document: {}", e)))?;
 
-        // Extract the PDS endpoint from the service array
+        self.extract_pds_from_doc(&doc, did)
+    }
+
+    /// Resolve a `did:web:` DID by fetching `/.well-known/did.json`.
+    ///
+    /// `did:web:host%3Aport` maps to `http://host:port/.well-known/did.json`.
+    /// Path segments (`did:web:host:path:to`) map to `/path/to/did.json`.
+    async fn resolve_did_web(&self, did: &str) -> Result<String> {
+        let authority = did
+            .strip_prefix("did:web:")
+            .unwrap()
+            .replace("%3A", ":")
+            .replace("%3a", ":");
+
+        // Split off any path segments (did:web:host:a:b → host, ["a","b"])
+        let mut parts = authority.splitn(2, ':');
+        let host = parts.next().unwrap_or("");
+        let path = parts
+            .next()
+            .map(|p| format!("/{}", p.replace(':', "/")))
+            .unwrap_or_default();
+
+        // Use http for localhost, https otherwise.
+        let scheme = if host.starts_with("localhost") || host.starts_with("127.") {
+            "http"
+        } else {
+            "https"
+        };
+        let doc_url = format!("{scheme}://{host}{path}/.well-known/did.json");
+
+        let response = self
+            .http_client
+            .get(&doc_url)
+            .send()
+            .await
+            .map_err(|e| Error::Pds(format!("Failed to fetch did:web document: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(Error::Pds(format!(
+                "did:web resolution returned {}: {}",
+                response.status(),
+                did
+            )));
+        }
+
+        let doc: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| Error::Pds(format!("Failed to parse did:web document: {}", e)))?;
+
+        self.extract_pds_from_doc(&doc, did)
+    }
+
+    /// Extract the `AtprotoPersonalDataServer` endpoint from a DID document.
+    fn extract_pds_from_doc(&self, doc: &serde_json::Value, did: &str) -> Result<String> {
         let services = doc["service"]
             .as_array()
             .ok_or_else(|| Error::Pds("DID document has no services".to_string()))?;
