@@ -641,10 +641,13 @@ impl App {
 
     /// HTTP: read messages for any conversation without changing active state.
     pub fn api_get_messages(&self, group_id_hex: &str) -> Vec<crate::keystore::StoredMessage> {
-        self.keys
+        let mut messages = self
+            .keys
             .load_messages(group_id_hex)
             .unwrap_or_default()
-            .messages
+            .messages;
+        messages.sort_by_key(|m| m.timestamp);
+        messages
     }
 
     /// HTTP: send message to active conversation.

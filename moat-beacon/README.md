@@ -138,6 +138,6 @@ participant with no conversations must call `watch_handle` before their first
 |-------|--------|-------------|
 | 1 | ✅ Done | Smoke test: Alice → Bob message delivery |
 | 2 | ✅ Done | Toxiproxy integration: all connections proxied, fault injection ready |
-| 3 | Planned | Property-based scenarios: random `Action` sequences with `proptest` |
+| 3 | ✅ Done | Property-based scenarios: random `Action` sequences with `proptest` |
 | 4 | Planned | Drawbridge (WebSocket) integration |
 | 5 | Planned | `beacon run <name>` / `beacon replay <seed>` CLI |

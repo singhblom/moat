@@ -20,6 +20,7 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 reqwest = { version = "0.12", features = ["json"] }
 tempfile = { workspace = true }
+proptest = "1"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

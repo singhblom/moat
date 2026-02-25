@@ -14,11 +14,16 @@
 //! - All participant connections now route through `proxy-pds` so tests can
 //!   inject network faults via [`TestWorld::toxiproxy`].
 //!
+//! # Phase 3 (complete)
+//! - [`actions`] — `Action` enum with `prop_flat_map` fold strategy.
+//! - [`invariants`] — `ScenarioState`, `drain_events`, invariant checkers.
+//!
 //! # Future phases
-//! - Phase 3: proptest `Action` enum for random scenario generation.
 //! - Phase 4: Drawbridge subprocess management.
 //! - Phase 5: `beacon run <name>` / `beacon replay <seed>` CLI.
 
+pub mod actions;
 pub mod client;
+pub mod invariants;
 pub mod toxiproxy;
 pub mod world;
