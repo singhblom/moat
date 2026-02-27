@@ -1,7 +1,9 @@
-//! Two-party polling delivery scenario.
+//! Two-party Drawbridge push delivery scenario with offline/online cycles.
 //!
-//! Alice and Bob exchange messages via a standard [`TestWorld`] (no Drawbridge).
-//! Message delivery relies on explicit polling by participants.
+//! Extends `two_party_push` with `GoOffline` / `ComeOnline` actions so that
+//! proptest sequences can kill and restart participant subprocesses.  Verifies
+//! that MLS state survives restarts and that messages sent while offline are
+//! delivered after reconnecting to Drawbridge.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -9,11 +11,12 @@ use std::time::Duration;
 
 use crate::actions::Action;
 use crate::invariants::{
-    check_consensus_ordering, check_delivery, check_no_duplicates, drain_events, ScenarioState,
+    check_consensus_ordering, check_delivery, check_no_duplicates, ScenarioState,
 };
 use crate::world::TestWorld;
 
-use super::{execute_action, format_action, vlog};
+use super::{ensure_all_online, execute_action, format_action, vlog};
+use super::two_party_push::drain_events_push;
 
 pub(crate) fn run_boxed(
     actions: Vec<Action>,
@@ -23,13 +26,13 @@ pub(crate) fn run_boxed(
 }
 
 pub async fn run(actions: Vec<Action>, verbose: bool) {
-    vlog!(verbose, "=== Scenario: two-party-chat ===");
+    vlog!(verbose, "=== Scenario: two-party-push-restart ===");
 
     // ── Prologue ──────────────────────────────────────────────────────────────
-    vlog!(verbose, "[setup] starting TestWorld...");
-    let mut world = TestWorld::new(&["alice", "bob"], ".postern.test")
+    vlog!(verbose, "[setup] starting TestWorld (with Drawbridge)...");
+    let mut world = TestWorld::new_with_drawbridge(&["alice", "bob"], ".postern.test")
         .await
-        .expect("world setup");
+        .expect("world setup with drawbridge");
     let alice = world.client("alice").clone();
     let bob = world.client("bob").clone();
 
@@ -44,8 +47,9 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
         .expect("bob login");
     vlog!(verbose, "[setup] login bob... done");
 
-    // Allow moat-cli to publish key packages and stealth addresses.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Allow moat-cli to publish key packages, stealth addresses, and connect
+    // to Drawbridge as sender (challenge-response auth).
+    tokio::time::sleep(Duration::from_millis(800)).await;
 
     bob.watch_handle("alice.postern.test")
         .await
@@ -59,6 +63,8 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
+    // One explicit poll: Bob joins the group (receives Welcome) and picks up
+    // Alice's DrawbridgeHint so he connects as recipient.
     let stats = bob.poll().await.expect("bob join poll");
     assert!(
         stats.new_conversations > 0,
@@ -73,6 +79,14 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
         "[setup] bob polls to join... done ({} new conversations)",
         stats.new_conversations
     );
+
+    // Give Bob time to connect to Drawbridge as recipient.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Disable auto-polling — delivery must come entirely through Drawbridge.
+    alice.set_poll_interval(0).await.expect("disable alice polling");
+    bob.set_poll_interval(0).await.expect("disable bob polling");
+    vlog!(verbose, "[setup] polling disabled (push-only mode)");
 
     // ── Random action sequence ─────────────────────────────────────────────────
     if verbose {
@@ -90,7 +104,7 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
             &mut world,
             "alice.postern.test",
             "bob.postern.test",
-            false,
+            true,
             &mut state,
             verbose,
         )
@@ -101,8 +115,21 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
     if verbose {
         eprintln!();
     }
-    vlog!(verbose, "[drain] waiting for events to propagate...");
-    drain_events(&alice, &bob).await;
+
+    // Bring any offline participants back online before draining.
+    vlog!(verbose, "[drain] ensuring all participants are online...");
+    ensure_all_online(
+        &mut world,
+        &alice,
+        &bob,
+        "alice.postern.test",
+        "bob.postern.test",
+        true,
+    )
+    .await;
+
+    vlog!(verbose, "[drain] waiting for push events to propagate...");
+    drain_events_push(&alice, &bob).await;
 
     let confirmed = state.sent_messages.iter().filter(|m| m.message_id.is_some()).count();
 

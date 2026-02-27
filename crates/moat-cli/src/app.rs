@@ -928,20 +928,21 @@ impl App {
             dids_to_poll.entry(my_did).or_insert(all_conv_indices);
         }
 
+        let watched: Vec<(String, Option<String>)> = self
+            .watched_dids
+            .iter()
+            .filter(|did| !dids_to_poll.contains_key(*did))
+            .map(|did| {
+                let last_rkey = self.keys.get_last_rkey(did).ok().flatten();
+                (did.clone(), last_rkey)
+            })
+            .collect();
+
         let dids_with_rkeys: Vec<(String, Vec<usize>, Option<String>)> = dids_to_poll
             .into_iter()
             .map(|(did, indices)| {
                 let last_rkey = self.keys.get_last_rkey(&did).ok().flatten();
                 (did, indices, last_rkey)
-            })
-            .collect();
-
-        let watched: Vec<(String, Option<String>)> = self
-            .watched_dids
-            .iter()
-            .map(|did| {
-                let last_rkey = self.keys.get_last_rkey(did).ok().flatten();
-                (did.clone(), last_rkey)
             })
             .collect();
 

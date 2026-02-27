@@ -23,7 +23,7 @@ moat/
 - **moat-atproto** — Async ATProto client. Authentication, publishing/fetching records (`social.moat.keyPackage`, `social.moat.event`, `social.moat.stealthAddress`), handle-to-DID resolution.
 - **moat-cli** — Ratatui terminal UI. Login, conversation list, message display, new conversation flow, background polling. Also supports `--http <addr>` for a headless HTTP API mode used by integration tests.
 - **moat-postern** — Minimal in-process ATProto PDS for integration testing. Implements just enough of the ATProto XRPC surface (record CRUD, blob upload, sessions) for moat-cli to communicate without hitting a real Bluesky PDS.
-- **moat-beacon** — Integration and property-based test runner. Spins up Postern in-process and moat-cli `--http` subprocesses per participant, drives them via typed HTTP clients, and verifies invariants (message delivery, ordering, no duplicates). Phase 2 will add network fault injection via Toxiproxy.
+- **moat-beacon** — Integration and property-based test runner. Spins up Postern in-process, Toxiproxy (for fault injection), optional Drawbridge, and one `moat-cli --http` subprocess per participant. Drives them via typed HTTP clients and verifies delivery, ordering, and no-duplicate invariants over randomly generated action sequences — including process kill/restart cycles.
 - **moat-flutter** — Flutter app (Android + Web) with Rust FFI via flutter_rust_bridge. See [moat-flutter/README.md](moat-flutter/README.md) for build and usage instructions.
 - **moat-drawbridge** — (WIP) Notification relay service in Go. A lightweight WebSocket broker that tells clients *when* to poll, without storing or decrypting messages. Clients authenticate via DID-signed challenge. Supports FCM/APNs push for backgrounded mobile apps. See [notifications-plan.md](notifications-plan.md) for the full design.
 
@@ -42,6 +42,11 @@ cargo test -p moat-core
 cargo test -p moat-atproto
 cargo test -p moat-cli
 cargo test -p moat-beacon    # Integration tests (spins up real processes)
+cargo test -p moat-beacon --test smoke                 # Smoke test only
+cargo test -p moat-beacon --test proptest_two_party    # Polling delivery (proptest)
+cargo test -p moat-beacon --test proptest_drawbridge   # Push delivery via Drawbridge (proptest)
+cargo test -p moat-beacon --test proptest_restart      # Polling + process restart (proptest)
+cargo test -p moat-beacon --test proptest_push_restart # Push + process restart (proptest)
 ```
 
 ## Usage

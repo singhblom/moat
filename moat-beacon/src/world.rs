@@ -26,15 +26,23 @@ use tempfile::TempDir;
 // ── ParticipantProcess ────────────────────────────────────────────────────────
 
 struct ParticipantProcess {
-    _child: Child,
-    _storage: TempDir,
+    /// Running child process; `None` when the participant has been killed (offline).
+    child: Option<Child>,
+    /// Persistent storage directory — kept alive across kill/restart cycles.
+    #[allow(dead_code)]
+    storage: TempDir,
+    /// Full CLI args used to spawn the process (includes `--http <addr>`).
+    /// Reused verbatim on restart so the HTTP port stays stable.
+    spawn_args: Vec<String>,
     pub client: MoatCliClient,
 }
 
 impl Drop for ParticipantProcess {
     fn drop(&mut self) {
-        // Kill child; ignore errors (process may have already exited).
-        let _ = self._child.kill();
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 
@@ -56,6 +64,8 @@ pub struct TestWorld {
     /// Only present when Drawbridge is enabled.
     pub db_verify_proxy: Option<ProxyHandle>,
     participants: HashMap<String, ParticipantProcess>,
+    /// Path to the `moat` CLI binary; reused when restarting participants.
+    moat_cli_bin: PathBuf,
 }
 
 impl TestWorld {
@@ -148,6 +158,10 @@ impl TestWorld {
             (None, None, None)
         };
 
+        // Resolve the moat binary once for the whole world (also triggers
+        // auto-build if needed).
+        let moat_cli_bin = moat_cli_binary()?;
+
         let mut world = Self {
             _postern: postern,
             toxiproxy,
@@ -156,6 +170,7 @@ impl TestWorld {
             _drawbridge: drawbridge,
             db_verify_proxy,
             participants: HashMap::new(),
+            moat_cli_bin,
         };
 
         for &handle in handles {
@@ -187,6 +202,54 @@ impl TestWorld {
         &self.postern_url
     }
 
+    /// Kill a participant's process.  The participant is considered offline
+    /// until [`TestWorld::restart_participant`] is called.
+    ///
+    /// The storage directory is **not** removed — it survives the restart.
+    pub fn kill_participant(&mut self, handle: &str) -> Result<()> {
+        let proc = self
+            .participants
+            .get_mut(handle)
+            .ok_or_else(|| anyhow::anyhow!("unknown participant: {handle}"))?;
+        if let Some(mut child) = proc.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        Ok(())
+    }
+
+    /// Restart a previously killed participant.
+    ///
+    /// Spawns a new process with the same CLI args (same HTTP port, same
+    /// storage dir) and waits up to 10 s for the HTTP server to respond.
+    pub async fn restart_participant(&mut self, handle: &str) -> Result<()> {
+        let proc = self
+            .participants
+            .get_mut(handle)
+            .ok_or_else(|| anyhow::anyhow!("unknown participant: {handle}"))?;
+
+        let child = Command::new(&self.moat_cli_bin)
+            .args(&proc.spawn_args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .with_context(|| format!("restart moat-cli for {handle}"))?;
+        proc.child = Some(child);
+
+        wait_for_http(&proc.client, std::time::Duration::from_secs(10))
+            .await
+            .with_context(|| format!("waiting for moat-cli ({handle}) to restart"))?;
+        Ok(())
+    }
+
+    /// Returns `true` if the participant process is currently running.
+    pub fn participant_is_online(&self, handle: &str) -> bool {
+        self.participants
+            .get(handle)
+            .map(|p| p.child.is_some())
+            .unwrap_or(false)
+    }
+
     // ── Private helpers ───────────────────────────────────────────────────────
 
     async fn spawn_participant(
@@ -199,8 +262,6 @@ impl TestWorld {
         let http_port = free_port()?;
         let http_addr = format!("127.0.0.1:{http_port}");
         let storage = TempDir::new().context("create temp storage dir")?;
-
-        let moat_cli_bin = moat_cli_binary()?;
 
         let mut args = vec![
             "--storage-dir".to_string(),
@@ -215,7 +276,7 @@ impl TestWorld {
             args.push(db_url.to_string());
         }
 
-        let child = Command::new(&moat_cli_bin)
+        let child = Command::new(&self.moat_cli_bin)
             .args(&args)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -233,8 +294,9 @@ impl TestWorld {
         self.participants.insert(
             short_handle.to_string(),
             ParticipantProcess {
-                _child: child,
-                _storage: storage,
+                child: Some(child),
+                storage,
+                spawn_args: args,
                 client,
             },
         );

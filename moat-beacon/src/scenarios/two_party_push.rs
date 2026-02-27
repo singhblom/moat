@@ -24,7 +24,7 @@ use super::{execute_action, format_action, vlog};
 /// 1. Alice's moat-cli to send `event_posted` to Drawbridge.
 /// 2. Drawbridge to forward `new_event` to Bob.
 /// 3. Bob's moat-cli to call `spawn_targeted_fetch` and retrieve the record.
-async fn drain_events_push(alice: &MoatCliClient, bob: &MoatCliClient) {
+pub(crate) async fn drain_events_push(alice: &MoatCliClient, bob: &MoatCliClient) {
     tokio::time::sleep(Duration::from_millis(1000)).await;
     let _ = alice.poll().await;
     let _ = bob.poll().await;
@@ -43,11 +43,11 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
 
     // ── Prologue ──────────────────────────────────────────────────────────────
     vlog!(verbose, "[setup] starting TestWorld (with Drawbridge)...");
-    let world = TestWorld::new_with_drawbridge(&["alice", "bob"], ".postern.test")
+    let mut world = TestWorld::new_with_drawbridge(&["alice", "bob"], ".postern.test")
         .await
         .expect("world setup with drawbridge");
-    let alice = world.client("alice");
-    let bob = world.client("bob");
+    let alice = world.client("alice").clone();
+    let bob = world.client("bob").clone();
 
     alice
         .login("alice.postern.test", "any-password")
@@ -110,7 +110,18 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
     let total = actions.len();
     for (i, action) in actions.iter().enumerate() {
         vlog!(verbose, "[action {}/{}] {}", i + 1, total, format_action(action));
-        execute_action(action, alice, bob, &mut state, verbose).await;
+        execute_action(
+            action,
+            &alice,
+            &bob,
+            &mut world,
+            "alice.postern.test",
+            "bob.postern.test",
+            true,
+            &mut state,
+            verbose,
+        )
+        .await;
     }
 
     // ── Drain + invariants ─────────────────────────────────────────────────────
@@ -118,19 +129,19 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
         eprintln!();
     }
     vlog!(verbose, "[drain] waiting for push events to propagate...");
-    drain_events_push(alice, bob).await;
+    drain_events_push(&alice, &bob).await;
 
     let confirmed = state.sent_messages.iter().filter(|m| m.message_id.is_some()).count();
 
-    check_delivery(alice, bob, &state).await.expect("delivery invariant violated");
+    check_delivery(&alice, &bob, &state).await.expect("delivery invariant violated");
     vlog!(verbose, "[check] delivery... ok ({confirmed} messages)");
 
-    check_consensus_ordering(alice, bob, &state)
+    check_consensus_ordering(&alice, &bob, &state)
         .await
         .expect("consensus ordering invariant violated");
     vlog!(verbose, "[check] consensus ordering... ok");
 
-    check_no_duplicates(alice, bob, &state)
+    check_no_duplicates(&alice, &bob, &state)
         .await
         .expect("no-duplicates invariant violated");
     vlog!(verbose, "[check] no duplicates... ok");

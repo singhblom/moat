@@ -1,7 +1,10 @@
-//! Two-party polling delivery scenario.
+//! Two-party polling delivery scenario with offline/online cycles.
 //!
-//! Alice and Bob exchange messages via a standard [`TestWorld`] (no Drawbridge).
-//! Message delivery relies on explicit polling by participants.
+//! Extends `two_party_chat` with `GoOffline` / `ComeOnline` actions so that
+//! proptest sequences can kill and restart participant subprocesses.  Verifies
+//! that on-disk MLS state, conversation membership, and key material survive a
+//! full process restart, and that messages sent while a participant was offline
+//! are delivered after they come back via polling.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -13,7 +16,7 @@ use crate::invariants::{
 };
 use crate::world::TestWorld;
 
-use super::{execute_action, format_action, vlog};
+use super::{ensure_all_online, execute_action, format_action, vlog};
 
 pub(crate) fn run_boxed(
     actions: Vec<Action>,
@@ -23,7 +26,7 @@ pub(crate) fn run_boxed(
 }
 
 pub async fn run(actions: Vec<Action>, verbose: bool) {
-    vlog!(verbose, "=== Scenario: two-party-chat ===");
+    vlog!(verbose, "=== Scenario: two-party-restart ===");
 
     // ── Prologue ──────────────────────────────────────────────────────────────
     vlog!(verbose, "[setup] starting TestWorld...");
@@ -101,6 +104,19 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
     if verbose {
         eprintln!();
     }
+
+    // Bring any offline participants back online before draining.
+    vlog!(verbose, "[drain] ensuring all participants are online...");
+    ensure_all_online(
+        &mut world,
+        &alice,
+        &bob,
+        "alice.postern.test",
+        "bob.postern.test",
+        false,
+    )
+    .await;
+
     vlog!(verbose, "[drain] waiting for events to propagate...");
     drain_events(&alice, &bob).await;
 

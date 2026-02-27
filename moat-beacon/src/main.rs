@@ -5,7 +5,7 @@
 //!   beacon run <name>                Run a named scenario once (verbose, random actions)
 //!   beacon replay <name> <seed>      Replay a proptest seed (same seed → same actions)
 
-use moat_beacon::scenarios::{actions_from_seed, generate_random_actions, get_scenario, SCENARIOS};
+use moat_beacon::scenarios::{get_scenario, SCENARIOS};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -13,7 +13,7 @@ fn main() {
     match args.get(1).map(|s| s.as_str()) {
         Some("list") => {
             for s in SCENARIOS {
-                eprintln!("{:<20} {}", s.name, s.description);
+                eprintln!("{:<25} {}", s.name, s.description);
             }
         }
 
@@ -33,7 +33,7 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            let actions = generate_random_actions();
+            let actions = scenario.generate_actions();
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -64,7 +64,7 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            let actions = match actions_from_seed(seed_str) {
+            let actions = match scenario.actions_from_seed(seed_str) {
                 Ok(a) => a,
                 Err(e) => {
                     eprintln!("Invalid seed: {e}");

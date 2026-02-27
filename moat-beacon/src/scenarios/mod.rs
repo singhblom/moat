@@ -9,12 +9,17 @@ use proptest::{
     test_runner::{Config, RngAlgorithm, TestRng, TestRunner},
 };
 
-use crate::actions::{action_sequence, Action, ParticipantId, EMOJI_VOCAB, TEXT_VOCAB};
+use crate::actions::{
+    action_sequence, action_sequence_with_offline, Action, ParticipantId, EMOJI_VOCAB, TEXT_VOCAB,
+};
 use crate::client::MoatCliClient;
 use crate::invariants::{ScenarioState, SentMessage};
+use crate::world::TestWorld;
 
 pub mod two_party_chat;
 pub mod two_party_push;
+pub mod two_party_push_restart;
+pub mod two_party_restart;
 
 // ── Verbose logging ───────────────────────────────────────────────────────────
 
@@ -38,10 +43,32 @@ pub fn pick_client<'a>(
     }
 }
 
+fn short_name(id: &ParticipantId) -> &'static str {
+    match id {
+        ParticipantId::Alice => "alice",
+        ParticipantId::Bob => "bob",
+    }
+}
+
+fn pick_handle<'a>(
+    id: &ParticipantId,
+    alice_handle: &'a str,
+    bob_handle: &'a str,
+) -> &'a str {
+    match id {
+        ParticipantId::Alice => alice_handle,
+        ParticipantId::Bob => bob_handle,
+    }
+}
+
 pub async fn execute_action(
     action: &Action,
     alice: &MoatCliClient,
     bob: &MoatCliClient,
+    world: &mut TestWorld,
+    alice_full_handle: &str,
+    bob_full_handle: &str,
+    push_mode: bool,
     state: &mut ScenarioState,
     verbose: bool,
 ) {
@@ -87,6 +114,93 @@ pub async fn execute_action(
                 vlog!(verbose, "  → reacted {:?} to message {}", emoji, message_idx);
             }
         }
+
+        Action::GoOffline { participant } => {
+            // Brief pause before kill: `send_message` spawns the ATProto
+            // publish as a background task and returns immediately.  If
+            // GoOffline follows a SendMessage for the same participant, the
+            // SIGKILL can race the in-flight localhost POST to Postern.
+            // 100 ms is ample time for a loopback HTTP round-trip to complete.
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            world
+                .kill_participant(short_name(participant))
+                .expect("kill participant");
+            vlog!(verbose, "  → {:?} went offline", participant);
+        }
+
+        Action::ComeOnline { participant } => {
+            let short = short_name(participant);
+            let full = pick_handle(participant, alice_full_handle, bob_full_handle);
+            let other_participant = match participant {
+                ParticipantId::Alice => &ParticipantId::Bob,
+                ParticipantId::Bob => &ParticipantId::Alice,
+            };
+            let other_full = pick_handle(other_participant, alice_full_handle, bob_full_handle);
+            let client = pick_client(participant, alice, bob);
+            world
+                .restart_participant(short)
+                .await
+                .expect("restart participant");
+            client
+                .login(full, "any-password")
+                .await
+                .expect("re-login after restart");
+            client
+                .watch_handle(other_full)
+                .await
+                .expect("re-watch after restart");
+            // Catch up messages missed while offline.
+            let _ = client.poll().await;
+            if push_mode {
+                client
+                    .set_poll_interval(0)
+                    .await
+                    .expect("disable polling after restart");
+            }
+            vlog!(verbose, "  → {:?} came online", participant);
+        }
+    }
+}
+
+/// Bring all offline participants back online.
+///
+/// For each participant that is currently offline, restarts the process,
+/// re-logs in, re-watches the other party, runs a catch-up poll, and
+/// (if `push_mode`) disables auto-polling again.
+pub async fn ensure_all_online(
+    world: &mut TestWorld,
+    alice: &MoatCliClient,
+    bob: &MoatCliClient,
+    alice_full_handle: &str,
+    bob_full_handle: &str,
+    push_mode: bool,
+) {
+    let participants = [
+        ("alice", alice_full_handle, alice, bob_full_handle),
+        ("bob", bob_full_handle, bob, alice_full_handle),
+    ];
+    for (handle, full_handle, client, other_full) in participants {
+        if !world.participant_is_online(handle) {
+            world
+                .restart_participant(handle)
+                .await
+                .expect("restart participant");
+            client
+                .login(full_handle, "any-password")
+                .await
+                .expect("re-login");
+            client
+                .watch_handle(other_full)
+                .await
+                .expect("re-watch");
+            let _ = client.poll().await;
+            if push_mode {
+                client
+                    .set_poll_interval(0)
+                    .await
+                    .expect("disable polling after bring-online");
+            }
+        }
     }
 }
 
@@ -107,6 +221,12 @@ pub fn format_action(action: &Action) -> String {
                 from, message_idx, emoji
             )
         }
+        Action::GoOffline { participant } => {
+            format!("GoOffline {{ participant: {:?} }}", participant)
+        }
+        Action::ComeOnline { participant } => {
+            format!("ComeOnline {{ participant: {:?} }}", participant)
+        }
     }
 }
 
@@ -116,6 +236,8 @@ pub struct Scenario {
     pub name: &'static str,
     pub description: &'static str,
     run_fn: fn(Vec<Action>, bool) -> Pin<Box<dyn Future<Output = ()> + Send>>,
+    gen_fn: fn() -> Vec<Action>,
+    seed_fn: fn(&str) -> Result<Vec<Action>>,
 }
 
 impl Scenario {
@@ -126,6 +248,16 @@ impl Scenario {
     ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
         (self.run_fn)(actions, verbose)
     }
+
+    /// Generate a random action sequence appropriate for this scenario.
+    pub fn generate_actions(&self) -> Vec<Action> {
+        (self.gen_fn)()
+    }
+
+    /// Reproduce an action sequence from a proptest seed string.
+    pub fn actions_from_seed(&self, seed_str: &str) -> Result<Vec<Action>> {
+        (self.seed_fn)(seed_str)
+    }
 }
 
 pub static SCENARIOS: &[Scenario] = &[
@@ -133,11 +265,29 @@ pub static SCENARIOS: &[Scenario] = &[
         name: "two-party-chat",
         description: "Alice + Bob, polling delivery",
         run_fn: two_party_chat::run_boxed,
+        gen_fn: generate_random_actions,
+        seed_fn: actions_from_seed,
     },
     Scenario {
         name: "two-party-push",
         description: "Alice + Bob, Drawbridge push delivery",
         run_fn: two_party_push::run_boxed,
+        gen_fn: generate_random_actions,
+        seed_fn: actions_from_seed,
+    },
+    Scenario {
+        name: "two-party-restart",
+        description: "Alice + Bob, polling delivery with offline/online cycles",
+        run_fn: two_party_restart::run_boxed,
+        gen_fn: generate_random_actions_offline,
+        seed_fn: actions_from_seed_offline,
+    },
+    Scenario {
+        name: "two-party-push-restart",
+        description: "Alice + Bob, Drawbridge push delivery with offline/online cycles",
+        run_fn: two_party_push_restart::run_boxed,
+        gen_fn: generate_random_actions_offline,
+        seed_fn: actions_from_seed_offline,
     },
 ];
 
@@ -173,7 +323,7 @@ pub fn parse_seed(s: &str) -> Result<[u8; 32]> {
     Ok(bytes)
 }
 
-/// Generate one action sequence from a proptest seed string.
+/// Generate one action sequence from a proptest seed string (standard strategy).
 pub fn actions_from_seed(seed_str: &str) -> Result<Vec<Action>> {
     let seed = parse_seed(seed_str)?;
     let rng = TestRng::from_seed(RngAlgorithm::ChaCha, &seed);
@@ -184,8 +334,28 @@ pub fn actions_from_seed(seed_str: &str) -> Result<Vec<Action>> {
         .map(|t| t.current())
 }
 
-/// Generate one random action sequence (for `beacon run`).
+/// Generate one random action sequence (standard strategy, for `beacon run`).
 pub fn generate_random_actions() -> Vec<Action> {
     let mut runner = TestRunner::default();
     action_sequence().new_tree(&mut runner).unwrap().current()
+}
+
+/// Generate one action sequence from a proptest seed string (offline strategy).
+pub fn actions_from_seed_offline(seed_str: &str) -> Result<Vec<Action>> {
+    let seed = parse_seed(seed_str)?;
+    let rng = TestRng::from_seed(RngAlgorithm::ChaCha, &seed);
+    let mut runner = TestRunner::new_with_rng(Config::default(), rng);
+    action_sequence_with_offline()
+        .new_tree(&mut runner)
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .map(|t| t.current())
+}
+
+/// Generate one random action sequence using the offline strategy (for `beacon run`).
+pub fn generate_random_actions_offline() -> Vec<Action> {
+    let mut runner = TestRunner::default();
+    action_sequence_with_offline()
+        .new_tree(&mut runner)
+        .unwrap()
+        .current()
 }
