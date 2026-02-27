@@ -22,12 +22,14 @@
 //! - [`drawbridge`] — `DrawbridgeProcess`: build Go binary, spawn, health-check.
 //! - [`TestWorld::new_with_drawbridge`] — extended world with push delivery.
 //!
-//! # Future phases
-//! - Phase 5: `beacon run <name>` / `beacon replay <seed>` CLI.
+//! # Phase 5 (complete)
+//! - [`scenarios`] — `Scenario` registry, seed utilities.
+//! - `beacon list` / `beacon run <name>` / `beacon replay <name> <seed>` CLI.
 
 pub mod actions;
 pub mod client;
 pub mod drawbridge;
 pub mod invariants;
+pub mod scenarios;
 pub mod toxiproxy;
 pub mod world;
