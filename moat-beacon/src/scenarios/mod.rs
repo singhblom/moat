@@ -16,6 +16,8 @@ use crate::client::MoatCliClient;
 use crate::invariants::{ScenarioState, SentMessage};
 use crate::world::TestWorld;
 
+pub mod dart_two_party_chat;
+pub mod mixed_two_party_chat;
 pub mod two_party_chat;
 pub mod two_party_push;
 pub mod two_party_push_restart;
@@ -288,6 +290,20 @@ pub static SCENARIOS: &[Scenario] = &[
         run_fn: two_party_push_restart::run_boxed,
         gen_fn: generate_random_actions_offline,
         seed_fn: actions_from_seed_offline,
+    },
+    Scenario {
+        name: "dart-two-party-chat",
+        description: "Alice (Dart) + Bob (Dart), polling delivery",
+        run_fn: dart_two_party_chat::run_boxed,
+        gen_fn: generate_random_actions,
+        seed_fn: actions_from_seed,
+    },
+    Scenario {
+        name: "mixed-two-party-chat",
+        description: "Alice (Rust) + Bob (Dart), polling delivery",
+        run_fn: mixed_two_party_chat::run_boxed,
+        gen_fn: generate_random_actions,
+        seed_fn: actions_from_seed,
     },
 ];
 

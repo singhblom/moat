@@ -23,6 +23,15 @@ use std::{
 };
 use tempfile::TempDir;
 
+/// Which implementation a participant runs.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ParticipantKind {
+    /// Rust CLI (`moat-cli --http`)
+    RustCli,
+    /// Dart headless server (`moat_dart_server --http`)
+    DartServer,
+}
+
 // ── ParticipantProcess ────────────────────────────────────────────────────────
 
 struct ParticipantProcess {
@@ -34,6 +43,8 @@ struct ParticipantProcess {
     /// Full CLI args used to spawn the process (includes `--http <addr>`).
     /// Reused verbatim on restart so the HTTP port stays stable.
     spawn_args: Vec<String>,
+    /// Which binary to use when restarting.
+    kind: ParticipantKind,
     pub client: MoatCliClient,
 }
 
@@ -66,40 +77,65 @@ pub struct TestWorld {
     participants: HashMap<String, ParticipantProcess>,
     /// Path to the `moat` CLI binary; reused when restarting participants.
     moat_cli_bin: PathBuf,
+    /// Path to the compiled Dart server binary; lazily resolved.
+    dart_server_bin: Option<PathBuf>,
+    /// Path to the Rust FFI dylib for the Dart server.
+    rust_lib_path: Option<PathBuf>,
 }
 
 impl TestWorld {
     /// Build a new `TestWorld` with the given participant handles (no Drawbridge).
     ///
-    /// Accounts are created on Postern using `did:plc:<handle>` DIDs.
-    /// All PDS traffic is routed through a `proxy-pds` Toxiproxy proxy so that
-    /// tests can inject network faults via [`TestWorld::toxiproxy`].
-    ///
-    /// All processes are ready (have passed their health check) when this
-    /// returns.
+    /// All participants run the Rust CLI (`moat-cli --http`).
     ///
     /// `handle_suffix` is appended to every handle, e.g. `".postern.test"`.
     pub async fn new(handles: &[&str], handle_suffix: &str) -> Result<Self> {
-        Self::build(handles, handle_suffix, false).await
+        let kinds = vec![ParticipantKind::RustCli; handles.len()];
+        Self::build(handles, &kinds, handle_suffix, false).await
     }
 
     /// Build a `TestWorld` with Drawbridge enabled.
     ///
-    /// In addition to the base setup, this:
-    /// - Spawns a Drawbridge WebSocket relay.
-    /// - Creates a `proxy-db-verify` Toxiproxy proxy routing Drawbridge's
-    ///   DID-resolution + PDS-verification calls to Postern.
-    /// - Configures Postern's DID documents to advertise `proxy-db-verify` as
-    ///   the PDS endpoint.
-    /// - Passes `--drawbridge-url ws://drawbridge/ws` to each moat-cli process.
-    ///
-    /// Account DIDs use `did:plc:<handle>` format (required by Drawbridge's
-    /// `PLCResolver`).
+    /// All participants run the Rust CLI (`moat-cli --http`).
     pub async fn new_with_drawbridge(handles: &[&str], handle_suffix: &str) -> Result<Self> {
-        Self::build(handles, handle_suffix, true).await
+        let kinds = vec![ParticipantKind::RustCli; handles.len()];
+        Self::build(handles, &kinds, handle_suffix, true).await
     }
 
-    async fn build(handles: &[&str], handle_suffix: &str, with_drawbridge: bool) -> Result<Self> {
+    /// Build a `TestWorld` where each participant can be a different implementation.
+    ///
+    /// `kinds` must have the same length as `handles`.  Use
+    /// [`ParticipantKind::DartServer`] to run the headless Dart server instead
+    /// of moat-cli for a given participant.
+    pub async fn new_with_kinds(
+        handles: &[&str],
+        kinds: &[ParticipantKind],
+        handle_suffix: &str,
+    ) -> Result<Self> {
+        Self::build(handles, kinds, handle_suffix, false).await
+    }
+
+    /// Build a `TestWorld` with Drawbridge enabled and per-participant kinds.
+    pub async fn new_with_kinds_and_drawbridge(
+        handles: &[&str],
+        kinds: &[ParticipantKind],
+        handle_suffix: &str,
+    ) -> Result<Self> {
+        Self::build(handles, kinds, handle_suffix, true).await
+    }
+
+    async fn build(
+        handles: &[&str],
+        kinds: &[ParticipantKind],
+        handle_suffix: &str,
+        with_drawbridge: bool,
+    ) -> Result<Self> {
+        assert_eq!(
+            handles.len(),
+            kinds.len(),
+            "handles and kinds must have equal length"
+        );
+
         // Build Postern accounts.  Use did:plc: format so Drawbridge's
         // PLCResolver accepts them (it enforces the did:plc: prefix).
         let accounts: Vec<AccountConfig> = handles
@@ -162,6 +198,15 @@ impl TestWorld {
         // auto-build if needed).
         let moat_cli_bin = moat_cli_binary()?;
 
+        // If any participant is a Dart server, build the Dart binary + FFI lib.
+        let (dart_server_bin, rust_lib_path) =
+            if kinds.iter().any(|k| *k == ParticipantKind::DartServer) {
+                let (dart_bin, lib) = dart_server_binary()?;
+                (Some(dart_bin), Some(lib))
+            } else {
+                (None, None)
+            };
+
         let mut world = Self {
             _postern: postern,
             toxiproxy,
@@ -171,9 +216,11 @@ impl TestWorld {
             db_verify_proxy,
             participants: HashMap::new(),
             moat_cli_bin,
+            dart_server_bin,
+            rust_lib_path,
         };
 
-        for &handle in handles {
+        for (&handle, kind) in handles.iter().zip(kinds.iter()) {
             let full_handle = format!("{handle}{handle_suffix}");
             world
                 .spawn_participant(
@@ -181,6 +228,7 @@ impl TestWorld {
                     &full_handle,
                     &pds_proxy.url.clone(),
                     drawbridge_ws_endpoint.as_deref(),
+                    kind.clone(),
                 )
                 .await
                 .with_context(|| format!("spawning participant {handle}"))?;
@@ -228,17 +276,25 @@ impl TestWorld {
             .get_mut(handle)
             .ok_or_else(|| anyhow::anyhow!("unknown participant: {handle}"))?;
 
-        let child = Command::new(&self.moat_cli_bin)
+        let bin = match proc.kind {
+            ParticipantKind::RustCli => self.moat_cli_bin.clone(),
+            ParticipantKind::DartServer => self
+                .dart_server_bin
+                .clone()
+                .expect("dart_server_bin not set"),
+        };
+
+        let child = Command::new(&bin)
             .args(&proc.spawn_args)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .with_context(|| format!("restart moat-cli for {handle}"))?;
+            .with_context(|| format!("restart participant for {handle}"))?;
         proc.child = Some(child);
 
         wait_for_http(&proc.client, std::time::Duration::from_secs(10))
             .await
-            .with_context(|| format!("waiting for moat-cli ({handle}) to restart"))?;
+            .with_context(|| format!("waiting for participant ({handle}) to restart"))?;
         Ok(())
     }
 
@@ -258,6 +314,7 @@ impl TestWorld {
         full_handle: &str,
         pds_url: &str,
         drawbridge_ws: Option<&str>,
+        kind: ParticipantKind,
     ) -> Result<()> {
         let http_port = free_port()?;
         let http_addr = format!("127.0.0.1:{http_port}");
@@ -275,13 +332,27 @@ impl TestWorld {
             args.push("--drawbridge-url".to_string());
             args.push(db_url.to_string());
         }
+        if kind == ParticipantKind::DartServer {
+            if let Some(ref lib) = self.rust_lib_path {
+                args.push("--lib-path".to_string());
+                args.push(lib.to_str().unwrap().to_string());
+            }
+        }
 
-        let child = Command::new(&self.moat_cli_bin)
+        let bin = match kind {
+            ParticipantKind::RustCli => self.moat_cli_bin.clone(),
+            ParticipantKind::DartServer => self
+                .dart_server_bin
+                .clone()
+                .expect("dart_server_bin not set"),
+        };
+
+        let child = Command::new(&bin)
             .args(&args)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .with_context(|| format!("spawn moat-cli for {full_handle}"))?;
+            .with_context(|| format!("spawn participant ({:?}) for {full_handle}", kind))?;
 
         let base_url = format!("http://{http_addr}");
         let client = MoatCliClient::new(&base_url);
@@ -289,7 +360,7 @@ impl TestWorld {
         // Wait until the HTTP server is up (up to 10 s).
         wait_for_http(&client, std::time::Duration::from_secs(10))
             .await
-            .with_context(|| format!("waiting for moat-cli ({full_handle}) to start"))?;
+            .with_context(|| format!("waiting for participant ({full_handle}) to start"))?;
 
         self.participants.insert(
             short_handle.to_string(),
@@ -297,6 +368,7 @@ impl TestWorld {
                 child: Some(child),
                 storage,
                 spawn_args: args,
+                kind,
                 client,
             },
         );
@@ -352,6 +424,89 @@ fn moat_cli_binary() -> Result<PathBuf> {
     }
 
     Ok(bin)
+}
+
+/// Path to the compiled `moat_dart_server` binary and Rust FFI dylib.
+///
+/// Builds the Rust FFI lib (`rust_lib_moat_flutter`) and compiles the Dart
+/// server binary if either is missing.  Returns `(dart_binary, lib_path)`.
+fn dart_server_binary() -> Result<(PathBuf, PathBuf)> {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+        .context("CARGO_MANIFEST_DIR not set — run via cargo test")?;
+
+    let workspace_root = PathBuf::from(&manifest_dir)
+        .parent()
+        .context("manifest_dir has no parent")?
+        .to_path_buf();
+
+    let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
+
+    // ── 1. Build the Rust FFI dylib ───────────────────────────────────────────
+    let rust_crate_dir = workspace_root.join("moat-dart").join("app").join("rust");
+    let lib_name = format!(
+        "{}rust_lib_moat_flutter.{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_EXTENSION
+    );
+    let lib_path = rust_crate_dir.join("target").join(profile).join(&lib_name);
+
+    if !lib_path.exists() {
+        eprintln!("beacon: rust_lib_moat_flutter not found, building…");
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+        let mut cmd = Command::new(&cargo);
+        cmd.arg("build")
+            .arg("--manifest-path")
+            .arg(rust_crate_dir.join("Cargo.toml"));
+        if !cfg!(debug_assertions) {
+            cmd.arg("--release");
+        }
+        let status = cmd
+            .current_dir(&workspace_root)
+            .status()
+            .context("running cargo build rust_lib_moat_flutter")?;
+        if !status.success() {
+            anyhow::bail!("cargo build rust_lib_moat_flutter failed");
+        }
+        if !lib_path.exists() {
+            anyhow::bail!(
+                "rust_lib_moat_flutter still not found at {} after build",
+                lib_path.display()
+            );
+        }
+    }
+
+    // ── 2. Compile the Dart server binary ─────────────────────────────────────
+    let dart_bin_dir = workspace_root.join("target").join("moat-dart-server");
+    std::fs::create_dir_all(&dart_bin_dir).context("create moat-dart-server output dir")?;
+    let dart_bin = dart_bin_dir.join("moat_dart_server");
+
+    if !dart_bin.exists() {
+        eprintln!("beacon: moat_dart_server not found, compiling…");
+        let dart_source = workspace_root
+            .join("moat-dart")
+            .join("server")
+            .join("bin")
+            .join("moat_dart_server.dart");
+        let status = Command::new("dart")
+            .args(["compile", "exe"])
+            .arg(&dart_source)
+            .arg("-o")
+            .arg(&dart_bin)
+            .current_dir(&workspace_root)
+            .status()
+            .context("running dart compile exe moat_dart_server")?;
+        if !status.success() {
+            anyhow::bail!("dart compile exe moat_dart_server failed");
+        }
+        if !dart_bin.exists() {
+            anyhow::bail!(
+                "moat_dart_server still not found at {} after compile",
+                dart_bin.display()
+            );
+        }
+    }
+
+    Ok((dart_bin, lib_path))
 }
 
 /// Poll `GET /status` until it returns 200 or the timeout elapses.

@@ -1,0 +1,10 @@
+name: moat_dart_common
+publish_to: none
+environment:
+  sdk: ">=3.5.0 <4.0.0"
+resolution: workspace
+dependencies:
+  flutter_rust_bridge: 2.11.1
+  http: ^1.2.2
+  web_socket_channel: ^3.0.3
+  web: ^1.1.0

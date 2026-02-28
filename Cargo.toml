@@ -8,7 +8,7 @@ members = [
     "moat-beacon",
 ]
 exclude = [
-    "moat-flutter/rust",
+    "moat-dart/app/rust",
 ]
 
 [workspace.package]
