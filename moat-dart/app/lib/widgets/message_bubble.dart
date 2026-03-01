@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../models/message.dart';
+import 'package:moat_dart_common/moat_dart_common.dart';
 import 'avatar_widget.dart';
 
 /// A message bubble widget for displaying a single message

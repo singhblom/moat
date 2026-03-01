@@ -2,11 +2,8 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:moat_flutter/models/conversation.dart';
-import 'package:moat_flutter/models/message.dart';
-import 'package:moat_flutter/providers/auth_provider.dart';
+import 'package:moat_dart_common/moat_dart_common.dart' hide ConversationManager;
 import 'package:moat_flutter/services/conversation_manager.dart';
-import 'package:moat_flutter/services/message_storage.dart';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -55,8 +52,8 @@ void main() {
 
   setUp(() {
     tempDir = Directory.systemTemp.createTempSync('conv_manager_test_');
-    storage = MessageStorage(directory: tempDir);
-    manager.init(authProvider: AuthProvider(), storage: storage);
+    storage = MessageStorage(backend: IoDocumentBackend(tempDir));
+    manager.init(storage: storage);
   });
 
   tearDown(() {
@@ -132,8 +129,8 @@ void main() {
 
     manager.notifyReaction(conv, msgId, '\u{1F44D}', 'did:plc:bob');
 
-    // Allow async write to complete.
-    await Future.delayed(Duration.zero);
+    // Allow async write to complete (includes file parent.create + writeAsString).
+    await Future<void>.delayed(const Duration(milliseconds: 50));
 
     expect(repo.messages.first.reactions.length, 1);
     expect(repo.messages.first.reactions.first.emoji, '\u{1F44D}');

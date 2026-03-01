@@ -1,7 +1,5 @@
 import 'package:flutter/foundation.dart';
-import '../models/message.dart';
-import 'message_storage.dart';
-import 'send_queue.dart';
+import 'package:moat_dart_common/moat_dart_common.dart' hide ConversationRepository, moatLog;
 import 'debug_log.dart';
 
 /// Single owner of all message state for a conversation.
@@ -18,7 +16,7 @@ class ConversationRepository extends ChangeNotifier {
   final String groupIdHex;
   final Uint8List groupId;
   final MessageStorage _storage;
-  final SendQueue sendQueue;
+  final SendQueue? sendQueue;
 
   List<Message> _persisted = [];
   List<Message> _optimistic = [];
@@ -33,11 +31,11 @@ class ConversationRepository extends ChangeNotifier {
     required this.groupIdHex,
     required this.groupId,
     required MessageStorage storage,
-    required this.sendQueue,
+    this.sendQueue,
   }) : _storage = storage {
     // Wire SendQueue callbacks back to this repository.
-    sendQueue.onSent = _onSendSuccess;
-    sendQueue.onFailed = _onSendFailed;
+    sendQueue?.onSent = _onSendSuccess;
+    sendQueue?.onFailed = _onSendFailed;
   }
 
   // ---------------------------------------------------------------------------
@@ -69,8 +67,8 @@ class ConversationRepository extends ChangeNotifier {
   bool get isLoading => _isLoading;
   String? get error => _error;
   bool get isLoaded => _loaded;
-  bool get isSending => sendQueue.isProcessing;
-  bool get hasQueuedMessages => sendQueue.hasQueued;
+  bool get isSending => sendQueue?.isProcessing ?? false;
+  bool get hasQueuedMessages => sendQueue?.hasQueued ?? false;
 
   // ---------------------------------------------------------------------------
   // Load / unload (screen lifecycle)
@@ -196,7 +194,7 @@ class ConversationRepository extends ChangeNotifier {
     _optimistic.add(optimisticMessage);
     notifyListeners();
 
-    sendQueue.enqueue(PendingMessage(localId: localId, text: text));
+    sendQueue?.enqueue(PendingMessage(localId: localId, text: text));
     return localId;
   }
 
@@ -212,7 +210,7 @@ class ConversationRepository extends ChangeNotifier {
 
     // Delegate actual send to the send queue's service.
     try {
-      await sendQueue.sendReaction(
+      await sendQueue?.sendReaction(
         targetMessageId: targetMessage.messageId!,
         emoji: emoji,
       );
@@ -237,12 +235,12 @@ class ConversationRepository extends ChangeNotifier {
           _optimistic[index].copyWith(status: MessageStatus.sending);
       notifyListeners();
     }
-    sendQueue.retry(localId);
+    sendQueue?.retry(localId);
   }
 
   /// Cancel a failed message — removes from optimistic list and send queue.
   void cancelMessage(String localId) {
-    sendQueue.cancel(localId);
+    sendQueue?.cancel(localId);
     _optimistic.removeWhere((m) => m.localId == localId || m.id == localId);
     notifyListeners();
   }

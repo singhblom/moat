@@ -1,27 +1,21 @@
 import 'dart:convert';
-import 'dart:io';
 import '../models/conversation.dart';
+import 'document_backend.dart';
 
 /// Local storage for conversations (non-sensitive metadata).
-/// Uses a constructor-injected [Directory] — no path_provider dependency.
+/// Uses a constructor-injected [DocumentBackend] — no path_provider dependency.
 class ConversationStorage {
-  static const _fileName = 'conversations.json';
+  static const _path = 'conversations/conversations.json';
 
-  final Directory directory;
+  final DocumentBackend _backend;
 
-  ConversationStorage({required this.directory});
+  ConversationStorage({required DocumentBackend backend}) : _backend = backend;
 
-  File get _file => File('${directory.path}/$_fileName');
-
-  /// Load all conversations from disk.
+  /// Load all conversations from storage.
   Future<List<Conversation>> loadAll() async {
     try {
-      await directory.create(recursive: true);
-      final file = _file;
-      if (!await file.exists()) {
-        return [];
-      }
-      final contents = await file.readAsString();
+      final contents = await _backend.read(_path);
+      if (contents == null) return [];
       final list = jsonDecode(contents) as List<dynamic>;
       return list
           .map((e) => Conversation.fromJson(e as Map<String, dynamic>))
@@ -31,11 +25,10 @@ class ConversationStorage {
     }
   }
 
-  /// Save all conversations to disk.
+  /// Save all conversations to storage.
   Future<void> saveAll(List<Conversation> conversations) async {
-    await directory.create(recursive: true);
     final json = conversations.map((c) => c.toJson()).toList();
-    await _file.writeAsString(jsonEncode(json));
+    await _backend.write(_path, jsonEncode(json));
   }
 
   /// Add or update a conversation.
@@ -75,10 +68,7 @@ class ConversationStorage {
 
   /// Clear all conversations.
   Future<void> clearAll() async {
-    final file = _file;
-    if (await file.exists()) {
-      await file.delete();
-    }
+    await _backend.delete(_path);
   }
 
   bool _bytesEqual(List<int> a, List<int> b) {

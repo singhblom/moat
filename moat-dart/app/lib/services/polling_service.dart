@@ -1,16 +1,10 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
-import '../models/conversation.dart';
-import '../models/message.dart';
+import 'package:moat_dart_common/moat_dart_common.dart' hide PollingService, ConversationManager, moatLog;
 import '../providers/auth_provider.dart';
 import '../providers/conversations_provider.dart';
 import '../providers/watch_list_provider.dart';
-import '../src/rust/api/simple.dart';
-import '../utils/message_payload.dart';
-import 'atproto_client.dart';
 import 'conversation_manager.dart';
-import 'drawbridge_service.dart';
-import 'secure_storage.dart';
 import 'debug_log.dart';
 
 /// Service that polls for events from watched DIDs and processes invites
@@ -30,11 +24,11 @@ class PollingService {
     required AuthProvider authProvider,
     required ConversationsProvider conversationsProvider,
     required WatchListProvider watchListProvider,
-    SecureStorageService? secureStorage,
+    required SecureStorageService secureStorage,
   })  : _authProvider = authProvider,
         _conversationsProvider = conversationsProvider,
         _watchListProvider = watchListProvider,
-        _secureStorage = secureStorage ?? SecureStorageService();
+        _secureStorage = secureStorage;
 
   /// Start polling for events (every 5 seconds)
   void startPolling() {

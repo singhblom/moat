@@ -1,149 +1,66 @@
 import 'package:flutter/foundation.dart';
-import '../models/conversation.dart';
-import '../services/conversation_storage.dart';
+import 'package:moat_dart_common/moat_dart_common.dart';
 
-/// Provider for managing conversations list
+/// Provider for managing conversations list.
+/// Thin [ChangeNotifier] wrapper around [ConversationsService].
 class ConversationsProvider extends ChangeNotifier {
-  final ConversationStorage _storage;
+  final ConversationsService _service;
 
-  List<Conversation> _conversations = [];
-  bool _isLoading = false;
+  ConversationsProvider({required ConversationsService service})
+      : _service = service;
 
-  ConversationsProvider({ConversationStorage? storage})
-      : _storage = storage ?? ConversationStorage();
+  List<Conversation> get conversations => _service.conversations;
+  bool get isLoading => _service.isLoading;
 
-  List<Conversation> get conversations => List.unmodifiable(_conversations);
-  bool get isLoading => _isLoading;
-
-  /// Initialize and load conversations from storage
   Future<void> init() async {
-    _isLoading = true;
-    notifyListeners();
-
-    try {
-      _conversations = await _storage.loadAll();
-      _sortConversations();
-    } catch (e) {
-      debugPrint('Failed to load conversations: $e');
-      _conversations = [];
-    }
-
-    _isLoading = false;
+    await _service.init();
     notifyListeners();
   }
 
-  /// Refresh conversations from storage
   Future<void> refresh() async {
-    _isLoading = true;
-    notifyListeners();
-
-    try {
-      _conversations = await _storage.loadAll();
-      _sortConversations();
-    } catch (e) {
-      debugPrint('Failed to refresh conversations: $e');
-    }
-
-    _isLoading = false;
+    await _service.refresh();
     notifyListeners();
   }
 
-  /// Add or update a conversation
   Future<void> saveConversation(Conversation conversation) async {
-    await _storage.save(conversation);
-
-    final index = _conversations.indexWhere(
-      (c) => _bytesEqual(c.groupId, conversation.groupId),
-    );
-
-    if (index >= 0) {
-      _conversations[index] = conversation;
-    } else {
-      _conversations.add(conversation);
-    }
-
-    _sortConversations();
+    await _service.saveConversation(conversation);
     notifyListeners();
   }
 
-  /// Delete a conversation
   Future<void> deleteConversation(List<int> groupId) async {
-    await _storage.delete(groupId);
-    _conversations.removeWhere((c) => _bytesEqual(c.groupId, groupId));
+    await _service.deleteConversation(groupId);
     notifyListeners();
   }
 
-  /// Find a conversation by group ID
-  Conversation? findByGroupId(List<int> groupId) {
-    try {
-      return _conversations.firstWhere(
-        (c) => _bytesEqual(c.groupId, groupId),
-      );
-    } catch (_) {
-      return null;
-    }
-  }
+  Conversation? findByGroupId(List<int> groupId) =>
+      _service.findByGroupId(groupId);
 
-  /// Update last message info for a conversation
   Future<void> updateLastMessage(
     List<int> groupId, {
     required String preview,
     required DateTime timestamp,
     bool incrementUnread = false,
   }) async {
-    final conversation = findByGroupId(groupId);
-    if (conversation == null) return;
-
-    conversation.lastMessagePreview = preview;
-    conversation.lastMessageAt = timestamp;
-    if (incrementUnread) {
-      conversation.unreadCount++;
-    }
-
-    await saveConversation(conversation);
+    await _service.updateLastMessage(
+      groupId,
+      preview: preview,
+      timestamp: timestamp,
+      incrementUnread: incrementUnread,
+    );
+    notifyListeners();
   }
 
-  /// Mark conversation as read
   Future<void> markAsRead(List<int> groupId) async {
-    final conversation = findByGroupId(groupId);
-    if (conversation == null) return;
-
-    conversation.unreadCount = 0;
-    await saveConversation(conversation);
+    await _service.markAsRead(groupId);
+    notifyListeners();
   }
 
-  /// Update conversation properties
   Future<void> updateConversation(
     List<int> groupId, {
     int? epoch,
     String? displayName,
   }) async {
-    final conversation = findByGroupId(groupId);
-    if (conversation == null) return;
-
-    if (epoch != null) {
-      conversation.epoch = epoch;
-    }
-    if (displayName != null) {
-      conversation.displayName = displayName;
-    }
-
-    await saveConversation(conversation);
-  }
-
-  void _sortConversations() {
-    _conversations.sort((a, b) {
-      final aTime = a.lastMessageAt ?? a.createdAt;
-      final bTime = b.lastMessageAt ?? b.createdAt;
-      return bTime.compareTo(aTime); // Most recent first
-    });
-  }
-
-  bool _bytesEqual(List<int> a, List<int> b) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i] != b[i]) return false;
-    }
-    return true;
+    await _service.updateConversation(groupId, epoch: epoch, displayName: displayName);
+    notifyListeners();
   }
 }

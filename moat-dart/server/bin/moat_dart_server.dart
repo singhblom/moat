@@ -40,12 +40,9 @@ Future<void> main(List<String> args) async {
   // Set up storage.
   final storageBackend = FileStorageBackend(storageDir);
   final secureStorage = SecureStorageService(storage: storageBackend);
-  final convStorage = ConversationStorage(
-    directory: Directory('$storageDirPath/conversations'),
-  );
-  final msgStorage = MessageStorage(
-    directory: Directory('$storageDirPath/messages'),
-  );
+  final docBackend = IoDocumentBackend(storageDir);
+  final convStorage = ConversationStorage(backend: docBackend);
+  final msgStorage = MessageStorage(backend: docBackend);
 
   // Create services.
   final atprotoClient = AtprotoClient(pdsOverride: pdsUrl);

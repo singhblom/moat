@@ -3,7 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:moat_flutter/models/conversation.dart';
+import 'package:moat_dart_common/moat_dart_common.dart';
 
 /// Tests for conversation storage JSON format and roundtrip behavior.
 ///

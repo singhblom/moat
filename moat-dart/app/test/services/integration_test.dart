@@ -2,12 +2,8 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:moat_flutter/models/conversation.dart';
-import 'package:moat_flutter/models/message.dart';
+import 'package:moat_dart_common/moat_dart_common.dart' hide ConversationRepository;
 import 'package:moat_flutter/services/conversation_repository.dart';
-import 'package:moat_flutter/services/message_storage.dart';
-import 'package:moat_flutter/services/send_queue.dart';
-import 'package:moat_flutter/services/send_service.dart';
 
 // ---------------------------------------------------------------------------
 // Test doubles
@@ -102,7 +98,7 @@ void main() {
 
   setUp(() {
     tempDir = Directory.systemTemp.createTempSync('integration_test_');
-    storage = MessageStorage(directory: tempDir);
+    storage = MessageStorage(backend: IoDocumentBackend(tempDir));
   });
 
   tearDown(() {
@@ -138,9 +134,8 @@ void main() {
       expect(repo.messages.first.status, MessageStatus.sending);
       expect(repo.messages.first.content, 'Hello');
 
-      // Let the queue process (async).
-      await Future.delayed(Duration.zero);
-      await Future.delayed(Duration.zero);
+      // Let the queue process and disk writes complete (async).
+      await Future<void>.delayed(const Duration(milliseconds: 50));
 
       // After processing, message should be confirmed.
       expect(repo.messages.length, 1);

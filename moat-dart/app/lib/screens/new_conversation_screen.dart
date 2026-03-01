@@ -1,10 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../models/conversation.dart';
+import 'package:moat_dart_common/moat_dart_common.dart';
 import '../providers/auth_provider.dart';
 import '../providers/conversations_provider.dart';
-import '../services/drawbridge_service.dart';
-import '../src/rust/api/simple.dart' as ffi;
 
 class NewConversationScreen extends StatefulWidget {
   const NewConversationScreen({super.key});
@@ -97,7 +95,7 @@ class _NewConversationScreenState extends State<NewConversationScreen> {
       await auth.populateConversationTags(result.groupId);
 
       // 7. Register Drawbridge ticket and publish hint
-      final ticket = ffi.generateDrawbridgeTicket();
+      final ticket = generateDrawbridgeTicket();
       final ticketHex = ticket
           .map((b) => b.toRadixString(16).padLeft(2, '0'))
           .join();
@@ -112,7 +110,7 @@ class _NewConversationScreenState extends State<NewConversationScreen> {
       final session = auth.moatSession;
       final keyBundle = await auth.getKeyBundle();
       if (session != null && keyBundle != null) {
-        final hintEvent = ffi.createDrawbridgeHint(
+        final hintEvent = createDrawbridgeHint(
           handle: session,
           groupId: result.groupId,
           url: defaultDrawbridgeUrl,

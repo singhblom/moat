@@ -1,33 +1,29 @@
 import 'dart:convert';
-import 'dart:io';
 import '../models/bluesky_profile.dart';
 import 'atproto_client.dart';
 import 'debug_log.dart';
+import 'document_backend.dart';
 
 /// App-wide cache for Bluesky profile data.
-/// Uses a constructor-injected [Directory] — no path_provider dependency.
+/// Uses a constructor-injected [DocumentBackend] — no path_provider dependency.
 class ProfileCacheService {
-  static const _cacheFileName = 'profile_cache.json';
+  static const _path = 'profile_cache.json';
   static const _maxCacheAgeHours = 24;
 
   final AtprotoClient _client;
-  final Directory _directory;
+  final DocumentBackend _backend;
 
   final Map<String, BlueskyProfile> cache = {};
   final Map<String, Future<BlueskyProfile?>> _pendingFetches = {};
 
-  File? _cacheFile;
-
   ProfileCacheService({
     required AtprotoClient client,
-    required Directory directory,
+    required DocumentBackend backend,
   })  : _client = client,
-        _directory = directory;
+        _backend = backend;
 
-  /// Initialize and load cached profiles from disk.
+  /// Initialize and load cached profiles from storage.
   Future<void> init() async {
-    await _directory.create(recursive: true);
-    _cacheFile = File('${_directory.path}/$_cacheFileName');
     await _loadFromDisk();
   }
 
@@ -75,9 +71,7 @@ class ProfileCacheService {
 
   Future<void> clearCache() async {
     cache.clear();
-    if (_cacheFile != null && await _cacheFile!.exists()) {
-      await _cacheFile!.delete();
-    }
+    await _backend.delete(_path);
   }
 
   Future<BlueskyProfile?> _fetchProfile(String did) async {
@@ -112,34 +106,29 @@ class ProfileCacheService {
   }
 
   Future<void> _loadFromDisk() async {
-    if (_cacheFile == null) return;
-
     try {
-      if (await _cacheFile!.exists()) {
-        final contents = await _cacheFile!.readAsString();
-        final json = jsonDecode(contents) as Map<String, dynamic>;
+      final contents = await _backend.read(_path);
+      if (contents == null) return;
 
-        for (final entry in json.entries) {
-          final profile =
-              BlueskyProfile.fromJson(entry.value as Map<String, dynamic>);
-          if (DateTime.now().difference(profile.fetchedAt).inHours <
-              _maxCacheAgeHours) {
-            cache[entry.key] = profile;
-          }
+      final json = jsonDecode(contents) as Map<String, dynamic>;
+      for (final entry in json.entries) {
+        final profile =
+            BlueskyProfile.fromJson(entry.value as Map<String, dynamic>);
+        if (DateTime.now().difference(profile.fetchedAt).inHours <
+            _maxCacheAgeHours) {
+          cache[entry.key] = profile;
         }
-        moatLog('ProfileCacheService: Loaded ${cache.length} profiles from cache');
       }
+      moatLog('ProfileCacheService: Loaded ${cache.length} profiles from cache');
     } catch (e) {
       moatLog('ProfileCacheService: Failed to load profile cache: $e');
     }
   }
 
   Future<void> _saveToDisk() async {
-    if (_cacheFile == null) return;
-
     try {
       final json = {for (final e in cache.entries) e.key: e.value.toJson()};
-      await _cacheFile!.writeAsString(jsonEncode(json));
+      await _backend.write(_path, jsonEncode(json));
     } catch (e) {
       moatLog('ProfileCacheService: Failed to save profile cache: $e');
     }

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../models/conversation.dart';
-import '../models/message.dart';
+import 'package:moat_dart_common/moat_dart_common.dart' hide ConversationRepository;
 import '../providers/profile_provider.dart';
 import '../services/conversation_repository.dart';
 import '../widgets/message_bubble.dart';

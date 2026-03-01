@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../models/conversation.dart';
+import 'package:moat_dart_common/moat_dart_common.dart' hide ConversationManager, ConversationRepository;
 import '../providers/auth_provider.dart';
 import '../providers/conversations_provider.dart';
 import '../providers/theme_provider.dart';

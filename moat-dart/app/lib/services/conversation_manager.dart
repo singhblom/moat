@@ -1,10 +1,5 @@
-import '../models/conversation.dart';
-import '../models/message.dart';
-import '../providers/auth_provider.dart';
+import 'package:moat_dart_common/moat_dart_common.dart' hide ConversationManager, ConversationRepository;
 import 'conversation_repository.dart';
-import 'message_storage.dart';
-import 'send_queue.dart';
-import 'send_service.dart';
 
 /// Global singleton managing [ConversationRepository] lifecycle.
 ///
@@ -17,37 +12,39 @@ class ConversationManager {
 
   final Map<String, ConversationRepository> _repos = {};
 
-  MessageStorage _storage = MessageStorage();
-  AuthProvider? _authProvider;
+  MessageStorage? _storage;
+  AuthService? _authService;
 
   /// Must be called once after authentication, before any repos are created.
   void init({
-    required AuthProvider authProvider,
+    AuthService? authService,
     MessageStorage? storage,
   }) {
-    _authProvider = authProvider;
+    _authService = authService;
     if (storage != null) _storage = storage;
   }
 
   /// Get or lazily create a repository for a conversation.
   ConversationRepository getRepository(Conversation conversation) {
     return _repos.putIfAbsent(conversation.groupIdHex, () {
-      final sendService = SendService(authProvider: _authProvider!);
-      final sendQueue = SendQueue(
-        sendService: sendService,
-        conversation: conversation,
-      );
+      SendQueue? sendQueue;
+      if (_authService != null) {
+        final sendService = SendService(authService: _authService!);
+        sendQueue = SendQueue(
+          sendService: sendService,
+          conversation: conversation,
+        );
+      }
       return ConversationRepository(
         groupIdHex: conversation.groupIdHex,
         groupId: conversation.groupId,
-        storage: _storage,
+        storage: _storage!,
         sendQueue: sendQueue,
       );
     });
   }
 
   /// Called by [PollingService] when new messages arrive for a conversation.
-  /// Routes to the appropriate repository (creating it if needed).
   void notify(Conversation conversation, List<Message> messages) {
     getRepository(conversation).mergeFromPolling(messages);
   }

@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:moat_flutter/models/message.dart';
+import 'package:moat_dart_common/moat_dart_common.dart';
 
 /// Tests for SendQueue logic.
 ///

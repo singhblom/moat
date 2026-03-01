@@ -1,141 +1,45 @@
 import 'package:flutter/foundation.dart';
-import '../services/secure_storage.dart';
-import '../services/atproto_client.dart';
+import 'package:moat_dart_common/moat_dart_common.dart';
 
-/// Entry in the watch list with DID and resolved handle
-class WatchListEntry {
-  final String did;
-  final String handle;
-  final DateTime addedAt;
+export 'package:moat_dart_common/moat_dart_common.dart' show WatchListEntry;
 
-  WatchListEntry({
-    required this.did,
-    required this.handle,
-    required this.addedAt,
-  });
-
-  Map<String, dynamic> toJson() => {
-        'did': did,
-        'handle': handle,
-        'addedAt': addedAt.toIso8601String(),
-      };
-
-  factory WatchListEntry.fromJson(Map<String, dynamic> json) => WatchListEntry(
-        did: json['did'] as String,
-        handle: json['handle'] as String,
-        addedAt: DateTime.parse(json['addedAt'] as String),
-      );
-}
-
-/// Provider for managing the watch list of DIDs to poll for invites
+/// Provider for managing the watch list of DIDs to poll for invites.
+/// Thin [ChangeNotifier] wrapper around [WatchListService].
 class WatchListProvider extends ChangeNotifier {
-  final SecureStorageService _secureStorage;
-  final AtprotoClient _atprotoClient;
+  final WatchListService _service;
 
-  List<WatchListEntry> _entries = [];
-  bool _isLoading = false;
+  // Local error state — provider owns dismissal lifecycle.
   String? _error;
 
-  WatchListProvider({
-    required AtprotoClient atprotoClient,
-    SecureStorageService? secureStorage,
-  })  : _atprotoClient = atprotoClient,
-        _secureStorage = secureStorage ?? SecureStorageService();
+  WatchListProvider({required WatchListService service}) : _service = service;
 
-  List<WatchListEntry> get entries => List.unmodifiable(_entries);
-  List<String> get dids => _entries.map((e) => e.did).toList();
-  bool get isLoading => _isLoading;
+  List<WatchListEntry> get entries => _service.entries;
+  List<String> get dids => _service.dids;
+  bool get isLoading => _service.isLoading;
   String? get error => _error;
-  bool get isEmpty => _entries.isEmpty;
+  bool get isEmpty => _service.isEmpty;
 
-  /// Initialize and load watch list from storage
   Future<void> init() async {
-    _isLoading = true;
-    notifyListeners();
-
-    try {
-      final storedDids = await _secureStorage.loadWatchList();
-      // For now, we store just DIDs - handles need to be resolved
-      // In a more complete implementation, we'd store full entries
-      _entries = [];
-      for (final did in storedDids) {
-        try {
-          final handle = await _atprotoClient.resolveHandle(did);
-          _entries.add(WatchListEntry(
-            did: did,
-            handle: handle,
-            addedAt: DateTime.now(),
-          ));
-        } catch (_) {
-          // If we can't resolve handle, use DID as display
-          _entries.add(WatchListEntry(
-            did: did,
-            handle: did,
-            addedAt: DateTime.now(),
-          ));
-        }
-      }
-      _error = null;
-    } catch (e) {
-      debugPrint('Failed to load watch list: $e');
-      _error = e.toString();
-    }
-
-    _isLoading = false;
-    notifyListeners();
-  }
-
-  /// Add a handle to the watch list (resolves to DID)
-  Future<void> addHandle(String handle) async {
-    _isLoading = true;
     _error = null;
-    notifyListeners();
-
-    try {
-      // Resolve handle to DID
-      final did = await _atprotoClient.resolveDid(handle);
-
-      // Check for duplicates
-      if (_entries.any((e) => e.did == did)) {
-        _error = 'Already watching this user';
-        _isLoading = false;
-        notifyListeners();
-        return;
-      }
-
-      // Add to list
-      final entry = WatchListEntry(
-        did: did,
-        handle: handle,
-        addedAt: DateTime.now(),
-      );
-      _entries.add(entry);
-
-      // Persist
-      await _secureStorage.saveWatchList(dids);
-      _error = null;
-    } catch (e) {
-      debugPrint('Failed to add to watch list: $e');
-      _error = e.toString();
-    }
-
-    _isLoading = false;
+    await _service.init();
+    _error = _service.error;
     notifyListeners();
   }
 
-  /// Remove a DID from the watch list
+  Future<void> addHandle(String handle) async {
+    _error = null;
+    await _service.addHandle(handle);
+    _error = _service.error;
+    notifyListeners();
+  }
+
   Future<void> removeDid(String did) async {
-    _entries.removeWhere((e) => e.did == did);
-    await _secureStorage.saveWatchList(dids);
+    await _service.removeDid(did);
     notifyListeners();
   }
 
-  /// Check if a DID is being watched
-  bool isWatching(String did) {
-    return _entries.any((e) => e.did == did);
-  }
+  bool isWatching(String did) => _service.isWatching(did);
 
-  /// Clear error
   void clearError() {
     _error = null;
     notifyListeners();

@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:moat_dart_common/moat_dart_common.dart' hide PollingService, ConversationManager, DebugLog;
 import 'providers/auth_provider.dart';
 import 'providers/conversations_provider.dart';
 import 'providers/profile_provider.dart';
@@ -8,11 +9,11 @@ import 'providers/theme_provider.dart';
 import 'providers/watch_list_provider.dart';
 import 'screens/login_screen.dart';
 import 'screens/conversations_screen.dart';
-import 'services/drawbridge_service.dart';
+import 'services/flutter_storage_backend.dart';
+import 'services/flutter_storage_factory.dart';
 import 'services/polling_service.dart';
 import 'services/conversation_manager.dart';
 import 'services/debug_log.dart';
-import 'src/rust/frb_generated.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -25,16 +26,15 @@ Future<void> main() async {
   } catch (e) {
     debugPrint('[moat] Failed to initialize Rust library: $e');
   }
+
+  final docBackend = await createDocumentBackend();
+  final storageBackend = FlutterStorageBackend();
+
   debugPrint('[moat] Starting app...');
-  runApp(const MoatApp());
+  runApp(MoatApp(docBackend: docBackend, storageBackend: storageBackend));
 }
 
 /// Apply custom fonts to the text theme.
-/// Platypi is used for display/headline/title styles.
-/// Body/label styles use default Roboto (bundled for web COEP compatibility).
-/// For emoji rendering, use [emojiTextStyle] on pure-emoji widgets only —
-/// CanvasKit's greedy font matching means NotoColorEmoji cannot be mixed
-/// with Roboto without breaking space/digit metrics.
 TextTheme _applyFonts(TextTheme base) {
   const platypi = 'Platypi';
 
@@ -55,13 +55,34 @@ TextTheme _applyFonts(TextTheme base) {
 }
 
 class MoatApp extends StatelessWidget {
-  const MoatApp({super.key});
+  final DocumentBackend docBackend;
+  final StorageBackend storageBackend;
+
+  const MoatApp({
+    super.key,
+    required this.docBackend,
+    required this.storageBackend,
+  });
 
   @override
   Widget build(BuildContext context) {
-    // Create AuthProvider first since others depend on it
-    final authProvider = AuthProvider()..init();
-    final conversationsProvider = ConversationsProvider()..init();
+    final secureStorage = SecureStorageService(storage: storageBackend);
+    final atprotoClient = AtprotoClient();
+    final authService = AuthService(
+      atprotoClient: atprotoClient,
+      secureStorage: secureStorage,
+    );
+    final authProvider = AuthProvider(service: authService)..init();
+
+    final convStorage = ConversationStorage(backend: docBackend);
+    final convsService = ConversationsService(storage: convStorage);
+    final conversationsProvider = ConversationsProvider(service: convsService)
+      ..init();
+
+    final msgStorage = MessageStorage(backend: docBackend);
+
+    final profileCacheService =
+        ProfileCacheService(client: atprotoClient, backend: docBackend);
 
     return MultiProvider(
       providers: [
@@ -69,35 +90,41 @@ class MoatApp extends StatelessWidget {
         ChangeNotifierProvider.value(value: authProvider),
         ChangeNotifierProvider.value(value: conversationsProvider),
         ChangeNotifierProxyProvider<AuthProvider, WatchListProvider>(
-          create: (context) => WatchListProvider(
-            atprotoClient: authProvider.atprotoClient,
-          ),
+          create: (context) {
+            final watchListService = WatchListService(
+              atprotoClient: authProvider.atprotoClient,
+              secureStorage: secureStorage,
+            );
+            return WatchListProvider(service: watchListService);
+          },
           update: (context, auth, previous) {
             if (previous == null) {
-              final provider = WatchListProvider(
+              final watchListService = WatchListService(
                 atprotoClient: auth.atprotoClient,
+                secureStorage: secureStorage,
               );
+              final provider = WatchListProvider(service: watchListService);
               if (auth.isAuthenticated) {
                 provider.init();
               }
               return provider;
             }
-            // Re-initialize when auth state changes
-            if (auth.isAuthenticated && previous.entries.isEmpty) {
+            if (auth.isAuthenticated && previous.isEmpty) {
               previous.init();
             }
             return previous;
           },
         ),
         ChangeNotifierProxyProvider<AuthProvider, ProfileProvider>(
-          create: (context) => ProfileProvider(
-            atprotoClient: authProvider.atprotoClient,
-          ),
+          create: (context) {
+            final provider = ProfileProvider(cacheService: profileCacheService);
+            provider.init();
+            return provider;
+          },
           update: (context, auth, previous) {
             if (previous == null) {
-              final provider = ProfileProvider(
-                atprotoClient: auth.atprotoClient,
-              );
+              final provider =
+                  ProfileProvider(cacheService: profileCacheService);
               provider.init();
               return provider;
             }
@@ -128,7 +155,10 @@ class MoatApp extends StatelessWidget {
               textTheme: _applyFonts(ThemeData.dark().textTheme),
               useMaterial3: true,
             ),
-            home: const AuthGate(),
+            home: AuthGate(
+              msgStorage: msgStorage,
+              secureStorage: secureStorage,
+            ),
           );
         },
       ),
@@ -136,9 +166,15 @@ class MoatApp extends StatelessWidget {
   }
 }
 
-/// Gate that shows login or main app based on auth state
 class AuthGate extends StatefulWidget {
-  const AuthGate({super.key});
+  final MessageStorage msgStorage;
+  final SecureStorageService secureStorage;
+
+  const AuthGate({
+    super.key,
+    required this.msgStorage,
+    required this.secureStorage,
+  });
 
   @override
   State<AuthGate> createState() => _AuthGateState();
@@ -167,12 +203,10 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
     switch (state) {
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
-        // Tear down WebSockets on background
         DrawbridgeService.instance.disconnectAll();
         _pollingService?.stopPolling();
         debugPrint('App backgrounded: Drawbridge disconnected, polling stopped');
       case AppLifecycleState.resumed:
-        // Reconnect on resume
         _pollingService?.startPolling();
         final auth = context.read<AuthProvider>();
         if (auth.isAuthenticated) {
@@ -184,16 +218,12 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
     }
   }
 
-  /// Reconnect partner relays and re-register tickets from persisted hints.
-  /// Does NOT call connectOwn — the caller is responsible for that.
   Future<void> _reconnectDrawbridge() async {
     final auth = context.read<AuthProvider>();
     final conversations = context.read<ConversationsProvider>().conversations;
     if (!auth.isAuthenticated) return;
 
     final db = DrawbridgeService.instance;
-
-    // Reconnect partner relays from persisted hints
     final session = auth.moatSession;
     if (session == null) return;
 
@@ -210,7 +240,6 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       }
     }
 
-    // Re-register own tickets
     for (final conv in conversations) {
       if (conv.ownDrawbridgeTicketHex != null) {
         db.registerTicket(conv.groupIdHex, conv.ownDrawbridgeTicketHex!);
@@ -223,26 +252,25 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   void _startPollingIfNeeded(AuthProvider auth) {
     if (auth.isAuthenticated && !_pollingStarted) {
       _pollingStarted = true;
-      // Start polling when authenticated
       _pollingService = PollingService(
         authProvider: auth,
         conversationsProvider: context.read<ConversationsProvider>(),
         watchListProvider: context.read<WatchListProvider>(),
+        secureStorage: widget.secureStorage,
       );
-      // Initialize ConversationManager with auth provider
-      ConversationManager.instance.init(authProvider: auth);
+      ConversationManager.instance.init(
+        authService: auth.service,
+        storage: widget.msgStorage,
+      );
 
       _pollingService!.onNewConversation = () {
-        // Refresh conversations when a new one is received
         context.read<ConversationsProvider>().refresh();
       };
       _pollingService!.startPolling();
       debugPrint('PollingService started');
 
-      // Initialize Drawbridge
       _initDrawbridge(auth);
     } else if (!auth.isAuthenticated && _pollingStarted) {
-      // Stop polling when logged out
       _pollingService?.dispose();
       _pollingService = null;
       _pollingStarted = false;
@@ -259,15 +287,11 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
     final db = DrawbridgeService.instance;
     db.init(did: auth.did!, keyBundle: Uint8List.fromList(keyBundle));
 
-    // Wire up new_event → pollNow
     db.onNewEvent = () {
       _pollingService?.poll();
     };
 
-    // Connect to own relay
     await db.connectOwn(defaultDrawbridgeUrl);
-
-    // Reconnect partner relays from persisted conversation hints
     await _reconnectDrawbridge();
   }
 
@@ -275,8 +299,6 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
 
-    // Start/stop polling based on auth state
-    // Use addPostFrameCallback to avoid calling during build
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _startPollingIfNeeded(auth);
     });
@@ -313,7 +335,9 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
                   Text(
                     'Messaging on ATProto',
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onSurfaceVariant,
                         ),
                   ),
                   const SizedBox(height: 32),

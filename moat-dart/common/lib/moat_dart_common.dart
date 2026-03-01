@@ -13,6 +13,7 @@ export 'utils/message_payload.dart';
 export 'services/storage_backend.dart';
 export 'services/file_storage_backend.dart';
 export 'services/secure_storage.dart';
+export 'services/document_backend.dart';
 export 'services/conversation_storage.dart';
 export 'services/message_storage.dart';
 export 'services/debug_log.dart';

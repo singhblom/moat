@@ -43,6 +43,7 @@ class AuthService {
   String? get deviceName => _deviceName;
   AtprotoClient get atprotoClient => _atprotoClient;
   MoatSessionHandle? get moatSession => _moatSession;
+  SecureStorageService get secureStorage => _secureStorage;
 
   /// Initialize and check for existing session.
   Future<void> init() async {

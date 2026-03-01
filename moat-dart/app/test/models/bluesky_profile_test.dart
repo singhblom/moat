@@ -1,7 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:moat_flutter/models/bluesky_profile.dart';
+import 'package:moat_dart_common/moat_dart_common.dart';
 
 void main() {
   group('BlueskyProfile', () {
