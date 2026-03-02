@@ -298,15 +298,34 @@ pub(crate) enum BgEvent {
 impl BgEvent {
     /// Whether this event requires async handling (must be processed outside the
     /// synchronous drain loop). Shared by TUI and HTTP headless loop.
+    ///
+    /// Uses an exhaustive match so that adding a new variant is a compile error
+    /// until you explicitly decide whether it needs async handling.
     pub(crate) fn is_async(&self) -> bool {
-        matches!(
-            self,
+        match self {
             BgEvent::DrawbridgeConnectOwn { .. }
-                | BgEvent::DrawbridgeHandleHint { .. }
-                | BgEvent::DrawbridgeUpdateTags { .. }
-                | BgEvent::DrawbridgeNotifyEventPosted { .. }
-                | BgEvent::DrawbridgeRetryDisconnected
-        )
+            | BgEvent::DrawbridgeHandleHint { .. }
+            | BgEvent::DrawbridgeUpdateTags { .. }
+            | BgEvent::DrawbridgeNotifyEventPosted { .. }
+            | BgEvent::DrawbridgeRetryDisconnected
+            | BgEvent::DrawbridgeReconnectPartners => true,
+
+            BgEvent::PollFetched { .. }
+            | BgEvent::SendPublished { .. }
+            | BgEvent::SendFailed(_)
+            | BgEvent::LoggedIn { .. }
+            | BgEvent::LoginFailed(_)
+            | BgEvent::PollError(_)
+            | BgEvent::DrawbridgeNewEvent { .. }
+            | BgEvent::DrawbridgeDisconnected { .. }
+            | BgEvent::DrawbridgeConnected { .. }
+            | BgEvent::HandleResolved { .. }
+            | BgEvent::BlobUploaded { .. }
+            | BgEvent::BlobFetched { .. }
+            | BgEvent::BlobFetchFailed { .. }
+            | BgEvent::ImageUploaded { .. }
+            | BgEvent::ImageBlobFetched { .. } => false,
+        }
     }
 }
 
