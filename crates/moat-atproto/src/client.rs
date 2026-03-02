@@ -270,10 +270,22 @@ impl MoatAtprotoClient {
         Err(Error::Pds(format!("No PDS endpoint found for {}", did)))
     }
 
-    /// Create an unauthenticated agent for a specific PDS (reuses the timeout client).
+    /// Create an unauthenticated agent for a specific PDS.
+    ///
+    /// Uses a **fresh** reqwest::Client (new connection pool) intentionally.
+    /// Sharing the authenticated agent's pool causes bsky.social to return
+    /// HTTP 408 ("Request Timeout") when it decides to close an idle keep-alive
+    /// connection: bsky.social sends a proper 408 response rather than a TCP RST,
+    /// so reqwest doesn't retry automatically and the error propagates up.
+    /// A fresh pool starts with no connections, so the first request always opens
+    /// a clean one and avoids the stale-connection 408.
     fn agent_for_pds(&self, pds_url: &str) -> AtpAgent<MemorySessionStore, ReqwestClient> {
+        let fresh_client = reqwest::Client::builder()
+            .timeout(HTTP_TIMEOUT)
+            .build()
+            .unwrap_or_default();
         let xrpc_client = ReqwestClientBuilder::new(pds_url)
-            .client(self.http_client.clone())
+            .client(fresh_client)
             .build();
         AtpAgent::new(xrpc_client, MemorySessionStore::default())
     }

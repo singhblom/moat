@@ -265,10 +265,13 @@ impl KeyStore {
         Ok(())
     }
 
-    /// Append a message to a conversation's local storage
+    /// Append a message to a conversation's local storage, maintaining timestamp order.
     pub fn append_message(&self, conv_id: &str, message: StoredMessage) -> Result<()> {
         let mut messages = self.load_messages(conv_id)?;
-        messages.messages.push(message);
+        let pos = messages
+            .messages
+            .partition_point(|m| m.timestamp <= message.timestamp);
+        messages.messages.insert(pos, message);
         self.store_messages(conv_id, &messages)
     }
 
@@ -400,6 +403,26 @@ impl KeyStore {
 
         self.store_device_name(&device_name)?;
         Ok(device_name)
+    }
+
+    /// Load watched DIDs (DIDs being monitored for incoming conversation invites)
+    pub fn load_watched_dids(&self) -> Result<std::collections::HashSet<String>> {
+        let path = self.base_path.join("watched_dids.json");
+        if !path.exists() {
+            return Ok(Default::default());
+        }
+        let data = fs::read(&path)?;
+        let dids: Vec<String> = serde_json::from_slice(&data)?;
+        Ok(dids.into_iter().collect())
+    }
+
+    /// Store watched DIDs
+    pub fn store_watched_dids(&self, dids: &std::collections::HashSet<String>) -> Result<()> {
+        let path = self.base_path.join("watched_dids.json");
+        let list: Vec<&String> = dids.iter().collect();
+        let json = serde_json::to_vec_pretty(&list)?;
+        fs::write(&path, json)?;
+        Ok(())
     }
 
     /// Load Drawbridge state from drawbridge.json

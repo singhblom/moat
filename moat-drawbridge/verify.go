@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -95,6 +96,9 @@ func (v *PDSVerifierImpl) Verify(ctx context.Context, did, rkey, expectedTag str
 }
 
 // decodeBytesField decodes an ATProto bytes field: {"$bytes": "<base64>"}
+// Uses RawStdEncoding after stripping any trailing '=' padding, because
+// ATProto PDSes (e.g. bsky.social) strip padding when re-encoding bytes
+// through their IPLD/CBOR layer.
 func decodeBytesField(raw json.RawMessage) ([]byte, error) {
 	var bytesObj struct {
 		Bytes string `json:"$bytes"`
@@ -102,7 +106,8 @@ func decodeBytesField(raw json.RawMessage) ([]byte, error) {
 	if err := json.Unmarshal(raw, &bytesObj); err != nil {
 		return nil, err
 	}
-	return base64.StdEncoding.DecodeString(bytesObj.Bytes)
+	s := strings.TrimRight(bytesObj.Bytes, "=")
+	return base64.RawStdEncoding.DecodeString(s)
 }
 
 // asyncVerifyKeyPackage verifies that a claimed public key exists in the DID's

@@ -295,6 +295,21 @@ pub(crate) enum BgEvent {
     },
 }
 
+impl BgEvent {
+    /// Whether this event requires async handling (must be processed outside the
+    /// synchronous drain loop). Shared by TUI and HTTP headless loop.
+    pub(crate) fn is_async(&self) -> bool {
+        matches!(
+            self,
+            BgEvent::DrawbridgeConnectOwn { .. }
+                | BgEvent::DrawbridgeHandleHint { .. }
+                | BgEvent::DrawbridgeUpdateTags { .. }
+                | BgEvent::DrawbridgeNotifyEventPosted { .. }
+                | BgEvent::DrawbridgeRetryDisconnected
+        )
+    }
+}
+
 /// Stats returned from a completed poll (for HTTP API awaitable poll).
 #[derive(Default)]
 pub(crate) struct PollStats {
@@ -646,15 +661,11 @@ impl App {
         }
     }
 
-    /// HTTP: read messages for any conversation without changing active state.
-    pub fn api_get_messages(&self, group_id_hex: &str) -> Vec<crate::keystore::StoredMessage> {
-        let mut messages = self
-            .keys
-            .load_messages(group_id_hex)
-            .unwrap_or_default()
-            .messages;
-        messages.sort_by_key(|m| m.timestamp);
-        messages
+    /// HTTP: read messages for the active conversation via the same in-memory
+    /// state the TUI renders from.  Callers must set the active conversation
+    /// first (via `api_set_active_conversation`).
+    pub fn api_get_messages(&self) -> &[DisplayMessage] {
+        &self.messages
     }
 
     /// HTTP: send message to active conversation.
@@ -666,24 +677,35 @@ impl App {
 
     /// HTTP: send an emoji reaction by explicit message_id hex.
     pub async fn api_send_reaction(&mut self, message_id_hex: &str, emoji: &str) -> Result<()> {
+        let target_message_id = hex::decode(message_id_hex)
+            .map_err(|e| AppError::Other(format!("Invalid message_id hex: {}", e)))?;
+        self.send_reaction_by_id(&target_message_id, emoji).await
+    }
+
+    /// Shared reaction logic: encrypt, publish, and locally toggle the reaction.
+    /// Used by both TUI (send_reaction) and HTTP (api_send_reaction).
+    async fn send_reaction_by_id(&mut self, target_message_id: &[u8], emoji: &str) -> Result<()> {
         if self.client.is_none() {
             return Err(AppError::NotLoggedIn);
         }
         let conv_idx = self.active_conversation.ok_or(AppError::NoConversation)?;
         let conv_id = self.conversations[conv_idx].id.clone();
 
-        let target_message_id = hex::decode(message_id_hex)
-            .map_err(|e| AppError::Other(format!("Invalid message_id hex: {}", e)))?;
+        self.debug_log.log(&format!(
+            "send_reaction_by_id: emoji={}, target_id={:02x?}",
+            emoji,
+            &target_message_id[..4.min(target_message_id.len())]
+        ));
 
         let key_bundle = self.keys.load_identity_key()?;
         let group_id = hex::decode(&conv_id)
             .map_err(|e| AppError::Other(format!("Invalid group ID: {}", e)))?;
 
         let current_epoch = self.mls.get_group_epoch(&group_id)?.unwrap_or(1);
-        let event = moat_core::Event::reaction(
+        let event = Event::reaction(
             group_id.clone(),
             current_epoch,
-            &target_message_id,
+            target_message_id,
             emoji,
         );
 
@@ -698,7 +720,29 @@ impl App {
             .publish_event(&encrypted.tag, &encrypted.ciphertext)
             .await?;
 
-        self.tag_map.insert(encrypted.tag, conv_id);
+        self.tag_map.insert(encrypted.tag, conv_id.clone());
+
+        // Apply reaction locally (toggle semantics)
+        let my_did = self.client.as_ref().unwrap().did().to_string();
+        if let Some(msg) = self.messages.iter_mut().find(|m| {
+            m.message_id.as_deref() == Some(target_message_id)
+        }) {
+            let emoji_str = emoji.to_string();
+            if let Some(pos) = msg
+                .reactions
+                .iter()
+                .position(|r| r.emoji == emoji_str && r.sender_did == my_did)
+            {
+                msg.reactions.remove(pos);
+            } else {
+                msg.reactions.push(DisplayReaction {
+                    emoji: emoji_str,
+                    sender_did: my_did,
+                });
+            }
+        }
+
+        self.debug_log.log("send_reaction_by_id: published");
         Ok(())
     }
 
@@ -737,6 +781,12 @@ impl App {
         Ok(())
     }
 
+    /// Clear login state (shared by TUI and HTTP).
+    pub fn logout(&mut self) {
+        self.client = None;
+        self.logged_in_handle = None;
+    }
+
     /// HTTP: list DIDs currently being watched for invites.
     pub fn api_watched_dids(&self) -> Vec<String> {
         self.watched_dids.iter().cloned().collect()
@@ -745,6 +795,7 @@ impl App {
     /// HTTP: remove a DID from the watch list.
     pub fn api_unwatch_did(&mut self, did: &str) {
         self.watched_dids.remove(did);
+        let _ = self.keys.store_watched_dids(&self.watched_dids);
     }
 
     /// HTTP: set the automatic poll interval in seconds.
@@ -2039,6 +2090,12 @@ impl App {
 
     /// Synchronous version of load_conversations (no network calls).
     fn load_conversations_sync(&mut self) {
+        // Restore watched DIDs from disk so invite polling survives restarts.
+        match self.keys.load_watched_dids() {
+            Ok(dids) => self.watched_dids = dids,
+            Err(e) => self.debug_log.log(&format!("load: failed to load watched DIDs: {e}")),
+        }
+
         let group_ids = match self.keys.list_groups() {
             Ok(ids) => ids,
             Err(e) => {
@@ -2149,8 +2206,16 @@ impl App {
         // before derived-tag events like DrawbridgeHint.
         watched_events.sort_by(|a, b| a.1.rkey.cmp(&b.1.rkey));
 
+        if !watched_events.is_empty() {
+            self.debug_log.log(&format!(
+                "poll: processing {} watched events",
+                watched_events.len(),
+            ));
+        }
+
         let mut reprocess = Vec::new();
         for (did, event_record) in watched_events {
+            let tag_hex: String = event_record.tag.iter().map(|b| format!("{b:02x}")).collect();
             if self.tag_map.contains_key(&event_record.tag) {
                 // Tag matched a known conversation — decrypt instead of trying as Welcome.
                 let conv_indices: Vec<usize> = self
@@ -2165,12 +2230,19 @@ impl App {
                 }
                 continue;
             }
+            self.debug_log.log(&format!(
+                "poll: watched tag {} rkey={} from {}, trying as welcome",
+                tag_hex,
+                event_record.rkey,
+                &event_record.author_did[..20.min(event_record.author_did.len())]
+            ));
             if self.try_process_welcome_sync(
                 &event_record.ciphertext,
                 &event_record.author_did,
                 event_record.tag,
             ) {
                 self.watched_dids.remove(&did);
+                let _ = self.keys.store_watched_dids(&self.watched_dids);
             }
         }
         // Decrypt watched events that matched the tag_map (e.g. DrawbridgeHint
@@ -2253,11 +2325,6 @@ impl App {
                             .as_ref()
                             .map(|p| render_message_preview(p))
                             .unwrap_or_else(|| "(invalid message payload)".to_string());
-                        let from = conv_idx
-                            .and_then(|idx| self.conversations.get(idx))
-                            .map(|c| c.name.clone())
-                            .unwrap_or_else(|| "Unknown".to_string());
-
                         let (sender_did, sender_device) = decrypted
                             .sender
                             .map(|s| (Some(s.did), Some(s.device_name)))
@@ -2284,8 +2351,11 @@ impl App {
                         }
 
                         if self.active_conversation == conv_idx {
-                            self.messages.push(DisplayMessage {
-                                from,
+                            let dm = DisplayMessage {
+                                from: conv_idx
+                                    .and_then(|idx| self.conversations.get(idx))
+                                    .map(|c| c.name.clone())
+                                    .unwrap_or_else(|| "Unknown".to_string()),
                                 content,
                                 timestamp: event_record.created_at,
                                 is_own,
@@ -2295,7 +2365,11 @@ impl App {
                                 reactions: vec![],
                                 image_proto: None,
                                 image_loading: false,
-                            });
+                            };
+                            let pos = self
+                                .messages
+                                .partition_point(|m| m.timestamp <= dm.timestamp);
+                            self.messages.insert(pos, dm);
                         } else if let Some(idx) = conv_idx {
                             if let Some(conv) = self.conversations.get_mut(idx) {
                                 conv.unread += 1;
@@ -2431,17 +2505,26 @@ impl App {
     ) -> bool {
         let stealth_privkey = match self.keys.load_stealth_key() {
             Ok(key) => key,
-            Err(_) => return false,
+            Err(e) => {
+                self.debug_log.log(&format!("try_welcome: failed to load stealth key: {e}"));
+                return false;
+            }
         };
 
         let welcome_bytes = match try_decrypt_stealth(&stealth_privkey, ciphertext) {
             Some(bytes) => bytes,
-            None => return false,
+            None => {
+                self.debug_log.log("try_welcome: stealth decryption failed (not for us)");
+                return false;
+            }
         };
 
         let group_id = match self.mls.process_welcome(&welcome_bytes) {
             Ok(id) => id,
-            Err(_) => return false,
+            Err(e) => {
+                self.debug_log.log(&format!("try_welcome: MLS process_welcome failed: {e}"));
+                return false;
+            }
         };
 
         let conv_id = hex::encode(&group_id);
@@ -2689,8 +2772,9 @@ impl App {
         // Resolve handle to DID
         let did = self.client.as_ref().unwrap().resolve_did(handle).await?;
 
-        // Add to watched DIDs
+        // Add to watched DIDs and persist so it survives restarts.
         self.watched_dids.insert(did);
+        let _ = self.keys.store_watched_dids(&self.watched_dids);
 
         self.status_message = None;
         self.focus = Focus::Conversations;
@@ -3244,12 +3328,6 @@ impl App {
 
     /// Send an emoji reaction to the currently selected message
     async fn send_reaction(&mut self, emoji: &str) -> Result<()> {
-        if self.client.is_none() {
-            return Err(AppError::NotLoggedIn);
-        }
-        let conv_idx = self.active_conversation.ok_or(AppError::NoConversation)?;
-        let conv_id = self.conversations[conv_idx].id.clone();
-
         // Find the selected message (selected_message is offset from bottom)
         let msg_index = {
             let offset = self.selected_message.unwrap_or(0);
@@ -3267,56 +3345,7 @@ impl App {
             }
         };
 
-        self.debug_log.log(&format!(
-            "send_reaction: emoji={}, target_id={:02x?}",
-            emoji,
-            &target_message_id[..4.min(target_message_id.len())]
-        ));
-
-        let key_bundle = self.keys.load_identity_key()?;
-        let group_id = hex::decode(&conv_id)
-            .map_err(|e| AppError::Other(format!("Invalid group ID: {}", e)))?;
-
-        let current_epoch = self.mls.get_group_epoch(&group_id)?.unwrap_or(1);
-        let event = Event::reaction(group_id.clone(), current_epoch, &target_message_id, emoji);
-
-        let encrypted = self.mls.encrypt_event(&group_id, &key_bundle, &event)?;
-        self.own_published_tags.insert(encrypted.tag);
-        self.save_mls_state()?;
-
-        // Update stored group state
-        self.keys
-            .store_group_state(&conv_id, &encrypted.new_group_state)?;
-
-        // Publish to PDS
-        let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
-        client
-            .publish_event(&encrypted.tag, &encrypted.ciphertext)
-            .await?;
-
-        // Update tag mapping
-        self.tag_map.insert(encrypted.tag, conv_id);
-
-        // Apply reaction locally (toggle semantics)
-        let my_did = self.client.as_ref().unwrap().did().to_string();
-        if let Some(msg) = self.messages.get_mut(msg_index) {
-            let emoji_str = emoji.to_string();
-            if let Some(pos) = msg
-                .reactions
-                .iter()
-                .position(|r| r.emoji == emoji_str && r.sender_did == my_did)
-            {
-                msg.reactions.remove(pos);
-            } else {
-                msg.reactions.push(DisplayReaction {
-                    emoji: emoji_str,
-                    sender_did: my_did,
-                });
-            }
-        }
-
-        self.debug_log.log("send_reaction: published");
-        Ok(())
+        self.send_reaction_by_id(&target_message_id, emoji).await
     }
 
     /// Poll for new devices belonging to our own DID and auto-add them.

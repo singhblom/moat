@@ -221,7 +221,7 @@ async fn run_app(
         // Separate async events from sync events
         let mut async_events = Vec::new();
         while let Ok(bg_event) = app.bg_rx.try_recv() {
-            if matches!(bg_event, app::BgEvent::DrawbridgeConnectOwn { .. } | app::BgEvent::DrawbridgeHandleHint { .. } | app::BgEvent::DrawbridgeUpdateTags { .. } | app::BgEvent::DrawbridgeNotifyEventPosted { .. } | app::BgEvent::DrawbridgeRetryDisconnected) {
+            if bg_event.is_async() {
                 async_events.push(bg_event);
             } else {
                 app.handle_bg_event(bg_event);

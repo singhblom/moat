@@ -114,8 +114,7 @@ async fn post_login(
 
 async fn post_logout(State(state): State<Arc<ServerState>>) -> Json<Value> {
     let mut app = state.app.lock().await;
-    app.client = None;
-    app.logged_in_handle = None;
+    app.logout();
     Json(json!({ "ok": true }))
 }
 
@@ -179,25 +178,23 @@ async fn put_conversation(
 async fn get_messages(
     State(state): State<Arc<ServerState>>,
     Path(group_id): Path<String>,
-) -> Json<Vec<MessageDto>> {
-    let app = state.app.lock().await;
-    let msgs = app.api_get_messages(&group_id);
-    let dtos = msgs
-        .into_iter()
+) -> HandlerResult<Json<Vec<MessageDto>>> {
+    let mut app = state.app.lock().await;
+    app.api_set_active_conversation(Some(&group_id))
+        .map_err(app_err)?;
+    let dtos = app
+        .api_get_messages()
+        .iter()
         .map(|m| MessageDto {
-            from: if m.is_own {
-                "You".to_string()
-            } else {
-                m.sender_did.clone().unwrap_or_else(|| "Unknown".to_string())
-            },
-            content: m.content,
+            from: m.from.clone(),
+            content: m.content.clone(),
             timestamp: m.timestamp.to_rfc3339(),
             is_own: m.is_own,
-            sender_did: m.sender_did,
-            message_id: m.message_id.map(|id| hex::encode(&id)),
+            sender_did: m.sender_did.clone(),
+            message_id: m.message_id.as_ref().map(|id| hex::encode(id)),
         })
         .collect();
-    Json(dtos)
+    Ok(Json(dtos))
 }
 
 async fn post_message(
@@ -296,16 +293,6 @@ async fn get_events(
 
 // ── Headless event loop ───────────────────────────────────────────────────────
 
-fn is_async_bg_event(ev: &crate::app::BgEvent) -> bool {
-    matches!(
-        ev,
-        crate::app::BgEvent::DrawbridgeConnectOwn { .. }
-            | crate::app::BgEvent::DrawbridgeHandleHint { .. }
-            | crate::app::BgEvent::DrawbridgeUpdateTags { .. }
-            | crate::app::BgEvent::DrawbridgeNotifyEventPosted { .. }
-            | crate::app::BgEvent::DrawbridgeRetryDisconnected
-    )
-}
 
 fn spawn_headless_loop(app: Arc<tokio::sync::Mutex<App>>) {
     tokio::spawn(async move {
@@ -314,7 +301,7 @@ fn spawn_headless_loop(app: Arc<tokio::sync::Mutex<App>>) {
             {
                 let mut app = app.lock().await;
                 while let Ok(ev) = app.bg_rx.try_recv() {
-                    if is_async_bg_event(&ev) {
+                    if ev.is_async() {
                         async_evs.push(ev);
                     } else {
                         app.handle_bg_event(ev);
@@ -332,7 +319,7 @@ fn spawn_headless_loop(app: Arc<tokio::sync::Mutex<App>>) {
                     app.do_device_poll().await;
                 }
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(16)).await;
         }
     });
 }

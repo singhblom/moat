@@ -116,7 +116,7 @@ pub struct StealthAddressData {
 /// Helper module for ATProto IPLD bytes encoding of byte vectors.
 /// Serializes as `{"$bytes": "<base64>"}` per the ATProto data model spec.
 mod base64_bytes {
-    use base64::{engine::general_purpose::STANDARD, Engine};
+    use base64::{engine::general_purpose::{STANDARD, STANDARD_NO_PAD}, Engine};
     use serde::{Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
@@ -139,14 +139,17 @@ mod base64_bytes {
             bytes: String,
         }
         let wrapper = BytesWrapper::deserialize(deserializer)?;
-        STANDARD.decode(&wrapper.bytes).map_err(serde::de::Error::custom)
+        // Use STANDARD_NO_PAD to handle both padded and unpadded base64.
+        // ATProto PDSes (e.g. bsky.social) strip padding when re-encoding
+        // bytes through their IPLD/CBOR layer.
+        STANDARD_NO_PAD.decode(wrapper.bytes.trim_end_matches('=')).map_err(serde::de::Error::custom)
     }
 }
 
 /// Helper module for ATProto IPLD bytes encoding of 16-byte tags.
 /// Serializes as `{"$bytes": "<base64>"}` per the ATProto data model spec.
 mod base64_tag {
-    use base64::{engine::general_purpose::STANDARD, Engine};
+    use base64::{engine::general_purpose::{STANDARD, STANDARD_NO_PAD}, Engine};
     use serde::{Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S>(bytes: &[u8; 16], serializer: S) -> Result<S::Ok, S::Error>
@@ -169,7 +172,7 @@ mod base64_tag {
             bytes: String,
         }
         let wrapper = BytesWrapper::deserialize(deserializer)?;
-        let bytes = STANDARD.decode(&wrapper.bytes).map_err(serde::de::Error::custom)?;
+        let bytes = STANDARD_NO_PAD.decode(wrapper.bytes.trim_end_matches('=')).map_err(serde::de::Error::custom)?;
         if bytes.len() != 16 {
             return Err(serde::de::Error::custom("tag must be exactly 16 bytes"));
         }
@@ -182,7 +185,7 @@ mod base64_tag {
 /// Helper module for ATProto IPLD bytes encoding of 32-byte public keys.
 /// Serializes as `{"$bytes": "<base64>"}` per the ATProto data model spec.
 mod base64_pubkey {
-    use base64::{engine::general_purpose::STANDARD, Engine};
+    use base64::{engine::general_purpose::{STANDARD, STANDARD_NO_PAD}, Engine};
     use serde::{Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S>(bytes: &[u8; 32], serializer: S) -> Result<S::Ok, S::Error>
@@ -205,7 +208,7 @@ mod base64_pubkey {
             bytes: String,
         }
         let wrapper = BytesWrapper::deserialize(deserializer)?;
-        let bytes = STANDARD.decode(&wrapper.bytes).map_err(serde::de::Error::custom)?;
+        let bytes = STANDARD_NO_PAD.decode(wrapper.bytes.trim_end_matches('=')).map_err(serde::de::Error::custom)?;
         if bytes.len() != 32 {
             return Err(serde::de::Error::custom("pubkey must be exactly 32 bytes"));
         }
@@ -270,6 +273,18 @@ mod tests {
             value["keyPackage"]["$bytes"].is_string(),
             "keyPackage must serialize as {{\"$bytes\": \"...\"}} per ATProto spec"
         );
+    }
+
+    /// Ensure that base64 fields without padding (as returned by bsky.social after
+    /// IPLD/CBOR round-trip) are accepted by the deserializers.
+    #[test]
+    fn test_stealth_address_unpadded_base64() {
+        // 32 bytes encodes to 43 base64 chars without padding (bsky.social strips the '=')
+        let json = r#"{"v":2,"scanPubkey":{"$bytes":"FtKnvfUoIJCdfrcKbtFL9JHrUdQbnt0X7euvw0fZUTs"},"deviceName":"CLI (Mac)","createdAt":"2026-03-01T21:31:58Z"}"#;
+        let record: StealthAddressData = serde_json::from_str(json)
+            .expect("should deserialize unpadded base64 from bsky.social");
+        assert_eq!(record.device_name, "CLI (Mac)");
+        assert_eq!(record.scan_pubkey.len(), 32);
     }
 
     #[test]
