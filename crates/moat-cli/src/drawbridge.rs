@@ -125,6 +125,11 @@ impl DrawbridgeManager {
         self.hints.is_empty()
     }
 
+    /// Return all stored partner hints (for re-registering tags after reconnect).
+    pub fn all_hints(&self) -> Vec<StoredHint> {
+        self.hints.values().cloned().collect()
+    }
+
     /// Load persisted state into the manager (hints only — connections are made later).
     pub fn load_state(&mut self, state: &DrawbridgeState) {
         self.hints.clear();

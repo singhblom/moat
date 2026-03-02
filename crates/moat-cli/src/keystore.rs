@@ -266,13 +266,20 @@ impl KeyStore {
     }
 
     /// Append a message to a conversation's local storage, maintaining timestamp order.
-    pub fn append_message(&self, conv_id: &str, message: StoredMessage) -> Result<()> {
+    /// Returns `Ok(false)` if a message with the same rkey already exists (dedup).
+    pub fn append_message(&self, conv_id: &str, message: StoredMessage) -> Result<bool> {
         let mut messages = self.load_messages(conv_id)?;
+        if message.rkey != "pending"
+            && messages.messages.iter().any(|m| m.rkey == message.rkey)
+        {
+            return Ok(false);
+        }
         let pos = messages
             .messages
             .partition_point(|m| m.timestamp <= message.timestamp);
         messages.messages.insert(pos, message);
-        self.store_messages(conv_id, &messages)
+        self.store_messages(conv_id, &messages)?;
+        Ok(true)
     }
 
     /// Store credentials (handle and app password)

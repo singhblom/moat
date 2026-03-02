@@ -246,6 +246,12 @@ pub(crate) enum BgEvent {
     /// Connect to all persisted partner Drawbridges on startup.
     DrawbridgeReconnectPartners,
 
+    /// Send a reciprocal DrawbridgeHint after joining a group via Welcome.
+    DrawbridgeSendReciprocalHint {
+        group_id: Vec<u8>,
+        conv_id: String,
+    },
+
     /// Blob upload completed — MLS-encrypt and publish the long-text event.
     BlobUploaded {
         cid: String,
@@ -308,7 +314,8 @@ impl BgEvent {
             | BgEvent::DrawbridgeUpdateTags { .. }
             | BgEvent::DrawbridgeNotifyEventPosted { .. }
             | BgEvent::DrawbridgeRetryDisconnected
-            | BgEvent::DrawbridgeReconnectPartners => true,
+            | BgEvent::DrawbridgeReconnectPartners
+            | BgEvent::DrawbridgeSendReciprocalHint { .. } => true,
 
             BgEvent::PollFetched { .. }
             | BgEvent::SendPublished { .. }
@@ -1242,6 +1249,7 @@ impl App {
             BgEvent::DrawbridgeNotifyEventPosted { .. } => {}
             BgEvent::DrawbridgeRetryDisconnected => {}
             BgEvent::DrawbridgeReconnectPartners => {}
+            BgEvent::DrawbridgeSendReciprocalHint { .. } => {}
             BgEvent::HandleResolved {
                 conv_id,
                 did,
@@ -1529,10 +1537,18 @@ impl App {
             }
             BgEvent::DrawbridgeRetryDisconnected => {
                 self.drawbridge.retry_disconnected().await;
+                self.send_watch_tags_for_all_partners().await;
             }
             BgEvent::DrawbridgeReconnectPartners => {
                 self.drawbridge.reconnect_all_partners().await;
                 self.save_drawbridge_state();
+                self.send_watch_tags_for_all_partners().await;
+            }
+            BgEvent::DrawbridgeSendReciprocalHint { group_id, conv_id } => {
+                if let Err(e) = self.send_drawbridge_hint(&group_id, &conv_id).await {
+                    self.debug_log
+                        .log(&format!("reciprocal hint failed: {e}"));
+                }
             }
             _ => {} // Non-async events handled by handle_bg_event
         }
@@ -2033,6 +2049,52 @@ impl App {
         }
     }
 
+    /// Send a DrawbridgeHint for a conversation: generate a ticket, register it
+    /// on our own Drawbridge, encrypt the hint, and publish it.  Used both when
+    /// starting a new conversation and when joining one via Welcome (reciprocal).
+    async fn send_drawbridge_hint(&mut self, group_id: &[u8], conv_id: &str) -> Result<()> {
+        if self.drawbridge_url.is_none() || !self.drawbridge.has_own_connection() {
+            return Ok(());
+        }
+
+        let ticket = MoatSession::generate_drawbridge_ticket();
+        let ticket_hex = hex::encode(&ticket);
+
+        // Register ticket on our own Drawbridge
+        if let Err(e) = self.drawbridge.register_ticket(&ticket, conv_id).await {
+            self.debug_log
+                .log(&format!("send_hint: register_ticket failed: {e}"));
+        }
+
+        let key_bundle = self.keys.load_identity_key()?;
+
+        let hint_event = self.mls.create_drawbridge_hint(
+            group_id,
+            self.drawbridge_url.as_ref().unwrap(),
+            &ticket,
+        )?;
+        let encrypted = self.mls.encrypt_event(group_id, &key_bundle, &hint_event)?;
+        self.own_published_tags.insert(encrypted.tag);
+        self.save_mls_state()?;
+        self.keys
+            .store_group_state(conv_id, &encrypted.new_group_state)?;
+
+        self.client
+            .as_ref()
+            .ok_or(AppError::NotLoggedIn)?
+            .publish_event(&encrypted.tag, &encrypted.ciphertext)
+            .await?;
+
+        self.debug_log.log(&format!(
+            "send_hint: sent DrawbridgeHint for conv {}, ticket {}...",
+            &conv_id[..16.min(conv_id.len())],
+            &ticket_hex[..8]
+        ));
+
+        self.save_drawbridge_state();
+        Ok(())
+    }
+
     /// Get all tags relevant to a specific conversation.
     fn get_tags_for_conversation(&self, conv_id: &str) -> Vec<[u8; 16]> {
         self.tag_map
@@ -2040,6 +2102,23 @@ impl App {
             .filter(|(_, cid)| *cid == conv_id)
             .map(|(tag, _)| *tag)
             .collect()
+    }
+
+    /// Re-send watch_tags for every connected partner (called after reconnect).
+    async fn send_watch_tags_for_all_partners(&mut self) {
+        for hint in self.drawbridge.all_hints() {
+            let tags = self.get_tags_for_conversation(&hint.group_id_hex);
+            if !tags.is_empty() {
+                let _ = self
+                    .drawbridge
+                    .update_tags_for_partner(
+                        &hint.partner_did,
+                        &hint.device_id_hex,
+                        &tags,
+                    )
+                    .await;
+            }
+        }
     }
 
     /// Update tags on partner Drawbridge connections for a specific conversation.
@@ -2362,11 +2441,18 @@ impl App {
                             sender_did: sender_did.clone(),
                             sender_device: sender_device.clone(),
                         };
-                        if let Err(e) = self.keys.append_message(&conv_id, stored_msg) {
-                            self.debug_log
-                                .log(&format!("poll: failed to store message: {}", e));
-                        } else {
-                            msg_stored = true;
+                        match self.keys.append_message(&conv_id, stored_msg) {
+                            Err(e) => {
+                                self.debug_log
+                                    .log(&format!("poll: failed to store message: {}", e));
+                            }
+                            Ok(false) => {
+                                // Duplicate rkey — already stored, skip in-memory insert.
+                                return msg_stored;
+                            }
+                            Ok(true) => {
+                                msg_stored = true;
+                            }
                         }
 
                         if self.active_conversation == conv_idx {
@@ -2574,6 +2660,12 @@ impl App {
             self.resolve_conversation_handle(conv);
         }
 
+        // Send reciprocal DrawbridgeHint so the initiator can push to us.
+        let _ = self.bg_tx.send(BgEvent::DrawbridgeSendReciprocalHint {
+            group_id: group_id.to_vec(),
+            conv_id: conv_id.clone(),
+        });
+
         self.debug_log
             .log("process_welcome: successfully joined group");
         true
@@ -2681,12 +2773,40 @@ impl App {
                 .await?;
         }
 
+        let did = client.did().to_string();
         self.client = Some(client);
         self.status_message = None;
         self.logged_in_handle = Some(handle);
         self.focus = Focus::Conversations;
 
         self.load_conversations_sync();
+
+        // Resolve handles for all conversations on login
+        for conv in self.conversations.clone() {
+            self.resolve_conversation_handle(&conv);
+        }
+
+        // Connect to own Drawbridge if configured
+        if let Some(ref url) = self.drawbridge_url.clone() {
+            if let Ok(sig_key) = self.keys.load_identity_key() {
+                let persisted_tickets = self
+                    .keys
+                    .load_drawbridge_state()
+                    .unwrap_or_default()
+                    .own_tickets;
+                let _ = self.bg_tx.send(BgEvent::DrawbridgeConnectOwn {
+                    url: url.clone(),
+                    did: did.clone(),
+                    signature_key: sig_key,
+                    persisted_tickets,
+                });
+            }
+        }
+
+        // Reconnect to partner Drawbridges from persisted hints
+        if !self.drawbridge.hints_empty() {
+            let _ = self.bg_tx.send(BgEvent::DrawbridgeReconnectPartners);
+        }
 
         Ok(())
     }
@@ -2943,42 +3063,9 @@ impl App {
         ));
 
         // 12. If Drawbridge is configured, send DrawbridgeHint and register ticket
-        if self.drawbridge_url.is_some() && self.drawbridge.has_own_connection() {
-            let ticket = MoatSession::generate_drawbridge_ticket();
-            let ticket_hex = hex::encode(&ticket);
-
-            // Register ticket on our own Drawbridge
-            if let Err(e) = self.drawbridge.register_ticket(&ticket, &conv_id).await {
-                self.debug_log
-                    .log(&format!("start_conv: register_ticket failed: {}", e));
-            }
-
-            // Create and encrypt DrawbridgeHint event
-            let hint_event = self.mls.create_drawbridge_hint(
-                &group_id,
-                self.drawbridge_url.as_ref().unwrap(),
-                &ticket,
-            )?;
-            let encrypted = self.mls.encrypt_event(&group_id, &key_bundle, &hint_event)?;
-            self.own_published_tags.insert(encrypted.tag);
-            self.save_mls_state()?;
-            self.keys
-                .store_group_state(&conv_id, &encrypted.new_group_state)?;
-
-            // Publish the hint
-            self.client
-                .as_ref()
-                .unwrap()
-                .publish_event(&encrypted.tag, &encrypted.ciphertext)
-                .await?;
-
-            self.debug_log.log(&format!(
-                "start_conv: sent DrawbridgeHint for conv {}, ticket {}...",
-                &conv_id[..16],
-                &ticket_hex[..8]
-            ));
-
-            self.save_drawbridge_state();
+        if let Err(e) = self.send_drawbridge_hint(&group_id, &conv_id).await {
+            self.debug_log
+                .log(&format!("start_conv: send_drawbridge_hint failed: {e}"));
         }
 
         // 13. Select the new conversation and switch to input mode

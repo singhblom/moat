@@ -21,6 +21,8 @@ pub struct StatusResponse {
     pub logged_in: bool,
     pub handle: Option<String>,
     pub did: Option<String>,
+    #[serde(default)]
+    pub drawbridge_connected: bool,
 }
 
 #[derive(Debug, Deserialize)]

@@ -65,6 +65,7 @@ struct StatusResponse {
     logged_in: bool,
     handle: Option<String>,
     did: Option<String>,
+    drawbridge_connected: bool,
 }
 
 #[derive(Serialize)]
@@ -125,6 +126,7 @@ async fn get_status(State(state): State<Arc<ServerState>>) -> Json<StatusRespons
         logged_in: app.client.is_some(),
         handle: app.logged_in_handle.clone(),
         did,
+        drawbridge_connected: app.drawbridge.has_own_connection(),
     })
 }
 

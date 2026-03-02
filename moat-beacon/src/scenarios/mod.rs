@@ -18,6 +18,8 @@ use crate::world::TestWorld;
 
 pub mod dart_two_party_chat;
 pub mod mixed_two_party_chat;
+pub mod push_latency;
+pub mod push_latency_restart;
 pub mod two_party_chat;
 pub mod two_party_push;
 pub mod two_party_push_restart;

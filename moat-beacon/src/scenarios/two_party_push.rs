@@ -21,14 +21,11 @@ use super::{execute_action, format_action, vlog};
 /// Wait for push-triggered fetches to complete without explicit polling.
 ///
 /// Sleeps long enough for:
-/// 1. Alice's moat-cli to send `event_posted` to Drawbridge.
-/// 2. Drawbridge to forward `new_event` to Bob.
-/// 3. Bob's moat-cli to call `spawn_targeted_fetch` and retrieve the record.
-pub(crate) async fn drain_events_push(alice: &MoatCliClient, bob: &MoatCliClient) {
+/// 1. The sender's moat-cli to send `event_posted` to Drawbridge.
+/// 2. Drawbridge to forward `new_event` to the recipient.
+/// 3. The recipient's moat-cli to call `spawn_targeted_fetch` and retrieve the record.
+pub(crate) async fn drain_events_push(_alice: &MoatCliClient, _bob: &MoatCliClient) {
     tokio::time::sleep(Duration::from_millis(1000)).await;
-    let _ = alice.poll().await;
-    let _ = bob.poll().await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
 }
 
 pub(crate) fn run_boxed(
@@ -60,9 +57,24 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
         .expect("bob login");
     vlog!(verbose, "[setup] login bob... done");
 
-    // Allow moat-cli to publish key packages, stealth addresses, and connect
-    // to Drawbridge as sender (challenge-response auth).
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    // Wait for both participants to connect to their own Drawbridge relay.
+    let drawbridge_deadline =
+        std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let a = alice.status().await.expect("alice status");
+        let b = bob.status().await.expect("bob status");
+        if a.drawbridge_connected && b.drawbridge_connected {
+            break;
+        }
+        if std::time::Instant::now() >= drawbridge_deadline {
+            panic!(
+                "Drawbridge not connected after 5s (alice={}, bob={})",
+                a.drawbridge_connected, b.drawbridge_connected
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    vlog!(verbose, "[setup] Drawbridge connections established");
 
     bob.watch_handle("alice.postern.test")
         .await
@@ -93,7 +105,9 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
         stats.new_conversations
     );
 
-    // Give Bob time to connect to Drawbridge as recipient.
+    // Give Bob time to send reciprocal DrawbridgeHint, then Alice picks it up.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let _ = alice.poll().await;
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Disable auto-polling — delivery must come entirely through Drawbridge.
