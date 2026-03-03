@@ -9,6 +9,8 @@ class ConversationsProvider extends ChangeNotifier {
   ConversationsProvider({required ConversationsService service})
       : _service = service;
 
+  ConversationsService get service => _service;
+
   List<Conversation> get conversations => _service.conversations;
   bool get isLoading => _service.isLoading;
 

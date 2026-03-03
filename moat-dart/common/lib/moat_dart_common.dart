@@ -30,6 +30,7 @@ export 'services/send_service.dart';
 export 'services/send_queue.dart';
 export 'services/conversation_repository.dart';
 export 'services/conversation_manager.dart';
+export 'services/conversation_starter.dart';
 export 'services/drawbridge_service.dart';
 export 'services/profile_cache_service.dart';
 

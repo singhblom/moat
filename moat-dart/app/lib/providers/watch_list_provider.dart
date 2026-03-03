@@ -13,6 +13,8 @@ class WatchListProvider extends ChangeNotifier {
 
   WatchListProvider({required WatchListService service}) : _service = service;
 
+  WatchListService get service => _service;
+
   List<WatchListEntry> get entries => _service.entries;
   List<String> get dids => _service.dids;
   bool get isLoading => _service.isLoading;

@@ -30,121 +30,20 @@ class _NewConversationScreenState extends State<NewConversationScreen> {
     setState(() {
       _isLoading = true;
       _error = null;
-      _statusMessage = 'Resolving handle...';
+      _statusMessage = 'Creating conversation...';
     });
 
     try {
       final auth = context.read<AuthProvider>();
       final conversations = context.read<ConversationsProvider>();
-      final client = auth.atprotoClient;
       final handle = _handleController.text.trim();
 
-      // 1. Resolve handle to DID
-      final recipientDid = await client.resolveDid(handle);
-
-      // Check we're not creating a conversation with ourselves
-      if (recipientDid == auth.did) {
-        throw Exception('Cannot create a conversation with yourself');
-      }
-
-      setState(() {
-        _statusMessage = 'Fetching stealth addresses...';
-      });
-
-      // 2. Fetch all of the recipient's stealth addresses (one per device)
-      final stealthRecords = await client.fetchStealthAddresses(recipientDid);
-      if (stealthRecords.isEmpty) {
-        throw Exception('Recipient has no stealth address published. They may need to update their Moat client.');
-      }
-
-      // Collect all device public keys for multi-recipient encryption
-      final stealthPubkeys = stealthRecords.map((r) => r.scanPubkey).toList();
-
-      setState(() {
-        _statusMessage = 'Fetching key packages...';
-      });
-
-      // 3. Fetch recipient's key packages
-      final keyPackages = await client.fetchKeyPackages(recipientDid);
-      if (keyPackages.isEmpty) {
-        throw Exception('Recipient has no valid key packages');
-      }
-
-      // Use the first (most recent) key package
-      final recipientKeyPackage = keyPackages.first.keyPackage;
-
-      setState(() {
-        _statusMessage = 'Creating encrypted group...';
-      });
-
-      // 4. Create conversation via AuthProvider (encrypts for all devices)
-      final result = await auth.createConversation(
-        recipientDid: recipientDid,
-        recipientStealthPubkeys: stealthPubkeys,
-        recipientKeyPackage: recipientKeyPackage,
+      final conversation = await startConversation(
+        recipientHandle: handle,
+        authService: auth.service,
+        convsService: conversations.service,
+        drawbridgeUrl: defaultDrawbridgeUrl,
       );
-
-      setState(() {
-        _statusMessage = 'Publishing invite...';
-      });
-
-      // 5. Publish the stealth-encrypted welcome with random tag
-      await client.publishEvent(result.randomTag, result.stealthCiphertext);
-
-      // 6. Register candidate tags for this conversation
-      await auth.populateConversationTags(result.groupId);
-
-      // 7. Register Drawbridge ticket and publish hint
-      final ticket = generateDrawbridgeTicket();
-      final ticketHex = ticket
-          .map((b) => b.toRadixString(16).padLeft(2, '0'))
-          .join();
-      final groupIdHex = result.groupId
-          .map((b) => b.toRadixString(16).padLeft(2, '0'))
-          .join();
-
-      // Register ticket on our own relay
-      DrawbridgeService.instance.registerTicket(groupIdHex, ticketHex);
-
-      // Create and publish DrawbridgeHint event so partner can connect
-      final session = auth.moatSession;
-      final keyBundle = await auth.getKeyBundle();
-      if (session != null && keyBundle != null) {
-        final hintEvent = createDrawbridgeHint(
-          handle: session,
-          groupId: result.groupId,
-          url: defaultDrawbridgeUrl,
-          ticket: ticket,
-        );
-
-        // Encrypt and publish the hint as a conversation event
-        final encResult = await session.encryptEvent(
-          groupId: result.groupId,
-          keyBundle: keyBundle,
-          event: hintEvent,
-        );
-        final hintUri = await client.publishEvent(
-            encResult.tag, encResult.ciphertext);
-        await auth.saveMlsState();
-
-        // Notify relay about the hint event
-        final hintRkey = hintUri.split('/').last;
-        DrawbridgeService.instance
-            .notifyEventPosted(encResult.tag, hintRkey);
-      }
-
-      // 8. Create and save conversation locally
-      final conversation = Conversation(
-        groupId: result.groupId,
-        displayName: handle,
-        participants: [recipientDid],
-        epoch: result.epoch,
-        keyBundleRef: 'key_bundle_$groupIdHex',
-        createdAt: DateTime.now(),
-        ownDrawbridgeTicketHex: ticketHex,
-      );
-
-      await conversations.saveConversation(conversation);
 
       if (mounted) {
         Navigator.of(context).pop(conversation);

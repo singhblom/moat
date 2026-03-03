@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:moat_dart_common/moat_dart_common.dart' hide PollingService, ConversationManager, DebugLog;
+import 'package:moat_dart_common/moat_dart_common.dart' hide DebugLog;
 import 'providers/auth_provider.dart';
 import 'providers/conversations_provider.dart';
 import 'providers/profile_provider.dart';
@@ -11,8 +11,6 @@ import 'screens/login_screen.dart';
 import 'screens/conversations_screen.dart';
 import 'services/flutter_storage_backend.dart';
 import 'services/flutter_storage_factory.dart';
-import 'services/polling_service.dart';
-import 'services/conversation_manager.dart';
 import 'services/debug_log.dart';
 
 Future<void> main() async {
@@ -253,9 +251,9 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
     if (auth.isAuthenticated && !_pollingStarted) {
       _pollingStarted = true;
       _pollingService = PollingService(
-        authProvider: auth,
-        conversationsProvider: context.read<ConversationsProvider>(),
-        watchListProvider: context.read<WatchListProvider>(),
+        authService: auth.service,
+        conversationsService: context.read<ConversationsProvider>().service,
+        watchListService: context.read<WatchListProvider>().service,
         secureStorage: widget.secureStorage,
       );
       ConversationManager.instance.init(

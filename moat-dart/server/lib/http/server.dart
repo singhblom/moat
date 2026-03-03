@@ -94,72 +94,17 @@ Handler buildRouter({
 
       moatLog('Server: Starting conversation with $recipientHandle');
 
-      // Resolve recipient DID.
-      final recipientDid = await authService.atprotoClient.resolveDid(recipientHandle);
-      moatLog('Server: Resolved $recipientHandle → $recipientDid');
-
-      // Fetch recipient's key packages.
-      final keyPackages = await authService.atprotoClient.fetchKeyPackages(recipientDid);
-      if (keyPackages.isEmpty) {
-        return Response(400,
-            body: jsonEncode({'error': 'recipient has no key packages'}),
-            headers: _jsonHeaders);
-      }
-      final keyPackage = keyPackages.first.keyPackage;
-
-      // Fetch recipient's stealth addresses.
-      final stealthRecords =
-          await authService.atprotoClient.fetchStealthAddresses(recipientDid);
-      if (stealthRecords.isEmpty) {
-        return Response(400,
-            body: jsonEncode({'error': 'recipient has no stealth address'}),
-            headers: _jsonHeaders);
-      }
-      final stealthPubkeys =
-          stealthRecords.map((r) => r.scanPubkey).toList();
-
-      // Create MLS group and generate welcome.
-      final result = await authService.createConversation(
-        recipientDid: recipientDid,
-        recipientStealthPubkeys: stealthPubkeys,
-        recipientKeyPackage: keyPackage,
+      final conversation = await startConversation(
+        recipientHandle: recipientHandle,
+        authService: authService,
+        convsService: convsService,
+        drawbridgeUrl: drawbridgeUrl,
       );
 
-      // Publish the stealth-encrypted welcome event to our PDS.
-      await authService.atprotoClient.publishEvent(
-        result.randomTag,
-        result.stealthCiphertext,
-      );
-
-      moatLog('Server: Welcome published, group: ${_bytesToHex(result.groupId)}');
-
-      // Populate candidate tags for this conversation.
-      await authService.populateConversationTags(result.groupId);
-
-      // Resolve display name.
-      String displayName;
-      try {
-        displayName = await authService.atprotoClient.resolveHandle(recipientDid);
-      } catch (_) {
-        displayName = recipientDid;
-      }
-
-      // Save conversation.
-      final groupIdHex = _bytesToHex(result.groupId);
-      final conversation = Conversation(
-        groupId: result.groupId,
-        displayName: displayName,
-        participants: [recipientDid],
-        epoch: result.epoch,
-        keyBundleRef: 'key_bundle_$groupIdHex',
-        createdAt: DateTime.now(),
-      );
-      await convsService.saveConversation(conversation);
-
-      moatLog('Server: Conversation $groupIdHex created');
+      moatLog('Server: Conversation ${conversation.groupIdHex} created');
 
       return Response.ok(
-        jsonEncode({'group_id': groupIdHex}),
+        jsonEncode({'group_id': conversation.groupIdHex}),
         headers: _jsonHeaders,
       );
     } catch (e) {
@@ -330,8 +275,4 @@ Handler buildRouter({
   });
 
   return router.call;
-}
-
-String _bytesToHex(Uint8List bytes) {
-  return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 }
