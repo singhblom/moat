@@ -16,19 +16,29 @@ pub const EMOJI_VOCAB: &[&str] = &["👍", "❤️", "😂", "🎉", "🔥"];
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ParticipantId {
-    Alice,
-    Bob,
-}
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ParticipantId(pub usize);
 
 impl ParticipantId {
-    /// Index into a `[T; 2]` keyed by participant (Alice=0, Bob=1).
+    pub const ALICE: Self = Self(0);
+    pub const BOB: Self = Self(1);
+    pub const CAROL: Self = Self(2);
+
+    /// Index into a slice keyed by participant.
     pub fn ordinal(&self) -> usize {
-        match self {
-            ParticipantId::Alice => 0,
-            ParticipantId::Bob => 1,
-        }
+        self.0
+    }
+
+    /// Short lowercase name for this participant.
+    pub fn short_name(&self) -> &'static str {
+        const NAMES: &[&str] = &["alice", "bob", "carol", "dave", "eve"];
+        NAMES.get(self.0).copied().unwrap_or("unknown")
+    }
+}
+
+impl std::fmt::Display for ParticipantId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.short_name())
     }
 }
 
@@ -61,7 +71,11 @@ pub enum Action {
 // ── Strategies ────────────────────────────────────────────────────────────────
 
 fn arb_participant() -> impl Strategy<Value = ParticipantId> {
-    prop_oneof![Just(ParticipantId::Alice), Just(ParticipantId::Bob)]
+    arb_participant_n(2)
+}
+
+fn arb_participant_n(n: usize) -> impl Strategy<Value = ParticipantId> {
+    (0..n).prop_map(ParticipantId)
 }
 
 /// Generate one action, given how many `SendMessage` actions have already been
@@ -121,8 +135,7 @@ struct OfflineFoldState {
     /// Number of `SendMessage` actions generated so far.
     num_messages: usize,
     /// `online[i]` is `true` iff participant `i` is currently online.
-    /// Index by [`ParticipantId::ordinal`].
-    online: [bool; 2],
+    online: Vec<bool>,
 }
 
 /// Generate one action given the current offline fold state.
@@ -130,11 +143,12 @@ struct OfflineFoldState {
 /// Generation rules:
 /// - Online participants may `SendMessage`, `Poll`, `React` (if messages exist), or `GoOffline`.
 /// - Offline participants may only `ComeOnline`.
-fn arb_action_with_offline(state: OfflineFoldState) -> BoxedStrategy<Action> {
+fn arb_action_with_offline_n(state: OfflineFoldState) -> BoxedStrategy<Action> {
     let mut choices: Vec<BoxedStrategy<Action>> = vec![];
+    let n = state.online.len();
 
-    for id in [ParticipantId::Alice, ParticipantId::Bob] {
-        let i = id.ordinal();
+    for i in 0..n {
+        let id = ParticipantId(i);
         if state.online[i] {
             choices.push(
                 (0..TEXT_VOCAB.len())
@@ -180,6 +194,8 @@ fn update_offline_state(state: &OfflineFoldState, action: &Action) -> OfflineFol
     new_state
 }
 
+// `online` is now `Vec<bool>`, so indexing by `ordinal()` works unchanged.
+
 /// Strategy that produces a valid action sequence of length 1–10, including
 /// `GoOffline` / `ComeOnline` transitions.
 ///
@@ -187,13 +203,20 @@ fn update_offline_state(state: &OfflineFoldState, action: &Action) -> OfflineFol
 /// so that offline participants can only come online, and online participants
 /// can go offline.
 pub fn action_sequence_with_offline() -> impl Strategy<Value = Vec<Action>> {
-    let init = OfflineFoldState { num_messages: 0, online: [true, true] };
+    action_sequence_with_offline_n(2)
+}
+
+fn action_sequence_with_offline_n(n: usize) -> impl Strategy<Value = Vec<Action>> {
+    let init = OfflineFoldState {
+        num_messages: 0,
+        online: vec![true; n],
+    };
     (1usize..=10).prop_flat_map(move |len| {
         let init = init.clone();
         (0..len)
             .fold(Just((vec![], init)).boxed(), |acc, _| {
                 acc.prop_flat_map(|(actions, state): (Vec<Action>, OfflineFoldState)| {
-                    arb_action_with_offline(state.clone()).prop_map(move |a| {
+                    arb_action_with_offline_n(state.clone()).prop_map(move |a| {
                         let mut v = actions.clone();
                         let new_state = update_offline_state(&state, &a);
                         v.push(a);
@@ -204,4 +227,59 @@ pub fn action_sequence_with_offline() -> impl Strategy<Value = Vec<Action>> {
             })
             .prop_map(|(actions, _state)| actions)
     })
+}
+
+// ── 3-party strategies ───────────────────────────────────────────────────────
+
+/// Strategy that produces a valid action sequence for 3 participants.
+pub fn action_sequence_3p() -> impl Strategy<Value = Vec<Action>> {
+    action_sequence_n(3)
+}
+
+fn action_sequence_n(n: usize) -> impl Strategy<Value = Vec<Action>> {
+    (1usize..=10).prop_flat_map(move |len| {
+        (0..len).fold(Just(vec![]).boxed(), move |acc, _| {
+            acc.prop_flat_map(move |actions| {
+                let num_messages = actions
+                    .iter()
+                    .filter(|a| matches!(a, Action::SendMessage { .. }))
+                    .count();
+                arb_action_n(num_messages, n).prop_map(move |a| {
+                    let mut v = actions.clone();
+                    v.push(a);
+                    v
+                })
+            })
+            .boxed()
+        })
+    })
+}
+
+fn arb_action_n(num_messages: usize, n: usize) -> BoxedStrategy<Action> {
+    let send_or_poll = prop_oneof![
+        (arb_participant_n(n), 0..TEXT_VOCAB.len())
+            .prop_map(|(from, text_idx)| Action::SendMessage { from, text_idx }),
+        arb_participant_n(n).prop_map(|participant| Action::Poll { participant }),
+    ];
+
+    if num_messages == 0 {
+        send_or_poll.boxed()
+    } else {
+        prop_oneof![
+            3 => send_or_poll,
+            1 => (arb_participant_n(n), 0..num_messages, 0..EMOJI_VOCAB.len())
+                .prop_map(|(from, message_idx, emoji_idx)| Action::React {
+                    from,
+                    message_idx,
+                    emoji_idx,
+                }),
+        ]
+        .boxed()
+    }
+}
+
+/// Strategy that produces a valid action sequence for 3 participants with
+/// `GoOffline` / `ComeOnline` transitions.
+pub fn action_sequence_3p_with_offline() -> impl Strategy<Value = Vec<Action>> {
+    action_sequence_with_offline_n(3)
 }

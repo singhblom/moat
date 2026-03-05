@@ -114,7 +114,7 @@ pub async fn check_per_sender_ordering(
     let alice_msgs = alice.get_messages(&state.group_id).await?;
     let bob_msgs = bob.get_messages(&state.group_id).await?;
 
-    for sender in [ParticipantId::Alice, ParticipantId::Bob] {
+    for sender in [ParticipantId::ALICE, ParticipantId::BOB] {
         // Ground-truth: IDs of confirmed messages from this sender, in send order.
         let sent_ids: Vec<String> = state
             .sent_messages
@@ -177,6 +177,90 @@ pub async fn check_no_duplicates(
             if let Some(ref mid) = msg.message_id {
                 if !seen.insert(mid.clone()) {
                     anyhow::bail!("No-duplicates: {name} has duplicate message_id {mid}");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// ── N-participant invariant checkers ─────────────────────────────────────────
+
+/// Let pending events propagate across N participants.
+pub async fn drain_events_n(clients: &[&MoatCliClient]) {
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    for _ in 0..2 {
+        for client in clients {
+            let _ = client.poll().await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Every sent message with a confirmed ID appears in all participants' lists.
+pub async fn check_delivery_n(
+    clients: &[&MoatCliClient],
+    state: &ScenarioState,
+) -> Result<()> {
+    let mut all_msgs = Vec::new();
+    for (i, client) in clients.iter().enumerate() {
+        let msgs = client.get_messages(&state.group_id).await?;
+        all_msgs.push((i, msgs));
+    }
+
+    for sent in &state.sent_messages {
+        let Some(ref mid) = sent.message_id else {
+            continue;
+        };
+        for (i, msgs) in &all_msgs {
+            let found = msgs.iter().any(|m| m.message_id.as_deref() == Some(mid));
+            if !found {
+                anyhow::bail!(
+                    "Delivery: {:?} (id={mid}) missing from participant {i}'s view",
+                    sent.text
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// After drain, all participants see the same sequence of message contents.
+pub async fn check_consensus_ordering_n(
+    clients: &[&MoatCliClient],
+    state: &ScenarioState,
+) -> Result<()> {
+    let mut contents_per_client: Vec<Vec<String>> = Vec::new();
+    for client in clients {
+        let msgs = client.get_messages(&state.group_id).await?;
+        contents_per_client.push(msgs.into_iter().map(|m| m.content).collect());
+    }
+
+    let first = &contents_per_client[0];
+    for (i, contents) in contents_per_client.iter().enumerate().skip(1) {
+        if contents != first {
+            anyhow::bail!(
+                "Consensus ordering violated between participant 0 and {i}:\n  0: {:?}\n  {i}: {:?}",
+                first,
+                contents,
+            );
+        }
+    }
+    Ok(())
+}
+
+/// No participant's message list contains the same message ID more than once.
+pub async fn check_no_duplicates_n(
+    clients: &[&MoatCliClient],
+    state: &ScenarioState,
+) -> Result<()> {
+    for (i, client) in clients.iter().enumerate() {
+        let msgs = client.get_messages(&state.group_id).await?;
+        let mut seen = std::collections::HashSet::new();
+        for msg in &msgs {
+            if let Some(ref mid) = msg.message_id {
+                if !seen.insert(mid.clone()) {
+                    anyhow::bail!("No-duplicates: participant {i} has duplicate message_id {mid}");
                 }
             }
         }

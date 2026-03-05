@@ -10,7 +10,8 @@ use proptest::{
 };
 
 use crate::actions::{
-    action_sequence, action_sequence_with_offline, Action, ParticipantId, EMOJI_VOCAB, TEXT_VOCAB,
+    action_sequence, action_sequence_3p, action_sequence_3p_with_offline,
+    action_sequence_with_offline, Action, ParticipantId, EMOJI_VOCAB, TEXT_VOCAB,
 };
 use crate::client::MoatCliClient;
 use crate::invariants::{ScenarioState, SentMessage};
@@ -20,6 +21,9 @@ pub mod dart_two_party_chat;
 pub mod mixed_two_party_chat;
 pub mod push_latency;
 pub mod push_latency_restart;
+pub mod three_party_chat;
+pub mod three_party_push;
+pub mod three_party_restart;
 pub mod two_party_chat;
 pub mod two_party_push;
 pub mod two_party_push_restart;
@@ -41,17 +45,15 @@ pub fn pick_client<'a>(
     alice: &'a MoatCliClient,
     bob: &'a MoatCliClient,
 ) -> &'a MoatCliClient {
-    match id {
-        ParticipantId::Alice => alice,
-        ParticipantId::Bob => bob,
+    match id.ordinal() {
+        0 => alice,
+        1 => bob,
+        _ => panic!("pick_client: only supports 2 participants, got {:?}", id),
     }
 }
 
 fn short_name(id: &ParticipantId) -> &'static str {
-    match id {
-        ParticipantId::Alice => "alice",
-        ParticipantId::Bob => "bob",
-    }
+    id.short_name()
 }
 
 fn pick_handle<'a>(
@@ -59,9 +61,10 @@ fn pick_handle<'a>(
     alice_handle: &'a str,
     bob_handle: &'a str,
 ) -> &'a str {
-    match id {
-        ParticipantId::Alice => alice_handle,
-        ParticipantId::Bob => bob_handle,
+    match id.ordinal() {
+        0 => alice_handle,
+        1 => bob_handle,
+        _ => panic!("pick_handle: only supports 2 participants, got {:?}", id),
     }
 }
 
@@ -135,11 +138,10 @@ pub async fn execute_action(
         Action::ComeOnline { participant } => {
             let short = short_name(participant);
             let full = pick_handle(participant, alice_full_handle, bob_full_handle);
-            let other_participant = match participant {
-                ParticipantId::Alice => &ParticipantId::Bob,
-                ParticipantId::Bob => &ParticipantId::Alice,
+            let other_full = match participant.ordinal() {
+                0 => bob_full_handle,
+                _ => alice_full_handle,
             };
-            let other_full = pick_handle(other_participant, alice_full_handle, bob_full_handle);
             let client = pick_client(participant, alice, bob);
             world
                 .restart_participant(short)
@@ -200,6 +202,151 @@ pub async fn ensure_all_online(
             let _ = client.poll().await;
             if push_mode {
                 client
+                    .set_poll_interval(0)
+                    .await
+                    .expect("disable polling after bring-online");
+            }
+        }
+    }
+}
+
+// ── N-participant helpers ─────────────────────────────────────────────────────
+
+/// Execute an action using indexed participant slices (N-participant generalization).
+pub async fn execute_action_n(
+    action: &Action,
+    clients: &[&MoatCliClient],
+    world: &mut TestWorld,
+    handles: &[&str],
+    push_mode: bool,
+    state: &mut ScenarioState,
+    verbose: bool,
+) {
+    match action {
+        Action::SendMessage { from, text_idx } => {
+            let text = TEXT_VOCAB[text_idx % TEXT_VOCAB.len()];
+            let client = &clients[from.ordinal()];
+            if client.send_message(&state.group_id, text).await.is_ok() {
+                let message_id = client
+                    .get_messages(&state.group_id)
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .rev()
+                    .find(|m| m.is_own && m.content.contains(text))
+                    .and_then(|m| m.message_id);
+                vlog!(verbose, "  → sent {:?} (id={:?})", text, message_id);
+                state.sent_messages.push(SentMessage {
+                    text: text.to_string(),
+                    from: from.clone(),
+                    message_id,
+                });
+            }
+        }
+
+        Action::Poll { participant } => {
+            let result = clients[participant.ordinal()].poll().await;
+            vlog!(
+                verbose,
+                "  → poll: new_messages={}, new_conversations={}",
+                result.as_ref().map(|s| s.new_messages).unwrap_or(0),
+                result.as_ref().map(|s| s.new_conversations).unwrap_or(0),
+            );
+        }
+
+        Action::React {
+            from,
+            message_idx,
+            emoji_idx,
+        } => {
+            let msg = &state.sent_messages[*message_idx];
+            if let Some(ref mid) = msg.message_id {
+                let emoji = EMOJI_VOCAB[emoji_idx % EMOJI_VOCAB.len()];
+                let _ = clients[from.ordinal()]
+                    .send_reaction(&state.group_id, mid, emoji)
+                    .await;
+                vlog!(
+                    verbose,
+                    "  → reacted {:?} to message {}",
+                    emoji,
+                    message_idx
+                );
+            }
+        }
+
+        Action::GoOffline { participant } => {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let name = participant.short_name();
+            world.kill_participant(name).expect("kill participant");
+            vlog!(verbose, "  → {} went offline", name);
+        }
+
+        Action::ComeOnline { participant } => {
+            let name = participant.short_name();
+            let full = handles[participant.ordinal()];
+            let client = &clients[participant.ordinal()];
+            world
+                .restart_participant(name)
+                .await
+                .expect("restart participant");
+            client
+                .login(full, "any-password")
+                .await
+                .expect("re-login after restart");
+            // Re-watch all other participants' handles
+            for (i, other_handle) in handles.iter().enumerate() {
+                if i != participant.ordinal() {
+                    client
+                        .watch_handle(other_handle)
+                        .await
+                        .expect("re-watch after restart");
+                }
+            }
+            let _ = client.poll().await;
+            if push_mode {
+                client
+                    .set_poll_interval(0)
+                    .await
+                    .expect("disable polling after restart");
+            }
+            vlog!(verbose, "  → {} came online", name);
+        }
+    }
+}
+
+/// Bring all offline participants back online (N-participant version).
+pub async fn ensure_all_online_n(
+    world: &mut TestWorld,
+    clients: &[&MoatCliClient],
+    handles: &[&str],
+    push_mode: bool,
+) {
+    let names: Vec<String> = handles
+        .iter()
+        .map(|h| h.split('.').next().unwrap().to_string())
+        .collect();
+
+    for (i, name) in names.iter().enumerate() {
+        if !world.participant_is_online(name) {
+            world
+                .restart_participant(name)
+                .await
+                .expect("restart participant");
+            clients[i]
+                .login(handles[i], "any-password")
+                .await
+                .expect("re-login");
+            for (j, other_handle) in handles.iter().enumerate() {
+                if j != i {
+                    clients[i]
+                        .watch_handle(other_handle)
+                        .await
+                        .expect("re-watch");
+                }
+            }
+            let _ = clients[i].poll().await;
+            if push_mode {
+                clients[i]
                     .set_poll_interval(0)
                     .await
                     .expect("disable polling after bring-online");
@@ -294,6 +441,27 @@ pub static SCENARIOS: &[Scenario] = &[
         seed_fn: actions_from_seed_offline,
     },
     Scenario {
+        name: "three-party-chat",
+        description: "Alice + Bob + Carol, polling delivery",
+        run_fn: three_party_chat::run_boxed,
+        gen_fn: generate_random_actions_3p,
+        seed_fn: actions_from_seed_3p,
+    },
+    Scenario {
+        name: "three-party-push",
+        description: "Alice + Bob + Carol, Drawbridge push delivery",
+        run_fn: three_party_push::run_boxed,
+        gen_fn: generate_random_actions_3p,
+        seed_fn: actions_from_seed_3p,
+    },
+    Scenario {
+        name: "three-party-restart",
+        description: "Alice + Bob + Carol, polling with offline/online cycles",
+        run_fn: three_party_restart::run_boxed,
+        gen_fn: generate_random_actions_3p_offline,
+        seed_fn: actions_from_seed_3p_offline,
+    },
+    Scenario {
         name: "dart-two-party-chat",
         description: "Alice (Dart) + Bob (Dart), polling delivery",
         run_fn: dart_two_party_chat::run_boxed,
@@ -373,6 +541,43 @@ pub fn actions_from_seed_offline(seed_str: &str) -> Result<Vec<Action>> {
 pub fn generate_random_actions_offline() -> Vec<Action> {
     let mut runner = TestRunner::default();
     action_sequence_with_offline()
+        .new_tree(&mut runner)
+        .unwrap()
+        .current()
+}
+
+/// Generate one action sequence from a proptest seed string (3-party strategy).
+pub fn actions_from_seed_3p(seed_str: &str) -> Result<Vec<Action>> {
+    let seed = parse_seed(seed_str)?;
+    let rng = TestRng::from_seed(RngAlgorithm::ChaCha, &seed);
+    let mut runner = TestRunner::new_with_rng(Config::default(), rng);
+    action_sequence_3p()
+        .new_tree(&mut runner)
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .map(|t| t.current())
+}
+
+/// Generate one random action sequence (3-party strategy, for `beacon run`).
+pub fn generate_random_actions_3p() -> Vec<Action> {
+    let mut runner = TestRunner::default();
+    action_sequence_3p().new_tree(&mut runner).unwrap().current()
+}
+
+/// Generate one action sequence from a proptest seed string (3-party offline strategy).
+pub fn actions_from_seed_3p_offline(seed_str: &str) -> Result<Vec<Action>> {
+    let seed = parse_seed(seed_str)?;
+    let rng = TestRng::from_seed(RngAlgorithm::ChaCha, &seed);
+    let mut runner = TestRunner::new_with_rng(Config::default(), rng);
+    action_sequence_3p_with_offline()
+        .new_tree(&mut runner)
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .map(|t| t.current())
+}
+
+/// Generate one random action sequence (3-party offline strategy, for `beacon run`).
+pub fn generate_random_actions_3p_offline() -> Vec<Action> {
+    let mut runner = TestRunner::default();
+    action_sequence_3p_with_offline()
         .new_tree(&mut runner)
         .unwrap()
         .current()

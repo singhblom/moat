@@ -29,7 +29,7 @@ pub struct StatusResponse {
 pub struct Conversation {
     pub id: String,
     pub name: String,
-    pub participant_did: String,
+    pub participant_dids: Vec<String>,
     pub epoch: u64,
     pub unread: usize,
 }
@@ -122,6 +122,26 @@ impl MoatCliClient {
         }
         let body: CreateConversationResponse = resp.json().await.context("parse group_id")?;
         Ok(body.group_id)
+    }
+
+    /// `POST /conversations/:group_id/members` — add a member to an existing group.
+    pub async fn add_member(&self, group_id: &str, handle: &str) -> Result<()> {
+        let resp = self
+            .http
+            .post(format!(
+                "{}/conversations/{group_id}/members",
+                self.base_url
+            ))
+            .json(&json!({ "handle": handle }))
+            .send()
+            .await
+            .context("POST /conversations/:group_id/members")?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body: Value = resp.json().await.unwrap_or_default();
+            anyhow::bail!("add_member failed ({status}): {body}");
+        }
+        Ok(())
     }
 
     /// `GET /conversations/:group_id/messages`
