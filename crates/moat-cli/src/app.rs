@@ -26,6 +26,55 @@ use tokio::sync::mpsc;
 /// Quick-reaction emojis (same as Flutter app)
 pub const QUICK_EMOJIS: &[&str] = &["👍", "❤️", "😂", "😮", "😢", "🙏"];
 
+// ── Welcome envelope (Welcome + Drawbridge hint bundle) ─────────────────────
+
+/// A Drawbridge hint bundled alongside a Welcome for the new member.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct HintBundleEntry {
+    did: String,
+    url: String,
+    device_id: Vec<u8>,
+    ticket: Vec<u8>,
+}
+
+/// Magic bytes identifying the envelope format (vs. raw MLS Welcome).
+const WELCOME_ENVELOPE_MAGIC: [u8; 4] = *b"MWE1";
+
+/// Encode a Welcome + hint bundle into an envelope.
+///
+/// Format: `[4-byte magic][4-byte welcome_len BE][welcome][hints_json]`
+fn encode_welcome_envelope(welcome: &[u8], hints: &[HintBundleEntry]) -> Vec<u8> {
+    let hints_json = serde_json::to_vec(&hints).unwrap_or_else(|_| b"[]".to_vec());
+    let mut buf = Vec::with_capacity(8 + welcome.len() + hints_json.len());
+    buf.extend_from_slice(&WELCOME_ENVELOPE_MAGIC);
+    buf.extend_from_slice(&(welcome.len() as u32).to_be_bytes());
+    buf.extend_from_slice(welcome);
+    buf.extend_from_slice(&hints_json);
+    buf
+}
+
+/// Decode a Welcome envelope, returning `(welcome_bytes, hints)`.
+///
+/// If the data doesn't start with the magic, treats the entire blob as a raw
+/// Welcome with no hints (backward compat).
+fn decode_welcome_envelope(data: &[u8]) -> (Vec<u8>, Vec<HintBundleEntry>) {
+    if data.len() >= 8 && data[..4] == WELCOME_ENVELOPE_MAGIC {
+        let welcome_len =
+            u32::from_be_bytes(data[4..8].try_into().unwrap_or_default()) as usize;
+        if data.len() >= 8 + welcome_len {
+            let welcome = data[8..8 + welcome_len].to_vec();
+            let hints: Vec<HintBundleEntry> = if data.len() > 8 + welcome_len {
+                serde_json::from_slice(&data[8 + welcome_len..]).unwrap_or_default()
+            } else {
+                vec![]
+            };
+            return (welcome, hints);
+        }
+    }
+    // Legacy: raw Welcome bytes, no hints
+    (data.to_vec(), vec![])
+}
+
 /// Thin wrapper around `Box<dyn StatefulProtocol>` that implements `Debug`
 /// (needed because `DisplayMessage` derives `Debug`).
 pub struct ImageProto(pub StatefulProtocol);
@@ -108,12 +157,12 @@ pub enum LoginField {
     Password,
 }
 
-/// A conversation with another user
+/// A conversation with one or more other users
 #[derive(Debug, Clone)]
 pub struct Conversation {
     pub id: String,
     pub name: String,
-    pub participant_did: String,
+    pub participant_dids: Vec<String>,
     pub current_epoch: u64,
     pub unread: usize,
 }
@@ -790,6 +839,11 @@ impl App {
         id.ok_or_else(|| AppError::Other("failed to determine conversation id".to_string()))
     }
 
+    /// HTTP: add a member to an existing group conversation.
+    pub async fn api_add_member(&mut self, group_id_hex: &str, handle: &str) -> Result<()> {
+        self.add_member_to_group(group_id_hex, handle).await
+    }
+
     /// HTTP: delete a conversation locally.
     pub fn api_delete_conversation(&mut self, group_id_hex: &str) -> Result<()> {
         self.keys.delete_group_metadata(group_id_hex)?;
@@ -995,10 +1049,12 @@ impl App {
         // Collect DIDs and their last rkeys
         let mut dids_to_poll: HashMap<String, Vec<usize>> = HashMap::new();
         for (idx, conv) in self.conversations.iter().enumerate() {
-            dids_to_poll
-                .entry(conv.participant_did.clone())
-                .or_default()
-                .push(idx);
+            for did in &conv.participant_dids {
+                dids_to_poll
+                    .entry(did.clone())
+                    .or_default()
+                    .push(idx);
+            }
         }
         if !self.conversations.is_empty() {
             let all_conv_indices: Vec<usize> = (0..self.conversations.len()).collect();
@@ -1262,8 +1318,8 @@ impl App {
                 let _ = self.keys.store_group_metadata(
                     &conv_id,
                     &GroupMetadata {
-                        participant_did: did,
-                        participant_handle: handle,
+                        participant_dids: vec![did],
+                        participant_handles: vec![handle],
                     },
                 );
             }
@@ -1992,7 +2048,7 @@ impl App {
             .conversations
             .iter()
             .enumerate()
-            .filter(|(_, c)| c.participant_did == did)
+            .filter(|(_, c)| c.participant_dids.contains(&did))
             .map(|(i, _)| i)
             .collect();
 
@@ -2169,11 +2225,11 @@ impl App {
             Some(c) => c.clone(),
             None => return,
         };
-        if conv.participant_did.is_empty() {
+        if conv.participant_dids.is_empty() {
             return;
         }
         let tx = self.bg_tx.clone();
-        let did = conv.participant_did.clone();
+        let did = conv.participant_dids[0].clone();
         let conv_id = conv.id.clone();
         tokio::spawn(async move {
             if let Ok(handle) = client.resolve_handle(&did).await {
@@ -2204,11 +2260,11 @@ impl App {
 
         self.conversations.clear();
         for group_id in group_ids {
-            let (name, participant_did) = match self.keys.load_group_metadata(&group_id) {
-                Ok(meta) => (meta.participant_handle, meta.participant_did),
+            let (name, participant_dids) = match self.keys.load_group_metadata(&group_id) {
+                Ok(meta) => (meta.participant_handles.join(", "), meta.participant_dids),
                 Err(_) => {
                     let short_id = &group_id[..8.min(group_id.len())];
-                    (format!("Conversation {}", short_id), String::new())
+                    (format!("Conversation {}", short_id), Vec::new())
                 }
             };
 
@@ -2224,7 +2280,7 @@ impl App {
             self.conversations.push(Conversation {
                 id: group_id,
                 name,
-                participant_did,
+                participant_dids,
                 current_epoch,
                 unread: 0,
             });
@@ -2320,7 +2376,7 @@ impl App {
                     .conversations
                     .iter()
                     .enumerate()
-                    .filter(|(_, c)| c.participant_did == did)
+                    .filter(|(_, c)| c.participant_dids.contains(&did))
                     .map(|(i, _)| i)
                     .collect();
                 if !conv_indices.is_empty() {
@@ -2542,6 +2598,38 @@ impl App {
                         {
                             conv.current_epoch = new_epoch;
                         }
+
+                        // Update member list from MLS group state (may have changed due to add/remove)
+                        let my_did_str = my_did.to_string();
+                        let old_dids: Vec<String> = self
+                            .conversations
+                            .iter()
+                            .find(|c| c.id == conv_id)
+                            .map(|c| c.participant_dids.clone())
+                            .unwrap_or_default();
+
+                        if let Ok(all_dids) = self.mls.get_group_dids(&group_id) {
+                            let member_dids: Vec<String> = all_dids
+                                .into_iter()
+                                .filter(|d| d != &my_did_str)
+                                .collect();
+                            if member_dids != old_dids {
+                                if let Some(conv) =
+                                    self.conversations.iter_mut().find(|c| c.id == conv_id)
+                                {
+                                    conv.participant_dids = member_dids.clone();
+                                }
+                                // Update stored metadata
+                                let _ = self.keys.store_group_metadata(
+                                    &conv_id,
+                                    &GroupMetadata {
+                                        participant_dids: member_dids.clone(),
+                                        participant_handles: member_dids,
+                                    },
+                                );
+                            }
+                        }
+
                         // Regenerate candidate tags for the new epoch
                         self.populate_candidate_tags(&conv_id, &group_id);
 
@@ -2605,7 +2693,7 @@ impl App {
     fn try_process_welcome_sync(
         &mut self,
         ciphertext: &[u8],
-        author_did: &str,
+        _author_did: &str,
         _tag: [u8; 16],
     ) -> bool {
         let stealth_privkey = match self.keys.load_stealth_key() {
@@ -2616,13 +2704,16 @@ impl App {
             }
         };
 
-        let welcome_bytes = match try_decrypt_stealth(&stealth_privkey, ciphertext) {
+        let plaintext = match try_decrypt_stealth(&stealth_privkey, ciphertext) {
             Some(bytes) => bytes,
             None => {
                 self.debug_log.log("try_welcome: stealth decryption failed (not for us)");
                 return false;
             }
         };
+
+        // Decode welcome envelope (may contain bundled Drawbridge hints)
+        let (welcome_bytes, hint_bundle) = decode_welcome_envelope(&plaintext);
 
         let group_id = match self.mls.process_welcome(&welcome_bytes) {
             Ok(id) => id,
@@ -2634,30 +2725,54 @@ impl App {
 
         let conv_id = hex::encode(&group_id);
 
-        // Use DID as name initially; will be resolved later
-        let participant_handle = author_did.to_string();
+        // Get all member DIDs from the MLS group (includes ourselves)
+        let my_did = self.client.as_ref().map(|c| c.did().to_string()).unwrap_or_default();
+        let all_dids = self.mls.get_group_dids(&group_id).unwrap_or_default();
+        let participant_dids: Vec<String> = all_dids
+            .into_iter()
+            .filter(|d| d != &my_did)
+            .collect();
+
+        // Use DIDs as placeholder names; will be resolved in background
+        let participant_handles: Vec<String> = participant_dids.clone();
+        let name = participant_handles.join(", ");
 
         let _ = self.keys.store_group_metadata(
             &conv_id,
             &GroupMetadata {
-                participant_did: author_did.to_string(),
-                participant_handle: participant_handle.clone(),
+                participant_dids: participant_dids.clone(),
+                participant_handles: participant_handles.clone(),
             },
         );
 
         self.conversations.push(Conversation {
             id: conv_id.clone(),
-            name: participant_handle,
-            participant_did: author_did.to_string(),
+            name,
+            participant_dids,
             current_epoch: 1,
             unread: 1,
         });
 
         self.populate_candidate_tags(&conv_id, &group_id);
 
-        // Resolve DID → handle in background
+        // Resolve DID → handle in background for each participant
         if let Some(conv) = self.conversations.last() {
             self.resolve_conversation_handle(conv);
+        }
+
+        // Process bundled Drawbridge hints from the Welcome envelope.
+        for hint in hint_bundle {
+            self.debug_log.log(&format!(
+                "process_welcome: processing bundled hint from {}",
+                &hint.did[..20.min(hint.did.len())]
+            ));
+            let _ = self.bg_tx.send(BgEvent::DrawbridgeHandleHint {
+                partner_did: hint.did,
+                device_id: hint.device_id,
+                url: hint.url,
+                ticket: hint.ticket,
+                group_id_hex: conv_id.clone(),
+            });
         }
 
         // Send reciprocal DrawbridgeHint so the initiator can push to us.
@@ -2942,7 +3057,7 @@ impl App {
         if let Some(existing_idx) = self
             .conversations
             .iter()
-            .position(|c| c.participant_did == recipient_did)
+            .position(|c| c.participant_dids.contains(&recipient_did))
         {
             // Switch to existing conversation instead of creating a duplicate
             self.active_conversation = Some(existing_idx);
@@ -3041,8 +3156,8 @@ impl App {
         self.keys.store_group_metadata(
             &conv_id,
             &GroupMetadata {
-                participant_did: recipient_did.clone(),
-                participant_handle: recipient_handle.to_string(),
+                participant_dids: vec![recipient_did.clone()],
+                participant_handles: vec![recipient_handle.to_string()],
             },
         )?;
 
@@ -3050,7 +3165,7 @@ impl App {
         self.conversations.push(Conversation {
             id: conv_id.clone(),
             name: recipient_handle.to_string(),
-            participant_did: recipient_did,
+            participant_dids: vec![recipient_did],
             current_epoch: 1, // Post-add epoch
             unread: 0,
         });
@@ -3091,6 +3206,143 @@ impl App {
             image_proto: None,
             image_loading: false,
         });
+
+        Ok(())
+    }
+
+    /// Add a new member to an existing group conversation.
+    async fn add_member_to_group(&mut self, group_id_hex: &str, handle: &str) -> Result<()> {
+        let client = self
+            .client
+            .as_ref()
+            .ok_or_else(|| AppError::Other("not logged in".to_string()))?
+            .clone();
+
+        // 1. Resolve handle → DID
+        let new_did = client.resolve_did(handle).await?;
+
+        // 2. Check DID not already in group
+        let group_id = hex::decode(group_id_hex)
+            .map_err(|e| AppError::Other(format!("invalid group_id hex: {e}")))?;
+        if self.mls.is_did_in_group(&group_id, &new_did)? {
+            return Err(AppError::Other(format!(
+                "{handle} is already in this group"
+            )));
+        }
+
+        // 3. Fetch stealth addresses for new member
+        let stealth_records = client.fetch_stealth_addresses(&new_did).await?;
+        if stealth_records.is_empty() {
+            return Err(AppError::Other(format!(
+                "No stealth address found for {handle}"
+            )));
+        }
+        let stealth_pubkeys: Vec<[u8; 32]> =
+            stealth_records.iter().map(|r| r.scan_pubkey).collect();
+
+        // 4. Fetch key package for new member
+        let key_packages = client.fetch_key_packages(&new_did).await?;
+        let kp_bytes = key_packages
+            .first()
+            .ok_or_else(|| AppError::Other(format!("No key package found for {handle}")))?
+            .key_package
+            .clone();
+
+        // 5. Load our key bundle
+        let key_bundle = self.keys.load_identity_key()?;
+
+        // 6. Derive commit tag BEFORE add_member (pre-epoch-advance)
+        let commit_tag = self.mls.derive_next_tag(&group_id, &key_bundle)?;
+
+        // 7. Add member to MLS group
+        let welcome_result = self.mls.add_member(&group_id, &key_bundle, &kp_bytes)?;
+        self.save_mls_state()?;
+
+        // 8. Build hint bundle (our own hint + all partner hints for this group)
+        let mut hint_bundle: Vec<HintBundleEntry> = Vec::new();
+        if self.drawbridge_url.is_some() && self.drawbridge.has_own_connection() {
+            // Our own hint: generate fresh ticket and register it
+            let ticket = MoatSession::generate_drawbridge_ticket();
+            if let Err(e) = self.drawbridge.register_ticket(&ticket, group_id_hex).await {
+                self.debug_log
+                    .log(&format!("add_member: register_ticket for bundle failed: {e}"));
+            }
+            let my_did = client.did().to_string();
+            hint_bundle.push(HintBundleEntry {
+                did: my_did,
+                url: self.drawbridge_url.as_ref().unwrap().clone(),
+                device_id: self.mls.device_id().to_vec(),
+                ticket: ticket.to_vec(),
+            });
+
+            // Partner hints for this group
+            for stored in self.drawbridge.hints_for_group(group_id_hex) {
+                hint_bundle.push(HintBundleEntry {
+                    did: stored.partner_did,
+                    url: stored.url,
+                    device_id: hex::decode(&stored.device_id_hex).unwrap_or_default(),
+                    ticket: hex::decode(&stored.ticket_hex).unwrap_or_default(),
+                });
+            }
+        }
+
+        // 9. Encrypt Welcome envelope (Welcome + hint bundle) for new member's
+        //    stealth keys, publish with random tag
+        let envelope = encode_welcome_envelope(&welcome_result.welcome, &hint_bundle);
+        let stealth_ciphertext =
+            moat_core::encrypt_for_stealth(&stealth_pubkeys, &envelope)?;
+        let random_tag: [u8; 16] = rand::random();
+        client
+            .publish_event(&random_tag, &stealth_ciphertext)
+            .await?;
+
+        // 10. Publish the Commit with pre-epoch tag for existing members
+        client
+            .publish_event(&commit_tag, &welcome_result.commit)
+            .await?;
+
+        // 11. Update GroupMetadata — add new DID/handle
+        if let Some(conv) = self.conversations.iter_mut().find(|c| c.id == group_id_hex) {
+            if !conv.participant_dids.contains(&new_did) {
+                conv.participant_dids.push(new_did.clone());
+            }
+            conv.name = {
+                // Rebuild name from all participant handles
+                let mut handles: Vec<String> = conv.participant_dids.iter().filter_map(|did| {
+                    // For the new member, use the handle we just resolved
+                    if did == &new_did {
+                        Some(handle.to_string())
+                    } else {
+                        None
+                    }
+                }).collect();
+                // Keep existing name parts and append new handle
+                if !conv.name.is_empty() {
+                    handles.insert(0, conv.name.clone());
+                }
+                handles.join(", ")
+            };
+
+            let _ = self.keys.store_group_metadata(
+                group_id_hex,
+                &GroupMetadata {
+                    participant_dids: conv.participant_dids.clone(),
+                    participant_handles: conv.name.split(", ").map(|s| s.to_string()).collect(),
+                },
+            );
+        }
+
+        // 12. Re-populate candidate tags for the new epoch
+        self.populate_candidate_tags(group_id_hex, &group_id);
+
+        // 13. Update Drawbridge tags for the new epoch
+        self.update_drawbridge_tags_for_conversation(group_id_hex);
+        self.save_drawbridge_state();
+
+        self.debug_log.log(&format!(
+            "add_member: added {handle} to group {}",
+            &group_id_hex[..16.min(group_id_hex.len())]
+        ));
 
         Ok(())
     }

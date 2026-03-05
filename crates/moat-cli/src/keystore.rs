@@ -25,8 +25,53 @@ pub enum KeyStoreError {
 /// Metadata about a conversation/group
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupMetadata {
-    pub participant_did: String,
-    pub participant_handle: String,
+    #[serde(
+        alias = "participant_did",
+        deserialize_with = "deserialize_string_or_vec",
+        default
+    )]
+    pub participant_dids: Vec<String>,
+    #[serde(
+        alias = "participant_handle",
+        deserialize_with = "deserialize_string_or_vec",
+        default
+    )]
+    pub participant_handles: Vec<String>,
+}
+
+/// Deserialize a field that may be a single string (old format) or a Vec<String> (new format).
+fn deserialize_string_or_vec<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    struct StringOrVec;
+
+    impl<'de> de::Visitor<'de> for StringOrVec {
+        type Value = Vec<String>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a string or a list of strings")
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<Vec<String>, E> {
+            Ok(vec![v.to_string()])
+        }
+
+        fn visit_seq<A: de::SeqAccess<'de>>(
+            self,
+            mut seq: A,
+        ) -> std::result::Result<Vec<String>, A::Error> {
+            let mut v = Vec::new();
+            while let Some(s) = seq.next_element()? {
+                v.push(s);
+            }
+            Ok(v)
+        }
+    }
+
+    deserializer.deserialize_any(StringOrVec)
 }
 
 /// Pagination state (per-DID last seen rkey)
@@ -571,12 +616,12 @@ mod tests {
         let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
 
         let meta_a = GroupMetadata {
-            participant_did: "did:plc:aaa".to_string(),
-            participant_handle: "alice.bsky.social".to_string(),
+            participant_dids: vec!["did:plc:aaa".to_string()],
+            participant_handles: vec!["alice.bsky.social".to_string()],
         };
         let meta_b = GroupMetadata {
-            participant_did: "did:plc:bbb".to_string(),
-            participant_handle: "bob.bsky.social".to_string(),
+            participant_dids: vec!["did:plc:bbb".to_string()],
+            participant_handles: vec!["bob.bsky.social".to_string()],
         };
 
         store.store_group_metadata("group-a", &meta_a).unwrap();
@@ -653,6 +698,50 @@ mod tests {
         assert_eq!(
             store.get_last_rkey("did:plc:abc123").unwrap(),
             Some("3lf9ghi".to_string())
+        );
+    }
+
+    #[test]
+    fn test_group_metadata_multi_member() {
+        let dir = tempdir().unwrap();
+        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+
+        let meta = GroupMetadata {
+            participant_dids: vec![
+                "did:plc:aaa".to_string(),
+                "did:plc:bbb".to_string(),
+                "did:plc:ccc".to_string(),
+            ],
+            participant_handles: vec![
+                "alice.bsky.social".to_string(),
+                "bob.bsky.social".to_string(),
+                "carol.bsky.social".to_string(),
+            ],
+        };
+
+        store.store_group_metadata("group-multi", &meta).unwrap();
+
+        let loaded = store.load_group_metadata("group-multi").unwrap();
+        assert_eq!(loaded.participant_dids.len(), 3);
+        assert_eq!(loaded.participant_dids[0], "did:plc:aaa");
+        assert_eq!(loaded.participant_dids[2], "did:plc:ccc");
+        assert_eq!(loaded.participant_handles[1], "bob.bsky.social");
+    }
+
+    #[test]
+    fn test_group_metadata_backward_compat() {
+        let dir = tempdir().unwrap();
+        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+
+        // Simulate old single-value JSON format written directly as the store would
+        let old_json = r#"{"participant_did":"did:plc:old","participant_handle":"old.bsky.social"}"#;
+        fs::write(dir.path().join("group_group-old.meta"), old_json).unwrap();
+
+        let loaded = store.load_group_metadata("group-old").unwrap();
+        assert_eq!(loaded.participant_dids, vec!["did:plc:old".to_string()]);
+        assert_eq!(
+            loaded.participant_handles,
+            vec!["old.bsky.social".to_string()]
         );
     }
 }

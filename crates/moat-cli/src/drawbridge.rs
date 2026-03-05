@@ -586,6 +586,15 @@ impl DrawbridgeManager {
             .map(|((did, device_id_hex), _)| (did.as_str(), device_id_hex.as_str()))
             .collect()
     }
+
+    /// Collect all stored partner hints for a specific group.
+    pub fn hints_for_group(&self, group_id_hex: &str) -> Vec<StoredHint> {
+        self.hints
+            .values()
+            .filter(|hint| hint.group_id_hex == group_id_hex)
+            .cloned()
+            .collect()
+    }
 }
 
 /// Read a JSON message from a WebSocket reader.

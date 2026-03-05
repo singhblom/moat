@@ -72,7 +72,7 @@ struct StatusResponse {
 struct ConversationDto {
     id: String,
     name: String,
-    participant_did: String,
+    participant_dids: Vec<String>,
     epoch: u64,
     unread: usize,
 }
@@ -138,7 +138,7 @@ async fn get_conversations(State(state): State<Arc<ServerState>>) -> Json<Vec<Co
         .map(|c| ConversationDto {
             id: c.id.clone(),
             name: c.name.clone(),
-            participant_did: c.participant_did.clone(),
+            participant_dids: c.participant_dids.clone(),
             epoch: c.current_epoch,
             unread: c.unread,
         })
@@ -156,6 +156,23 @@ async fn post_conversations(
         .await
         .map_err(app_err)?;
     Ok(Json(json!({ "group_id": group_id })))
+}
+
+#[derive(Deserialize)]
+struct AddMemberRequest {
+    handle: String,
+}
+
+async fn post_add_member(
+    State(state): State<Arc<ServerState>>,
+    Path(group_id): Path<String>,
+    Json(body): Json<AddMemberRequest>,
+) -> HandlerResult<Json<Value>> {
+    let mut app = state.app.lock().await;
+    app.api_add_member(&group_id, &body.handle)
+        .await
+        .map_err(app_err)?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 async fn delete_conversation(
@@ -357,6 +374,10 @@ pub async fn run_http(
         .route("/conversations", get(get_conversations))
         .route("/conversations", post(post_conversations))
         .route("/conversations/:group_id", delete(delete_conversation))
+        .route(
+            "/conversations/:group_id/members",
+            post(post_add_member),
+        )
         .route("/conversation", put(put_conversation))
         .route("/conversations/:group_id/messages", get(get_messages))
         .route("/conversations/:group_id/messages", post(post_message))

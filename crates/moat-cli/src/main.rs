@@ -644,7 +644,7 @@ async fn cmd_devices(storage_dir: Option<PathBuf>, conversation: &str) -> anyhow
         for gid in groups {
             let meta = keys.load_group_metadata(&gid).ok();
             let name = meta
-                .map(|m| m.participant_handle)
+                .map(|m| m.participant_handles.join(", "))
                 .unwrap_or_else(|| "(unknown)".to_string());
             println!("  {} - {}", &gid[..16], name);
         }
