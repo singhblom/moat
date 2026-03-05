@@ -82,6 +82,38 @@ This is the most complex part. The goal: Alice invites Bob without revealing to 
 3. Process the MLS Welcome to join the group
 4. Generate candidate tags for all group members and register them for future message routing
 
+## Adding Members to an Existing Group
+
+When an existing member (Alice) adds a new member (Carol) to a group that already contains other members (Bob):
+
+**Alice (adder):**
+
+1. Resolve Carol's handle → DID, fetch her stealth public keys and MLS key package
+2. Derive a commit tag using the **current** epoch (pre-advance), since existing members scan for tags at this epoch
+3. Call MLS `add_member` → produces a Welcome (for Carol) and a Commit (for existing members). The epoch advances.
+4. Stealth-encrypt the Welcome for Carol's devices, publish with a **random** tag (same as the initial invite flow)
+5. Publish the raw Commit with the **pre-advance tag** so existing members (Bob) can find and process it
+6. Publish a Drawbridge hint bundle alongside the Welcome — this contains the Drawbridge hints of all existing group members (see [Drawbridge Hints — Adding Members](#adding-members)). Carol can use these to immediately connect to every existing member's relay without waiting for them to come online.
+
+**Carol (new member):**
+
+1. Detect the Welcome via stealth decryption while polling Alice's PDS
+2. Process the Welcome to join the group
+3. Call `get_group_dids` to discover **all** current members (not just the Welcome author), and store the full member list
+4. Process the Drawbridge hint bundle from Alice to connect to all existing members' relays
+5. Generate candidate tags for all members and register them
+6. Send a reciprocal Drawbridge hint (encrypted as a group event, visible to all members) so existing members can discover Carol's relay
+
+**Bob (existing member):**
+
+1. Detect the Commit via tag scanning (it uses the pre-advance epoch tag Bob is scanning for)
+2. Process the Commit — MLS advances the epoch, the new member appears in the group roster
+3. Update the local member list by querying MLS for all group DIDs
+4. Regenerate candidate tags for the new epoch (now includes Carol's tags)
+5. Receive Carol's reciprocal Drawbridge hint via normal group event scanning — no action required from Bob
+
+**Event count:** Adding a member produces exactly 3 published events regardless of group size: the stealth-encrypted Welcome (with hint bundle), the Commit, and Carol's reciprocal hint. Existing members publish nothing.
+
 ## Privacy Properties
 
 | Mechanism | What it hides |
@@ -228,6 +260,8 @@ The `control.drawbridge_hint` event payload is JSON:
 2. The sender encrypts a `control.drawbridge_hint` event and publishes it to the group.
 3. Recipients decrypt the hint, connect to the specified Drawbridge URL, and authenticate with the ticket via `ticket_auth`.
 4. Recipients can then `watch_tags` on that Drawbridge to receive real-time `new_event` notifications.
+
+**Adding members:** <a id="adding-members"></a> When Alice adds Carol to a group, Alice bundles the Drawbridge hints of all existing members alongside the Welcome (see [Adding Members](#adding-members-to-an-existing-group)). Carol processes these hints immediately upon joining, connecting to every existing member's relay without waiting for them to come online. Carol then sends a single reciprocal hint (encrypted as a group event) so existing members can discover her relay. This produces exactly one hint event regardless of group size. Existing members do not need to publish anything — they already have each other's hints from before. Hints are only exchanged when the member list changes; regular epoch advances do not trigger new hints.
 
 ### Deduplication
 
