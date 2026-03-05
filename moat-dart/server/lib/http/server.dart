@@ -74,7 +74,7 @@ Handler buildRouter({
     final convs = convsService.conversations.map((c) => {
           'id': c.groupIdHex,
           'name': c.displayName,
-          'participant_did': c.participants.isNotEmpty ? c.participants.first : '',
+          'participant_dids': c.participants,
           'epoch': c.epoch,
           'unread': c.unreadCount,
         }).toList();
