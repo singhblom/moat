@@ -19,28 +19,17 @@ type AuthenticatedMsg struct {
 	Type string `json:"type"` // "authenticated"
 }
 
-type TicketAuthenticatedMsg struct {
-	Type string `json:"type"` // "ticket_authenticated"
-}
-
-type TicketRegisteredMsg struct {
-	Type string `json:"type"` // "ticket_registered"
-}
-
-type TicketRevokedMsg struct {
-	Type string `json:"type"` // "ticket_revoked"
-}
-
 type ErrorMsg struct {
 	Type    string `json:"type"` // "error"
 	Message string `json:"message"`
 }
 
 type NewEventMsg struct {
-	Type string `json:"type"` // "new_event"
-	Tag  string `json:"tag"`
-	RKey string `json:"rkey"`
-	DID  string `json:"did"`
+	Type    string `json:"type"` // "new_event"
+	Tag     string `json:"tag"`
+	RKey    string `json:"rkey"`
+	DID     string `json:"did"`
+	Payload string `json:"payload,omitempty"` // base64-encoded ciphertext
 }
 
 // Client -> Server messages
@@ -69,9 +58,11 @@ type UpdateTagsMsg struct {
 }
 
 type EventPostedMsg struct {
-	Type string `json:"type"` // "event_posted"
-	Tag  string `json:"tag"`
-	RKey string `json:"rkey"`
+	Type      string   `json:"type"` // "event_posted"
+	Tag       string   `json:"tag"`
+	RKey      string   `json:"rkey"`
+	Payload   string   `json:"payload,omitempty"`    // base64-encoded ciphertext
+	RelayURLs []string `json:"relay_urls,omitempty"` // recipient Drawbridge URLs for fan-out
 }
 
 type RegisterPushMsg struct {
@@ -80,19 +71,13 @@ type RegisterPushMsg struct {
 	Token    string `json:"token"`
 }
 
-type TicketAuthMsg struct {
-	Type   string `json:"type"`   // "ticket_auth"
-	Ticket string `json:"ticket"` // 32 bytes, hex-encoded
-}
-
-type RegisterTicketMsg struct {
-	Type   string `json:"type"`   // "register_ticket"
-	Ticket string `json:"ticket"` // 32 bytes, hex-encoded
-}
-
-type RevokeTicketMsg struct {
-	Type   string `json:"type"`   // "revoke_ticket"
-	Ticket string `json:"ticket"` // 32 bytes, hex-encoded
+// Relay-to-relay inbound event (received via POST /relay/event).
+// No sender DID — the field is untrustworthy (endpoint is unauthenticated)
+// and would leak metadata to the recipient's relay operator.
+type RelayEventMsg struct {
+	Tag     string `json:"tag"`
+	RKey    string `json:"rkey"`
+	Payload string `json:"payload,omitempty"`
 }
 
 // parseMessage deserializes a raw JSON message into the appropriate typed struct.
@@ -135,24 +120,6 @@ func parseMessage(data []byte) (string, any, error) {
 		return env.Type, &msg, nil
 	case "request_challenge":
 		var msg RequestChallengeMsg
-		if err := json.Unmarshal(data, &msg); err != nil {
-			return env.Type, nil, err
-		}
-		return env.Type, &msg, nil
-	case "ticket_auth":
-		var msg TicketAuthMsg
-		if err := json.Unmarshal(data, &msg); err != nil {
-			return env.Type, nil, err
-		}
-		return env.Type, &msg, nil
-	case "register_ticket":
-		var msg RegisterTicketMsg
-		if err := json.Unmarshal(data, &msg); err != nil {
-			return env.Type, nil, err
-		}
-		return env.Type, &msg, nil
-	case "revoke_ticket":
-		var msg RevokeTicketMsg
 		if err := json.Unmarshal(data, &msg); err != nil {
 			return env.Type, nil, err
 		}

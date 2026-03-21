@@ -1,9 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -18,6 +18,10 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
+const (
+	fanOutTimeout = 5 * time.Second
+)
+
 // Relay is the central hub that manages client connections and notification routing.
 type Relay struct {
 	mu      sync.RWMutex
@@ -30,11 +34,6 @@ type Relay struct {
 
 	dedupMu sync.Mutex
 	dedup   map[string]time.Time
-
-	// Ticket registry: maps ticket (hex) -> owner DID
-	// Only the owner (sender) can register/revoke tickets
-	ticketsMu sync.RWMutex
-	tickets   map[string]string
 
 	resolver    DIDResolver
 	verifier    PDSVerifier
@@ -68,7 +67,6 @@ func NewRelay(publicURL, fallbackURL string, resolver DIDResolver, verifier PDSV
 		byTag:       make(map[string]map[*Client]bool),
 		buffers:     make(map[string]*DisconnectBuffer),
 		dedup:       make(map[string]time.Time),
-		tickets:     make(map[string]string),
 		resolver:    resolver,
 		verifier:    verifier,
 		rateLimiter: NewRateLimiter(),
@@ -104,6 +102,7 @@ func (r *Relay) clientRelayURL(req *http.Request) string {
 func (r *Relay) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", r.serveWS)
+	mux.HandleFunc("/relay/event", r.relayEventHandler)
 	mux.HandleFunc("/health", r.healthHandler)
 	return mux
 }
@@ -266,13 +265,14 @@ func (r *Relay) handleEventPosted(c *Client, msg *EventPostedMsg) {
 	r.dedupMu.Unlock()
 
 	notification := NewEventMsg{
-		Type: "new_event",
-		Tag:  msg.Tag,
-		RKey: msg.RKey,
-		DID:  c.did,
+		Type:    "new_event",
+		Tag:     msg.Tag,
+		RKey:    msg.RKey,
+		DID:     c.did,
+		Payload: msg.Payload,
 	}
 
-	// Collect recipients
+	// Collect local recipients (other devices of same DID watching this tag)
 	r.mu.RLock()
 	tagClients := r.byTag[msg.Tag]
 	var recipients []*Client
@@ -284,7 +284,7 @@ func (r *Relay) handleEventPosted(c *Client, msg *EventPostedMsg) {
 	}
 	r.mu.RUnlock()
 
-	// Send to connected recipients
+	// Send to connected local recipients
 	for _, client := range recipients {
 		client.sendMsg(notification)
 	}
@@ -292,11 +292,121 @@ func (r *Relay) handleEventPosted(c *Client, msg *EventPostedMsg) {
 	// Buffer for disconnected DIDs
 	r.bufferNotification(msg.Tag, notification)
 
-	r.log.Info("event routed", "did", c.did, "tag", msg.Tag, "rkey", msg.RKey, "recipients", len(recipients))
+	r.log.Info("event routed", "did", c.did, "tag", msg.Tag, "rkey", msg.RKey,
+		"local_recipients", len(recipients), "relay_urls", len(msg.RelayURLs))
+
+	// Fan out to recipient Drawbridges (no DID — untrustworthy on unauthenticated endpoint)
+	if len(msg.RelayURLs) > 0 {
+		go r.fanOut(msg.Tag, msg.RKey, msg.Payload, msg.RelayURLs)
+	}
 
 	// Async PDS verification
 	if r.verifier != nil {
 		go r.asyncVerify(c.did, msg.RKey, msg.Tag)
+	}
+}
+
+// fanOut sends the event to each recipient Drawbridge via POST /relay/event.
+// Each request is independent and has its own timeout.
+func (r *Relay) fanOut(tag, rkey, payload string, relayURLs []string) {
+	body, err := json.Marshal(RelayEventMsg{
+		Tag:     tag,
+		RKey:    rkey,
+		Payload: payload,
+	})
+	if err != nil {
+		r.log.Error("failed to marshal fan-out body", "error", err)
+		return
+	}
+
+	var wg sync.WaitGroup
+	for _, url := range relayURLs {
+		wg.Add(1)
+		go func(relayURL string) {
+			defer wg.Done()
+			r.fanOutToRelay(relayURL, body)
+		}(url)
+	}
+	wg.Wait()
+}
+
+func (r *Relay) fanOutToRelay(relayURL string, body []byte) {
+	client := &http.Client{Timeout: fanOutTimeout}
+	endpoint := relayURL + "/relay/event"
+
+	resp, err := client.Post(endpoint, "application/json", bytes.NewReader(body))
+	if err != nil {
+		r.log.Warn("fan-out failed", "url", relayURL, "error", err)
+		return
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusAccepted {
+		r.log.Warn("fan-out unexpected status", "url", relayURL, "status", resp.StatusCode)
+	}
+}
+
+// relayEventHandler handles inbound relay-to-relay events via POST /relay/event.
+// No authentication required — events are delivered immediately and verified asynchronously.
+func (r *Relay) relayEventHandler(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var msg RelayEventMsg
+	if err := json.NewDecoder(req.Body).Decode(&msg); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if msg.Tag == "" || msg.RKey == "" {
+		http.Error(w, "missing required fields", http.StatusBadRequest)
+		return
+	}
+
+	// Dedup check (same window as local events)
+	dedupKey := msg.Tag + ":" + msg.RKey
+	r.dedupMu.Lock()
+	if last, ok := r.dedup[dedupKey]; ok && time.Since(last) < 5*time.Second {
+		r.dedupMu.Unlock()
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	r.dedup[dedupKey] = time.Now()
+	r.dedupMu.Unlock()
+
+	notification := NewEventMsg{
+		Type:    "new_event",
+		Tag:     msg.Tag,
+		RKey:    msg.RKey,
+		Payload: msg.Payload,
+	}
+
+	// Deliver to local clients watching this tag
+	r.deliverRelayEvent(&notification)
+
+	// Buffer for disconnected DIDs
+	r.bufferNotification(msg.Tag, notification)
+
+	r.log.Info("relay event received", "tag", msg.Tag, "rkey", msg.RKey,
+		"source_ip", req.RemoteAddr)
+
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// deliverRelayEvent sends a notification to all local clients watching the matching tag.
+func (r *Relay) deliverRelayEvent(notification *NewEventMsg) {
+	r.mu.RLock()
+	tagClients := r.byTag[notification.Tag]
+	var recipients []*Client
+	for client := range tagClients {
+		recipients = append(recipients, client)
+	}
+	r.mu.RUnlock()
+
+	for _, client := range recipients {
+		client.sendMsg(*notification)
 	}
 }
 
@@ -328,70 +438,6 @@ func (r *Relay) flushBuffer(c *Client) {
 	for _, msg := range buf.messages {
 		c.sendMsg(msg)
 	}
-}
-
-// authenticateTicket verifies a ticket and associates it with the client.
-func (r *Relay) authenticateTicket(c *Client, ticket string) error {
-	// Validate ticket format (should be 64 hex chars = 32 bytes)
-	if len(ticket) != 64 {
-		return fmt.Errorf("invalid ticket format")
-	}
-
-	r.ticketsMu.RLock()
-	_, exists := r.tickets[ticket]
-	r.ticketsMu.RUnlock()
-
-	if !exists {
-		return fmt.Errorf("invalid ticket")
-	}
-
-	c.ticket = ticket
-	return nil
-}
-
-// handleRegisterTicket registers a new ticket for the authenticated sender.
-func (r *Relay) handleRegisterTicket(c *Client, msg *RegisterTicketMsg) {
-	// Validate ticket format
-	if len(msg.Ticket) != 64 {
-		c.sendMsg(ErrorMsg{Type: "error", Message: "invalid ticket format: must be 64 hex characters"})
-		return
-	}
-
-	r.ticketsMu.Lock()
-	defer r.ticketsMu.Unlock()
-
-	// Check if ticket already exists
-	if owner, exists := r.tickets[msg.Ticket]; exists {
-		if owner != c.did {
-			c.sendMsg(ErrorMsg{Type: "error", Message: "ticket already registered by another user"})
-			return
-		}
-		// Re-registering own ticket is a no-op, but still confirm
-	}
-
-	r.tickets[msg.Ticket] = c.did
-	r.log.Info("ticket registered", "did", c.did, "ticket_prefix", msg.Ticket[:16])
-	c.sendMsg(TicketRegisteredMsg{Type: "ticket_registered"})
-}
-
-// handleRevokeTicket revokes a ticket owned by the authenticated sender.
-func (r *Relay) handleRevokeTicket(c *Client, msg *RevokeTicketMsg) {
-	r.ticketsMu.Lock()
-	defer r.ticketsMu.Unlock()
-
-	owner, exists := r.tickets[msg.Ticket]
-	if !exists {
-		c.sendMsg(ErrorMsg{Type: "error", Message: "ticket not found"})
-		return
-	}
-	if owner != c.did {
-		c.sendMsg(ErrorMsg{Type: "error", Message: "not your ticket"})
-		return
-	}
-
-	delete(r.tickets, msg.Ticket)
-	r.log.Info("ticket revoked", "did", c.did, "ticket_prefix", msg.Ticket[:16])
-	c.sendMsg(TicketRevokedMsg{Type: "ticket_revoked"})
 }
 
 func (r *Relay) asyncVerify(did, rkey, tag string) {
@@ -450,16 +496,11 @@ func (r *Relay) healthHandler(w http.ResponseWriter, req *http.Request) {
 	tagCount := len(r.byTag)
 	r.mu.RUnlock()
 
-	r.ticketsMu.RLock()
-	ticketCount := len(r.tickets)
-	r.ticketsMu.RUnlock()
-
 	resp := map[string]any{
-		"status":             "ok",
-		"uptime_seconds":     int(time.Since(r.startTime).Seconds()),
-		"connections":        connCount,
-		"tags_tracked":       tagCount,
-		"tickets_registered": ticketCount,
+		"status":         "ok",
+		"uptime_seconds": int(time.Since(r.startTime).Seconds()),
+		"connections":    connCount,
+		"tags_tracked":   tagCount,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

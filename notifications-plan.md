@@ -108,9 +108,9 @@ This works even if the client's PDS session has expired, and avoids credential s
 4. Alice's Drawbridge fans out to each recipient Drawbridge via relay-to-relay push
 5. Each recipient Drawbridge matches the tag against its local `tag -> []client` index
 6. For each matching client:
-   - If WebSocket is active: deliver `{ type: "new_event", tag, rkey, did, payload }` immediately
+   - If WebSocket is active: deliver `{ type: "new_event", tag, rkey, payload }` immediately (DID is included for local delivery from owner's `event_posted`, omitted for inbound relay-to-relay events)
    - If backgrounded with push token: send opaque push notification (see Push section)
-7. Alice's Drawbridge asynchronously verifies the event exists on Alice's PDS
+7. Alice's Drawbridge asynchronously verifies the event exists on Alice's PDS (trusted DID from auth)
 
 **Slow path (sender not connected):**
 - No relay notification occurs. Recipients discover new events via normal polling.
@@ -126,17 +126,17 @@ Inbound endpoint for receiving fan-out from other Drawbridges:
   {
     "tag": "<hex>",
     "rkey": "<rkey>",
-    "did": "<sender-did>",
     "payload": "<base64-encoded-ciphertext>"
   }
   ```
 - **Response**: `202 Accepted` (fire-and-forget from sender Drawbridge's perspective)
-- **No authentication required.** The recipient Drawbridge delivers immediately and verifies asynchronously.
+- **No authentication required.** The recipient Drawbridge delivers immediately. Rate-limiting is by source IP.
+- **No sender DID.** The endpoint is unauthenticated, so any DID field would be untrustworthy. An attacker could claim any DID, and DID-based rate limiting would punish the victim rather than the attacker. The sender's own Drawbridge performs PDS verification (it has a trusted DID from challenge-response auth). The recipient Drawbridge rate-limits by source IP instead.
 
 ### Two-Tier Notification Content
 
 **WebSocket delivery (client online):**
-- Rich: includes tag, rkey, sender DID, and encrypted payload
+- Includes tag, rkey, and encrypted payload. Sender DID is included for local delivery (same relay), omitted for relay-to-relay forwarded events.
 - Private: only travels between Drawbridges and client, never through Google/Apple
 - Client decrypts immediately — no PDS round-trip needed
 
@@ -147,12 +147,14 @@ Inbound endpoint for receiving fan-out from other Drawbridges:
 
 ### Async PDS Verification
 
-After delivering a notification, the **recipient's Drawbridge** asynchronously verifies the event:
+The **sender's Drawbridge** asynchronously verifies the event after forwarding it (it has the sender's DID from challenge-response auth):
 1. Resolve sender's DID document → extract PDS service endpoint
 2. Fetch `com.atproto.repo.getRecord` for `social.moat.event` at the claimed rkey from the sender's PDS
 3. Verify **both** that the record exists **and** that its tag field matches the claimed tag
-- **On verification failure**: Log the failure and apply a soft rate limit — temporarily cool down notifications from the sender DID for 1 minute. No hard ban for MVP.
+- **On verification failure**: Log the failure and apply a soft rate limit — temporarily cool down the sender DID's notification privileges for 1 minute. No hard ban for MVP.
 - Verification is non-blocking — notifications are already delivered before verification completes.
+
+The **recipient's Drawbridge** does not perform PDS verification — the relay-to-relay protocol carries no sender DID (see Relay-to-Relay Protocol section). Spam protection on the recipient side is via source IP rate limiting.
 
 ### Tag Registration
 
@@ -331,7 +333,7 @@ When a WebSocket notification arrives:
 - Match the tag to a conversation
 - Decrypt the payload using the MLS session for that group
 - On success: process and display immediately — no PDS fetch needed
-- On failure: fall back to fetching the record from the sender's PDS by rkey
+- On failure: fall back to polling (the rkey is available for targeted fetch if the sender DID is known from a local `new_event`, otherwise the next poll cycle picks it up)
 
 ### Sending Flow
 
@@ -384,273 +386,82 @@ Location: `moat-drawbridge/` directory in this repo (Go module). Binary/service 
 
 ## Implementation Status
 
-The previous incarnation of Drawbridge used a different architecture: recipients connected to the sender's Drawbridge via ticket-based auth, notifications were metadata-only (no payload), and relay discovery used DrawbridgeHint events inside MLS. This section maps what exists against the new plan.
-
-### What Can Be Reused As-Is
-
-**Go relay (moat-drawbridge/):**
-- WebSocket server, dual TLS/plain mode, `/health` endpoint — unchanged
-- DID challenge-response authentication (`request_challenge`, `challenge`, `challenge_response`, `authenticated`) — unchanged, this is now the only auth mechanism
-- Tag registration (`watch_tags`, `update_tags`) and `tag -> []client` in-memory index — unchanged
-- `DID -> []client` multi-device mapping — unchanged
-- Deduplication (5s window per tag+rkey) — unchanged
-- DID resolution via PLC directory with 1-hour cache — unchanged
-- Rate limiting per DID — unchanged
-- WebSocket keepalive (ping/pong) — unchanged
-- Structured logging (slog) — unchanged
-
-**Rust CLI (crates/moat-cli/src/drawbridge.rs):**
-- DID challenge-response signing flow (`connect_own`) — unchanged
-- `watch_tags` / `update_tags` sending — reusable
-- Exponential backoff reconnect logic — reusable
-- `DrawbridgeState` persistence pattern — reusable (fields will change)
-
-**Dart (moat-dart/common/lib/services/drawbridge_service.dart):**
-- DID challenge-response signing flow via FFI — unchanged
-- `watch_tags` / `update_tags` sending — reusable
-- Exponential backoff reconnect logic — reusable
-- Singleton service pattern — reusable
-
-**moat-core:**
-- `MoatSession::sign_drawbridge_challenge()` — unchanged
-
-**Go tests:**
-- `TestHealthEndpoint` — unchanged
-- `TestAuthFlow`, `TestAuthReject_BadSignature`, `TestAuthReject_ExpiredTimestamp` — unchanged
-- Tag registration and routing property tests (`TestProp_EventRoutingExactWatchers`, `TestProp_UpdateTagsCorrectness`, `TestProp_UpdateTagsOverlap`, `TestProp_ByTagConsistency`) — unchanged
-- Cross-language challenge vector tests (`TestCrossLanguage_ChallengeVectors`) — unchanged
-
-### What Must Be Removed
-
-**Go relay:**
-- Ticket system: `AuthModeRecipient`, `register_ticket`, `revoke_ticket`, `ticket_auth`, `ticket_authenticated`, `ticket_registered`, `ticket_revoked` message types. Remove `Relay.tickets` map, `ticketsMu`, and all ticket handler functions.
-- `AuthMode` enum collapses — all authenticated connections are DID-authenticated owners. No sender/recipient distinction.
-- Key package verification (`asyncVerifyKeyPackage`) — was specific to ticket-based auth trust model.
-
-**Rust CLI:**
-- `PartnerDrawbridge` struct and `partner_read_loop` — no more cross-relay connections.
-- `StoredHint` with `ticket_hex` and `device_id_hex` — replaced by relay discovery via ATProto record.
-- `DrawbridgeState.partner_hints` and `own_tickets` — no more tickets.
-- Ticket registration/revocation logic.
-- `BgEvent::DrawbridgeNewEvent` — replaced by payload delivery from own Drawbridge.
-
-**Dart:**
-- `_PartnerConnection` class and all partner connection management.
-- `connectPartner()`, `registerTicket()`, `reconnectPartners()`.
-- `StoredDrawbridgeHint` with ticket fields.
-- Ticket queue and re-registration on connect.
-
-**moat-core:**
-- `DrawbridgeHintPayload` struct and `ControlKind::DrawbridgeHint` event kind.
-- All DrawbridgeHint encoding/decoding in event processing.
-
-**Go tests:**
-- All ticket-related tests and property tests (`TestProp_TicketRevokeOnlyByOwner`, `TestProp_RevokedTicketCannotAuth`, `TestProp_TicketRegistrationIdempotent`).
-- Tests that assume recipient connects to sender's relay.
-
-**moat-beacon:**
-- Drawbridge integration tests that use the old ticket-based model (proptest_drawbridge, proptest_push_restart Drawbridge paths).
-
-### What Must Be Added or Modified
-
-#### Go Relay
-
-1. **Extend `event_posted` message** to include `payload` (base64 string) and `relay_urls` (string array):
-   ```go
-   type EventPostedMsg struct {
-       Type      string   `json:"type"`
-       Tag       string   `json:"tag"`
-       RKey      string   `json:"rkey"`
-       Payload   string   `json:"payload"`     // NEW: base64-encoded ciphertext
-       RelayURLs []string `json:"relay_urls"`  // NEW: recipient Drawbridge URLs
-   }
-   ```
-
-2. **Add `POST /relay/event` HTTP endpoint** for relay-to-relay delivery. Accepts `{ tag, rkey, did, payload }`. No authentication — matches tag against local index, delivers to WebSocket clients, returns `202 Accepted`. Triggers async PDS verification.
-
-3. **Modify `event_posted` handler** to:
-   - Deliver locally to other devices of the sender watching this tag (with payload)
-   - Fan out to each URL in `relay_urls` via HTTP POST to `/relay/event`
-   - Fan-out is fire-and-forget with a short timeout per request (e.g., 5s)
-
-4. **Extend `new_event` message** to include `payload`:
-   ```go
-   type NewEventMsg struct {
-       Type    string `json:"type"`
-       Tag     string `json:"tag"`
-       RKey    string `json:"rkey"`
-       DID     string `json:"did"`
-       Payload string `json:"payload"`  // NEW: base64-encoded ciphertext
-   }
-   ```
-
-5. **Update disconnect buffer** to store `NewEventMsg` including payload (it already stores `NewEventMsg`, so this follows automatically from #4).
-
-6. **Move async PDS verification** — previously done by sender's Drawbridge after `event_posted`. Now also done by recipient's Drawbridge after receiving via `POST /relay/event`. Both paths verify.
-
-7. **Remove all ticket code** — `AuthMode` distinction, ticket maps, ticket message handlers.
-
-#### ATProto / Lexicons
-
-8. **Add `social.moat.relayConfig` lexicon** in `lexicons/social/moat/relayConfig.json`:
-   ```json
-   {
-     "lexicon": 1,
-     "id": "social.moat.relayConfig",
-     "defs": {
-       "main": {
-         "type": "record",
-         "key": "literal:self",
-         "record": {
-           "type": "object",
-           "required": ["relays"],
-           "properties": {
-             "relays": {
-               "type": "array",
-               "items": { "$ref": "#/defs/relayEntry" }
-             }
-           }
-         }
-       },
-       "relayEntry": {
-         "type": "object",
-         "required": ["url"],
-         "properties": {
-           "url": { "type": "string" },
-           "priority": { "type": "integer" }
-         }
-       }
-     }
-   }
-   ```
-
-9. **Add relay config publish/fetch to moat-atproto** — `publish_relay_config(url)` and `fetch_relay_config(did) -> Option<Vec<RelayEntry>>` methods on `MoatAtprotoClient`.
-
-#### Rust CLI (crates/moat-cli/src/drawbridge.rs)
-
-10. **Simplify to single connection** — remove `PartnerDrawbridge`, keep only `OwnDrawbridge`. The client maintains one WebSocket to its own Drawbridge.
-
-11. **Send envelope on `event_posted`** — after writing to PDS, send `{ type: "event_posted", tag, rkey, payload, relay_urls }`. The payload is the ciphertext bytes (base64-encoded). Relay URLs come from cached `social.moat.relayConfig` lookups for each conversation member.
-
-12. **Handle `new_event` with payload** — when receiving `new_event` from own Drawbridge, attempt to decrypt the payload directly. On failure, fall back to fetching from sender's PDS by rkey.
-
-13. **Relay config cache** — cache `social.moat.relayConfig` lookups per DID. Refresh periodically or when a conversation member's relay URL is needed and not cached.
-
-14. **Publish own relay config** — on login, publish `social.moat.relayConfig` record with the configured Drawbridge URL.
-
-15. **Update `DrawbridgeState`** — remove `own_tickets`, `partner_hints`. Keep `own_url`.
-
-#### Dart (moat-dart/common/lib/services/drawbridge_service.dart)
-
-16. **Simplify to single connection** — remove `_PartnerConnection`, `connectPartner()`, `reconnectPartners()`. Keep only the own-Drawbridge connection.
-
-17. **Send envelope on `notifyEventPosted`** — include payload and relay_urls.
-
-18. **Handle `new_event` with payload** — decrypt inline, fall back to PDS fetch on failure.
-
-19. **Relay config fetch/publish** — same as CLI: cache partner relay configs, publish own on login.
-
-20. **Remove DrawbridgeHint handling** from conversation model, polling service, and storage.
-
-#### moat-core
-
-21. **Remove `DrawbridgeHintPayload`** and `ControlKind::DrawbridgeHint` from `event.rs`.
-
-22. **Remove DrawbridgeHint processing** from any event handling/routing code.
-
-#### Postern (moat-postern)
-
-23. **Add `social.moat.relayConfig` support** — Postern already supports arbitrary record CRUD, so this should work out of the box. Verify in tests.
-
-#### moat-beacon
-
-24. **Update `TestWorld`** — each participant gets its own Drawbridge instance (not one shared relay). `TestWorld::new_with_drawbridge()` spawns N Drawbridge processes, one per participant.
-
-25. **Update `DrawbridgeProcess`** — may need to support multiple instances with different ports.
-
-26. **Remove ticket/hint plumbing** from test setup.
-
-### Tests
-
-#### Go Unit & Property Tests (moat-drawbridge/)
-
-**Keep (unchanged):**
-- Auth challenge-response flow tests
-- Tag registration and routing property tests
-- Deduplication tests
-- Health endpoint test
-- Cross-language challenge vector tests
-
-**Remove:**
-- All ticket-related tests and property tests
-
-**Add:**
-
-- `TestRelayToRelay_BasicDelivery` — Spin up two relay instances. Client A authenticates with relay 1, registers tags. External HTTP POST to relay 1's `/relay/event` with matching tag. Verify client A receives `new_event` with payload.
-
-- `TestRelayToRelay_NoMatchingTag` — POST to `/relay/event` with a tag no client is watching. Verify 202 response but no WebSocket delivery.
-
-- `TestRelayToRelay_MultipleClients` — Multiple clients on same relay watching same tag. POST to `/relay/event`. Verify all receive the notification.
-
-- `TestEventPosted_FanOut` — Client sends `event_posted` with `relay_urls`. Mock HTTP server(s) at those URLs. Verify relay POSTs to each URL with correct `{ tag, rkey, did, payload }`.
-
-- `TestEventPosted_FanOutTimeout` — One relay URL is unresponsive. Verify fan-out to other URLs still completes (no blocking).
-
-- `TestEventPosted_FanOutPlusLocalDelivery` — Sender has two devices. One sends `event_posted` with relay_urls. Other device is watching the tag. Verify: (a) other device gets `new_event` locally, (b) fan-out HTTP requests are made to relay_urls.
-
-- `TestEventPosted_WithPayload` — Verify payload round-trips through `event_posted` → local delivery and `event_posted` → fan-out → `/relay/event` → client delivery.
-
-- `TestRelayToRelay_Dedup` — POST same tag+rkey to `/relay/event` twice within 5s. Verify client receives it only once.
-
-- `TestRelayToRelay_DisconnectBuffer` — Client watches tags, disconnects. POST to `/relay/event` with matching tag. Client reconnects within 30s. Verify buffered notification (with payload) is delivered.
-
-- `TestRelayToRelay_AsyncVerification` — POST to `/relay/event` with mock PDS verifier that fails. Verify notification is still delivered (non-blocking), but rate limit is applied to sender DID.
-
-- `TestNoTicketMessagesAccepted` — Verify relay rejects `ticket_auth`, `register_ticket`, `revoke_ticket` messages (or that they are simply unrecognized).
-
-**Property tests to add:**
-
-- `TestProp_FanOutReachesAllURLs` — Random number of relay URLs (1–10). Verify POST made to each one exactly once.
-
-- `TestProp_RelayToRelayRoutingMatchesTags` — Random set of clients with random tags. Random inbound events with random tags. Verify: every client watching a matching tag receives the event, no client watching a non-matching tag receives it.
-
-- `TestProp_PayloadPreserved` — Random binary payloads (up to 4KB). Verify payload survives: sender → `event_posted` → fan-out → `/relay/event` → `new_event` to client, byte-for-byte identical.
-
-- `TestProp_DedupAcrossBothPaths` — Event arrives via both local `event_posted` (sender's other device) and `/relay/event` (from another relay). Same tag+rkey. Verify client receives it only once.
-
-#### moat-beacon Integration Tests
-
-**Modify existing scenarios:**
-
-- `two-party-push` / `two-party-push-restart` — Update to use per-participant Drawbridges. Each participant publishes `social.moat.relayConfig` (via Postern). Sender's Drawbridge fans out to recipient's Drawbridge. Verify end-to-end delivery with payload.
-
-**Add new scenarios:**
-
-- `two-party-payload-delivery` — Two participants, each with own Drawbridge. Alice sends message. Verify Bob receives it via Drawbridge (payload delivery) before any polling occurs. Verify decryption succeeds.
-
-- `two-party-payload-fallback` — Alice sends message. Bob's Drawbridge is down. Verify Bob still receives the message via polling fallback.
-
-- `three-party-fanout` — Three participants on three different Drawbridges. Alice sends message. Verify both Bob and Carol receive via their respective Drawbridges.
-
-- `same-drawbridge-local` — Two participants on the same Drawbridge. Alice sends message with `relay_urls` pointing to the same relay. Verify local delivery (no external HTTP call needed, or at least delivery works).
-
-**Property tests (moat-beacon):**
-
-- `proptest_payload_delivery` — Random message sequences between two participants. Each message sent via PDS + Drawbridge envelope. Verify: all messages arrive, payloads decrypt correctly, message order matches PDS order.
-
-- `proptest_mixed_delivery` — Random mix of: Drawbridge-delivered messages and polling-only messages (simulated by skipping the envelope). Verify all messages arrive regardless of delivery path.
-
-- `proptest_drawbridge_restart` — Random message sequences interleaved with Drawbridge process restarts. Verify: messages during Drawbridge downtime are caught by polling, messages after restart are delivered via Drawbridge.
-
-#### Rust CLI Unit Tests
-
-- Test `event_posted` envelope construction (tag, rkey, payload, relay_urls all populated correctly).
-- Test `new_event` payload handling: successful decryption path and fallback-to-PDS path.
-- Test relay config caching (fetch, cache hit, cache expiry).
-
-#### Dart Unit Tests
-
-- Test `notifyEventPosted` sends envelope with payload and relay_urls.
-- Test `new_event` handler decrypts payload inline.
-- Test relay config fetch and cache.
-- Remove all ticket/hint-related tests.
+### Phase 1: Go Relay — COMPLETE
+
+All Go relay changes are implemented and tested. 42 tests pass in ~6s.
+
+**Ticket system removed:**
+- Removed `AuthMode` enum (`AuthModeNone`, `AuthModeSender`, `AuthModeRecipient`) from `conn.go`
+- Removed `ticket` and `authMode` fields from `Client` struct
+- Removed `ticketsMu`, `tickets` map, `authenticateTicket()`, `handleRegisterTicket()`, `handleRevokeTicket()` from `relay.go`
+- Removed all ticket message types from `messages.go`: `TicketAuthenticatedMsg`, `TicketRegisteredMsg`, `TicketRevokedMsg`, `TicketAuthMsg`, `RegisterTicketMsg`, `RevokeTicketMsg`
+- Simplified `handlePreAuth` and `handlePostAuth` — no sender/recipient distinction
+- Added `TestTicketAuthRejected` and `TestTicketMessagesRejectedPostAuth` to verify old messages are rejected
+
+**Payload piping implemented:**
+- `EventPostedMsg` now includes `Payload string` and `RelayURLs []string`
+- `NewEventMsg` now includes `Payload string`
+- Payload flows through local delivery, disconnect buffer, and relay-to-relay
+- Tests: `TestEventPostedWithPayload`, `TestEventPostedPayloadInDisconnectBuffer`
+
+**Relay-to-relay fan-out implemented:**
+- `POST /relay/event` endpoint accepts `{ tag, rkey, payload }` — no DID (untrustworthy on unauthenticated endpoint)
+- `handleEventPosted` calls `fanOut()` in a goroutine for each URL in `relay_urls`
+- `fanOut()` spawns goroutines per URL with WaitGroup, 5s timeout per request
+- `relayEventHandler()` deduplicates, delivers to local tag watchers, buffers for disconnected clients
+- No async PDS verification on inbound relay events (no DID to verify)
+- Async PDS verification only on sender's Drawbridge (has trusted DID from auth)
+- Tests: `TestRelayToRelay_BasicDelivery`, `TestRelayToRelay_NoMatchingTag`, `TestRelayToRelay_MultipleClients`, `TestRelayToRelay_Dedup`, `TestRelayToRelay_DisconnectBuffer`, `TestRelayToRelay_NoAsyncVerification`, `TestEventPosted_FanOut`, `TestEventPosted_FanOutTimeout`, `TestEventPosted_FanOutPlusLocalDelivery`
+
+**Property tests added:**
+- `TestProp_RelayToRelayRoutingMatchesTags` — tag-based routing for inbound relay events
+- `TestProp_PayloadPreserved` — random payloads survive fan-out round-trip
+- `TestProp_FanOutReachesAllURLs` — all relay URLs receive POST
+- `TestProp_DedupAcrossBothPaths` — same tag+rkey via local and relay delivers only once
+
+**Property tests removed:**
+- `TestProp_TicketRevokeOnlyByOwner`, `TestProp_RevokedTicketCannotAuth`, `TestProp_TicketRegistrationIdempotent`, `TestProp_ByDIDOnlySenders`
+
+### Phase 2: ATProto Lexicon — NOT STARTED
+
+- Add `social.moat.relayConfig` lexicon in `lexicons/social/moat/relayConfig.json`
+- Add `publish_relay_config(url)` and `fetch_relay_config(did)` to `MoatAtprotoClient`
+- Postern already supports arbitrary record CRUD, so `relayConfig` should work out of the box
+
+### Phase 3: Rust CLI — NOT STARTED
+
+- Simplify `drawbridge.rs` to single connection (remove `PartnerDrawbridge`, `partner_read_loop`)
+- Remove `StoredHint`, `DrawbridgeState.partner_hints`, `own_tickets`, ticket registration/revocation
+- Send envelope on `event_posted` with `{ tag, rkey, payload, relay_urls }`
+- Handle `new_event` with payload: decrypt inline, fall back to PDS fetch on failure
+- Add relay config cache (fetch partner `social.moat.relayConfig`, publish own on login)
+- Update `DrawbridgeState` — remove ticket fields, keep `own_url`
+
+### Phase 4: moat-core Cleanup — NOT STARTED
+
+- Remove `DrawbridgeHintPayload` and `ControlKind::DrawbridgeHint` from `event.rs`
+- Remove DrawbridgeHint encoding/decoding from event processing
+- 11 files currently reference DrawbridgeHint
+
+### Phase 5: Dart — NOT STARTED
+
+- Simplify `drawbridge_service.dart` to single connection (remove `_PartnerConnection`, `connectPartner()`, `reconnectPartners()`)
+- Remove `StoredDrawbridgeHint`, ticket queue, re-registration
+- Send envelope on `notifyEventPosted` with payload and relay_urls
+- Handle `new_event` with payload: decrypt inline, fall back to PDS fetch
+- Add relay config fetch/publish
+
+### Phase 6: moat-beacon Integration Tests — NOT STARTED
+
+- Update `TestWorld::new_with_drawbridge()` to spawn per-participant Drawbridge instances
+- Update `DrawbridgeProcess` to support multiple instances with different ports
+- Remove ticket/hint plumbing from test setup
+- Update `two-party-push` / `two-party-push-restart` scenarios for new architecture
+- Add new scenarios: `two-party-payload-delivery`, `two-party-payload-fallback`, `three-party-fanout`, `same-drawbridge-local`
+- Add property tests: `proptest_payload_delivery`, `proptest_mixed_delivery`, `proptest_drawbridge_restart`
+
+### Phase 7: Mobile Push — NOT STARTED
+
+- FCM/APNS integration in Go relay
+- `register_push` message handling
+- Push notification delivery for offline clients
