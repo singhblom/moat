@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -330,9 +331,25 @@ func (r *Relay) fanOut(tag, rkey, payload string, relayURLs []string) {
 	wg.Wait()
 }
 
+// normalizeRelayURL converts a WebSocket relay URL to an HTTP URL suitable for
+// POST requests.  Clients publish their Drawbridge URL in ws:// or wss:// form
+// (since it's primarily a WebSocket endpoint), but relay-to-relay fan-out uses
+// plain HTTP POST.  This also strips the trailing "/ws" path if present.
+func normalizeRelayURL(u string) string {
+	u = strings.TrimSuffix(u, "/ws")
+	u = strings.TrimSuffix(u, "/")
+	if strings.HasPrefix(u, "wss://") {
+		return "https://" + u[len("wss://"):]
+	}
+	if strings.HasPrefix(u, "ws://") {
+		return "http://" + u[len("ws://"):]
+	}
+	return u
+}
+
 func (r *Relay) fanOutToRelay(relayURL string, body []byte) {
 	client := &http.Client{Timeout: fanOutTimeout}
-	endpoint := relayURL + "/relay/event"
+	endpoint := normalizeRelayURL(relayURL) + "/relay/event"
 
 	resp, err := client.Post(endpoint, "application/json", bytes.NewReader(body))
 	if err != nil {

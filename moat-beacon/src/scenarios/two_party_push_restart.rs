@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use crate::actions::Action;
 use crate::invariants::{
-    check_consensus_ordering, check_delivery, check_no_duplicates, ScenarioState,
+    check_per_sender_ordering, check_delivery, check_no_duplicates, ScenarioState,
 };
 use crate::world::TestWorld;
 
@@ -30,7 +30,7 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
 
     // ── Prologue ──────────────────────────────────────────────────────────────
     vlog!(verbose, "[setup] starting TestWorld (with Drawbridge)...");
-    let mut world = TestWorld::new_with_drawbridge(&["alice", "bob"], ".postern.test")
+    let mut world = TestWorld::new_with_drawbridge(&[("alice", "alice"), ("bob", "bob")], ".postern.test")
         .await
         .expect("world setup with drawbridge");
     let alice = world.client("alice").clone();
@@ -153,10 +153,10 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
     check_delivery(&alice, &bob, &state).await.expect("delivery invariant violated");
     vlog!(verbose, "[check] delivery... ok ({confirmed} messages)");
 
-    check_consensus_ordering(&alice, &bob, &state)
+    check_per_sender_ordering(&alice, &bob, &state)
         .await
-        .expect("consensus ordering invariant violated");
-    vlog!(verbose, "[check] consensus ordering... ok");
+        .expect("per-sender ordering invariant violated");
+    vlog!(verbose, "[check] per-sender ordering... ok");
 
     check_no_duplicates(&alice, &bob, &state)
         .await

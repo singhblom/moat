@@ -549,29 +549,47 @@ All Go relay changes are implemented and tested. 42 tests pass in ~6s.
 
 **Note:** Rust FFI at `moat-dart/app/rust/` still defines `EventKindDto::DrawbridgeHint`, `DrawbridgeHintPayloadDto`, `createDrawbridgeHint()`, and `generateDrawbridgeTicket()`. These are unused by Dart code but still compile against the excluded workspace. Cleanup deferred.
 
-### Phase 6: moat-beacon Integration Tests — NOT STARTED
+### Phase 6: moat-beacon Integration Tests — IN PROGRESS
 
-**Per-participant Drawbridge instances:**
-- Update `TestWorld::new_with_drawbridge()` to spawn one Drawbridge per participant (currently spawns one shared instance)
-- Update `DrawbridgeProcess` to support multiple instances with different ports
-- Each participant gets `--drawbridge-url` pointing to their own relay
-- Participants publish `social.moat.drawbridgeConfig` so peers can discover each other's relays
+**TestWorld topology refactor:**
+- `new_with_drawbridge(&[("alice", "alice"), ("bob", "bob")])` — takes `(handle, relay_label)` tuples; participants with the same label share a Drawbridge relay, distinct labels spawn separate relays
+- Replaced `DrawbridgeTopology` enum and `new_with_shared_drawbridge()` — any topology is now expressible with labels (e.g. `("alice", "shared"), ("bob", "shared")` for shared relay)
+- `_drawbridge: Option<DrawbridgeProcess>` replaced with `_drawbridges: Vec<DrawbridgeProcess>`
+- Each participant gets `--drawbridge-url` pointing to their relay
+- Participants publish `social.moat.drawbridgeConfig` so peers discover each other's relays (no moat-cli changes needed)
+- `db_verify_proxy` retained — all relays share it for DID resolution / async PDS verification
 
-**Remove old plumbing:**
-- Remove ticket/hint setup from test world
-- Remove `db_verify_proxy` if no longer needed (async PDS verification is sender-side only)
+**Inline payload persistence fix (moat-cli):**
+- `process_inline_decrypted` now persists messages via `self.keys.append_message()` — previously only updated in-memory display state, so Drawbridge-delivered messages were invisible to `get_messages` API
+- Accepts `rkey` parameter from the Drawbridge `new_event` for storage and deduplication
+- Uses `render_message_preview()` for consistent content rendering (matches polling path)
+- Properly determines `is_own` by comparing sender DID against client's DID
+- Duplicate suppression: when the same message later arrives via poll, rkey dedup in `append_message` rejects it
 
-**Update existing scenarios:**
-- `two-party-push` / `two-party-push-restart` — adapt for per-participant relays + relay-to-relay fan-out
+**Message ordering fix (moat-cli):**
+- `append_message` now inserts by rkey order (was timestamp order) — rkeys are TIDs (timestamp-based, lexicographically sortable), so this gives correct chronological ordering for same-PDS messages and best-effort ordering across PDSes (dependent on clock sync, which is sub-millisecond for NTP-synced servers)
+- This fixed a bug where rapid push-delivered messages from the same sender could be stored out of order (inline decryption processed them in WebSocket arrival order, and `Utc::now()` timestamps were indistinguishable at sub-millisecond granularity)
+- Removed 150ms sleep workaround from `execute_action` / `execute_action_n` in push test scenarios — no longer needed
 
-**Add new scenarios:**
-- `two-party-payload-delivery` — verify ciphertext flows through relay without PDS round-trip
-- `two-party-payload-fallback` — verify PDS fetch fallback when relay is down
-- `three-party-fanout` — verify fan-out to multiple recipient relays
-- `same-drawbridge-local` — verify local delivery when sender and recipient share a relay
+**Push scenario ordering invariants:**
+- Push scenarios use `check_per_sender_ordering` — verifies each sender's messages appear in correct relative order without requiring a global interleaving
+- Added `check_per_sender_ordering_n` in `invariants.rs` for N-participant push scenarios
+- Affected scenarios: `two-party-push`, `two-party-push-restart`, `two-party-fanout`, `same-drawbridge-local`, `three-party-push`
 
-**Add property tests:**
-- `proptest_payload_delivery`, `proptest_mixed_delivery`, `proptest_drawbridge_restart`
+**Existing push scenarios updated automatically:**
+- `two-party-push` / `two-party-push-restart` / `three-party-push` / `push-latency` / `push-latency-restart` all use `new_with_drawbridge()` which exercises relay-to-relay fan-out
+
+**New scenarios:**
+- `two-party-fanout` — Alice + Bob on separate relays, relay-to-relay fan-out delivery
+- `same-drawbridge-local` — Alice + Bob on shared relay, local delivery within single relay
+
+**New property tests:**
+- `proptest_fanout` — 8 cases, per-participant relays
+- `proptest_same_drawbridge` — 8 cases, shared relay
+
+**11 scenarios total** now registered in `SCENARIOS` array
+
+**Tests:** All 2-party push proptests pass (drawbridge, fanout, same_drawbridge, push_restart). All polling proptests pass (two_party, restart). Smoke tests pass. moat-cli 52 tests pass. Go relay 42 tests pass.
 
 ### Phase 7: Mobile Push — NOT STARTED
 

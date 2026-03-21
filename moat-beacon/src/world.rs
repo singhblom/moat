@@ -6,9 +6,17 @@
 //! - One **`moat-cli --http`** subprocess per participant, each connected to
 //!   Postern through the `proxy-pds` Toxiproxy proxy.
 //! - A typed [`MoatCliClient`] for each participant.
-//! - Optionally a **Drawbridge** WebSocket relay (via [`TestWorld::new_with_drawbridge`]).
+//! - Optionally one or more **Drawbridge** relay instances.
+//!
+//! ## Relay topology
+//!
+//! [`TestWorld::new_with_drawbridge`] takes `(handle, relay_label)` tuples.
+//! Participants with the same label share a Drawbridge relay; distinct labels
+//! spawn separate relays.  This lets callers express any topology — shared
+//! relay, per-participant relays, or mixed — with a single constructor.
 //!
 //! Everything is cleaned up when `TestWorld` is dropped.
+
 
 use crate::client::MoatCliClient;
 use crate::drawbridge::DrawbridgeProcess;
@@ -68,8 +76,9 @@ pub struct TestWorld {
     pub pds_proxy: ProxyHandle,
     /// Direct Postern URL (useful for out-of-band inspection).
     postern_url: String,
-    /// Optional Drawbridge relay (present when created via [`TestWorld::new_with_drawbridge`]).
-    _drawbridge: Option<DrawbridgeProcess>,
+    /// Drawbridge relay instances, keyed by participant short handle or "shared".
+    /// Dropped on `TestWorld` drop, which kills the child processes.
+    _drawbridges: Vec<DrawbridgeProcess>,
     /// `proxy-db-verify` proxy: routes Drawbridge's PDS verification calls through
     /// Toxiproxy so tests can inject faults on the Drawbridge → Postern path.
     /// Only present when Drawbridge is enabled.
@@ -90,16 +99,28 @@ impl TestWorld {
     ///
     /// `handle_suffix` is appended to every handle, e.g. `".postern.test"`.
     pub async fn new(handles: &[&str], handle_suffix: &str) -> Result<Self> {
+        let participants: Vec<_> = handles.iter().map(|h| (*h, None)).collect();
         let kinds = vec![ParticipantKind::RustCli; handles.len()];
-        Self::build(handles, &kinds, handle_suffix, false).await
+        Self::build(&participants, &kinds, handle_suffix).await
     }
 
-    /// Build a `TestWorld` with Drawbridge enabled.
+    /// Build a `TestWorld` with Drawbridge relay(s).
+    ///
+    /// Each tuple is `(handle, relay_label)`.  Participants with the same
+    /// label share a single Drawbridge relay; distinct labels spawn separate
+    /// relay instances.
     ///
     /// All participants run the Rust CLI (`moat-cli --http`).
-    pub async fn new_with_drawbridge(handles: &[&str], handle_suffix: &str) -> Result<Self> {
-        let kinds = vec![ParticipantKind::RustCli; handles.len()];
-        Self::build(handles, &kinds, handle_suffix, true).await
+    pub async fn new_with_drawbridge(
+        participants: &[(&str, &str)],
+        handle_suffix: &str,
+    ) -> Result<Self> {
+        let with_labels: Vec<_> = participants
+            .iter()
+            .map(|(h, label)| (*h, Some(*label)))
+            .collect();
+        let kinds = vec![ParticipantKind::RustCli; participants.len()];
+        Self::build(&with_labels, &kinds, handle_suffix).await
     }
 
     /// Build a `TestWorld` where each participant can be a different implementation.
@@ -112,29 +133,22 @@ impl TestWorld {
         kinds: &[ParticipantKind],
         handle_suffix: &str,
     ) -> Result<Self> {
-        Self::build(handles, kinds, handle_suffix, false).await
-    }
-
-    /// Build a `TestWorld` with Drawbridge enabled and per-participant kinds.
-    pub async fn new_with_kinds_and_drawbridge(
-        handles: &[&str],
-        kinds: &[ParticipantKind],
-        handle_suffix: &str,
-    ) -> Result<Self> {
-        Self::build(handles, kinds, handle_suffix, true).await
+        let participants: Vec<_> = handles.iter().map(|h| (*h, None)).collect();
+        Self::build(&participants, kinds, handle_suffix).await
     }
 
     async fn build(
-        handles: &[&str],
+        participants: &[(&str, Option<&str>)],
         kinds: &[ParticipantKind],
         handle_suffix: &str,
-        with_drawbridge: bool,
     ) -> Result<Self> {
         assert_eq!(
-            handles.len(),
+            participants.len(),
             kinds.len(),
-            "handles and kinds must have equal length"
+            "participants and kinds must have equal length"
         );
+
+        let handles: Vec<&str> = participants.iter().map(|(h, _)| *h).collect();
 
         // Build Postern accounts.  Use did:plc: format so Drawbridge's
         // PLCResolver accepts them (it enforces the did:plc: prefix).
@@ -169,8 +183,11 @@ impl TestWorld {
             .await
             .context("create proxy-pds")?;
 
-        // Optional Drawbridge setup.
-        let (drawbridge, db_verify_proxy, drawbridge_ws_endpoint) = if with_drawbridge {
+        // Collect relay labels and deduplicate to determine which Drawbridge
+        // instances to spawn.
+        let has_drawbridge = participants.iter().any(|(_, label)| label.is_some());
+
+        let (drawbridges, db_verify_proxy, drawbridge_ws_endpoints) = if has_drawbridge {
             // proxy-db-verify routes Drawbridge → Postern so we can fault-inject
             // Drawbridge's DID resolution and key-package verification calls.
             let db_verify = toxiproxy
@@ -183,15 +200,36 @@ impl TestWorld {
             // com.atproto.repo.listRecords through the proxy.
             postern.set_pds_endpoint_override(&db_verify.url);
 
-            // Spawn Drawbridge with PLC_BASE_URL pointing at proxy-db-verify.
-            let db = DrawbridgeProcess::spawn(&db_verify.url)
-                .await
-                .context("spawn drawbridge")?;
+            // Deduplicate relay labels: spawn one Drawbridge per unique label.
+            let mut unique_labels: Vec<&str> = Vec::new();
+            for (_, label) in participants {
+                if let Some(l) = label {
+                    if !unique_labels.contains(l) {
+                        unique_labels.push(l);
+                    }
+                }
+            }
 
-            let ws_endpoint = db.ws_endpoint();
-            (Some(db), Some(db_verify), Some(ws_endpoint))
+            let mut dbs = Vec::with_capacity(unique_labels.len());
+            let mut label_to_ws: HashMap<&str, String> = HashMap::new();
+            for label in &unique_labels {
+                let db = DrawbridgeProcess::spawn(&db_verify.url)
+                    .await
+                    .with_context(|| format!("spawn drawbridge for relay {label}"))?;
+                label_to_ws.insert(label, db.ws_endpoint());
+                dbs.push(db);
+            }
+
+            // Map each participant to its relay's WS endpoint.
+            let endpoints: Vec<Option<String>> = participants
+                .iter()
+                .map(|(_, label)| label.map(|l| label_to_ws[l].clone()))
+                .collect();
+
+            (dbs, Some(db_verify), endpoints)
         } else {
-            (None, None, None)
+            let endpoints: Vec<Option<String>> = participants.iter().map(|_| None).collect();
+            (vec![], None, endpoints)
         };
 
         // Resolve the moat binary once for the whole world (also triggers
@@ -212,7 +250,7 @@ impl TestWorld {
             toxiproxy,
             pds_proxy: pds_proxy.clone(),
             postern_url,
-            _drawbridge: drawbridge,
+            _drawbridges: vec![],
             db_verify_proxy,
             participants: HashMap::new(),
             moat_cli_bin,
@@ -220,19 +258,23 @@ impl TestWorld {
             rust_lib_path,
         };
 
-        for (&handle, kind) in handles.iter().zip(kinds.iter()) {
+        for (i, (&handle, kind)) in handles.iter().zip(kinds.iter()).enumerate() {
             let full_handle = format!("{handle}{handle_suffix}");
+            let drawbridge_ws = drawbridge_ws_endpoints[i].as_deref();
             world
                 .spawn_participant(
                     handle,
                     &full_handle,
                     &pds_proxy.url.clone(),
-                    drawbridge_ws_endpoint.as_deref(),
+                    drawbridge_ws,
                     kind.clone(),
                 )
                 .await
                 .with_context(|| format!("spawning participant {handle}"))?;
         }
+
+        // Move drawbridge processes into world after all participants are spawned.
+        world._drawbridges = drawbridges;
 
         Ok(world)
     }
@@ -287,7 +329,7 @@ impl TestWorld {
         let child = Command::new(&bin)
             .args(&proc.spawn_args)
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::inherit())
             .spawn()
             .with_context(|| format!("restart participant for {handle}"))?;
         proc.child = Some(child);
@@ -350,7 +392,7 @@ impl TestWorld {
         let child = Command::new(&bin)
             .args(&args)
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::inherit())
             .spawn()
             .with_context(|| format!("spawn participant ({:?}) for {full_handle}", kind))?;
 

@@ -21,10 +21,12 @@ pub mod dart_two_party_chat;
 pub mod mixed_two_party_chat;
 pub mod push_latency;
 pub mod push_latency_restart;
+pub mod same_drawbridge_local;
 pub mod three_party_chat;
 pub mod three_party_push;
 pub mod three_party_restart;
 pub mod two_party_chat;
+pub mod two_party_fanout;
 pub mod two_party_push;
 pub mod two_party_push_restart;
 pub mod two_party_restart;
@@ -472,6 +474,20 @@ pub static SCENARIOS: &[Scenario] = &[
         name: "mixed-two-party-chat",
         description: "Alice (Rust) + Bob (Dart), polling delivery",
         run_fn: mixed_two_party_chat::run_boxed,
+        gen_fn: generate_random_actions,
+        seed_fn: actions_from_seed,
+    },
+    Scenario {
+        name: "two-party-fanout",
+        description: "Alice + Bob on separate relays, relay-to-relay fan-out",
+        run_fn: two_party_fanout::run_boxed,
+        gen_fn: generate_random_actions,
+        seed_fn: actions_from_seed,
+    },
+    Scenario {
+        name: "same-drawbridge-local",
+        description: "Alice + Bob on shared relay, local delivery",
+        run_fn: same_drawbridge_local::run_boxed,
         gen_fn: generate_random_actions,
         seed_fn: actions_from_seed,
     },

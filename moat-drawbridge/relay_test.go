@@ -1117,3 +1117,23 @@ func TestEventPosted_FanOutPlusLocalDelivery(t *testing.T) {
 		t.Fatal("expected fan-out to remote relay")
 	}
 }
+
+func TestNormalizeRelayURL(t *testing.T) {
+	tests := []struct {
+		input, want string
+	}{
+		{"ws://127.0.0.1:8080/ws", "http://127.0.0.1:8080"},
+		{"wss://relay.example.com/ws", "https://relay.example.com"},
+		{"ws://127.0.0.1:8080", "http://127.0.0.1:8080"},
+		{"wss://relay.example.com", "https://relay.example.com"},
+		{"http://127.0.0.1:8080", "http://127.0.0.1:8080"},
+		{"https://relay.example.com", "https://relay.example.com"},
+		{"http://127.0.0.1:8080/", "http://127.0.0.1:8080"},
+	}
+	for _, tt := range tests {
+		got := normalizeRelayURL(tt.input)
+		if got != tt.want {
+			t.Errorf("normalizeRelayURL(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}

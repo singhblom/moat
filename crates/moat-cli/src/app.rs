@@ -1241,7 +1241,7 @@ impl App {
                         if let Ok(decrypted) = self.mls.decrypt_event(&group_id, ciphertext) {
                             self.debug_log.log("drawbridge: inline payload decrypted successfully");
                             // Process the decrypted event inline — skip PDS fetch
-                            self.process_inline_decrypted(&conv_id, decrypted);
+                            self.process_inline_decrypted(&conv_id, &rkey, decrypted);
                             self.save_mls_state().ok();
                             return;
                         }
@@ -2137,39 +2137,69 @@ impl App {
     }
 
     /// Process a decrypted event received inline via Drawbridge payload.
-    fn process_inline_decrypted(&mut self, conv_id: &str, outcome: moat_core::DecryptOutcome) {
+    fn process_inline_decrypted(&mut self, conv_id: &str, rkey: &str, outcome: moat_core::DecryptOutcome) {
         let decrypted = outcome.into_result();
         let conv_idx = self.conversations.iter().position(|c| c.id == *conv_id);
+        let my_did = self.client.as_ref().map(|c| c.did().to_string()).unwrap_or_default();
 
         match decrypted.event.kind {
-            EventKind::Message(moat_core::MessageKind::ShortText)
-            | EventKind::Message(moat_core::MessageKind::MediumText)
-            | EventKind::Message(moat_core::MessageKind::Legacy) => {
-                // Increment unread count
-                if let Some(idx) = conv_idx {
-                    if self.active_conversation != Some(idx) {
-                        self.conversations[idx].unread += 1;
+            EventKind::Message(_) => {
+                let parsed = decrypted.event.parse_message_payload();
+                let content = parsed
+                    .as_ref()
+                    .map(|p| render_message_preview(p))
+                    .unwrap_or_else(|| String::from_utf8_lossy(&decrypted.event.payload).to_string());
+                let (sender_did, sender_device) = decrypted
+                    .sender
+                    .map(|s| (Some(s.did), Some(s.device_name)))
+                    .unwrap_or((None, None));
+                let is_own = sender_did.as_ref().map_or(false, |did| did == &my_did);
+                let timestamp = chrono::Utc::now();
+
+                // Persist received message locally
+                let stored_msg = crate::keystore::StoredMessage {
+                    rkey: rkey.to_string(),
+                    content: content.clone(),
+                    timestamp,
+                    is_own,
+                    message_id: decrypted.event.message_id.clone(),
+                    sender_did: sender_did.clone(),
+                    sender_device: sender_device.clone(),
+                };
+                match self.keys.append_message(conv_id, stored_msg) {
+                    Ok(false) => {
+                        // Duplicate rkey — already stored
+                        self.keys.store_group_state(conv_id, &decrypted.new_group_state).ok();
+                        return;
                     }
+                    Err(e) => {
+                        self.debug_log
+                            .log(&format!("drawbridge: failed to store message: {}", e));
+                    }
+                    Ok(true) => {}
                 }
 
-                // If this is the active conversation, add to display
-                if let Some(idx) = conv_idx {
-                    if self.active_conversation == Some(idx) {
-                        let sender_did = decrypted.sender.as_ref().map(|s| s.did.clone()).unwrap_or_default();
-                        let sender_device = decrypted.sender.as_ref().map(|s| s.device_name.clone()).unwrap_or_default();
-                        let content = String::from_utf8_lossy(&decrypted.event.payload).to_string();
-                        self.messages.push(DisplayMessage {
-                            from: sender_did.clone(),
-                            content,
-                            timestamp: chrono::Utc::now(),
-                            is_own: false,
-                            sender_did: Some(sender_did),
-                            sender_device: Some(sender_device),
-                            message_id: decrypted.event.message_id.clone(),
-                            reactions: vec![],
-                            image_proto: None,
-                            image_loading: false,
-                        });
+                // Update display
+                if self.active_conversation == conv_idx {
+                    let dm = DisplayMessage {
+                        from: sender_did.as_deref().unwrap_or("Unknown").to_string(),
+                        content,
+                        timestamp,
+                        is_own,
+                        sender_did,
+                        sender_device,
+                        message_id: decrypted.event.message_id.clone(),
+                        reactions: vec![],
+                        image_proto: None,
+                        image_loading: false,
+                    };
+                    let pos = self
+                        .messages
+                        .partition_point(|m| m.timestamp <= dm.timestamp);
+                    self.messages.insert(pos, dm);
+                } else if let Some(idx) = conv_idx {
+                    if let Some(conv) = self.conversations.get_mut(idx) {
+                        conv.unread += 1;
                     }
                 }
 
@@ -2716,6 +2746,8 @@ impl App {
 
         // Fetch relay configs for the new conversation's partners
         self.fetch_partner_drawbridge_configs(&conv_id);
+        // Register new conversation tags on own Drawbridge relay
+        self.schedule_watch_tags_update();
 
         self.debug_log
             .log("process_welcome: successfully joined group");

@@ -310,7 +310,7 @@ impl KeyStore {
         Ok(())
     }
 
-    /// Append a message to a conversation's local storage, maintaining timestamp order.
+    /// Append a message to a conversation's local storage, maintaining rkey order.
     /// Returns `Ok(false)` if a message with the same rkey already exists (dedup).
     pub fn append_message(&self, conv_id: &str, message: StoredMessage) -> Result<bool> {
         let mut messages = self.load_messages(conv_id)?;
@@ -321,7 +321,7 @@ impl KeyStore {
         }
         let pos = messages
             .messages
-            .partition_point(|m| m.timestamp <= message.timestamp);
+            .partition_point(|m| m.rkey <= message.rkey);
         messages.messages.insert(pos, message);
         self.store_messages(conv_id, &messages)?;
         Ok(true)
