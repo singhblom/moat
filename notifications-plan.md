@@ -52,7 +52,7 @@ A relay service (Drawbridge) that provides real-time encrypted message delivery 
 
 1. **Each client connects only to their own Drawbridge.** No ticket system, no connecting to partner relays. You authenticate with your own Drawbridge via DID challenge-response and that's it.
 
-2. **Sender's Drawbridge fans out.** When Alice sends a message, her client sends an envelope to her Drawbridge containing the encrypted payload and a list of recipient Drawbridge URLs (discovered via `social.moat.relayConfig`). Alice's Drawbridge pushes to each recipient's Drawbridge.
+2. **Sender's Drawbridge fans out.** When Alice sends a message, her client sends an envelope to her Drawbridge containing the encrypted payload and a list of recipient Drawbridge URLs (discovered via `social.moat.drawbridgeConfig`). Alice's Drawbridge pushes to each recipient's Drawbridge.
 
 3. **Relay-to-relay requires no authentication.** Recipient Drawbridges accept inbound payloads from any source and deliver immediately. Async PDS verification catches abuse after the fact.
 
@@ -258,20 +258,20 @@ When the app receives a push notification:
 - **APNs**: Drawbridge needs an APNs auth key (.p8) or certificate. Standard APNs HTTP/2 API.
 - Both are configured via Drawbridge environment variables / config file.
 
-## Relay Discovery
+## Drawbridge Discovery
 
 ### Per-User ATProto Record
 
 Each user publishes their Drawbridge URL(s) as an ATProto record:
 
 ```
-Collection: social.moat.relayConfig
+Collection: social.moat.drawbridgeConfig
 RKey: self
 
 {
-  "relays": [
-    { "url": "wss://relay.moat.chat", "priority": 1 },
-    { "url": "wss://my-relay.example.com", "priority": 2 }
+  "drawbridges": [
+    { "url": "wss://drawbridge.moat.chat", "priority": 1 },
+    { "url": "wss://my-drawbridge.example.com", "priority": 2 }
   ]
 }
 ```
@@ -279,26 +279,26 @@ RKey: self
 This is analogous to how the ATProto PLC directory maps DIDs to PDS service endpoints.
 
 When sending a message, the sender's client:
-1. Looks up each recipient's `social.moat.relayConfig` record (cached)
+1. Looks up each recipient's `social.moat.drawbridgeConfig` record (cached)
 2. Includes the recipient Drawbridge URLs in the envelope sent to the sender's own Drawbridge
 3. Sender's Drawbridge fans out to each recipient Drawbridge
 
 If sender and recipient use the same Drawbridge, the fan-out is a local delivery — no network hop.
 
-### Future: Per-Group Relay Override
+### Future: Per-Group Drawbridge Override
 
-Groups can optionally specify relay(s) in their encrypted MLS metadata, overriding members' default relay config for that conversation. Adding/changing the group relay advances the MLS epoch. This is deferred to post-MVP.
+Groups can optionally specify Drawbridge(s) in their encrypted MLS metadata, overriding members' default Drawbridge config for that conversation. Adding/changing the group Drawbridge advances the MLS epoch. This is deferred to post-MVP.
 
-## Multi-Relay Design (Deferred)
+## Multi-Drawbridge Design (Deferred)
 
-The protocol supports multiple relays from day one, even though MVP uses a single relay:
+The protocol supports multiple Drawbridges from day one, even though MVP uses a single instance:
 
-- A user's `social.moat.relayConfig` lists relays in priority order
-- Sender's Drawbridge fans out to all of the recipient's listed relays
-- First relay to deliver wins; duplicates are handled client-side (dedup by rkey)
-- If one relay is down, others still deliver
+- A user's `social.moat.drawbridgeConfig` lists Drawbridges in priority order
+- Sender's Drawbridge fans out to all of the recipient's listed Drawbridges
+- First Drawbridge to deliver wins; duplicates are handled client-side (dedup by rkey)
+- If one Drawbridge is down, others still deliver
 
-Implementation of multi-relay connection and failover is deferred.
+Implementation of multi-Drawbridge connection and failover is deferred.
 
 ## Abuse Prevention (Deferred Details)
 
@@ -338,7 +338,7 @@ When a WebSocket notification arrives:
 ### Sending Flow
 
 After writing an event to the PDS, the client sends an envelope to its own Drawbridge:
-1. Look up each recipient's `social.moat.relayConfig` (cached)
+1. Look up each recipient's `social.moat.drawbridgeConfig` (cached)
 2. Send envelope: `{ type: "event_posted", tag, rkey, payload, relay_urls: [...] }`
 3. Fire-and-forget; if the Drawbridge is unavailable, nothing happens (recipients catch up via polling)
 
@@ -369,7 +369,7 @@ Location: `moat-drawbridge/` directory in this repo (Go module). Binary/service 
 ### Milestone 2: Client Integration
 - CLI: WebSocket connection to own Drawbridge, envelope sending, payload receiving
 - Flutter: Same, plus push token registration
-- Both: Relay discovery via `social.moat.relayConfig` record
+- Both: Drawbridge discovery via `social.moat.drawbridgeConfig` record
 - Both: Reduce poll frequency when Drawbridge-connected
 
 ### Milestone 3: Mobile Push
@@ -422,43 +422,131 @@ All Go relay changes are implemented and tested. 42 tests pass in ~6s.
 **Property tests removed:**
 - `TestProp_TicketRevokeOnlyByOwner`, `TestProp_RevokedTicketCannotAuth`, `TestProp_TicketRegistrationIdempotent`, `TestProp_ByDIDOnlySenders`
 
-### Phase 2: ATProto Lexicon — NOT STARTED
+### Phase 2: ATProto Lexicon — COMPLETE
 
-- Add `social.moat.relayConfig` lexicon in `lexicons/social/moat/relayConfig.json`
-- Add `publish_relay_config(url)` and `fetch_relay_config(did)` to `MoatAtprotoClient`
-- Postern already supports arbitrary record CRUD, so `relayConfig` should work out of the box
+- Added `social.moat.drawbridgeConfig` lexicon in `lexicons/social/moat/drawbridgeConfig.json` (singleton record, rkey = `"self"`, array of `{url, priority}` relay entries)
+- Added `DrawbridgeConfigRecord` and `DrawbridgeEntry` types to `records.rs`, exported from crate
+- Added `publish_drawbridge_config(url)` using `putRecord` (upsert with rkey `"self"`) to `MoatAtprotoClient`
+- Added `fetch_drawbridge_config(did)` using `getRecord` (returns `Option<DrawbridgeConfigRecord>`, `None` if not published) to `MoatAtprotoClient`
+- Added `DRAWBRIDGE_CONFIG_NSID` to `delete_all_records` cleanup
+- 6 tests pass (including 2 new Drawbridge config serialization tests)
 
-### Phase 3: Rust CLI — NOT STARTED
+### Phase 3: Rust CLI — COMPLETE
 
-- Simplify `drawbridge.rs` to single connection (remove `PartnerDrawbridge`, `partner_read_loop`)
-- Remove `StoredHint`, `DrawbridgeState.partner_hints`, `own_tickets`, ticket registration/revocation
-- Send envelope on `event_posted` with `{ tag, rkey, payload, relay_urls }`
-- Handle `new_event` with payload: decrypt inline, fall back to PDS fetch on failure
-- Add relay config cache (fetch partner `social.moat.relayConfig`, publish own on login)
-- Update `DrawbridgeState` — remove ticket fields, keep `own_url`
+**Partner/ticket architecture removed (single-connection model):**
+- Removed `PartnerDrawbridge`, `partner_read_loop`, `connect_partner()`, `reconnect_all_partners()`, `retry_disconnected()`
+- Removed `StoredHint`, `DrawbridgeState.partner_hints`, `DrawbridgeState.own_tickets`, `ConnectionState`
+- Removed `register_ticket()`, `handle_hint()`, `update_tags_for_partner()`, `get_partner_for_group()`, `hints_for_group()`
+- Removed `hints` and `partners` HashMaps from `DrawbridgeManager`
+- `DrawbridgeState` now only stores `own_url` (backward-compatible deserialization via `#[serde(deny_unknown_fields)]` not used — old fields silently ignored)
+- `connect_own()` no longer takes `persisted_tickets` parameter
 
-### Phase 4: moat-core Cleanup — NOT STARTED
+**BgEvent variants removed:**
+- `DrawbridgeHandleHint`, `DrawbridgeUpdateTags`, `DrawbridgeRetryDisconnected`, `DrawbridgeReconnectPartners`, `DrawbridgeSendReciprocalHint`, `DrawbridgeConnected`
 
-- Remove `DrawbridgeHintPayload` and `ControlKind::DrawbridgeHint` from `event.rs`
-- Remove DrawbridgeHint encoding/decoding from event processing
-- 11 files currently reference DrawbridgeHint
+**Envelope-based sending implemented:**
+- `notify_event_posted()` now takes `payload: &[u8]` and `relay_urls: &[String]`
+- `SendPublished` BgEvent carries `ciphertext` for forwarding to relay
+- `drawbridge_urls_for_conversation()` collects partner Drawbridge URLs from in-memory cache
+- `DrawbridgeConfigFetched` BgEvent caches partner Drawbridge configs
+
+**Payload-based receiving implemented:**
+- `own_read_loop` handles `new_event` with inline `payload` field (base64-encoded)
+- `DrawbridgeNewEvent` BgEvent carries `payload: Option<Vec<u8>>`
+- `process_inline_decrypted()` handles ShortText/MediumText/Legacy messages and Commit events inline
+- Falls back to PDS fetch when inline decryption fails or DID is available
+
+**Tag registration on own relay:**
+- `watch_tags()` method sends all active tags to own Drawbridge
+- `send_all_watched_tags()` called after connect
+- `schedule_watch_tags_update()` called after epoch changes
+- `DrawbridgeWatchTags` BgEvent for async tag updates
+
+**Drawbridge config lifecycle implemented:**
+- Publishes own `social.moat.drawbridgeConfig` on successful Drawbridge connect
+- Fetches partner Drawbridge configs on login, start conversation, join via Welcome, and add member
+- `drawbridge_config_cache: DrawbridgeConfigCache` (DID -> URLs) in App struct
+
+**Hint bundle still decoded but ignored** (backward compat with old Welcome envelopes)
+
+**Tests:** 52 pass (45 unit + 7 proptest), no warnings
+
+### Phase 4: moat-core Cleanup — COMPLETE
+
+**Removed from moat-core `event.rs`:**
+- `ControlKind::DrawbridgeHint` variant
+- `DrawbridgeHintPayload` struct
+- `Event::drawbridge_hint()` constructor
+- `Event::drawbridge_hint_payload()` method
+- `test_drawbridge_hint_roundtrip` and `test_drawbridge_hint_payload_on_non_hint` tests
+- Serialization/deserialization entries for `"drawbridge_hint"` (legacy events now deserialize as `ControlKind::Unknown("drawbridge_hint")`)
+
+**Removed from moat-core `lib.rs`:**
+- `DrawbridgeHintPayload` export
+- `MoatSession::create_drawbridge_hint()` method
+- `MoatSession::generate_drawbridge_ticket()` method
+
+**Removed from moat-core `tests/proptest_padding_tag.rs`:**
+- `drawbridge_hint_roundtrip` proptest (and unused `ControlKind`/`EventKind` imports)
+
+**Removed from moat-cli `app.rs`:**
+- `ControlKind::DrawbridgeHint` match arm in `process_matched_event`
+- Updated comments referencing DrawbridgeHint
+
+**Updated `PROTOCOL.md`:**
+- Replaced "Drawbridge Hints" section with "Drawbridge Discovery" section documenting `social.moat.drawbridgeConfig` record-based discovery
+- Removed `control.drawbridge_hint` from event kind table
+
+**Backward compatibility:** Old serialized events with `"control.drawbridge_hint"` kind now deserialize as `ControlKind::Unknown("drawbridge_hint")` and are silently ignored by the catch-all `_` match arm.
+
+**Note:** moat-dart's Rust FFI crate (`moat-dart/app/rust/`) still references the removed types. This is excluded from the workspace and will be updated in Phase 5.
+
+**Tests:** moat-core 108 pass, moat-cli 52 pass (45 unit + 7 proptest), no warnings
 
 ### Phase 5: Dart — NOT STARTED
 
-- Simplify `drawbridge_service.dart` to single connection (remove `_PartnerConnection`, `connectPartner()`, `reconnectPartners()`)
-- Remove `StoredDrawbridgeHint`, ticket queue, re-registration
-- Send envelope on `notifyEventPosted` with payload and relay_urls
+**Remove partner/ticket architecture:**
+- Remove `_PartnerConnection` class, `_partnerConnections` HashMap, `connectPartner()`, `reconnectPartners()`
+- Remove `_ownTickets` HashMap, `registerTicket()`, `updatePartnerTags()`
+- Remove `StoredDrawbridgeHint` references from `polling_service.dart` and `conversation_starter.dart`
+
+**Implement new envelope-based sending:**
+- `notifyEventPosted` sends `{ tag, rkey, payload, relay_urls }` to own Drawbridge
+- Fetch recipient Drawbridge configs via ATProto
+
+**Implement payload-based receiving:**
 - Handle `new_event` with payload: decrypt inline, fall back to PDS fetch
-- Add relay config fetch/publish
+
+**Drawbridge config lifecycle:**
+- Publish own `social.moat.drawbridgeConfig` on login
+- Fetch partner Drawbridge configs when starting/joining conversations
+
+**Update tests:**
+- `drawbridge_service_test.dart`, `drawbridge_lifecycle_test.dart`, `drawbridge_integration_test.dart`
 
 ### Phase 6: moat-beacon Integration Tests — NOT STARTED
 
-- Update `TestWorld::new_with_drawbridge()` to spawn per-participant Drawbridge instances
+**Per-participant Drawbridge instances:**
+- Update `TestWorld::new_with_drawbridge()` to spawn one Drawbridge per participant (currently spawns one shared instance)
 - Update `DrawbridgeProcess` to support multiple instances with different ports
-- Remove ticket/hint plumbing from test setup
-- Update `two-party-push` / `two-party-push-restart` scenarios for new architecture
-- Add new scenarios: `two-party-payload-delivery`, `two-party-payload-fallback`, `three-party-fanout`, `same-drawbridge-local`
-- Add property tests: `proptest_payload_delivery`, `proptest_mixed_delivery`, `proptest_drawbridge_restart`
+- Each participant gets `--drawbridge-url` pointing to their own relay
+- Participants publish `social.moat.drawbridgeConfig` so peers can discover each other's relays
+
+**Remove old plumbing:**
+- Remove ticket/hint setup from test world
+- Remove `db_verify_proxy` if no longer needed (async PDS verification is sender-side only)
+
+**Update existing scenarios:**
+- `two-party-push` / `two-party-push-restart` — adapt for per-participant relays + relay-to-relay fan-out
+
+**Add new scenarios:**
+- `two-party-payload-delivery` — verify ciphertext flows through relay without PDS round-trip
+- `two-party-payload-fallback` — verify PDS fetch fallback when relay is down
+- `three-party-fanout` — verify fan-out to multiple recipient relays
+- `same-drawbridge-local` — verify local delivery when sender and recipient share a relay
+
+**Add property tests:**
+- `proptest_payload_delivery`, `proptest_mixed_delivery`, `proptest_drawbridge_restart`
 
 ### Phase 7: Mobile Push — NOT STARTED
 
