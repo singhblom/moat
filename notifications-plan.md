@@ -503,26 +503,51 @@ All Go relay changes are implemented and tested. 42 tests pass in ~6s.
 
 **Tests:** moat-core 108 pass, moat-cli 52 pass (45 unit + 7 proptest), no warnings
 
-### Phase 5: Dart — NOT STARTED
+### Phase 5: Dart — COMPLETE
 
-**Remove partner/ticket architecture:**
-- Remove `_PartnerConnection` class, `_partnerConnections` HashMap, `connectPartner()`, `reconnectPartners()`
-- Remove `_ownTickets` HashMap, `registerTicket()`, `updatePartnerTags()`
-- Remove `StoredDrawbridgeHint` references from `polling_service.dart` and `conversation_starter.dart`
+**Partner/ticket architecture removed:**
+- Removed `_PartnerConnection` class, `_partnerConnections` HashMap, `connectPartner()`, `reconnectPartners()`, `_sendWatchTags()`, `updatePartnerTags()`, `_handlePartnerMessage()`
+- Removed `_ownTickets` HashMap, `registerTicket()`, `_reregisterTickets()`, `_sendRegisterTicket()`
+- Removed `ticket_registered`/`ticket_revoked`/`ticket_auth` message handling from `_handleOwnMessage`
+- Removed `partnerConnectionCount` getter
+- Removed `StoredDrawbridgeHint` class from `conversation.dart`
+- Removed `partnerDrawbridgeHints`, `ownDrawbridgeTicketHex`, `upsertPartnerHint()` from `Conversation`
+- Removed Drawbridge hint/ticket generation from `conversation_starter.dart` (step 8: ticket generation, hint event encryption/publish)
+- Removed `drawbridgeUrl` parameter from `startConversation()` and `buildRouter()`
+- Removed `EventKindDto.drawbridgeHint` processing from `polling_service.dart` (now silently ignored as legacy)
+- Removed `_reconnectDrawbridge()` partner hint/ticket re-registration from `main.dart`
 
-**Implement new envelope-based sending:**
-- `notifyEventPosted` sends `{ tag, rkey, payload, relay_urls }` to own Drawbridge
-- Fetch recipient Drawbridge configs via ATProto
+**Envelope-based sending implemented:**
+- `notifyEventPosted()` now takes named params: `tag`, `rkey`, `payload` (ciphertext), `relayUrls`
+- Sends `{ type: "event_posted", tag, rkey, payload (base64), relay_urls }` to own Drawbridge
+- `send_service.dart` passes `result.ciphertext` as payload and calls `relayUrlsForParticipants()` for relay URLs
 
-**Implement payload-based receiving:**
-- Handle `new_event` with payload: decrypt inline, fall back to PDS fetch
+**Payload-based receiving implemented:**
+- `DrawbridgeNewEvent` class carries `tagHex`, `rkey`, `payload` (decoded bytes) — no sender DID (on decrypt failure, a general poll is sufficient recovery; avoids special-casing local vs relay-to-relay delivery)
+- `onNewEvent` callback signature changed from `VoidCallback` to `void Function(DrawbridgeNewEvent)`
+- `_handleNewEvent()` decodes base64 payload from `new_event` messages
+- Callers (main.dart, server) receive the event data; currently trigger poll, inline decryption deferred
 
-**Drawbridge config lifecycle:**
-- Publish own `social.moat.drawbridgeConfig` on login
-- Fetch partner Drawbridge configs when starting/joining conversations
+**Tag watching on own relay implemented:**
+- `watchTags(List<Uint8List>)` — replaces all watched tags (called on connect/resume)
+- `addTags(List<Uint8List>)` — adds tags incrementally (called when joining conversation)
+- `updateTags({add, remove})` — updates after MLS epoch changes
+- Sends `watch_tags` after authentication, `update_tags` for incremental changes
+- `_registerAllTags()` in main.dart collects tags from all conversations on connect
 
-**Update tests:**
-- `drawbridge_service_test.dart`, `drawbridge_lifecycle_test.dart`, `drawbridge_integration_test.dart`
+**Drawbridge config lifecycle implemented:**
+- `AtprotoClient.publishDrawbridgeConfig(url)` — upserts `social.moat.drawbridgeConfig` via `putRecord` (rkey: `self`)
+- `AtprotoClient.fetchDrawbridgeConfig(did)` — fetches relay URLs sorted by priority
+- `drawbridgeConfigNsid` constant added
+- `DrawbridgeService._configCache: Map<String, List<String>>` — DID → relay URLs
+- `cacheDrawbridgeConfig(did, urls)` and `relayUrlsForParticipants(dids)` for cache access
+- main.dart publishes own config on connect, fetches partner configs for all conversations
+- `conversation_starter.dart` fetches recipient config after creating group
+- `polling_service.dart` fetches partner configs after processing Welcome
+
+**Tests:** 123 pass (same count, all rewritten for new model), 0 warnings
+
+**Note:** Rust FFI at `moat-dart/app/rust/` still defines `EventKindDto::DrawbridgeHint`, `DrawbridgeHintPayloadDto`, `createDrawbridgeHint()`, and `generateDrawbridgeTicket()`. These are unused by Dart code but still compile against the excluded workspace. Cleanup deferred.
 
 ### Phase 6: moat-beacon Integration Tests — NOT STARTED
 

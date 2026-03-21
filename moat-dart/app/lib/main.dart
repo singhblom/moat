@@ -216,35 +216,21 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _reconnectDrawbridge() async {
+  void _registerAllTags() {
     final auth = context.read<AuthProvider>();
     final conversations = context.read<ConversationsProvider>().conversations;
     if (!auth.isAuthenticated) return;
 
-    final db = DrawbridgeService.instance;
     final session = auth.moatSession;
     if (session == null) return;
 
-    final hintsWithTags = <({String url, String ticketHex, List<Uint8List> tags})>[];
+    final allTags = <Uint8List>[];
     for (final conv in conversations) {
-      if (conv.partnerDrawbridgeHints.isEmpty) continue;
       final tags = session.populateCandidateTags(groupId: conv.groupId);
-      for (final hint in conv.partnerDrawbridgeHints) {
-        hintsWithTags.add((
-          url: hint.url,
-          ticketHex: hint.ticketHex,
-          tags: tags.map((t) => Uint8List.fromList(t)).toList(),
-        ));
-      }
+      allTags.addAll(tags.map((t) => Uint8List.fromList(t)));
     }
 
-    for (final conv in conversations) {
-      if (conv.ownDrawbridgeTicketHex != null) {
-        db.registerTicket(conv.groupIdHex, conv.ownDrawbridgeTicketHex!);
-      }
-    }
-
-    await db.reconnectPartners(hintsWithTags);
+    DrawbridgeService.instance.watchTags(allTags);
   }
 
   void _startPollingIfNeeded(AuthProvider auth) {
@@ -285,12 +271,37 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
     final db = DrawbridgeService.instance;
     db.init(did: auth.did!, keyBundle: Uint8List.fromList(keyBundle));
 
-    db.onNewEvent = () {
+    db.onNewEvent = (event) {
+      // For now, trigger a poll on any new event notification.
+      // Inline decryption using event.payload can be added later.
       _pollingService?.poll();
     };
 
     await db.connectOwn(defaultDrawbridgeUrl);
-    await _reconnectDrawbridge();
+    _registerAllTags();
+
+    // Publish own drawbridge config.
+    try {
+      await auth.service.atprotoClient
+          .publishDrawbridgeConfig(defaultDrawbridgeUrl);
+    } catch (e) {
+      debugPrint('Failed to publish drawbridge config: $e');
+    }
+
+    // Fetch partner drawbridge configs for all conversations.
+    final conversations = context.read<ConversationsProvider>().conversations;
+    final client = auth.service.atprotoClient;
+    final participantDids = <String>{};
+    for (final conv in conversations) {
+      participantDids.addAll(conv.participants);
+    }
+    for (final did in participantDids) {
+      if (!mounted) return;
+      try {
+        final urls = await client.fetchDrawbridgeConfig(did);
+        db.cacheDrawbridgeConfig(did, urls);
+      } catch (_) {}
+    }
   }
 
   @override

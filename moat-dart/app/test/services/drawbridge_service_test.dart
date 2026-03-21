@@ -15,7 +15,6 @@ void main() {
 
     test('starts unconnected', () {
       expect(service.isOwnConnected, false);
-      expect(service.partnerConnectionCount, 0);
     });
 
     test('init stores credentials', () {
@@ -27,18 +26,23 @@ void main() {
       expect(service.isOwnConnected, false);
     });
 
-    test('registerTicket stores ticket for group', () {
-      // Should not throw even when not connected (queues for later)
-      service.registerTicket('aabbccdd', 'ticket123');
-      // No crash = success; ticket is stored internally
-    });
-
     test('notifyEventPosted does nothing when not authenticated', () {
       // Should not throw
       service.notifyEventPosted(
-        Uint8List.fromList([0x01, 0x02]),
-        'rkey123',
+        tag: Uint8List.fromList([0x01, 0x02]),
+        rkey: 'rkey123',
+        payload: Uint8List.fromList([0x03, 0x04]),
+        relayUrls: [],
       );
+    });
+
+    test('watchTags does nothing when not connected', () {
+      // Should not throw — tags are stored but not sent
+      service.watchTags([Uint8List.fromList([1, 2, 3])]);
+    });
+
+    test('addTags does nothing when not connected', () {
+      service.addTags([Uint8List.fromList([4, 5, 6])]);
     });
 
     test('reset clears all state', () {
@@ -46,10 +50,11 @@ void main() {
         did: 'did:plc:test',
         keyBundle: Uint8List.fromList(List.filled(32, 0x42)),
       );
-      service.registerTicket('group1', 'ticket1');
+      service.watchTags([Uint8List.fromList([1, 2, 3])]);
+      service.cacheDrawbridgeConfig('did:plc:bob', ['wss://relay.example.com']);
       service.reset();
       expect(service.isOwnConnected, false);
-      expect(service.partnerConnectionCount, 0);
+      expect(service.relayUrlsForParticipants(['did:plc:bob']), isEmpty);
     });
 
     test('disconnectAll marks as disposed', () {
@@ -62,149 +67,118 @@ void main() {
     });
   });
 
-  group('StoredDrawbridgeHint', () {
-    test('toJson / fromJson roundtrip', () {
-      final hint = StoredDrawbridgeHint(
-        url: 'wss://relay.example.com/ws',
-        deviceIdHex: 'aabb',
-        ticketHex: 'ccdd' * 16, // 64-char hex
-        partnerDid: 'did:plc:partner',
-      );
-      final json = hint.toJson();
-      final restored = StoredDrawbridgeHint.fromJson(json);
+  group('Drawbridge config cache', () {
+    late DrawbridgeService service;
 
-      expect(restored.url, hint.url);
-      expect(restored.deviceIdHex, hint.deviceIdHex);
-      expect(restored.ticketHex, hint.ticketHex);
-      expect(restored.partnerDid, hint.partnerDid);
+    setUp(() {
+      DrawbridgeService.instance.reset();
+      service = DrawbridgeService.instance;
+    });
+
+    test('cacheDrawbridgeConfig stores and retrieves URLs', () {
+      service.cacheDrawbridgeConfig(
+          'did:plc:alice', ['wss://relay-a.example.com']);
+      service.cacheDrawbridgeConfig(
+          'did:plc:bob', ['wss://relay-b.example.com']);
+
+      final urls = service
+          .relayUrlsForParticipants(['did:plc:alice', 'did:plc:bob']);
+      expect(urls, hasLength(2));
+      expect(urls, contains('wss://relay-a.example.com'));
+      expect(urls, contains('wss://relay-b.example.com'));
+    });
+
+    test('relayUrlsForParticipants deduplicates', () {
+      service.cacheDrawbridgeConfig(
+          'did:plc:alice', ['wss://shared-relay.example.com']);
+      service.cacheDrawbridgeConfig(
+          'did:plc:bob', ['wss://shared-relay.example.com']);
+
+      final urls = service
+          .relayUrlsForParticipants(['did:plc:alice', 'did:plc:bob']);
+      expect(urls, hasLength(1));
+      expect(urls.first, 'wss://shared-relay.example.com');
+    });
+
+    test('relayUrlsForParticipants returns empty for unknown DIDs', () {
+      final urls = service.relayUrlsForParticipants(['did:plc:unknown']);
+      expect(urls, isEmpty);
+    });
+
+    test('cacheDrawbridgeConfig ignores empty URLs', () {
+      service.cacheDrawbridgeConfig('did:plc:alice', []);
+      final urls = service.relayUrlsForParticipants(['did:plc:alice']);
+      expect(urls, isEmpty);
+    });
+
+    test('reset clears config cache', () {
+      service.cacheDrawbridgeConfig(
+          'did:plc:alice', ['wss://relay.example.com']);
+      service.reset();
+      final urls = service.relayUrlsForParticipants(['did:plc:alice']);
+      expect(urls, isEmpty);
     });
   });
 
-  group('Conversation Drawbridge fields', () {
-    Conversation makeConversation({
-      List<StoredDrawbridgeHint>? hints,
-      String? ownTicket,
-    }) {
+  group('DrawbridgeNewEvent', () {
+    test('can be created with all fields', () {
+      final event = DrawbridgeNewEvent(
+        tagHex: 'aa' * 16,
+        rkey: 'test-rkey',
+        payload: Uint8List.fromList([1, 2, 3]),
+      );
+      expect(event.tagHex, 'aa' * 16);
+      expect(event.rkey, 'test-rkey');
+      expect(event.payload, isNotNull);
+    });
+
+    test('payload is optional', () {
+      final event = DrawbridgeNewEvent(
+        tagHex: 'bb' * 16,
+        rkey: 'rkey2',
+      );
+      expect(event.payload, isNull);
+    });
+  });
+
+  group('Conversation model (no Drawbridge fields)', () {
+    Conversation makeConversation() {
       return Conversation(
         groupId: Uint8List.fromList([1, 2, 3, 4]),
         displayName: 'Test',
         participants: ['did:plc:bob'],
         keyBundleRef: 'ref',
         createdAt: DateTime.utc(2025, 1, 1),
-        partnerDrawbridgeHints: hints,
-        ownDrawbridgeTicketHex: ownTicket,
       );
     }
 
-    test('empty hints roundtrips', () {
+    test('JSON roundtrip has no hint/ticket fields', () {
       final conv = makeConversation();
-      final restored = Conversation.fromJson(conv.toJson());
-      expect(restored.partnerDrawbridgeHints, isEmpty);
-      expect(restored.ownDrawbridgeTicketHex, isNull);
+      final json = conv.toJson();
+      expect(json.containsKey('partnerDrawbridgeHints'), false);
+      expect(json.containsKey('ownDrawbridgeTicketHex'), false);
+
+      final restored = Conversation.fromJson(json);
+      expect(restored.groupIdHex, conv.groupIdHex);
+      expect(restored.displayName, 'Test');
     });
 
-    test('hints roundtrip through JSON', () {
-      final conv = makeConversation(
-        hints: [
-          StoredDrawbridgeHint(
-            url: 'wss://a.com/ws',
-            deviceIdHex: 'aa',
-            ticketHex: 'bb' * 32,
-            partnerDid: 'did:plc:alice',
-          ),
-          StoredDrawbridgeHint(
-            url: 'wss://b.com/ws',
-            deviceIdHex: 'cc',
-            ticketHex: 'dd' * 32,
-            partnerDid: 'did:plc:alice',
-          ),
-        ],
-        ownTicket: 'ee' * 32,
-      );
-      final restored = Conversation.fromJson(conv.toJson());
-      expect(restored.partnerDrawbridgeHints.length, 2);
-      expect(restored.partnerDrawbridgeHints[0].url, 'wss://a.com/ws');
-      expect(restored.partnerDrawbridgeHints[1].deviceIdHex, 'cc');
-      expect(restored.ownDrawbridgeTicketHex, 'ee' * 32);
-    });
-
-    test('upsertPartnerHint adds new hint', () {
-      final conv = makeConversation();
-      conv.upsertPartnerHint(StoredDrawbridgeHint(
-        url: 'wss://relay.com/ws',
-        deviceIdHex: 'aa',
-        ticketHex: 'bb' * 32,
-        partnerDid: 'did:plc:bob',
-      ));
-      expect(conv.partnerDrawbridgeHints.length, 1);
-    });
-
-    test('upsertPartnerHint replaces hint for same device', () {
-      final conv = makeConversation();
-      conv.upsertPartnerHint(StoredDrawbridgeHint(
-        url: 'wss://old-relay.com/ws',
-        deviceIdHex: 'aa',
-        ticketHex: 'old_ticket',
-        partnerDid: 'did:plc:bob',
-      ));
-      conv.upsertPartnerHint(StoredDrawbridgeHint(
-        url: 'wss://new-relay.com/ws',
-        deviceIdHex: 'aa',
-        ticketHex: 'new_ticket',
-        partnerDid: 'did:plc:bob',
-      ));
-      expect(conv.partnerDrawbridgeHints.length, 1);
-      expect(conv.partnerDrawbridgeHints[0].url, 'wss://new-relay.com/ws');
-      expect(conv.partnerDrawbridgeHints[0].ticketHex, 'new_ticket');
-    });
-
-    test('upsertPartnerHint keeps hints for different devices', () {
-      final conv = makeConversation();
-      conv.upsertPartnerHint(StoredDrawbridgeHint(
-        url: 'wss://relay.com/ws',
-        deviceIdHex: 'device_a',
-        ticketHex: 'ticket_a',
-        partnerDid: 'did:plc:bob',
-      ));
-      conv.upsertPartnerHint(StoredDrawbridgeHint(
-        url: 'wss://relay.com/ws',
-        deviceIdHex: 'device_b',
-        ticketHex: 'ticket_b',
-        partnerDid: 'did:plc:bob',
-      ));
-      expect(conv.partnerDrawbridgeHints.length, 2);
-    });
-
-    test('upsertPartnerHint distinguishes same device across different DIDs', () {
-      final conv = makeConversation();
-      conv.upsertPartnerHint(StoredDrawbridgeHint(
-        url: 'wss://relay.com/ws',
-        deviceIdHex: 'same_device',
-        ticketHex: 'ticket_1',
-        partnerDid: 'did:plc:alice',
-      ));
-      conv.upsertPartnerHint(StoredDrawbridgeHint(
-        url: 'wss://relay.com/ws',
-        deviceIdHex: 'same_device',
-        ticketHex: 'ticket_2',
-        partnerDid: 'did:plc:bob',
-      ));
-      // Different DIDs, same device ID → both should be kept
-      expect(conv.partnerDrawbridgeHints.length, 2);
-    });
-
-    test('missing partnerDrawbridgeHints in JSON defaults to empty', () {
+    test('fromJson ignores legacy hint/ticket fields', () {
       final json = makeConversation().toJson();
-      json.remove('partnerDrawbridgeHints');
-      final restored = Conversation.fromJson(json);
-      expect(restored.partnerDrawbridgeHints, isEmpty);
-    });
+      // Simulate old serialized data with legacy fields
+      json['partnerDrawbridgeHints'] = [
+        {
+          'url': 'wss://old.relay.com',
+          'deviceIdHex': 'aa',
+          'ticketHex': 'bb' * 32,
+          'partnerDid': 'did:plc:alice',
+        }
+      ];
+      json['ownDrawbridgeTicketHex'] = 'cc' * 32;
 
-    test('missing ownDrawbridgeTicketHex in JSON defaults to null', () {
-      final json = makeConversation(ownTicket: 'abc').toJson();
-      json.remove('ownDrawbridgeTicketHex');
+      // Should not throw — unknown keys are silently ignored
       final restored = Conversation.fromJson(json);
-      expect(restored.ownDrawbridgeTicketHex, isNull);
+      expect(restored.displayName, 'Test');
     });
   });
 }

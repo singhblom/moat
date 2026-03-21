@@ -339,36 +339,6 @@ class PollingService {
           }
           return false;
 
-        case EventKindDto.drawbridgeHint:
-          final hint = result.event.drawbridgeHintPayload();
-          if (hint != null) {
-            final ticketHex = hint.ticket
-                .map((b) => b.toRadixString(16).padLeft(2, '0'))
-                .join();
-            final deviceIdHex = hint.deviceId
-                .map((b) => b.toRadixString(16).padLeft(2, '0'))
-                .join();
-            final hintSenderDid = result.sender?.did ?? senderDid;
-            moatLog('DrawbridgeHint from $hintSenderDid device=$deviceIdHex: url=${hint.url}');
-
-            conversation.upsertPartnerHint(StoredDrawbridgeHint(
-              url: hint.url,
-              deviceIdHex: deviceIdHex,
-              ticketHex: ticketHex,
-              partnerDid: hintSenderDid,
-            ));
-            await _conversationsService.saveConversation(conversation);
-
-            final tags = session.populateCandidateTags(
-                groupId: conversation.groupId);
-            await DrawbridgeService.instance.connectPartner(
-              url: hint.url,
-              ticketHex: ticketHex,
-              tags: tags.map((t) => Uint8List.fromList(t)).toList(),
-            );
-          }
-          return false;
-
         case EventKindDto.welcome:
         case EventKindDto.checkpoint:
         case EventKindDto.unknown:
@@ -422,6 +392,22 @@ class PollingService {
     );
 
     await _conversationsService.saveConversation(conversation);
+
+    // Register tags on own Drawbridge and fetch partner config.
+    final db = DrawbridgeService.instance;
+    if (session != null) {
+      final tags = session.populateCandidateTags(groupId: groupId);
+      db.addTags(tags.map((t) => Uint8List.fromList(t)).toList());
+    }
+
+    for (final did in otherDids) {
+      try {
+        final urls = await _authService.atprotoClient.fetchDrawbridgeConfig(did);
+        db.cacheDrawbridgeConfig(did, urls);
+      } catch (e) {
+        moatLog('PollingService: Failed to fetch drawbridge config for $did: $e');
+      }
+    }
   }
 
   void dispose() {

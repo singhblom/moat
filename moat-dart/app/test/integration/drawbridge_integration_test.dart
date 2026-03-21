@@ -51,40 +51,6 @@ void main() {
       await channel.sink.close();
     });
 
-    test('ticket_auth with invalid ticket returns error', () async {
-      final channel = IOWebSocketChannel.connect(Uri.parse(_relayUrl));
-      await channel.ready;
-
-      // Try authenticating with a bogus ticket (wrong length)
-      channel.sink.add(jsonEncode({
-        'type': 'ticket_auth',
-        'ticket': 'not-a-valid-ticket',
-      }));
-
-      final msg = await _readOne(channel);
-      expect(msg['type'], 'error');
-
-      await channel.sink.close();
-    });
-
-    test('ticket_auth with 64-char non-registered ticket returns error',
-        () async {
-      final channel = IOWebSocketChannel.connect(Uri.parse(_relayUrl));
-      await channel.ready;
-
-      // 64-char hex ticket that isn't registered
-      final ticket = 'ab' * 32;
-      channel.sink.add(jsonEncode({
-        'type': 'ticket_auth',
-        'ticket': ticket,
-      }));
-
-      final msg = await _readOne(channel);
-      expect(msg['type'], 'error');
-
-      await channel.sink.close();
-    });
-
     test('unauthenticated event_posted returns error', () async {
       final channel = IOWebSocketChannel.connect(Uri.parse(_relayUrl));
       await channel.ready;
@@ -94,6 +60,8 @@ void main() {
         'type': 'event_posted',
         'tag': 'aa' * 16,
         'rkey': 'test-rkey',
+        'payload': 'dGVzdA==',
+        'relay_urls': [],
       }));
 
       final msg = await _readOne(channel);
@@ -102,13 +70,13 @@ void main() {
       await channel.sink.close();
     });
 
-    test('unauthenticated register_ticket returns error', () async {
+    test('unauthenticated watch_tags returns error', () async {
       final channel = IOWebSocketChannel.connect(Uri.parse(_relayUrl));
       await channel.ready;
 
       channel.sink.add(jsonEncode({
-        'type': 'register_ticket',
-        'ticket': 'ab' * 32,
+        'type': 'watch_tags',
+        'tags': ['aa' * 16],
       }));
 
       final msg = await _readOne(channel);
@@ -123,6 +91,21 @@ void main() {
 
       channel.sink.add(jsonEncode({
         'type': 'bogus_message',
+      }));
+
+      final msg = await _readOne(channel);
+      expect(msg['type'], 'error');
+
+      await channel.sink.close();
+    });
+
+    test('ticket_auth is rejected (ticket system removed)', () async {
+      final channel = IOWebSocketChannel.connect(Uri.parse(_relayUrl));
+      await channel.ready;
+
+      channel.sink.add(jsonEncode({
+        'type': 'ticket_auth',
+        'ticket': 'ab' * 32,
       }));
 
       final msg = await _readOne(channel);

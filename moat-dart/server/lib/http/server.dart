@@ -23,7 +23,6 @@ Handler buildRouter({
   required ConversationsService convsService,
   required WatchListService watchListService,
   required PollingService pollingService,
-  String? drawbridgeUrl,
 }) {
   final router = Router();
 
@@ -98,7 +97,6 @@ Handler buildRouter({
         recipientHandle: recipientHandle,
         authService: authService,
         convsService: convsService,
-        drawbridgeUrl: drawbridgeUrl,
       );
 
       moatLog('Server: Conversation ${conversation.groupIdHex} created');

@@ -35,8 +35,12 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 
   /// Initialize flutter_rust_bridge in mock mode.
   /// No libraries for FFI are loaded.
-  static void initMock({required RustLibApi api}) {
-    instance.initMockImpl(api: api);
+  static void initMock({
+    required RustLibApi api,
+  }) {
+    instance.initMockImpl(
+      api: api,
+    );
   }
 
   /// Dispose flutter_rust_bridge
@@ -66,129 +70,93 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => 1480322503;
+  int get rustContentHash => -480607539;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
-        stem: 'rust_lib_moat_flutter',
-        ioDirectory: 'rust/target/release/',
-        webPrefix: 'pkg/',
-      );
+    stem: 'rust_lib_moat_flutter',
+    ioDirectory: '../app/rust/target/release/',
+    webPrefix: 'pkg/',
+  );
 }
 
 abstract class RustLibApi extends BaseApi {
-  Future<WelcomeResultDto> crateApiSimpleMoatSessionHandleAddMember({
-    required MoatSessionHandle that,
-    required List<int> groupId,
-    required List<int> keyBundle,
-    required List<int> newMemberKeyPackage,
-  });
+  Future<WelcomeResultDto> crateApiSimpleMoatSessionHandleAddMember(
+      {required MoatSessionHandle that,
+      required List<int> groupId,
+      required List<int> keyBundle,
+      required List<int> newMemberKeyPackage});
 
-  Future<Uint8List> crateApiSimpleMoatSessionHandleCreateGroup({
-    required MoatSessionHandle that,
-    required String did,
-    required String deviceName,
-    required List<int> keyBundle,
-  });
+  Future<Uint8List> crateApiSimpleMoatSessionHandleCreateGroup(
+      {required MoatSessionHandle that,
+      required String did,
+      required String deviceName,
+      required List<int> keyBundle});
 
-  Future<DecryptResultDto> crateApiSimpleMoatSessionHandleDecryptEvent({
-    required MoatSessionHandle that,
-    required List<int> groupId,
-    required List<int> ciphertext,
-  });
+  Future<DecryptResultDto> crateApiSimpleMoatSessionHandleDecryptEvent(
+      {required MoatSessionHandle that,
+      required List<int> groupId,
+      required List<int> ciphertext});
 
-  Uint8List crateApiSimpleMoatSessionHandleDeviceId({
-    required MoatSessionHandle that,
-  });
+  Uint8List crateApiSimpleMoatSessionHandleDeviceId(
+      {required MoatSessionHandle that});
 
-  Future<EncryptResultDto> crateApiSimpleMoatSessionHandleEncryptEvent({
-    required MoatSessionHandle that,
-    required List<int> groupId,
-    required List<int> keyBundle,
-    required EventDto event,
-  });
+  Future<EncryptResultDto> crateApiSimpleMoatSessionHandleEncryptEvent(
+      {required MoatSessionHandle that,
+      required List<int> groupId,
+      required List<int> keyBundle,
+      required EventDto event});
 
-  Future<Uint8List> crateApiSimpleMoatSessionHandleExportState({
-    required MoatSessionHandle that,
-  });
+  Future<Uint8List> crateApiSimpleMoatSessionHandleExportState(
+      {required MoatSessionHandle that});
 
-  Future<MoatSessionHandle> crateApiSimpleMoatSessionHandleFromState({
-    required List<int> state,
-  });
+  Future<MoatSessionHandle> crateApiSimpleMoatSessionHandleFromState(
+      {required List<int> state});
 
-  Future<KeyPackageResult> crateApiSimpleMoatSessionHandleGenerateKeyPackage({
-    required MoatSessionHandle that,
-    required String did,
-    required String deviceName,
-  });
+  Future<KeyPackageResult> crateApiSimpleMoatSessionHandleGenerateKeyPackage(
+      {required MoatSessionHandle that,
+      required String did,
+      required String deviceName});
 
-  Future<List<String>> crateApiSimpleMoatSessionHandleGetGroupDids({
-    required MoatSessionHandle that,
-    required List<int> groupId,
-  });
+  Future<List<String>> crateApiSimpleMoatSessionHandleGetGroupDids(
+      {required MoatSessionHandle that, required List<int> groupId});
 
-  Future<BigInt?> crateApiSimpleMoatSessionHandleGetGroupEpoch({
-    required MoatSessionHandle that,
-    required List<int> groupId,
-  });
+  Future<BigInt?> crateApiSimpleMoatSessionHandleGetGroupEpoch(
+      {required MoatSessionHandle that, required List<int> groupId});
 
-  bool crateApiSimpleMoatSessionHandleHasPendingChanges({
-    required MoatSessionHandle that,
-  });
+  bool crateApiSimpleMoatSessionHandleHasPendingChanges(
+      {required MoatSessionHandle that});
 
-  bool crateApiSimpleMoatSessionHandleMarkTagSeen({
-    required MoatSessionHandle that,
-    required List<int> tag,
-  });
+  bool crateApiSimpleMoatSessionHandleMarkTagSeen(
+      {required MoatSessionHandle that, required List<int> tag});
 
   MoatSessionHandle crateApiSimpleMoatSessionHandleNewSession();
 
-  List<Uint8List> crateApiSimpleMoatSessionHandlePopulateCandidateTags({
-    required MoatSessionHandle that,
-    required List<int> groupId,
-  });
+  List<Uint8List> crateApiSimpleMoatSessionHandlePopulateCandidateTags(
+      {required MoatSessionHandle that, required List<int> groupId});
 
-  Future<Uint8List> crateApiSimpleMoatSessionHandleProcessWelcome({
-    required MoatSessionHandle that,
-    required List<int> welcomeBytes,
-  });
+  Future<Uint8List> crateApiSimpleMoatSessionHandleProcessWelcome(
+      {required MoatSessionHandle that, required List<int> welcomeBytes});
 
-  EventDto crateApiSimpleCreateDrawbridgeHint({
-    required MoatSessionHandle handle,
-    required List<int> groupId,
-    required String url,
-    required List<int> ticket,
-  });
+  Uint8List crateApiSimpleDeriveNextTag(
+      {required MoatSessionHandle handle,
+      required List<int> groupId,
+      required List<int> keyBundle});
 
-  Uint8List crateApiSimpleDeriveNextTag({
-    required MoatSessionHandle handle,
-    required List<int> groupId,
-    required List<int> keyBundle,
-  });
+  Future<Uint8List> crateApiSimpleEncryptForStealth(
+      {required List<Uint8List> recipientScanPubkeys,
+      required List<int> welcomeBytes});
 
-  Future<Uint8List> crateApiSimpleEncryptForStealth({
-    required List<Uint8List> recipientScanPubkeys,
-    required List<int> welcomeBytes,
-  });
+  ReactionPayloadDto? crateApiSimpleEventDtoReactionPayload(
+      {required EventDto that});
 
-  DrawbridgeHintPayloadDto? crateApiSimpleEventDtoDrawbridgeHintPayload({
-    required EventDto that,
-  });
-
-  ReactionPayloadDto? crateApiSimpleEventDtoReactionPayload({
-    required EventDto that,
-  });
-
-  List<Uint8List> crateApiSimpleGenerateCandidateTags({
-    required MoatSessionHandle handle,
-    required List<int> groupId,
-    required String senderDid,
-    required List<int> senderDeviceId,
-    required BigInt fromCounter,
-    required BigInt count,
-  });
-
-  Uint8List crateApiSimpleGenerateDrawbridgeTicket();
+  List<Uint8List> crateApiSimpleGenerateCandidateTags(
+      {required MoatSessionHandle handle,
+      required List<int> groupId,
+      required String senderDid,
+      required List<int> senderDeviceId,
+      required BigInt fromCounter,
+      required BigInt count});
 
   StealthKeypair crateApiSimpleGenerateStealthKeypair();
 
@@ -196,26 +164,22 @@ abstract class RustLibApi extends BaseApi {
 
   Uint8List crateApiSimplePadToBucket({required List<int> plaintext});
 
-  Future<DrawbridgeChallengeSignature> crateApiSimpleSignDrawbridgeChallenge({
-    required List<int> keyBundle,
-    required List<int> message,
-  });
+  Future<DrawbridgeChallengeSignature> crateApiSimpleSignDrawbridgeChallenge(
+      {required List<int> keyBundle, required List<int> message});
 
-  Uint8List? crateApiSimpleTryDecryptStealth({
-    required List<int> scanPrivkey,
-    required List<int> payload,
-  });
+  Uint8List? crateApiSimpleTryDecryptStealth(
+      {required List<int> scanPrivkey, required List<int> payload});
 
   Uint8List crateApiSimpleUnpad({required List<int> padded});
 
   RustArcIncrementStrongCountFnType
-  get rust_arc_increment_strong_count_MoatSessionHandle;
+      get rust_arc_increment_strong_count_MoatSessionHandle;
 
   RustArcDecrementStrongCountFnType
-  get rust_arc_decrement_strong_count_MoatSessionHandle;
+      get rust_arc_decrement_strong_count_MoatSessionHandle;
 
   CrossPlatformFinalizerArg
-  get rust_arc_decrement_strong_count_MoatSessionHandlePtr;
+      get rust_arc_decrement_strong_count_MoatSessionHandlePtr;
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -227,39 +191,30 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   });
 
   @override
-  Future<WelcomeResultDto> crateApiSimpleMoatSessionHandleAddMember({
-    required MoatSessionHandle that,
-    required List<int> groupId,
-    required List<int> keyBundle,
-    required List<int> newMemberKeyPackage,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-            that,
-            serializer,
-          );
-          sse_encode_list_prim_u_8_loose(groupId, serializer);
-          sse_encode_list_prim_u_8_loose(keyBundle, serializer);
-          sse_encode_list_prim_u_8_loose(newMemberKeyPackage, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 1,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_welcome_result_dto,
-          decodeErrorData: sse_decode_String,
-        ),
-        constMeta: kCrateApiSimpleMoatSessionHandleAddMemberConstMeta,
-        argValues: [that, groupId, keyBundle, newMemberKeyPackage],
-        apiImpl: this,
+  Future<WelcomeResultDto> crateApiSimpleMoatSessionHandleAddMember(
+      {required MoatSessionHandle that,
+      required List<int> groupId,
+      required List<int> keyBundle,
+      required List<int> newMemberKeyPackage}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+            that, serializer);
+        sse_encode_list_prim_u_8_loose(groupId, serializer);
+        sse_encode_list_prim_u_8_loose(keyBundle, serializer);
+        sse_encode_list_prim_u_8_loose(newMemberKeyPackage, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 1, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_welcome_result_dto,
+        decodeErrorData: sse_decode_String,
       ),
-    );
+      constMeta: kCrateApiSimpleMoatSessionHandleAddMemberConstMeta,
+      argValues: [that, groupId, keyBundle, newMemberKeyPackage],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiSimpleMoatSessionHandleAddMemberConstMeta =>
@@ -269,39 +224,30 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<Uint8List> crateApiSimpleMoatSessionHandleCreateGroup({
-    required MoatSessionHandle that,
-    required String did,
-    required String deviceName,
-    required List<int> keyBundle,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-            that,
-            serializer,
-          );
-          sse_encode_String(did, serializer);
-          sse_encode_String(deviceName, serializer);
-          sse_encode_list_prim_u_8_loose(keyBundle, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 2,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_prim_u_8_strict,
-          decodeErrorData: sse_decode_String,
-        ),
-        constMeta: kCrateApiSimpleMoatSessionHandleCreateGroupConstMeta,
-        argValues: [that, did, deviceName, keyBundle],
-        apiImpl: this,
+  Future<Uint8List> crateApiSimpleMoatSessionHandleCreateGroup(
+      {required MoatSessionHandle that,
+      required String did,
+      required String deviceName,
+      required List<int> keyBundle}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+            that, serializer);
+        sse_encode_String(did, serializer);
+        sse_encode_String(deviceName, serializer);
+        sse_encode_list_prim_u_8_loose(keyBundle, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 2, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_prim_u_8_strict,
+        decodeErrorData: sse_decode_String,
       ),
-    );
+      constMeta: kCrateApiSimpleMoatSessionHandleCreateGroupConstMeta,
+      argValues: [that, did, deviceName, keyBundle],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiSimpleMoatSessionHandleCreateGroupConstMeta =>
@@ -311,37 +257,28 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<DecryptResultDto> crateApiSimpleMoatSessionHandleDecryptEvent({
-    required MoatSessionHandle that,
-    required List<int> groupId,
-    required List<int> ciphertext,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-            that,
-            serializer,
-          );
-          sse_encode_list_prim_u_8_loose(groupId, serializer);
-          sse_encode_list_prim_u_8_loose(ciphertext, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 3,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_decrypt_result_dto,
-          decodeErrorData: sse_decode_String,
-        ),
-        constMeta: kCrateApiSimpleMoatSessionHandleDecryptEventConstMeta,
-        argValues: [that, groupId, ciphertext],
-        apiImpl: this,
+  Future<DecryptResultDto> crateApiSimpleMoatSessionHandleDecryptEvent(
+      {required MoatSessionHandle that,
+      required List<int> groupId,
+      required List<int> ciphertext}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+            that, serializer);
+        sse_encode_list_prim_u_8_loose(groupId, serializer);
+        sse_encode_list_prim_u_8_loose(ciphertext, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 3, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_decrypt_result_dto,
+        decodeErrorData: sse_decode_String,
       ),
-    );
+      constMeta: kCrateApiSimpleMoatSessionHandleDecryptEventConstMeta,
+      argValues: [that, groupId, ciphertext],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiSimpleMoatSessionHandleDecryptEventConstMeta =>
@@ -351,28 +288,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Uint8List crateApiSimpleMoatSessionHandleDeviceId({
-    required MoatSessionHandle that,
-  }) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-            that,
-            serializer,
-          );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 4)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_prim_u_8_strict,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiSimpleMoatSessionHandleDeviceIdConstMeta,
-        argValues: [that],
-        apiImpl: this,
+  Uint8List crateApiSimpleMoatSessionHandleDeviceId(
+      {required MoatSessionHandle that}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+            that, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 4)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_prim_u_8_strict,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiSimpleMoatSessionHandleDeviceIdConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiSimpleMoatSessionHandleDeviceIdConstMeta =>
@@ -382,39 +314,30 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<EncryptResultDto> crateApiSimpleMoatSessionHandleEncryptEvent({
-    required MoatSessionHandle that,
-    required List<int> groupId,
-    required List<int> keyBundle,
-    required EventDto event,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-            that,
-            serializer,
-          );
-          sse_encode_list_prim_u_8_loose(groupId, serializer);
-          sse_encode_list_prim_u_8_loose(keyBundle, serializer);
-          sse_encode_box_autoadd_event_dto(event, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 5,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_encrypt_result_dto,
-          decodeErrorData: sse_decode_String,
-        ),
-        constMeta: kCrateApiSimpleMoatSessionHandleEncryptEventConstMeta,
-        argValues: [that, groupId, keyBundle, event],
-        apiImpl: this,
+  Future<EncryptResultDto> crateApiSimpleMoatSessionHandleEncryptEvent(
+      {required MoatSessionHandle that,
+      required List<int> groupId,
+      required List<int> keyBundle,
+      required EventDto event}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+            that, serializer);
+        sse_encode_list_prim_u_8_loose(groupId, serializer);
+        sse_encode_list_prim_u_8_loose(keyBundle, serializer);
+        sse_encode_box_autoadd_event_dto(event, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 5, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_encrypt_result_dto,
+        decodeErrorData: sse_decode_String,
       ),
-    );
+      constMeta: kCrateApiSimpleMoatSessionHandleEncryptEventConstMeta,
+      argValues: [that, groupId, keyBundle, event],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiSimpleMoatSessionHandleEncryptEventConstMeta =>
@@ -424,33 +347,24 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<Uint8List> crateApiSimpleMoatSessionHandleExportState({
-    required MoatSessionHandle that,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-            that,
-            serializer,
-          );
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 6,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_prim_u_8_strict,
-          decodeErrorData: sse_decode_String,
-        ),
-        constMeta: kCrateApiSimpleMoatSessionHandleExportStateConstMeta,
-        argValues: [that],
-        apiImpl: this,
+  Future<Uint8List> crateApiSimpleMoatSessionHandleExportState(
+      {required MoatSessionHandle that}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+            that, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 6, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_prim_u_8_strict,
+        decodeErrorData: sse_decode_String,
       ),
-    );
+      constMeta: kCrateApiSimpleMoatSessionHandleExportStateConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiSimpleMoatSessionHandleExportStateConstMeta =>
@@ -460,31 +374,24 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<MoatSessionHandle> crateApiSimpleMoatSessionHandleFromState({
-    required List<int> state,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_list_prim_u_8_loose(state, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 7,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData:
-              sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle,
-          decodeErrorData: sse_decode_String,
-        ),
-        constMeta: kCrateApiSimpleMoatSessionHandleFromStateConstMeta,
-        argValues: [state],
-        apiImpl: this,
+  Future<MoatSessionHandle> crateApiSimpleMoatSessionHandleFromState(
+      {required List<int> state}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_list_prim_u_8_loose(state, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 7, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData:
+            sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle,
+        decodeErrorData: sse_decode_String,
       ),
-    );
+      constMeta: kCrateApiSimpleMoatSessionHandleFromStateConstMeta,
+      argValues: [state],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiSimpleMoatSessionHandleFromStateConstMeta =>
@@ -494,76 +401,57 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<KeyPackageResult> crateApiSimpleMoatSessionHandleGenerateKeyPackage({
-    required MoatSessionHandle that,
-    required String did,
-    required String deviceName,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-            that,
-            serializer,
-          );
-          sse_encode_String(did, serializer);
-          sse_encode_String(deviceName, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 8,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_key_package_result,
-          decodeErrorData: sse_decode_String,
-        ),
-        constMeta: kCrateApiSimpleMoatSessionHandleGenerateKeyPackageConstMeta,
-        argValues: [that, did, deviceName],
-        apiImpl: this,
+  Future<KeyPackageResult> crateApiSimpleMoatSessionHandleGenerateKeyPackage(
+      {required MoatSessionHandle that,
+      required String did,
+      required String deviceName}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+            that, serializer);
+        sse_encode_String(did, serializer);
+        sse_encode_String(deviceName, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 8, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_key_package_result,
+        decodeErrorData: sse_decode_String,
       ),
-    );
+      constMeta: kCrateApiSimpleMoatSessionHandleGenerateKeyPackageConstMeta,
+      argValues: [that, did, deviceName],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta
-  get kCrateApiSimpleMoatSessionHandleGenerateKeyPackageConstMeta =>
-      const TaskConstMeta(
-        debugName: "MoatSessionHandle_generate_key_package",
-        argNames: ["that", "did", "deviceName"],
-      );
+      get kCrateApiSimpleMoatSessionHandleGenerateKeyPackageConstMeta =>
+          const TaskConstMeta(
+            debugName: "MoatSessionHandle_generate_key_package",
+            argNames: ["that", "did", "deviceName"],
+          );
 
   @override
-  Future<List<String>> crateApiSimpleMoatSessionHandleGetGroupDids({
-    required MoatSessionHandle that,
-    required List<int> groupId,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-            that,
-            serializer,
-          );
-          sse_encode_list_prim_u_8_loose(groupId, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 9,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_String,
-          decodeErrorData: sse_decode_String,
-        ),
-        constMeta: kCrateApiSimpleMoatSessionHandleGetGroupDidsConstMeta,
-        argValues: [that, groupId],
-        apiImpl: this,
+  Future<List<String>> crateApiSimpleMoatSessionHandleGetGroupDids(
+      {required MoatSessionHandle that, required List<int> groupId}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+            that, serializer);
+        sse_encode_list_prim_u_8_loose(groupId, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 9, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_String,
+        decodeErrorData: sse_decode_String,
       ),
-    );
+      constMeta: kCrateApiSimpleMoatSessionHandleGetGroupDidsConstMeta,
+      argValues: [that, groupId],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiSimpleMoatSessionHandleGetGroupDidsConstMeta =>
@@ -573,35 +461,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<BigInt?> crateApiSimpleMoatSessionHandleGetGroupEpoch({
-    required MoatSessionHandle that,
-    required List<int> groupId,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-            that,
-            serializer,
-          );
-          sse_encode_list_prim_u_8_loose(groupId, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 10,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_opt_box_autoadd_u_64,
-          decodeErrorData: sse_decode_String,
-        ),
-        constMeta: kCrateApiSimpleMoatSessionHandleGetGroupEpochConstMeta,
-        argValues: [that, groupId],
-        apiImpl: this,
+  Future<BigInt?> crateApiSimpleMoatSessionHandleGetGroupEpoch(
+      {required MoatSessionHandle that, required List<int> groupId}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+            that, serializer);
+        sse_encode_list_prim_u_8_loose(groupId, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 10, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_opt_box_autoadd_u_64,
+        decodeErrorData: sse_decode_String,
       ),
-    );
+      constMeta: kCrateApiSimpleMoatSessionHandleGetGroupEpochConstMeta,
+      argValues: [that, groupId],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiSimpleMoatSessionHandleGetGroupEpochConstMeta =>
@@ -611,62 +489,51 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  bool crateApiSimpleMoatSessionHandleHasPendingChanges({
-    required MoatSessionHandle that,
-  }) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-            that,
-            serializer,
-          );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 11)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_bool,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiSimpleMoatSessionHandleHasPendingChangesConstMeta,
-        argValues: [that],
-        apiImpl: this,
+  bool crateApiSimpleMoatSessionHandleHasPendingChanges(
+      {required MoatSessionHandle that}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+            that, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 11)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_bool,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiSimpleMoatSessionHandleHasPendingChangesConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta
-  get kCrateApiSimpleMoatSessionHandleHasPendingChangesConstMeta =>
-      const TaskConstMeta(
-        debugName: "MoatSessionHandle_has_pending_changes",
-        argNames: ["that"],
-      );
+      get kCrateApiSimpleMoatSessionHandleHasPendingChangesConstMeta =>
+          const TaskConstMeta(
+            debugName: "MoatSessionHandle_has_pending_changes",
+            argNames: ["that"],
+          );
 
   @override
-  bool crateApiSimpleMoatSessionHandleMarkTagSeen({
-    required MoatSessionHandle that,
-    required List<int> tag,
-  }) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-            that,
-            serializer,
-          );
-          sse_encode_list_prim_u_8_loose(tag, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 12)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_bool,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiSimpleMoatSessionHandleMarkTagSeenConstMeta,
-        argValues: [that, tag],
-        apiImpl: this,
+  bool crateApiSimpleMoatSessionHandleMarkTagSeen(
+      {required MoatSessionHandle that, required List<int> tag}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+            that, serializer);
+        sse_encode_list_prim_u_8_loose(tag, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 12)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_bool,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiSimpleMoatSessionHandleMarkTagSeenConstMeta,
+      argValues: [that, tag],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiSimpleMoatSessionHandleMarkTagSeenConstMeta =>
@@ -677,22 +544,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @override
   MoatSessionHandle crateApiSimpleMoatSessionHandleNewSession() {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 13)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData:
-              sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiSimpleMoatSessionHandleNewSessionConstMeta,
-        argValues: [],
-        apiImpl: this,
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 13)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData:
+            sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiSimpleMoatSessionHandleNewSessionConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiSimpleMoatSessionHandleNewSessionConstMeta =>
@@ -702,70 +567,53 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  List<Uint8List> crateApiSimpleMoatSessionHandlePopulateCandidateTags({
-    required MoatSessionHandle that,
-    required List<int> groupId,
-  }) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-            that,
-            serializer,
-          );
-          sse_encode_list_prim_u_8_loose(groupId, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 14)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_list_prim_u_8_strict,
-          decodeErrorData: sse_decode_String,
-        ),
-        constMeta:
-            kCrateApiSimpleMoatSessionHandlePopulateCandidateTagsConstMeta,
-        argValues: [that, groupId],
-        apiImpl: this,
+  List<Uint8List> crateApiSimpleMoatSessionHandlePopulateCandidateTags(
+      {required MoatSessionHandle that, required List<int> groupId}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+            that, serializer);
+        sse_encode_list_prim_u_8_loose(groupId, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 14)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_list_prim_u_8_strict,
+        decodeErrorData: sse_decode_String,
       ),
-    );
+      constMeta: kCrateApiSimpleMoatSessionHandlePopulateCandidateTagsConstMeta,
+      argValues: [that, groupId],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta
-  get kCrateApiSimpleMoatSessionHandlePopulateCandidateTagsConstMeta =>
-      const TaskConstMeta(
-        debugName: "MoatSessionHandle_populate_candidate_tags",
-        argNames: ["that", "groupId"],
-      );
+      get kCrateApiSimpleMoatSessionHandlePopulateCandidateTagsConstMeta =>
+          const TaskConstMeta(
+            debugName: "MoatSessionHandle_populate_candidate_tags",
+            argNames: ["that", "groupId"],
+          );
 
   @override
-  Future<Uint8List> crateApiSimpleMoatSessionHandleProcessWelcome({
-    required MoatSessionHandle that,
-    required List<int> welcomeBytes,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-            that,
-            serializer,
-          );
-          sse_encode_list_prim_u_8_loose(welcomeBytes, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 15,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_prim_u_8_strict,
-          decodeErrorData: sse_decode_String,
-        ),
-        constMeta: kCrateApiSimpleMoatSessionHandleProcessWelcomeConstMeta,
-        argValues: [that, welcomeBytes],
-        apiImpl: this,
+  Future<Uint8List> crateApiSimpleMoatSessionHandleProcessWelcome(
+      {required MoatSessionHandle that, required List<int> welcomeBytes}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+            that, serializer);
+        sse_encode_list_prim_u_8_loose(welcomeBytes, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 15, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_prim_u_8_strict,
+        decodeErrorData: sse_decode_String,
       ),
-    );
+      constMeta: kCrateApiSimpleMoatSessionHandleProcessWelcomeConstMeta,
+      argValues: [that, welcomeBytes],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiSimpleMoatSessionHandleProcessWelcomeConstMeta =>
@@ -775,69 +623,27 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  EventDto crateApiSimpleCreateDrawbridgeHint({
-    required MoatSessionHandle handle,
-    required List<int> groupId,
-    required String url,
-    required List<int> ticket,
-  }) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-            handle,
-            serializer,
-          );
-          sse_encode_list_prim_u_8_loose(groupId, serializer);
-          sse_encode_String(url, serializer);
-          sse_encode_list_prim_u_8_loose(ticket, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 16)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_event_dto,
-          decodeErrorData: sse_decode_String,
-        ),
-        constMeta: kCrateApiSimpleCreateDrawbridgeHintConstMeta,
-        argValues: [handle, groupId, url, ticket],
-        apiImpl: this,
+  Uint8List crateApiSimpleDeriveNextTag(
+      {required MoatSessionHandle handle,
+      required List<int> groupId,
+      required List<int> keyBundle}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+            handle, serializer);
+        sse_encode_list_prim_u_8_loose(groupId, serializer);
+        sse_encode_list_prim_u_8_loose(keyBundle, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 16)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_prim_u_8_strict,
+        decodeErrorData: sse_decode_String,
       ),
-    );
-  }
-
-  TaskConstMeta get kCrateApiSimpleCreateDrawbridgeHintConstMeta =>
-      const TaskConstMeta(
-        debugName: "create_drawbridge_hint",
-        argNames: ["handle", "groupId", "url", "ticket"],
-      );
-
-  @override
-  Uint8List crateApiSimpleDeriveNextTag({
-    required MoatSessionHandle handle,
-    required List<int> groupId,
-    required List<int> keyBundle,
-  }) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-            handle,
-            serializer,
-          );
-          sse_encode_list_prim_u_8_loose(groupId, serializer);
-          sse_encode_list_prim_u_8_loose(keyBundle, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 17)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_prim_u_8_strict,
-          decodeErrorData: sse_decode_String,
-        ),
-        constMeta: kCrateApiSimpleDeriveNextTagConstMeta,
-        argValues: [handle, groupId, keyBundle],
-        apiImpl: this,
-      ),
-    );
+      constMeta: kCrateApiSimpleDeriveNextTagConstMeta,
+      argValues: [handle, groupId, keyBundle],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiSimpleDeriveNextTagConstMeta =>
@@ -847,35 +653,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<Uint8List> crateApiSimpleEncryptForStealth({
-    required List<Uint8List> recipientScanPubkeys,
-    required List<int> welcomeBytes,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_list_list_prim_u_8_strict(
-            recipientScanPubkeys,
-            serializer,
-          );
-          sse_encode_list_prim_u_8_loose(welcomeBytes, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 18,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_prim_u_8_strict,
-          decodeErrorData: sse_decode_String,
-        ),
-        constMeta: kCrateApiSimpleEncryptForStealthConstMeta,
-        argValues: [recipientScanPubkeys, welcomeBytes],
-        apiImpl: this,
+  Future<Uint8List> crateApiSimpleEncryptForStealth(
+      {required List<Uint8List> recipientScanPubkeys,
+      required List<int> welcomeBytes}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_list_list_prim_u_8_strict(recipientScanPubkeys, serializer);
+        sse_encode_list_prim_u_8_loose(welcomeBytes, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 17, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_prim_u_8_strict,
+        decodeErrorData: sse_decode_String,
       ),
-    );
+      constMeta: kCrateApiSimpleEncryptForStealthConstMeta,
+      argValues: [recipientScanPubkeys, welcomeBytes],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiSimpleEncryptForStealthConstMeta =>
@@ -885,54 +681,22 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  DrawbridgeHintPayloadDto? crateApiSimpleEventDtoDrawbridgeHintPayload({
-    required EventDto that,
-  }) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_box_autoadd_event_dto(that, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 19)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData:
-              sse_decode_opt_box_autoadd_drawbridge_hint_payload_dto,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiSimpleEventDtoDrawbridgeHintPayloadConstMeta,
-        argValues: [that],
-        apiImpl: this,
+  ReactionPayloadDto? crateApiSimpleEventDtoReactionPayload(
+      {required EventDto that}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_box_autoadd_event_dto(that, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 18)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_opt_box_autoadd_reaction_payload_dto,
+        decodeErrorData: null,
       ),
-    );
-  }
-
-  TaskConstMeta get kCrateApiSimpleEventDtoDrawbridgeHintPayloadConstMeta =>
-      const TaskConstMeta(
-        debugName: "event_dto_drawbridge_hint_payload",
-        argNames: ["that"],
-      );
-
-  @override
-  ReactionPayloadDto? crateApiSimpleEventDtoReactionPayload({
-    required EventDto that,
-  }) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_box_autoadd_event_dto(that, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 20)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_opt_box_autoadd_reaction_payload_dto,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiSimpleEventDtoReactionPayloadConstMeta,
-        argValues: [that],
-        apiImpl: this,
-      ),
-    );
+      constMeta: kCrateApiSimpleEventDtoReactionPayloadConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiSimpleEventDtoReactionPayloadConstMeta =>
@@ -942,45 +706,40 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  List<Uint8List> crateApiSimpleGenerateCandidateTags({
-    required MoatSessionHandle handle,
-    required List<int> groupId,
-    required String senderDid,
-    required List<int> senderDeviceId,
-    required BigInt fromCounter,
-    required BigInt count,
-  }) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-            handle,
-            serializer,
-          );
-          sse_encode_list_prim_u_8_loose(groupId, serializer);
-          sse_encode_String(senderDid, serializer);
-          sse_encode_list_prim_u_8_loose(senderDeviceId, serializer);
-          sse_encode_u_64(fromCounter, serializer);
-          sse_encode_u_64(count, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 21)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_list_prim_u_8_strict,
-          decodeErrorData: sse_decode_String,
-        ),
-        constMeta: kCrateApiSimpleGenerateCandidateTagsConstMeta,
-        argValues: [
-          handle,
-          groupId,
-          senderDid,
-          senderDeviceId,
-          fromCounter,
-          count,
-        ],
-        apiImpl: this,
+  List<Uint8List> crateApiSimpleGenerateCandidateTags(
+      {required MoatSessionHandle handle,
+      required List<int> groupId,
+      required String senderDid,
+      required List<int> senderDeviceId,
+      required BigInt fromCounter,
+      required BigInt count}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+            handle, serializer);
+        sse_encode_list_prim_u_8_loose(groupId, serializer);
+        sse_encode_String(senderDid, serializer);
+        sse_encode_list_prim_u_8_loose(senderDeviceId, serializer);
+        sse_encode_u_64(fromCounter, serializer);
+        sse_encode_u_64(count, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 19)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_list_prim_u_8_strict,
+        decodeErrorData: sse_decode_String,
       ),
-    );
+      constMeta: kCrateApiSimpleGenerateCandidateTagsConstMeta,
+      argValues: [
+        handle,
+        groupId,
+        senderDid,
+        senderDeviceId,
+        fromCounter,
+        count
+      ],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiSimpleGenerateCandidateTagsConstMeta =>
@@ -992,134 +751,98 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           "senderDid",
           "senderDeviceId",
           "fromCounter",
-          "count",
+          "count"
         ],
       );
 
   @override
-  Uint8List crateApiSimpleGenerateDrawbridgeTicket() {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 22)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_prim_u_8_strict,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiSimpleGenerateDrawbridgeTicketConstMeta,
-        argValues: [],
-        apiImpl: this,
+  StealthKeypair crateApiSimpleGenerateStealthKeypair() {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 20)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_stealth_keypair,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiSimpleGenerateStealthKeypairConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiSimpleGenerateDrawbridgeTicketConstMeta =>
+  TaskConstMeta get kCrateApiSimpleGenerateStealthKeypairConstMeta =>
       const TaskConstMeta(
-        debugName: "generate_drawbridge_ticket",
+        debugName: "generate_stealth_keypair",
         argNames: [],
       );
 
   @override
-  StealthKeypair crateApiSimpleGenerateStealthKeypair() {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 23)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_stealth_keypair,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiSimpleGenerateStealthKeypairConstMeta,
-        argValues: [],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta get kCrateApiSimpleGenerateStealthKeypairConstMeta =>
-      const TaskConstMeta(debugName: "generate_stealth_keypair", argNames: []);
-
-  @override
   Future<void> crateApiSimpleInitApp() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 24,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_unit,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiSimpleInitAppConstMeta,
-        argValues: [],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 21, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiSimpleInitAppConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiSimpleInitAppConstMeta =>
-      const TaskConstMeta(debugName: "init_app", argNames: []);
+  TaskConstMeta get kCrateApiSimpleInitAppConstMeta => const TaskConstMeta(
+        debugName: "init_app",
+        argNames: [],
+      );
 
   @override
   Uint8List crateApiSimplePadToBucket({required List<int> plaintext}) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_list_prim_u_8_loose(plaintext, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 25)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_prim_u_8_strict,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiSimplePadToBucketConstMeta,
-        argValues: [plaintext],
-        apiImpl: this,
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_list_prim_u_8_loose(plaintext, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 22)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_prim_u_8_strict,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiSimplePadToBucketConstMeta,
+      argValues: [plaintext],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiSimplePadToBucketConstMeta =>
-      const TaskConstMeta(debugName: "pad_to_bucket", argNames: ["plaintext"]);
+  TaskConstMeta get kCrateApiSimplePadToBucketConstMeta => const TaskConstMeta(
+        debugName: "pad_to_bucket",
+        argNames: ["plaintext"],
+      );
 
   @override
-  Future<DrawbridgeChallengeSignature> crateApiSimpleSignDrawbridgeChallenge({
-    required List<int> keyBundle,
-    required List<int> message,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_list_prim_u_8_loose(keyBundle, serializer);
-          sse_encode_list_prim_u_8_loose(message, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 26,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_drawbridge_challenge_signature,
-          decodeErrorData: sse_decode_String,
-        ),
-        constMeta: kCrateApiSimpleSignDrawbridgeChallengeConstMeta,
-        argValues: [keyBundle, message],
-        apiImpl: this,
+  Future<DrawbridgeChallengeSignature> crateApiSimpleSignDrawbridgeChallenge(
+      {required List<int> keyBundle, required List<int> message}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_list_prim_u_8_loose(keyBundle, serializer);
+        sse_encode_list_prim_u_8_loose(message, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 23, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_drawbridge_challenge_signature,
+        decodeErrorData: sse_decode_String,
       ),
-    );
+      constMeta: kCrateApiSimpleSignDrawbridgeChallengeConstMeta,
+      argValues: [keyBundle, message],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiSimpleSignDrawbridgeChallengeConstMeta =>
@@ -1129,27 +852,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Uint8List? crateApiSimpleTryDecryptStealth({
-    required List<int> scanPrivkey,
-    required List<int> payload,
-  }) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_list_prim_u_8_loose(scanPrivkey, serializer);
-          sse_encode_list_prim_u_8_loose(payload, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 27)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_opt_list_prim_u_8_strict,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiSimpleTryDecryptStealthConstMeta,
-        argValues: [scanPrivkey, payload],
-        apiImpl: this,
+  Uint8List? crateApiSimpleTryDecryptStealth(
+      {required List<int> scanPrivkey, required List<int> payload}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_list_prim_u_8_loose(scanPrivkey, serializer);
+        sse_encode_list_prim_u_8_loose(payload, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 24)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_opt_list_prim_u_8_strict,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiSimpleTryDecryptStealthConstMeta,
+      argValues: [scanPrivkey, payload],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiSimpleTryDecryptStealthConstMeta =>
@@ -1160,58 +879,55 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @override
   Uint8List crateApiSimpleUnpad({required List<int> padded}) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_list_prim_u_8_loose(padded, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 28)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_prim_u_8_strict,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiSimpleUnpadConstMeta,
-        argValues: [padded],
-        apiImpl: this,
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_list_prim_u_8_loose(padded, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 25)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_prim_u_8_strict,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiSimpleUnpadConstMeta,
+      argValues: [padded],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiSimpleUnpadConstMeta =>
-      const TaskConstMeta(debugName: "unpad", argNames: ["padded"]);
+  TaskConstMeta get kCrateApiSimpleUnpadConstMeta => const TaskConstMeta(
+        debugName: "unpad",
+        argNames: ["padded"],
+      );
 
   RustArcIncrementStrongCountFnType
-  get rust_arc_increment_strong_count_MoatSessionHandle => wire
-      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle;
+      get rust_arc_increment_strong_count_MoatSessionHandle => wire
+          .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle;
 
   RustArcDecrementStrongCountFnType
-  get rust_arc_decrement_strong_count_MoatSessionHandle => wire
-      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle;
+      get rust_arc_decrement_strong_count_MoatSessionHandle => wire
+          .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle;
 
   @protected
   MoatSessionHandle
-  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-    dynamic raw,
-  ) {
+      dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return MoatSessionHandleImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
 
   @protected
   MoatSessionHandle
-  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-    dynamic raw,
-  ) {
+      dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return MoatSessionHandleImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
 
   @protected
   MoatSessionHandle
-  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-    dynamic raw,
-  ) {
+      dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return MoatSessionHandleImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
@@ -1226,14 +942,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   bool dco_decode_bool(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as bool;
-  }
-
-  @protected
-  DrawbridgeHintPayloadDto dco_decode_box_autoadd_drawbridge_hint_payload_dto(
-    dynamic raw,
-  ) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return dco_decode_drawbridge_hint_payload_dto(raw);
   }
 
   @protected
@@ -1276,8 +984,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   DrawbridgeChallengeSignature dco_decode_drawbridge_challenge_signature(
-    dynamic raw,
-  ) {
+      dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
     if (arr.length != 2)
@@ -1285,19 +992,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return DrawbridgeChallengeSignature(
       signature: dco_decode_list_prim_u_8_strict(arr[0]),
       publicKey: dco_decode_list_prim_u_8_strict(arr[1]),
-    );
-  }
-
-  @protected
-  DrawbridgeHintPayloadDto dco_decode_drawbridge_hint_payload_dto(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
-    return DrawbridgeHintPayloadDto(
-      url: dco_decode_String(arr[0]),
-      deviceId: dco_decode_list_prim_u_8_strict(arr[1]),
-      ticket: dco_decode_list_prim_u_8_strict(arr[2]),
     );
   }
 
@@ -1379,18 +1073,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  DrawbridgeHintPayloadDto?
-  dco_decode_opt_box_autoadd_drawbridge_hint_payload_dto(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return raw == null
-        ? null
-        : dco_decode_box_autoadd_drawbridge_hint_payload_dto(raw);
-  }
-
-  @protected
   ReactionPayloadDto? dco_decode_opt_box_autoadd_reaction_payload_dto(
-    dynamic raw,
-  ) {
+      dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null
         ? null
@@ -1491,38 +1175,29 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   MoatSessionHandle
-  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-    SseDeserializer deserializer,
-  ) {
+      sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return MoatSessionHandleImpl.frbInternalSseDecode(
-      sse_decode_usize(deserializer),
-      sse_decode_i_32(deserializer),
-    );
+        sse_decode_usize(deserializer), sse_decode_i_32(deserializer));
   }
 
   @protected
   MoatSessionHandle
-  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-    SseDeserializer deserializer,
-  ) {
+      sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return MoatSessionHandleImpl.frbInternalSseDecode(
-      sse_decode_usize(deserializer),
-      sse_decode_i_32(deserializer),
-    );
+        sse_decode_usize(deserializer), sse_decode_i_32(deserializer));
   }
 
   @protected
   MoatSessionHandle
-  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-    SseDeserializer deserializer,
-  ) {
+      sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return MoatSessionHandleImpl.frbInternalSseDecode(
-      sse_decode_usize(deserializer),
-      sse_decode_i_32(deserializer),
-    );
+        sse_decode_usize(deserializer), sse_decode_i_32(deserializer));
   }
 
   @protected
@@ -1539,14 +1214,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  DrawbridgeHintPayloadDto sse_decode_box_autoadd_drawbridge_hint_payload_dto(
-    SseDeserializer deserializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    return (sse_decode_drawbridge_hint_payload_dto(deserializer));
-  }
-
-  @protected
   EventDto sse_decode_box_autoadd_event_dto(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_event_dto(deserializer));
@@ -1554,16 +1221,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   ReactionPayloadDto sse_decode_box_autoadd_reaction_payload_dto(
-    SseDeserializer deserializer,
-  ) {
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_reaction_payload_dto(deserializer));
   }
 
   @protected
   SenderInfoDto sse_decode_box_autoadd_sender_info_dto(
-    SseDeserializer deserializer,
-  ) {
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_sender_info_dto(deserializer));
   }
@@ -1582,39 +1247,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_sender = sse_decode_opt_box_autoadd_sender_info_dto(deserializer);
     var var_warnings = sse_decode_list_String(deserializer);
     return DecryptResultDto(
-      newGroupState: var_newGroupState,
-      event: var_event,
-      sender: var_sender,
-      warnings: var_warnings,
-    );
+        newGroupState: var_newGroupState,
+        event: var_event,
+        sender: var_sender,
+        warnings: var_warnings);
   }
 
   @protected
   DrawbridgeChallengeSignature sse_decode_drawbridge_challenge_signature(
-    SseDeserializer deserializer,
-  ) {
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_signature = sse_decode_list_prim_u_8_strict(deserializer);
     var var_publicKey = sse_decode_list_prim_u_8_strict(deserializer);
     return DrawbridgeChallengeSignature(
-      signature: var_signature,
-      publicKey: var_publicKey,
-    );
-  }
-
-  @protected
-  DrawbridgeHintPayloadDto sse_decode_drawbridge_hint_payload_dto(
-    SseDeserializer deserializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    var var_url = sse_decode_String(deserializer);
-    var var_deviceId = sse_decode_list_prim_u_8_strict(deserializer);
-    var var_ticket = sse_decode_list_prim_u_8_strict(deserializer);
-    return DrawbridgeHintPayloadDto(
-      url: var_url,
-      deviceId: var_deviceId,
-      ticket: var_ticket,
-    );
+        signature: var_signature, publicKey: var_publicKey);
   }
 
   @protected
@@ -1625,11 +1271,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_ciphertext = sse_decode_list_prim_u_8_strict(deserializer);
     var var_messageId = sse_decode_opt_list_prim_u_8_strict(deserializer);
     return EncryptResultDto(
-      newGroupState: var_newGroupState,
-      tag: var_tag,
-      ciphertext: var_ciphertext,
-      messageId: var_messageId,
-    );
+        newGroupState: var_newGroupState,
+        tag: var_tag,
+        ciphertext: var_ciphertext,
+        messageId: var_messageId);
   }
 
   @protected
@@ -1641,12 +1286,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_payload = sse_decode_list_prim_u_8_strict(deserializer);
     var var_messageId = sse_decode_opt_list_prim_u_8_strict(deserializer);
     return EventDto(
-      kind: var_kind,
-      groupId: var_groupId,
-      epoch: var_epoch,
-      payload: var_payload,
-      messageId: var_messageId,
-    );
+        kind: var_kind,
+        groupId: var_groupId,
+        epoch: var_epoch,
+        payload: var_payload,
+        messageId: var_messageId);
   }
 
   @protected
@@ -1668,9 +1312,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_keyPackage = sse_decode_list_prim_u_8_strict(deserializer);
     var var_keyBundle = sse_decode_list_prim_u_8_strict(deserializer);
     return KeyPackageResult(
-      keyPackage: var_keyPackage,
-      keyBundle: var_keyBundle,
-    );
+        keyPackage: var_keyPackage, keyBundle: var_keyBundle);
   }
 
   @protected
@@ -1687,8 +1329,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   List<Uint8List> sse_decode_list_list_prim_u_8_strict(
-    SseDeserializer deserializer,
-  ) {
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     var len_ = sse_decode_i_32(deserializer);
@@ -1714,23 +1355,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  DrawbridgeHintPayloadDto?
-  sse_decode_opt_box_autoadd_drawbridge_hint_payload_dto(
-    SseDeserializer deserializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-
-    if (sse_decode_bool(deserializer)) {
-      return (sse_decode_box_autoadd_drawbridge_hint_payload_dto(deserializer));
-    } else {
-      return null;
-    }
-  }
-
-  @protected
   ReactionPayloadDto? sse_decode_opt_box_autoadd_reaction_payload_dto(
-    SseDeserializer deserializer,
-  ) {
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     if (sse_decode_bool(deserializer)) {
@@ -1742,8 +1368,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   SenderInfoDto? sse_decode_opt_box_autoadd_sender_info_dto(
-    SseDeserializer deserializer,
-  ) {
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     if (sse_decode_bool(deserializer)) {
@@ -1777,15 +1402,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   ReactionPayloadDto sse_decode_reaction_payload_dto(
-    SseDeserializer deserializer,
-  ) {
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_emoji = sse_decode_String(deserializer);
     var var_targetMessageId = sse_decode_list_prim_u_8_strict(deserializer);
     return ReactionPayloadDto(
-      emoji: var_emoji,
-      targetMessageId: var_targetMessageId,
-    );
+        emoji: var_emoji, targetMessageId: var_targetMessageId);
   }
 
   @protected
@@ -1835,50 +1457,40 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_commit = sse_decode_list_prim_u_8_strict(deserializer);
     var var_groupId = sse_decode_list_prim_u_8_strict(deserializer);
     return WelcomeResultDto(
-      newGroupState: var_newGroupState,
-      welcome: var_welcome,
-      commit: var_commit,
-      groupId: var_groupId,
-    );
+        newGroupState: var_newGroupState,
+        welcome: var_welcome,
+        commit: var_commit,
+        groupId: var_groupId);
   }
 
   @protected
   void
-  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-    MoatSessionHandle self,
-    SseSerializer serializer,
-  ) {
+      sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          MoatSessionHandle self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
-      (self as MoatSessionHandleImpl).frbInternalSseEncode(move: true),
-      serializer,
-    );
+        (self as MoatSessionHandleImpl).frbInternalSseEncode(move: true),
+        serializer);
   }
 
   @protected
   void
-  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-    MoatSessionHandle self,
-    SseSerializer serializer,
-  ) {
+      sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          MoatSessionHandle self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
-      (self as MoatSessionHandleImpl).frbInternalSseEncode(move: false),
-      serializer,
-    );
+        (self as MoatSessionHandleImpl).frbInternalSseEncode(move: false),
+        serializer);
   }
 
   @protected
   void
-  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-    MoatSessionHandle self,
-    SseSerializer serializer,
-  ) {
+      sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          MoatSessionHandle self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
-      (self as MoatSessionHandleImpl).frbInternalSseEncode(move: null),
-      serializer,
-    );
+        (self as MoatSessionHandleImpl).frbInternalSseEncode(move: null),
+        serializer);
   }
 
   @protected
@@ -1894,37 +1506,22 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_box_autoadd_drawbridge_hint_payload_dto(
-    DrawbridgeHintPayloadDto self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_drawbridge_hint_payload_dto(self, serializer);
-  }
-
-  @protected
   void sse_encode_box_autoadd_event_dto(
-    EventDto self,
-    SseSerializer serializer,
-  ) {
+      EventDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_event_dto(self, serializer);
   }
 
   @protected
   void sse_encode_box_autoadd_reaction_payload_dto(
-    ReactionPayloadDto self,
-    SseSerializer serializer,
-  ) {
+      ReactionPayloadDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_reaction_payload_dto(self, serializer);
   }
 
   @protected
   void sse_encode_box_autoadd_sender_info_dto(
-    SenderInfoDto self,
-    SseSerializer serializer,
-  ) {
+      SenderInfoDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_sender_info_dto(self, serializer);
   }
@@ -1937,9 +1534,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_decrypt_result_dto(
-    DecryptResultDto self,
-    SseSerializer serializer,
-  ) {
+      DecryptResultDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_prim_u_8_strict(self.newGroupState, serializer);
     sse_encode_event_dto(self.event, serializer);
@@ -1949,30 +1544,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_drawbridge_challenge_signature(
-    DrawbridgeChallengeSignature self,
-    SseSerializer serializer,
-  ) {
+      DrawbridgeChallengeSignature self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_prim_u_8_strict(self.signature, serializer);
     sse_encode_list_prim_u_8_strict(self.publicKey, serializer);
   }
 
   @protected
-  void sse_encode_drawbridge_hint_payload_dto(
-    DrawbridgeHintPayloadDto self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_String(self.url, serializer);
-    sse_encode_list_prim_u_8_strict(self.deviceId, serializer);
-    sse_encode_list_prim_u_8_strict(self.ticket, serializer);
-  }
-
-  @protected
   void sse_encode_encrypt_result_dto(
-    EncryptResultDto self,
-    SseSerializer serializer,
-  ) {
+      EncryptResultDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_prim_u_8_strict(self.newGroupState, serializer);
     sse_encode_list_prim_u_8_strict(self.tag, serializer);
@@ -2004,9 +1584,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_key_package_result(
-    KeyPackageResult self,
-    SseSerializer serializer,
-  ) {
+      KeyPackageResult self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_prim_u_8_strict(self.keyPackage, serializer);
     sse_encode_list_prim_u_8_strict(self.keyBundle, serializer);
@@ -2023,9 +1601,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_list_list_prim_u_8_strict(
-    List<Uint8List> self,
-    SseSerializer serializer,
-  ) {
+      List<Uint8List> self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
@@ -2035,44 +1611,24 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_list_prim_u_8_loose(
-    List<int> self,
-    SseSerializer serializer,
-  ) {
+      List<int> self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
-    serializer.buffer.putUint8List(
-      self is Uint8List ? self : Uint8List.fromList(self),
-    );
+    serializer.buffer
+        .putUint8List(self is Uint8List ? self : Uint8List.fromList(self));
   }
 
   @protected
   void sse_encode_list_prim_u_8_strict(
-    Uint8List self,
-    SseSerializer serializer,
-  ) {
+      Uint8List self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     serializer.buffer.putUint8List(self);
   }
 
   @protected
-  void sse_encode_opt_box_autoadd_drawbridge_hint_payload_dto(
-    DrawbridgeHintPayloadDto? self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-
-    sse_encode_bool(self != null, serializer);
-    if (self != null) {
-      sse_encode_box_autoadd_drawbridge_hint_payload_dto(self, serializer);
-    }
-  }
-
-  @protected
   void sse_encode_opt_box_autoadd_reaction_payload_dto(
-    ReactionPayloadDto? self,
-    SseSerializer serializer,
-  ) {
+      ReactionPayloadDto? self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     sse_encode_bool(self != null, serializer);
@@ -2083,9 +1639,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_opt_box_autoadd_sender_info_dto(
-    SenderInfoDto? self,
-    SseSerializer serializer,
-  ) {
+      SenderInfoDto? self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     sse_encode_bool(self != null, serializer);
@@ -2106,9 +1660,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_opt_list_prim_u_8_strict(
-    Uint8List? self,
-    SseSerializer serializer,
-  ) {
+      Uint8List? self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     sse_encode_bool(self != null, serializer);
@@ -2119,9 +1671,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_reaction_payload_dto(
-    ReactionPayloadDto self,
-    SseSerializer serializer,
-  ) {
+      ReactionPayloadDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.emoji, serializer);
     sse_encode_list_prim_u_8_strict(self.targetMessageId, serializer);
@@ -2129,9 +1679,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_sender_info_dto(
-    SenderInfoDto self,
-    SseSerializer serializer,
-  ) {
+      SenderInfoDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.did, serializer);
     sse_encode_String(self.deviceName, serializer);
@@ -2139,9 +1687,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_stealth_keypair(
-    StealthKeypair self,
-    SseSerializer serializer,
-  ) {
+      StealthKeypair self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_prim_u_8_strict(self.privateKey, serializer);
     sse_encode_list_prim_u_8_strict(self.publicKey, serializer);
@@ -2172,9 +1718,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_welcome_result_dto(
-    WelcomeResultDto self,
-    SseSerializer serializer,
-  ) {
+      WelcomeResultDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_prim_u_8_strict(self.newGroupState, serializer);
     sse_encode_list_prim_u_8_strict(self.welcome, serializer);
@@ -2187,13 +1731,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 class MoatSessionHandleImpl extends RustOpaque implements MoatSessionHandle {
   // Not to be used by end users
   MoatSessionHandleImpl.frbInternalDcoDecode(List<dynamic> wire)
-    : super.frbInternalDcoDecode(wire, _kStaticData);
+      : super.frbInternalDcoDecode(wire, _kStaticData);
 
   // Not to be used by end users
   MoatSessionHandleImpl.frbInternalSseDecode(
-    BigInt ptr,
-    int externalSizeOnNative,
-  ) : super.frbInternalSseDecode(ptr, externalSizeOnNative, _kStaticData);
+      BigInt ptr, int externalSizeOnNative)
+      : super.frbInternalSseDecode(ptr, externalSizeOnNative, _kStaticData);
 
   static final _kStaticData = RustArcStaticData(
     rustArcIncrementStrongCount:
@@ -2201,93 +1744,76 @@ class MoatSessionHandleImpl extends RustOpaque implements MoatSessionHandle {
     rustArcDecrementStrongCount:
         RustLib.instance.api.rust_arc_decrement_strong_count_MoatSessionHandle,
     rustArcDecrementStrongCountPtr: RustLib
-        .instance
-        .api
-        .rust_arc_decrement_strong_count_MoatSessionHandlePtr,
+        .instance.api.rust_arc_decrement_strong_count_MoatSessionHandlePtr,
   );
 
   /// Add a member to a group. Returns welcome result.
-  Future<WelcomeResultDto> addMember({
-    required List<int> groupId,
-    required List<int> keyBundle,
-    required List<int> newMemberKeyPackage,
-  }) => RustLib.instance.api.crateApiSimpleMoatSessionHandleAddMember(
-    that: this,
-    groupId: groupId,
-    keyBundle: keyBundle,
-    newMemberKeyPackage: newMemberKeyPackage,
-  );
+  Future<WelcomeResultDto> addMember(
+          {required List<int> groupId,
+          required List<int> keyBundle,
+          required List<int> newMemberKeyPackage}) =>
+      RustLib.instance.api.crateApiSimpleMoatSessionHandleAddMember(
+          that: this,
+          groupId: groupId,
+          keyBundle: keyBundle,
+          newMemberKeyPackage: newMemberKeyPackage);
 
   /// Create a new MLS group with DID and device name. Returns the group ID.
-  Future<Uint8List> createGroup({
-    required String did,
-    required String deviceName,
-    required List<int> keyBundle,
-  }) => RustLib.instance.api.crateApiSimpleMoatSessionHandleCreateGroup(
-    that: this,
-    did: did,
-    deviceName: deviceName,
-    keyBundle: keyBundle,
-  );
+  Future<Uint8List> createGroup(
+          {required String did,
+          required String deviceName,
+          required List<int> keyBundle}) =>
+      RustLib.instance.api.crateApiSimpleMoatSessionHandleCreateGroup(
+          that: this, did: did, deviceName: deviceName, keyBundle: keyBundle);
 
   /// Decrypt a ciphertext for a group. Returns decrypt result with any warnings.
-  Future<DecryptResultDto> decryptEvent({
-    required List<int> groupId,
-    required List<int> ciphertext,
-  }) => RustLib.instance.api.crateApiSimpleMoatSessionHandleDecryptEvent(
-    that: this,
-    groupId: groupId,
-    ciphertext: ciphertext,
-  );
+  Future<DecryptResultDto> decryptEvent(
+          {required List<int> groupId, required List<int> ciphertext}) =>
+      RustLib.instance.api.crateApiSimpleMoatSessionHandleDecryptEvent(
+          that: this, groupId: groupId, ciphertext: ciphertext);
 
   /// Get the 16-byte device ID.
   Uint8List deviceId() =>
-      RustLib.instance.api.crateApiSimpleMoatSessionHandleDeviceId(that: this);
+      RustLib.instance.api.crateApiSimpleMoatSessionHandleDeviceId(
+        that: this,
+      );
 
   /// Encrypt an event for a group. Returns encrypt result.
-  Future<EncryptResultDto> encryptEvent({
-    required List<int> groupId,
-    required List<int> keyBundle,
-    required EventDto event,
-  }) => RustLib.instance.api.crateApiSimpleMoatSessionHandleEncryptEvent(
-    that: this,
-    groupId: groupId,
-    keyBundle: keyBundle,
-    event: event,
-  );
+  Future<EncryptResultDto> encryptEvent(
+          {required List<int> groupId,
+          required List<int> keyBundle,
+          required EventDto event}) =>
+      RustLib.instance.api.crateApiSimpleMoatSessionHandleEncryptEvent(
+          that: this, groupId: groupId, keyBundle: keyBundle, event: event);
 
   /// Export the full session state as bytes for persistence.
-  Future<Uint8List> exportState() => RustLib.instance.api
-      .crateApiSimpleMoatSessionHandleExportState(that: this);
+  Future<Uint8List> exportState() =>
+      RustLib.instance.api.crateApiSimpleMoatSessionHandleExportState(
+        that: this,
+      );
 
   /// Generate a new key package with DID and device name.
   /// Returns (key_package_bytes, key_bundle_bytes).
-  Future<KeyPackageResult> generateKeyPackage({
-    required String did,
-    required String deviceName,
-  }) => RustLib.instance.api.crateApiSimpleMoatSessionHandleGenerateKeyPackage(
-    that: this,
-    did: did,
-    deviceName: deviceName,
-  );
+  Future<KeyPackageResult> generateKeyPackage(
+          {required String did, required String deviceName}) =>
+      RustLib.instance.api.crateApiSimpleMoatSessionHandleGenerateKeyPackage(
+          that: this, did: did, deviceName: deviceName);
 
   /// Get the DIDs of all members in a group (deduplicated).
   Future<List<String>> getGroupDids({required List<int> groupId}) =>
       RustLib.instance.api.crateApiSimpleMoatSessionHandleGetGroupDids(
-        that: this,
-        groupId: groupId,
-      );
+          that: this, groupId: groupId);
 
   /// Get the current epoch of a group. Returns null if group doesn't exist.
   Future<BigInt?> getGroupEpoch({required List<int> groupId}) =>
       RustLib.instance.api.crateApiSimpleMoatSessionHandleGetGroupEpoch(
-        that: this,
-        groupId: groupId,
-      );
+          that: this, groupId: groupId);
 
   /// Check if there are unsaved changes.
-  bool hasPendingChanges() => RustLib.instance.api
-      .crateApiSimpleMoatSessionHandleHasPendingChanges(that: this);
+  bool hasPendingChanges() =>
+      RustLib.instance.api.crateApiSimpleMoatSessionHandleHasPendingChanges(
+        that: this,
+      );
 
   /// Mark a tag as seen, advancing the seen counter for that sender.
   ///
@@ -2301,14 +1827,10 @@ class MoatSessionHandleImpl extends RustOpaque implements MoatSessionHandle {
   /// Returns a flat list of candidate tags for recipient scanning.
   List<Uint8List> populateCandidateTags({required List<int> groupId}) =>
       RustLib.instance.api.crateApiSimpleMoatSessionHandlePopulateCandidateTags(
-        that: this,
-        groupId: groupId,
-      );
+          that: this, groupId: groupId);
 
   /// Process a welcome message to join a group. Returns the group ID.
   Future<Uint8List> processWelcome({required List<int> welcomeBytes}) =>
       RustLib.instance.api.crateApiSimpleMoatSessionHandleProcessWelcome(
-        that: this,
-        welcomeBytes: welcomeBytes,
-      );
+          that: this, welcomeBytes: welcomeBytes);
 }

@@ -27,7 +27,6 @@ void main() {
 
       db.disconnectAll();
       expect(db.isOwnConnected, false);
-      expect(db.partnerConnectionCount, 0);
 
       // Re-init after disconnect (simulates app resume)
       db.init(
@@ -37,22 +36,22 @@ void main() {
       expect(db.isOwnConnected, false);
     });
 
-    test('reset clears all state including tickets', () {
+    test('reset clears all state including tags and config cache', () {
       db.init(
         did: 'did:plc:alice',
         keyBundle: Uint8List.fromList(List.filled(32, 1)),
       );
-      db.registerTicket('group1', 'ticket1');
-      db.registerTicket('group2', 'ticket2');
+      db.watchTags([Uint8List.fromList([1, 2, 3])]);
+      db.cacheDrawbridgeConfig('did:plc:bob', ['wss://relay.example.com']);
 
       db.reset();
       expect(db.isOwnConnected, false);
-      expect(db.partnerConnectionCount, 0);
+      expect(db.relayUrlsForParticipants(['did:plc:bob']), isEmpty);
     });
 
     test('onNewEvent callback can be set and cleared', () {
       var callCount = 0;
-      db.onNewEvent = () => callCount++;
+      db.onNewEvent = (_) => callCount++;
 
       // Callback is set but won't fire without a real WebSocket
       expect(db.onNewEvent, isNotNull);
@@ -63,11 +62,12 @@ void main() {
       expect(db.onNewEvent, isNotNull);
     });
 
-    test('registerTicket before connect is safe and idempotent', () {
-      db.registerTicket('group1', 'ticket_aaa');
-      db.registerTicket('group1', 'ticket_bbb'); // override
-      db.registerTicket('group2', 'ticket_ccc');
-      // No crash = pass; tickets are queued for when connection is established
+    test('watchTags before connect stores tags for later', () {
+      db.watchTags([
+        Uint8List.fromList([1, 2, 3]),
+        Uint8List.fromList([4, 5, 6]),
+      ]);
+      // No crash = pass; tags are queued for when connection is established
     });
 
     test('notifyEventPosted is no-op when not connected', () {
@@ -76,67 +76,12 @@ void main() {
         keyBundle: Uint8List.fromList(List.filled(32, 1)),
       );
       // Should not throw — silently ignored
-      db.notifyEventPosted(Uint8List.fromList([1, 2, 3]), 'rkey123');
-    });
-
-    test('reconnectPartners with empty list is no-op', () async {
-      db.init(
-        did: 'did:plc:alice',
-        keyBundle: Uint8List.fromList(List.filled(32, 1)),
+      db.notifyEventPosted(
+        tag: Uint8List.fromList([1, 2, 3]),
+        rkey: 'rkey123',
+        payload: Uint8List.fromList([4, 5, 6]),
+        relayUrls: ['wss://relay.example.com'],
       );
-      await db.reconnectPartners([]);
-      expect(db.partnerConnectionCount, 0);
-    });
-
-    test('reconnectPartners after dispose is no-op', () async {
-      db.init(
-        did: 'did:plc:alice',
-        keyBundle: Uint8List.fromList(List.filled(32, 1)),
-      );
-      db.disconnectAll(); // sets _disposed = true
-      await db.reconnectPartners([
-        (
-          url: 'wss://relay.example.com/ws',
-          ticketHex: 'ab' * 32,
-          tags: <Uint8List>[],
-        ),
-      ]);
-      // Should be skipped because disposed
-      expect(db.partnerConnectionCount, 0);
-    });
-  });
-
-  group('Reconnect and resilience', () {
-    test('disconnectAll cancels pending reconnect timer', () {
-      db.init(
-        did: 'did:plc:alice',
-        keyBundle: Uint8List.fromList(List.filled(32, 1)),
-      );
-
-      // disconnectAll sets _disposed = true, which prevents reconnect
-      db.disconnectAll();
-
-      // Re-init should work cleanly (no stale timer firing)
-      db.init(
-        did: 'did:plc:alice',
-        keyBundle: Uint8List.fromList(List.filled(32, 1)),
-      );
-      expect(db.isOwnConnected, false);
-    });
-
-    test('reset clears reconnect attempts', () {
-      db.init(
-        did: 'did:plc:alice',
-        keyBundle: Uint8List.fromList(List.filled(32, 1)),
-      );
-      db.reset();
-
-      // After reset, re-init and connect should start fresh
-      db.init(
-        did: 'did:plc:alice',
-        keyBundle: Uint8List.fromList(List.filled(32, 1)),
-      );
-      expect(db.isOwnConnected, false);
     });
 
     test('connectOwn without init is no-op', () async {
@@ -159,77 +104,50 @@ void main() {
       db.reset();
       db.reset(); // second call should not throw
       expect(db.isOwnConnected, false);
-      expect(db.partnerConnectionCount, 0);
     });
   });
 
-  group('Conversation hint lifecycle', () {
-    Conversation makeConv() => Conversation(
-          groupId: Uint8List.fromList([1, 2, 3]),
-          displayName: 'Test',
-          participants: ['did:plc:bob'],
-          keyBundleRef: 'ref',
-          createdAt: DateTime.utc(2025, 1, 1),
-        );
-
-    test('build reconnect list from conversations with hints', () {
-      final conv = makeConv();
-      conv.upsertPartnerHint(StoredDrawbridgeHint(
-        url: 'wss://relay-a.com/ws',
-        deviceIdHex: 'dev1',
-        ticketHex: 'aa' * 32,
-        partnerDid: 'did:plc:bob',
-      ));
-      conv.upsertPartnerHint(StoredDrawbridgeHint(
-        url: 'wss://relay-b.com/ws',
-        deviceIdHex: 'dev2',
-        ticketHex: 'bb' * 32,
-        partnerDid: 'did:plc:bob',
-      ));
-      conv.ownDrawbridgeTicketHex = 'cc' * 32;
-
-      // Simulate what _reconnectDrawbridge does
-      final hintsWithTags =
-          <({String url, String ticketHex, List<Uint8List> tags})>[];
-      final fakeTags = [Uint8List.fromList([10, 20, 30])];
-
-      for (final hint in conv.partnerDrawbridgeHints) {
-        hintsWithTags.add((
-          url: hint.url,
-          ticketHex: hint.ticketHex,
-          tags: fakeTags,
-        ));
-      }
-
-      expect(hintsWithTags.length, 2);
-      expect(hintsWithTags[0].url, 'wss://relay-a.com/ws');
-      expect(hintsWithTags[1].url, 'wss://relay-b.com/ws');
+  group('Tag management', () {
+    test('watchTags replaces previous tags', () {
+      db.watchTags([Uint8List.fromList([1, 2, 3])]);
+      db.watchTags([Uint8List.fromList([4, 5, 6])]);
+      // No crash; second call replaces first set
     });
 
-    test('conversations without hints produce empty reconnect list', () {
-      final conv = makeConv();
-      final hintsWithTags =
-          <({String url, String ticketHex, List<Uint8List> tags})>[];
-      if (conv.partnerDrawbridgeHints.isNotEmpty) {
-        fail('should be empty');
-      }
-      expect(hintsWithTags, isEmpty);
+    test('addTags accumulates', () {
+      db.addTags([Uint8List.fromList([1, 2, 3])]);
+      db.addTags([Uint8List.fromList([4, 5, 6])]);
+      // No crash; both tag sets are stored
     });
 
-    test('own ticket re-registration from conversation metadata', () {
-      final conv = makeConv();
-      conv.ownDrawbridgeTicketHex = 'dd' * 32;
-
-      db.init(
-        did: 'did:plc:alice',
-        keyBundle: Uint8List.fromList(List.filled(32, 1)),
+    test('updateTags adds and removes', () {
+      db.watchTags([Uint8List.fromList([1, 2, 3])]);
+      db.updateTags(
+        add: [Uint8List.fromList([4, 5, 6])],
+        remove: [Uint8List.fromList([1, 2, 3])],
       );
+      // No crash; tag set should now contain only [4,5,6]
+    });
+  });
 
-      // Simulate what _reconnectDrawbridge does
-      if (conv.ownDrawbridgeTicketHex != null) {
-        db.registerTicket(conv.groupIdHex, conv.ownDrawbridgeTicketHex!);
-      }
-      // No crash = success; ticket is queued for when own relay connects
+  group('Config cache lifecycle', () {
+    test('cache survives disconnectAll but is cleared by reset', () {
+      db.cacheDrawbridgeConfig('did:plc:bob', ['wss://relay.example.com']);
+
+      db.disconnectAll();
+      // Config cache survives disconnect (reconnect doesn't need to re-fetch)
+      // (Cannot directly verify internal state, but relayUrlsForParticipants works)
+
+      db.reset();
+      expect(db.relayUrlsForParticipants(['did:plc:bob']), isEmpty);
+    });
+
+    test('cacheDrawbridgeConfig overwrites previous entry', () {
+      db.cacheDrawbridgeConfig('did:plc:bob', ['wss://old-relay.com']);
+      db.cacheDrawbridgeConfig('did:plc:bob', ['wss://new-relay.com']);
+
+      final urls = db.relayUrlsForParticipants(['did:plc:bob']);
+      expect(urls, ['wss://new-relay.com']);
     });
   });
 }
