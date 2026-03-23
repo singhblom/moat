@@ -549,7 +549,7 @@ All Go relay changes are implemented and tested. 42 tests pass in ~6s.
 
 **Note:** Rust FFI at `moat-dart/app/rust/` still defines `EventKindDto::DrawbridgeHint`, `DrawbridgeHintPayloadDto`, `createDrawbridgeHint()`, and `generateDrawbridgeTicket()`. These are unused by Dart code but still compile against the excluded workspace. Cleanup deferred.
 
-### Phase 6: moat-beacon Integration Tests — IN PROGRESS
+### Phase 6: moat-beacon Integration Tests — COMPLETE
 
 **TestWorld topology refactor:**
 - `new_with_drawbridge(&[("alice", "alice"), ("bob", "bob")])` — takes `(handle, relay_label)` tuples; participants with the same label share a Drawbridge relay, distinct labels spawn separate relays
@@ -595,7 +595,10 @@ All Go relay changes are implemented and tested. 42 tests pass in ~6s.
 
 **11 scenarios total** now registered in `SCENARIOS` array
 
-**Tests:** All 2-party and 3-party polling proptests pass (two_party, restart, three_party, dart_two_party, mixed). All 2-party push proptests pass (drawbridge, fanout, same_drawbridge, push_restart). Smoke tests pass. `proptest_three_party_push` fails — Carol missing messages in 3-party Drawbridge fanout (delivery issue, not ordering).
+**Drawbridge config fetch on member change (moat-cli):**
+- When processing a Commit event during polling that changes the member list, `fetch_partner_drawbridge_configs` is now called for the conversation — previously, existing members who learned about a new member via polling never fetched the new member's Drawbridge relay URL, so fan-out envelopes omitted their relay and push delivery silently failed for them
+
+**Tests:** All 2-party and 3-party polling proptests pass (two_party, restart, three_party, dart_two_party, mixed). All 2-party and 3-party push proptests pass (drawbridge, fanout, same_drawbridge, push_restart, three_party_push). Smoke tests pass.
 
 ### Phase 7: Mobile Push — NOT STARTED
 

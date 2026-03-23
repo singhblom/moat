@@ -2658,6 +2658,8 @@ impl App {
                                         participant_handles: member_dids,
                                     },
                                 );
+                                // Fetch relay configs for any new members
+                                self.fetch_partner_drawbridge_configs(&conv_id);
                             }
                         }
 
