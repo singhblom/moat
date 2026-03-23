@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc c0acaf8e86c6cda538e091a07aa5b4f4c8b6bf6f29ec808bb0f24662892622a5 # shrinks to actions = [GoOffline { participant: Bob }, SendMessage { from: Alice, text_idx: 6 }, SendMessage { from: Alice, text_idx: 2 }, ComeOnline { participant: Bob }, SendMessage { from: Alice, text_idx: 0 }]
+cc 6b3ff1401955113e16a1dc3246569bd22b6d690c433f1c9472e79242e75e2cb7 # shrinks to actions = [SendMessage { from: ParticipantId(1), text_idx: 6 }, React { from: ParticipantId(0), message_idx: 0, emoji_idx: 4 }, GoOffline { participant: ParticipantId(1) }, React { from: ParticipantId(0), message_idx: 0, emoji_idx: 0 }, SendMessage { from: ParticipantId(0), text_idx: 4 }, React { from: ParticipantId(0), message_idx: 0, emoji_idx: 4 }, Poll { participant: ParticipantId(0) }, GoOffline { participant: ParticipantId(0) }]

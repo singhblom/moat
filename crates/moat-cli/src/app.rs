@@ -194,6 +194,8 @@ pub struct DisplayMessage {
     pub image_proto: Option<ImageProto>,
     /// `true` while the image blob is being fetched from the PDS.
     pub image_loading: bool,
+    /// ATProto record key (TID), used for canonical ordering.
+    pub rkey: String,
 }
 
 /// A notification about a new device joining a conversation
@@ -220,6 +222,8 @@ pub(crate) enum BgEvent {
         tag: [u8; 16],
         /// The published ciphertext, forwarded to Drawbridge for relay delivery.
         ciphertext: Vec<u8>,
+        /// MLS message ID, used to correlate with the pending stored message.
+        message_id: Option<Vec<u8>>,
     },
     /// Network publish for send_message failed.
     SendFailed(String),
@@ -1204,14 +1208,32 @@ impl App {
                 self.poll_in_flight = false;
                 self.set_error(format!("Poll error: {e}"));
             }
-            BgEvent::SendPublished { uri, conv_id, tag, ciphertext } => {
+            BgEvent::SendPublished { uri, conv_id, tag, ciphertext, message_id } => {
                 self.debug_log
                     .log(&format!("send_message: published to PDS, uri={}", uri));
                 self.tag_map.insert(tag, conv_id.clone());
 
+                let rkey = uri.split('/').last().unwrap_or("").to_string();
+
+                // Fix up the "pending" rkey in storage to the real one
+                if !rkey.is_empty() {
+                    if let Err(e) = self.keys.fixup_pending_rkey_by_message_id(&conv_id, &rkey, message_id.as_deref()) {
+                        self.debug_log.log(&format!(
+                            "send_message: failed to fixup pending rkey: {e}"
+                        ));
+                    }
+                    // Also fix up in-memory display messages
+                    if let Some(dm) = self.messages.iter_mut().rev().find(|m| {
+                        m.rkey == "pending" && (message_id.is_none() || m.message_id.as_ref() == message_id.as_ref())
+                    }) {
+                        dm.rkey = rkey.clone();
+                    }
+                    // Re-sort display messages by rkey
+                    self.messages.sort_by(|a, b| a.rkey.cmp(&b.rkey));
+                }
+
                 // Notify Drawbridge about the published event with payload + relay URLs
                 if self.drawbridge.has_own_connection() {
-                    let rkey = uri.split('/').last().unwrap_or("").to_string();
                     // Collect relay URLs for all partner DIDs in this conversation
                     let drawbridge_urls = self.drawbridge_urls_for_conversation(&conv_id);
                     let _ = self.bg_tx.send(BgEvent::DrawbridgeNotifyEventPosted {
@@ -1489,11 +1511,12 @@ impl App {
         let client = self.client.as_ref().unwrap().clone();
         let tag = encrypted.tag;
         let ciphertext = encrypted.ciphertext;
+        let msg_id = encrypted.message_id.clone();
         let tx = self.bg_tx.clone();
         tokio::spawn(async move {
             match client.publish_event(&tag, &ciphertext).await {
                 Ok(uri) => {
-                    let _ = tx.send(BgEvent::SendPublished { uri, conv_id, tag, ciphertext });
+                    let _ = tx.send(BgEvent::SendPublished { uri, conv_id, tag, ciphertext, message_id: msg_id });
                 }
                 Err(e) => {
                     let _ = tx.send(BgEvent::SendFailed(format!("{e}")));
@@ -1697,6 +1720,7 @@ impl App {
             reactions: vec![],
             image_proto: None,
             image_loading: true,
+            rkey: "pending".to_string(),
         });
 
         // Persist the placeholder so the message survives a restart.
@@ -1900,11 +1924,12 @@ impl App {
         let client = self.client.as_ref().unwrap().clone();
         let tag = encrypted.tag;
         let ciphertext = encrypted.ciphertext;
+        let msg_id = encrypted.message_id.clone();
         let tx = self.bg_tx.clone();
         tokio::spawn(async move {
             match client.publish_event(&tag, &ciphertext).await {
                 Ok(uri) => {
-                    let _ = tx.send(BgEvent::SendPublished { uri, conv_id, tag, ciphertext });
+                    let _ = tx.send(BgEvent::SendPublished { uri, conv_id, tag, ciphertext, message_id: msg_id });
                 }
                 Err(e) => {
                     let _ = tx.send(BgEvent::SendFailed(format!("{e}")));
@@ -2192,10 +2217,11 @@ impl App {
                         reactions: vec![],
                         image_proto: None,
                         image_loading: false,
+                        rkey: rkey.to_string(),
                     };
                     let pos = self
                         .messages
-                        .partition_point(|m| m.timestamp <= dm.timestamp);
+                        .partition_point(|m| m.rkey <= dm.rkey);
                     self.messages.insert(pos, dm);
                 } else if let Some(idx) = conv_idx {
                     if let Some(conv) = self.conversations.get_mut(idx) {
@@ -2530,10 +2556,11 @@ impl App {
                                 reactions: vec![],
                                 image_proto: None,
                                 image_loading: false,
+                                rkey: event_record.rkey.clone(),
                             };
                             let pos = self
                                 .messages
-                                .partition_point(|m| m.timestamp <= dm.timestamp);
+                                .partition_point(|m| m.rkey <= dm.rkey);
                             self.messages.insert(pos, dm);
                         } else if let Some(idx) = conv_idx {
                             if let Some(conv) = self.conversations.get_mut(idx) {
@@ -3165,6 +3192,7 @@ impl App {
             reactions: vec![],
             image_proto: None,
             image_loading: false,
+            rkey: String::new(),
         });
 
         Ok(())
@@ -3307,6 +3335,7 @@ impl App {
                 reactions: vec![],
                 image_proto: None,
                 image_loading: false,
+                rkey: stored.rkey.clone(),
             });
         }
 
@@ -3489,6 +3518,7 @@ impl App {
                 reactions: vec![],
                 image_proto: None,
                 image_loading: false,
+                rkey: "pending".to_string(),
             });
 
             let stored_msg = crate::keystore::StoredMessage {
@@ -3569,6 +3599,7 @@ impl App {
             reactions: vec![],
             image_proto: None,
             image_loading: false,
+            rkey: "pending".to_string(),
         });
 
         // Store locally with placeholder rkey (will be real once publish completes)
@@ -3594,6 +3625,7 @@ impl App {
         let client = self.client.as_ref().unwrap().clone();
         let tag = encrypted.tag;
         let ciphertext = encrypted.ciphertext;
+        let msg_id = encrypted.message_id.clone();
         let conv_id_clone = conv_id;
         let tx = self.bg_tx.clone();
 
@@ -3605,6 +3637,7 @@ impl App {
                         conv_id: conv_id_clone,
                         tag,
                         ciphertext,
+                        message_id: msg_id,
                     });
                 }
                 Err(e) => {

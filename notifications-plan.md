@@ -566,10 +566,16 @@ All Go relay changes are implemented and tested. 42 tests pass in ~6s.
 - Properly determines `is_own` by comparing sender DID against client's DID
 - Duplicate suppression: when the same message later arrives via poll, rkey dedup in `append_message` rejects it
 
-**Message ordering fix (moat-cli):**
+**Message ordering fix (moat-cli + Dart):**
 - `append_message` now inserts by rkey order (was timestamp order) — rkeys are TIDs (timestamp-based, lexicographically sortable), so this gives correct chronological ordering for same-PDS messages and best-effort ordering across PDSes (dependent on clock sync, which is sub-millisecond for NTP-synced servers)
 - This fixed a bug where rapid push-delivered messages from the same sender could be stored out of order (inline decryption processed them in WebSocket arrival order, and `Utc::now()` timestamps were indistinguishable at sub-millisecond granularity)
 - Removed 150ms sleep workaround from `execute_action` / `execute_action_n` in push test scenarios — no longer needed
+- `DisplayMessage` now carries `rkey` field; in-memory insertion uses `partition_point` on rkey (was timestamp)
+- `SendPublished` BgEvent now carries `message_id` for correlating with pending stored messages
+- `fixup_pending_rkey_by_message_id` in `KeyStore` — when a publish completes, updates the "pending" rkey to the real one, matching by `message_id` to handle multiple in-flight sends correctly (previously, two rapid sends could swap rkeys because `fixup_pending_rkey` matched the last "pending" entry regardless of which publish completed)
+- Dart `Message` model now has `rkey` getter (extracts rkey from `id` field, format `{groupIdHex}_{rkey}`)
+- Dart `MessageStorage.appendMessage`/`appendMessages` sort by `rkey` (was `timestamp`)
+- Dart `ConversationRepository` — all sort calls (`messages` getter, `loadMessages`, `_onSendSuccess`, `_mergeIntoLoaded`) changed from `timestamp.compareTo` to `rkey.compareTo`
 
 **Push scenario ordering invariants:**
 - Push scenarios use `check_per_sender_ordering` — verifies each sender's messages appear in correct relative order without requiring a global interleaving
@@ -589,7 +595,7 @@ All Go relay changes are implemented and tested. 42 tests pass in ~6s.
 
 **11 scenarios total** now registered in `SCENARIOS` array
 
-**Tests:** All 2-party push proptests pass (drawbridge, fanout, same_drawbridge, push_restart). All polling proptests pass (two_party, restart). Smoke tests pass. moat-cli 52 tests pass. Go relay 42 tests pass.
+**Tests:** All 2-party and 3-party polling proptests pass (two_party, restart, three_party, dart_two_party, mixed). All 2-party push proptests pass (drawbridge, fanout, same_drawbridge, push_restart). Smoke tests pass. `proptest_three_party_push` fails — Carol missing messages in 3-party Drawbridge fanout (delivery issue, not ordering).
 
 ### Phase 7: Mobile Push — NOT STARTED
 

@@ -32,7 +32,7 @@ class ConversationRepository {
     sendQueue.onFailed = _onSendFailed;
   }
 
-  /// The merged view: persisted + optimistic, sorted by timestamp.
+  /// The merged view: persisted + optimistic, sorted by rkey.
   List<Message> get messages {
     if (!_loaded) return List.unmodifiable(_optimistic);
     final merged = <Message>[];
@@ -46,7 +46,7 @@ class ConversationRepository {
       }
       merged.add(opt);
     }
-    merged.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    merged.sort((a, b) => a.rkey.compareTo(b.rkey));
     return List.unmodifiable(merged);
   }
 
@@ -68,7 +68,7 @@ class ConversationRepository {
               m.status != MessageStatus.sending &&
               m.status != MessageStatus.failed)
           .toList();
-      loaded.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      loaded.sort((a, b) => a.rkey.compareTo(b.rkey));
       _persisted = loaded;
       _loaded = true;
     } catch (e) {
@@ -207,7 +207,7 @@ class ConversationRepository {
 
     if (_loaded) {
       _persisted.add(confirmed);
-      _persisted.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      _persisted.sort((a, b) => a.rkey.compareTo(b.rkey));
       _enqueueWrite(() => _storage.appendMessage(groupIdHex, confirmed));
     } else {
       _enqueueWrite(() => _storage.appendMessage(groupIdHex, confirmed));
@@ -239,7 +239,7 @@ class ConversationRepository {
       }
     }
 
-    _persisted.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    _persisted.sort((a, b) => a.rkey.compareTo(b.rkey));
   }
 
   void _toggleReactionLocally(
