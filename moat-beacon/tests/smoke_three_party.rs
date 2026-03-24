@@ -106,6 +106,36 @@ async fn three_party_conversation() {
         bob_conv.participant_dids
     );
 
+    // --- Verify conversation names contain all member handles ---
+    // Alice's conversation name should include both bob and carol
+    let alice_convs = alice
+        .list_conversations()
+        .await
+        .expect("alice list convos");
+    let alice_conv = alice_convs
+        .iter()
+        .find(|c| c.id == group_id)
+        .expect("Alice should have the conversation");
+    assert!(
+        alice_conv.name.contains("bob") && alice_conv.name.contains("carol"),
+        "Alice's conversation name should contain both 'bob' and 'carol', got: {:?}",
+        alice_conv.name
+    );
+
+    // Bob's conversation name should include both alice and carol
+    assert!(
+        bob_conv.name.contains("alice") && bob_conv.name.contains("carol"),
+        "Bob's conversation name should contain both 'alice' and 'carol', got: {:?}",
+        bob_conv.name
+    );
+
+    // Carol's conversation name should include both alice and bob
+    assert!(
+        carol_conv.name.contains("alice") && carol_conv.name.contains("bob"),
+        "Carol's conversation name should contain both 'alice' and 'bob', got: {:?}",
+        carol_conv.name
+    );
+
     // --- All three send messages ---
     alice
         .send_message(&group_id, "hello from alice")

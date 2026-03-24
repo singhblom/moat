@@ -162,10 +162,28 @@ pub enum LoginField {
 #[derive(Debug, Clone)]
 pub struct Conversation {
     pub id: String,
-    pub name: String,
+    /// Explicit group name set by a user (like WhatsApp/Telegram group names).
+    /// `None` means the display name is computed from participant handles.
+    pub name: Option<String>,
     pub participant_dids: Vec<String>,
+    /// Resolved handles for each participant (may contain DIDs for unresolved members).
+    pub participant_handles: Vec<String>,
     pub current_epoch: u64,
     pub unread: usize,
+}
+
+impl Conversation {
+    /// Returns the display name: explicit name if set, otherwise comma-joined
+    /// participant handles (falling back to DIDs if handles are empty).
+    pub fn display_name(&self) -> String {
+        if let Some(name) = &self.name {
+            return name.clone();
+        }
+        if !self.participant_handles.is_empty() {
+            return self.participant_handles.join(", ");
+        }
+        self.participant_dids.join(", ")
+    }
 }
 
 /// A single reaction on a message
@@ -1319,17 +1337,26 @@ impl App {
                 did,
                 handle,
             } => {
-                // Update conversation name and stored metadata
+                // Update the resolved handle for this DID in the conversation
                 if let Some(conv) = self.conversations.iter_mut().find(|c| c.id == conv_id) {
-                    conv.name = handle.clone();
+                    if let Some(pos) = conv.participant_dids.iter().position(|d| d == &did) {
+                        // Update existing entry
+                        if pos < conv.participant_handles.len() {
+                            conv.participant_handles[pos] = handle.clone();
+                        } else {
+                            // Handles vec was shorter — extend to match
+                            conv.participant_handles.resize(pos, did.clone());
+                            conv.participant_handles.push(handle.clone());
+                        }
+                    }
+                    let _ = self.keys.store_group_metadata(
+                        &conv_id,
+                        &GroupMetadata {
+                            participant_dids: conv.participant_dids.clone(),
+                            participant_handles: conv.participant_handles.clone(),
+                        },
+                    );
                 }
-                let _ = self.keys.store_group_metadata(
-                    &conv_id,
-                    &GroupMetadata {
-                        participant_dids: vec![did],
-                        participant_handles: vec![handle],
-                    },
-                );
             }
 
             BgEvent::BlobUploaded {
@@ -2290,12 +2317,9 @@ impl App {
 
         self.conversations.clear();
         for group_id in group_ids {
-            let (name, participant_dids) = match self.keys.load_group_metadata(&group_id) {
-                Ok(meta) => (meta.participant_handles.join(", "), meta.participant_dids),
-                Err(_) => {
-                    let short_id = &group_id[..8.min(group_id.len())];
-                    (format!("Conversation {}", short_id), Vec::new())
-                }
+            let (participant_dids, participant_handles) = match self.keys.load_group_metadata(&group_id) {
+                Ok(meta) => (meta.participant_dids, meta.participant_handles),
+                Err(_) => (Vec::new(), Vec::new()),
             };
 
             let group_id_bytes = hex::decode(&group_id).unwrap_or_default();
@@ -2309,8 +2333,9 @@ impl App {
 
             self.conversations.push(Conversation {
                 id: group_id,
-                name,
+                name: None,
                 participant_dids,
+                participant_handles,
                 current_epoch,
                 unread: 0,
             });
@@ -2545,7 +2570,7 @@ impl App {
                             let dm = DisplayMessage {
                                 from: conv_idx
                                     .and_then(|idx| self.conversations.get(idx))
-                                    .map(|c| c.name.clone())
+                                    .map(|c| c.display_name())
                                     .unwrap_or_else(|| "Unknown".to_string()),
                                 content,
                                 timestamp: event_record.created_at,
@@ -2645,17 +2670,38 @@ impl App {
                                 .filter(|d| d != &my_did_str)
                                 .collect();
                             if member_dids != old_dids {
+                                // Build updated handles: preserve known handles for existing
+                                // members, use DIDs as placeholders for new ones.
+                                let old_handles: Vec<String> = self
+                                    .conversations
+                                    .iter()
+                                    .find(|c| c.id == conv_id)
+                                    .map(|c| c.participant_handles.clone())
+                                    .unwrap_or_default();
+                                let new_handles: Vec<String> = member_dids
+                                    .iter()
+                                    .map(|did| {
+                                        // If this DID was already known, reuse its handle
+                                        old_dids
+                                            .iter()
+                                            .position(|d| d == did)
+                                            .and_then(|i| old_handles.get(i).cloned())
+                                            .unwrap_or_else(|| did.clone())
+                                    })
+                                    .collect();
+
                                 if let Some(conv) =
                                     self.conversations.iter_mut().find(|c| c.id == conv_id)
                                 {
                                     conv.participant_dids = member_dids.clone();
+                                    conv.participant_handles = new_handles.clone();
                                 }
                                 // Update stored metadata
                                 let _ = self.keys.store_group_metadata(
                                     &conv_id,
                                     &GroupMetadata {
-                                        participant_dids: member_dids.clone(),
-                                        participant_handles: member_dids,
+                                        participant_dids: member_dids,
+                                        participant_handles: new_handles,
                                     },
                                 );
                                 // Fetch relay configs for any new members
@@ -2746,9 +2792,8 @@ impl App {
             .filter(|d| d != &my_did)
             .collect();
 
-        // Use DIDs as placeholder names; will be resolved in background
+        // Use DIDs as placeholder handles; will be resolved in background
         let participant_handles: Vec<String> = participant_dids.clone();
-        let name = participant_handles.join(", ");
 
         let _ = self.keys.store_group_metadata(
             &conv_id,
@@ -2760,8 +2805,9 @@ impl App {
 
         self.conversations.push(Conversation {
             id: conv_id.clone(),
-            name,
+            name: None,
             participant_dids,
+            participant_handles,
             current_epoch: 1,
             unread: 1,
         });
@@ -3155,8 +3201,9 @@ impl App {
         // 10. Update UI - add conversation to list
         self.conversations.push(Conversation {
             id: conv_id.clone(),
-            name: recipient_handle.to_string(),
+            name: None,
             participant_dids: vec![recipient_did],
+            participant_handles: vec![recipient_handle.to_string()],
             current_epoch: 1, // Post-add epoch
             unread: 0,
         });
@@ -3267,28 +3314,13 @@ impl App {
             if !conv.participant_dids.contains(&new_did) {
                 conv.participant_dids.push(new_did.clone());
             }
-            conv.name = {
-                // Rebuild name from all participant handles
-                let mut handles: Vec<String> = conv.participant_dids.iter().filter_map(|did| {
-                    // For the new member, use the handle we just resolved
-                    if did == &new_did {
-                        Some(handle.to_string())
-                    } else {
-                        None
-                    }
-                }).collect();
-                // Keep existing name parts and append new handle
-                if !conv.name.is_empty() {
-                    handles.insert(0, conv.name.clone());
-                }
-                handles.join(", ")
-            };
+            conv.participant_handles.push(handle.to_string());
 
             let _ = self.keys.store_group_metadata(
                 group_id_hex,
                 &GroupMetadata {
                     participant_dids: conv.participant_dids.clone(),
-                    participant_handles: conv.name.split(", ").map(|s| s.to_string()).collect(),
+                    participant_handles: conv.participant_handles.clone(),
                 },
             );
         }
@@ -3317,14 +3349,14 @@ impl App {
         };
 
         let conv_id = self.conversations[idx].id.clone();
-        let conv_name = self.conversations[idx].name.clone();
+        let conv_display_name = self.conversations[idx].display_name();
 
         let local_messages = self.keys.load_messages(&conv_id).unwrap_or_default();
         for stored in &local_messages.messages {
             let from = if stored.is_own {
                 "You".to_string()
             } else {
-                conv_name.clone()
+                conv_display_name.clone()
             };
             self.messages.push(DisplayMessage {
                 from,
@@ -3891,7 +3923,7 @@ impl App {
                             .conversations
                             .iter()
                             .find(|c| c.id == conv_id)
-                            .map(|c| c.name.clone())
+                            .map(|c| c.display_name())
                             .unwrap_or_else(|| "Unknown".to_string());
 
                         if let Some(conv) = self.conversations.iter_mut().find(|c| c.id == conv_id)
@@ -3976,5 +4008,57 @@ mod tests {
 
         assert_eq!(watched_events[2].1.tag, hint_tag);
         assert_eq!(watched_events[2].1.rkey, "3mfcetibqab2v");
+    }
+
+    #[test]
+    fn display_name_returns_explicit_name() {
+        let conv = super::Conversation {
+            id: "abc".to_string(),
+            name: Some("Work Chat".to_string()),
+            participant_dids: vec!["did:plc:alice".to_string(), "did:plc:bob".to_string()],
+            participant_handles: vec!["alice.bsky.social".to_string(), "bob.bsky.social".to_string()],
+            current_epoch: 1,
+            unread: 0,
+        };
+        assert_eq!(conv.display_name(), "Work Chat");
+    }
+
+    #[test]
+    fn display_name_falls_back_to_handles() {
+        let conv = super::Conversation {
+            id: "abc".to_string(),
+            name: None,
+            participant_dids: vec!["did:plc:alice".to_string(), "did:plc:bob".to_string()],
+            participant_handles: vec!["alice.bsky.social".to_string(), "bob.bsky.social".to_string()],
+            current_epoch: 1,
+            unread: 0,
+        };
+        assert_eq!(conv.display_name(), "alice.bsky.social, bob.bsky.social");
+    }
+
+    #[test]
+    fn display_name_falls_back_to_dids_when_no_handles() {
+        let conv = super::Conversation {
+            id: "abc".to_string(),
+            name: None,
+            participant_dids: vec!["did:plc:alice".to_string(), "did:plc:bob".to_string()],
+            participant_handles: vec![],
+            current_epoch: 1,
+            unread: 0,
+        };
+        assert_eq!(conv.display_name(), "did:plc:alice, did:plc:bob");
+    }
+
+    #[test]
+    fn display_name_single_participant() {
+        let conv = super::Conversation {
+            id: "abc".to_string(),
+            name: None,
+            participant_dids: vec!["did:plc:alice".to_string()],
+            participant_handles: vec!["alice.bsky.social".to_string()],
+            current_epoch: 1,
+            unread: 0,
+        };
+        assert_eq!(conv.display_name(), "alice.bsky.social");
     }
 }

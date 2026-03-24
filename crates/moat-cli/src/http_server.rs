@@ -137,7 +137,7 @@ async fn get_conversations(State(state): State<Arc<ServerState>>) -> Json<Vec<Co
         .iter()
         .map(|c| ConversationDto {
             id: c.id.clone(),
-            name: c.name.clone(),
+            name: c.display_name(),
             participant_dids: c.participant_dids.clone(),
             epoch: c.current_epoch,
             unread: c.unread,

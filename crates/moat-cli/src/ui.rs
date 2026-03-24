@@ -272,7 +272,7 @@ fn draw_conversations(frame: &mut Frame, app: &App, area: Rect) {
                 String::new()
             };
 
-            ListItem::new(format!("{}{}{}", prefix, conv.name, unread)).style(style)
+            ListItem::new(format!("{}{}{}", prefix, conv.display_name(), unread)).style(style)
         })
         .collect();
 
