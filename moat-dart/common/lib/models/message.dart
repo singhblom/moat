@@ -84,6 +84,10 @@ class Message {
     this.reactions = const [],
   });
 
+  /// The rkey portion of the message ID (for ordering).
+  /// ID format is `{groupIdHex}_{rkey}`.
+  String get rkey => id.substring(id.indexOf('_') + 1);
+
   /// Group ID as hex string
   String get groupIdHex =>
       groupId.map((b) => b.toRadixString(16).padLeft(2, '0')).join();

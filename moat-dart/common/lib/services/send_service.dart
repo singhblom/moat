@@ -72,7 +72,14 @@ class SendService {
 
     final rkey = _extractRkey(uri);
 
-    DrawbridgeService.instance.notifyEventPosted(result.tag, rkey);
+    final relayUrls = DrawbridgeService.instance
+        .relayUrlsForParticipants(conversation.participants);
+    DrawbridgeService.instance.notifyEventPosted(
+      tag: result.tag,
+      rkey: rkey,
+      payload: result.ciphertext,
+      relayUrls: relayUrls,
+    );
 
     return Message(
       id: '${conversation.groupIdHex}_$rkey',
@@ -137,7 +144,14 @@ class SendService {
     );
 
     final rkey = _extractRkey(uri);
-    DrawbridgeService.instance.notifyEventPosted(result.tag, rkey);
+    final relayUrls = DrawbridgeService.instance
+        .relayUrlsForParticipants(conversation.participants);
+    DrawbridgeService.instance.notifyEventPosted(
+      tag: result.tag,
+      rkey: rkey,
+      payload: result.ciphertext,
+      relayUrls: relayUrls,
+    );
 
     moatLog('SendService: Reaction "$emoji" published');
   }

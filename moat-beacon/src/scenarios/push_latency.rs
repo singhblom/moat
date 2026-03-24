@@ -48,7 +48,7 @@ pub async fn run(verbose: bool) {
 
     // ── Prologue (same as two_party_push) ────────────────────────────────────
     vlog!(verbose, "[setup] starting TestWorld (with Drawbridge)...");
-    let world = TestWorld::new_with_drawbridge(&["alice", "bob"], ".postern.test")
+    let world = TestWorld::new_with_drawbridge(&[("alice", "alice"), ("bob", "bob")], ".postern.test")
         .await
         .expect("world setup with drawbridge");
     let alice = world.client("alice").clone();

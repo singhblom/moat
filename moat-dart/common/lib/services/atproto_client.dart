@@ -18,6 +18,7 @@ Uint8List _decodeBytesField(dynamic field) {
 const keyPackageNsid = 'social.moat.keyPackage';
 const eventNsid = 'social.moat.event';
 const stealthAddressNsid = 'social.moat.stealthAddress';
+const drawbridgeConfigNsid = 'social.moat.drawbridgeConfig';
 
 /// MLS ciphersuite identifier
 const mlsCiphersuite = 'MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519';
@@ -348,6 +349,61 @@ class AtprotoClient {
     );
 
     return response['uri'] as String;
+  }
+
+  /// Publish (upsert) our Drawbridge config record.
+  Future<void> publishDrawbridgeConfig(String url) async {
+    _requireSession();
+
+    final record = {
+      'drawbridges': [
+        {'url': url, 'priority': 1},
+      ],
+    };
+
+    await _authedPost(
+      '${_session!.pdsUrl}/xrpc/com.atproto.repo.putRecord',
+      body: {
+        'repo': _session!.did,
+        'collection': drawbridgeConfigNsid,
+        'rkey': 'self',
+        'record': record,
+      },
+    );
+  }
+
+  /// Fetch a user's Drawbridge config. Returns relay URLs in priority order,
+  /// or empty list if not published.
+  Future<List<String>> fetchDrawbridgeConfig(String did) async {
+    try {
+      final pdsUrl = await resolvePdsEndpoint(did);
+      final response = await _get(
+        '$pdsUrl/xrpc/com.atproto.repo.getRecord',
+        queryParams: {
+          'repo': did,
+          'collection': drawbridgeConfigNsid,
+          'rkey': 'self',
+        },
+      );
+
+      final value = response['value'] as Map<String, dynamic>?;
+      if (value == null) return [];
+
+      final drawbridges = value['drawbridges'] as List<dynamic>? ?? [];
+      final entries = drawbridges
+          .map((e) => e as Map<String, dynamic>)
+          .toList()
+        ..sort((a, b) =>
+            (a['priority'] as int? ?? 99)
+                .compareTo(b['priority'] as int? ?? 99));
+
+      return entries
+          .map((e) => e['url'] as String)
+          .toList();
+    } catch (e) {
+      moatLog('Failed to fetch drawbridge config for $did: $e');
+      return [];
+    }
   }
 
   Future<List<StealthAddressRecord>> fetchStealthAddresses(String did) async {

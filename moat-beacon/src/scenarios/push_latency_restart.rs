@@ -69,7 +69,7 @@ pub async fn run(verbose: bool) {
 
     // ── Phase 1: Setup (same as push_latency) ───────────────────────────────
     vlog!(verbose, "[setup] starting TestWorld (with Drawbridge)...");
-    let mut world = TestWorld::new_with_drawbridge(&["alice", "bob"], ".postern.test")
+    let mut world = TestWorld::new_with_drawbridge(&[("alice", "alice"), ("bob", "bob")], ".postern.test")
         .await
         .expect("world setup with drawbridge");
     let alice = world.client("alice").clone();

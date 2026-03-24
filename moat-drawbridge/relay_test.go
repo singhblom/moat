@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -256,6 +258,17 @@ func (tc *testClient) watchTags(tags ...string) {
 func (tc *testClient) postEvent(tag, rkey string) {
 	tc.t.Helper()
 	tc.sendJSON(map[string]any{"type": "event_posted", "tag": tag, "rkey": rkey})
+}
+
+func (tc *testClient) postEventWithPayload(tag, rkey, payload string, relayURLs []string) {
+	tc.t.Helper()
+	tc.sendJSON(map[string]any{
+		"type":       "event_posted",
+		"tag":        tag,
+		"rkey":       rkey,
+		"payload":    payload,
+		"relay_urls": relayURLs,
+	})
 }
 
 // --- Tests ---
@@ -665,70 +678,17 @@ func TestChallengeResponseWithoutRequest(t *testing.T) {
 	}
 }
 
-// --- Ticket Authentication Tests ---
+// --- Ticket messages should be rejected (removed feature) ---
 
-func TestTicketRegistration(t *testing.T) {
+func TestTicketAuthRejected(t *testing.T) {
 	env := newTestEnv(t)
-	alice := env.connect("did:plc:alice")
+	conn := env.connectRaw()
 
 	ticket := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	alice.sendJSON(map[string]any{"type": "register_ticket", "ticket": ticket})
-
-	msg := alice.readMsgAs("ticket_registered")
-	_ = msg
-
-	// Verify ticket is in relay
-	env.relay.ticketsMu.RLock()
-	owner, exists := env.relay.tickets[ticket]
-	env.relay.ticketsMu.RUnlock()
-
-	if !exists {
-		t.Fatal("ticket not registered")
-	}
-	if owner != "did:plc:alice" {
-		t.Fatalf("expected owner did:plc:alice, got %s", owner)
-	}
-}
-
-func TestTicketAuth(t *testing.T) {
-	env := newTestEnv(t)
-
-	// Alice registers a ticket
-	alice := env.connect("did:plc:alice")
-	ticket := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	alice.sendJSON(map[string]any{"type": "register_ticket", "ticket": ticket})
-	alice.readMsgAs("ticket_registered")
-
-	// Bob connects with ticket auth
-	conn := env.connectRaw()
-
-	// Authenticate with ticket directly (no challenge needed)
 	msg, _ := json.Marshal(map[string]any{"type": "ticket_auth", "ticket": ticket})
 	conn.WriteMessage(websocket.TextMessage, msg)
 
-	// Should receive ticket_authenticated
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	_, data, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var resp map[string]any
-	json.Unmarshal(data, &resp)
-	if resp["type"] != "ticket_authenticated" {
-		t.Fatalf("expected ticket_authenticated, got %v", resp)
-	}
-}
-
-func TestTicketAuthInvalidTicket(t *testing.T) {
-	env := newTestEnv(t)
-	conn := env.connectRaw()
-
-	// Try to auth with unregistered ticket
-	ticket := "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-	msg, _ := json.Marshal(map[string]any{"type": "ticket_auth", "ticket": ticket})
-	conn.WriteMessage(websocket.TextMessage, msg)
-
-	// Should get error
+	// Should get error — ticket_auth is no longer a valid message type
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	_, data, err := conn.ReadMessage()
 	if err != nil {
@@ -737,209 +697,443 @@ func TestTicketAuthInvalidTicket(t *testing.T) {
 	var resp map[string]any
 	json.Unmarshal(data, &resp)
 	if resp["type"] != "error" {
-		t.Fatalf("expected error, got %v", resp)
+		t.Fatalf("expected error for ticket_auth, got %v", resp)
 	}
 }
 
-func TestTicketRevocation(t *testing.T) {
+func TestTicketMessagesRejectedPostAuth(t *testing.T) {
 	env := newTestEnv(t)
 	alice := env.connect("did:plc:alice")
 
-	ticket := "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-	alice.sendJSON(map[string]any{"type": "register_ticket", "ticket": ticket})
-	alice.readMsgAs("ticket_registered")
-
-	// Revoke the ticket
-	alice.sendJSON(map[string]any{"type": "revoke_ticket", "ticket": ticket})
-	alice.readMsgAs("ticket_revoked")
-
-	// Verify ticket is removed
-	env.relay.ticketsMu.RLock()
-	_, exists := env.relay.tickets[ticket]
-	env.relay.ticketsMu.RUnlock()
-
-	if exists {
-		t.Fatal("ticket should have been revoked")
+	// register_ticket should be rejected
+	alice.sendJSON(map[string]any{
+		"type":   "register_ticket",
+		"ticket": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	})
+	msg := alice.readMsgAs("error")
+	if !strings.Contains(msg["message"].(string), "unknown") {
+		t.Fatalf("expected unknown message error, got: %v", msg["message"])
 	}
 }
 
-func TestTicketRevocationByNonOwner(t *testing.T) {
+// --- Payload delivery tests ---
+
+func TestEventPostedWithPayload(t *testing.T) {
 	env := newTestEnv(t)
 	alice := env.connect("did:plc:alice")
 	bob := env.connect("did:plc:bob")
 
-	ticket := "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-	alice.sendJSON(map[string]any{"type": "register_ticket", "ticket": ticket})
-	alice.readMsgAs("ticket_registered")
+	tag := "aabbccddaabbccddaabbccddaabbccdd"
+	payload := base64.StdEncoding.EncodeToString([]byte("encrypted-ciphertext-here"))
 
-	// Bob tries to revoke Alice's ticket
-	bob.sendJSON(map[string]any{"type": "revoke_ticket", "ticket": ticket})
-	msg := bob.readMsgAs("error")
-	if !strings.Contains(msg["message"].(string), "not your ticket") {
-		t.Fatalf("expected 'not your ticket' error, got: %v", msg["message"])
-	}
-
-	// Ticket should still exist
-	env.relay.ticketsMu.RLock()
-	_, exists := env.relay.tickets[ticket]
-	env.relay.ticketsMu.RUnlock()
-
-	if !exists {
-		t.Fatal("ticket should not have been revoked by non-owner")
-	}
-}
-
-func TestRecipientCannotEventPosted(t *testing.T) {
-	env := newTestEnv(t)
-
-	// Alice registers a ticket
-	alice := env.connect("did:plc:alice")
-	ticket := "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-	alice.sendJSON(map[string]any{"type": "register_ticket", "ticket": ticket})
-	alice.readMsgAs("ticket_registered")
-
-	// Bob connects with ticket auth
-	conn := env.connectRaw()
-
-	msg, _ := json.Marshal(map[string]any{"type": "ticket_auth", "ticket": ticket})
-	conn.WriteMessage(websocket.TextMessage, msg)
-
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	conn.ReadMessage() // ticket_authenticated
-
-	// Bob (recipient) tries to send event_posted
-	msg, _ = json.Marshal(map[string]any{
-		"type": "event_posted",
-		"tag":  "aabbccdd00112233aabbccdd00112233",
-		"rkey": "abc123",
-	})
-	conn.WriteMessage(websocket.TextMessage, msg)
-
-	// Should get error
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	_, data, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var resp map[string]any
-	json.Unmarshal(data, &resp)
-	if resp["type"] != "error" {
-		t.Fatalf("expected error, got %v", resp)
-	}
-	if !strings.Contains(resp["message"].(string), "DID authentication") {
-		t.Fatalf("expected DID auth required error, got: %v", resp["message"])
-	}
-}
-
-func TestRecipientCanWatchTags(t *testing.T) {
-	env := newTestEnv(t)
-
-	// Alice registers a ticket and posts events
-	alice := env.connect("did:plc:alice")
-	ticket := "1111111111111111111111111111111111111111111111111111111111111111"
-	alice.sendJSON(map[string]any{"type": "register_ticket", "ticket": ticket})
-	alice.readMsgAs("ticket_registered")
-
-	// Bob connects with ticket auth
-	conn := env.connectRaw()
-
-	msg, _ := json.Marshal(map[string]any{"type": "ticket_auth", "ticket": ticket})
-	conn.WriteMessage(websocket.TextMessage, msg)
-
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	conn.ReadMessage() // ticket_authenticated
-
-	// Bob watches tags
-	tag := "aabbccdd00112233aabbccdd00112233"
-	msg, _ = json.Marshal(map[string]any{"type": "watch_tags", "tags": []string{tag}})
-	conn.WriteMessage(websocket.TextMessage, msg)
-
+	alice.watchTags(tag)
 	time.Sleep(50 * time.Millisecond)
 
-	// Alice posts
-	alice.postEvent(tag, "rk-from-alice")
+	bob.postEventWithPayload(tag, "rk1", payload, nil)
 
-	// Bob should receive
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	_, data, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatal(err)
+	msg := alice.readMsgAs("new_event")
+	if msg["tag"] != tag {
+		t.Fatalf("wrong tag: %v", msg["tag"])
 	}
-	var resp map[string]any
-	json.Unmarshal(data, &resp)
-	if resp["type"] != "new_event" {
-		t.Fatalf("expected new_event, got %v", resp)
+	if msg["rkey"] != "rk1" {
+		t.Fatalf("wrong rkey: %v", msg["rkey"])
 	}
-	if resp["rkey"] != "rk-from-alice" {
-		t.Fatalf("expected rkey rk-from-alice, got %v", resp["rkey"])
+	if msg["did"] != "did:plc:bob" {
+		t.Fatalf("wrong did: %v", msg["did"])
+	}
+	if msg["payload"] != payload {
+		t.Fatalf("expected payload %q, got %v", payload, msg["payload"])
 	}
 }
 
-func TestRecipientCannotRegisterTicket(t *testing.T) {
+func TestEventPostedPayloadInDisconnectBuffer(t *testing.T) {
 	env := newTestEnv(t)
+	bob := env.connect("did:plc:bob")
 
-	// Alice registers a ticket
-	alice := env.connect("did:plc:alice")
-	ticket := "2222222222222222222222222222222222222222222222222222222222222222"
-	alice.sendJSON(map[string]any{"type": "register_ticket", "ticket": ticket})
-	alice.readMsgAs("ticket_registered")
+	tag := "aabbccddaabbccddaabbccddaabbccdd"
+	payload := base64.StdEncoding.EncodeToString([]byte("buffered-payload"))
 
-	// Bob connects with ticket auth
-	conn := env.connectRaw()
+	// Alice connects, watches tag, then disconnects
+	alice1 := env.connect("did:plc:alice")
+	alice1.watchTags(tag)
+	time.Sleep(50 * time.Millisecond)
+	alice1.conn.Close()
+	time.Sleep(100 * time.Millisecond)
 
-	msg, _ := json.Marshal(map[string]any{"type": "ticket_auth", "ticket": ticket})
-	conn.WriteMessage(websocket.TextMessage, msg)
+	// Bob posts with payload while Alice is disconnected
+	bob.postEventWithPayload(tag, "rk-buf", payload, nil)
+	time.Sleep(100 * time.Millisecond)
 
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	conn.ReadMessage() // ticket_authenticated
+	// Alice reconnects
+	alice2 := env.connect("did:plc:alice")
 
-	// Bob (recipient) tries to register a ticket
-	newTicket := "3333333333333333333333333333333333333333333333333333333333333333"
-	msg, _ = json.Marshal(map[string]any{"type": "register_ticket", "ticket": newTicket})
-	conn.WriteMessage(websocket.TextMessage, msg)
-
-	// Should get error
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	_, data, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatal(err)
+	// Should receive buffered notification with payload
+	msg := alice2.readMsgAs("new_event")
+	if msg["rkey"] != "rk-buf" {
+		t.Fatalf("expected rk-buf, got %v", msg["rkey"])
 	}
-	var resp map[string]any
-	json.Unmarshal(data, &resp)
-	if resp["type"] != "error" {
-		t.Fatalf("expected error, got %v", resp)
-	}
-	if !strings.Contains(resp["message"].(string), "DID authentication") {
-		t.Fatalf("expected DID auth required error, got: %v", resp["message"])
+	if msg["payload"] != payload {
+		t.Fatalf("expected payload in buffered notification, got %v", msg["payload"])
 	}
 }
 
-func TestHealthEndpointIncludesTickets(t *testing.T) {
+// --- Relay-to-relay tests ---
+
+func TestRelayToRelay_BasicDelivery(t *testing.T) {
 	env := newTestEnv(t)
 
-	// Register a ticket
-	alice := env.connect("did:plc:alice")
-	ticket := "4444444444444444444444444444444444444444444444444444444444444444"
-	alice.sendJSON(map[string]any{"type": "register_ticket", "ticket": ticket})
-	alice.readMsgAs("ticket_registered")
+	tag := "aabbccddaabbccddaabbccddaabbccdd"
+	payload := base64.StdEncoding.EncodeToString([]byte("relay-to-relay-payload"))
 
-	// Check health endpoint
-	resp, err := http.Get(env.srv.URL + "/health")
+	alice := env.connect("did:plc:alice")
+	alice.watchTags(tag)
+	time.Sleep(50 * time.Millisecond)
+
+	// Simulate inbound relay-to-relay POST (no DID — untrustworthy on unauthenticated endpoint)
+	body, _ := json.Marshal(map[string]any{
+		"tag":     tag,
+		"rkey":    "rk-r2r",
+		"payload": payload,
+	})
+	resp, err := http.Post(env.srv.URL+"/relay/event", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
 
-	var body map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatal(err)
+	if resp.StatusCode != http.StatusAccepted {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 202, got %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
-	ticketCount, ok := body["tickets_registered"].(float64)
-	if !ok {
-		t.Fatal("tickets_registered not in health response")
+	// Alice should receive the event
+	msg := alice.readMsgAs("new_event")
+	if msg["tag"] != tag {
+		t.Fatalf("wrong tag: %v", msg["tag"])
 	}
-	if ticketCount != 1 {
-		t.Fatalf("expected 1 ticket, got %v", ticketCount)
+	if msg["rkey"] != "rk-r2r" {
+		t.Fatalf("wrong rkey: %v", msg["rkey"])
+	}
+	// No DID in relay-to-relay notifications — it's untrustworthy
+	if msg["did"] != "" {
+		t.Fatalf("expected no DID in relay-to-relay notification, got %v", msg["did"])
+	}
+	if msg["payload"] != payload {
+		t.Fatalf("wrong payload: %v", msg["payload"])
+	}
+}
+
+func TestRelayToRelay_NoMatchingTag(t *testing.T) {
+	env := newTestEnv(t)
+
+	alice := env.connect("did:plc:alice")
+	alice.watchTags("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1")
+	time.Sleep(50 * time.Millisecond)
+
+	// POST with a different tag
+	body, _ := json.Marshal(map[string]any{
+		"tag":     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"rkey":    "rk1",
+		"payload": "cGF5bG9hZA==",
+	})
+	resp, err := http.Post(env.srv.URL+"/relay/event", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", resp.StatusCode)
+	}
+
+	// Alice should NOT receive anything
+	alice.expectNoMsg(200 * time.Millisecond)
+}
+
+func TestRelayToRelay_MultipleClients(t *testing.T) {
+	env := newTestEnv(t)
+
+	tag := "aabbccddaabbccddaabbccddaabbccdd"
+
+	alice := env.connect("did:plc:alice")
+	bob := env.connect("did:plc:bob")
+	alice.watchTags(tag)
+	bob.watchTags(tag)
+	time.Sleep(50 * time.Millisecond)
+
+	// Inbound relay-to-relay event
+	body, _ := json.Marshal(map[string]any{
+		"tag":     tag,
+		"rkey":    "rk-multi",
+		"payload": "cGF5bG9hZA==",
+	})
+	resp, err := http.Post(env.srv.URL+"/relay/event", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	// Both should receive
+	alice.readMsgAs("new_event")
+	bob.readMsgAs("new_event")
+}
+
+func TestRelayToRelay_Dedup(t *testing.T) {
+	env := newTestEnv(t)
+
+	tag := "aabbccddaabbccddaabbccddaabbccdd"
+	alice := env.connect("did:plc:alice")
+	alice.watchTags(tag)
+	time.Sleep(50 * time.Millisecond)
+
+	body, _ := json.Marshal(map[string]any{
+		"tag":     tag,
+		"rkey":    "rk-dup",
+		"payload": "cGF5bG9hZA==",
+	})
+
+	// POST twice
+	resp1, _ := http.Post(env.srv.URL+"/relay/event", "application/json", bytes.NewReader(body))
+	resp1.Body.Close()
+	// Need a fresh reader for the second POST
+	body2, _ := json.Marshal(map[string]any{
+		"tag":     tag,
+		"rkey":    "rk-dup",
+		"did":     "did:plc:bob",
+		"payload": "cGF5bG9hZA==",
+	})
+	resp2, _ := http.Post(env.srv.URL+"/relay/event", "application/json", bytes.NewReader(body2))
+	resp2.Body.Close()
+
+	// Alice should receive only once
+	alice.readMsgAs("new_event")
+	alice.expectNoMsg(200 * time.Millisecond)
+}
+
+func TestRelayToRelay_DisconnectBuffer(t *testing.T) {
+	env := newTestEnv(t)
+
+	tag := "aabbccddaabbccddaabbccddaabbccdd"
+	payload := base64.StdEncoding.EncodeToString([]byte("buffered-r2r"))
+
+	// Alice connects, watches tag, then disconnects
+	alice1 := env.connect("did:plc:alice")
+	alice1.watchTags(tag)
+	time.Sleep(50 * time.Millisecond)
+	alice1.conn.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	// Relay-to-relay event while Alice is disconnected
+	body, _ := json.Marshal(map[string]any{
+		"tag":     tag,
+		"rkey":    "rk-r2r-buf",
+		"payload": payload,
+	})
+	resp, _ := http.Post(env.srv.URL+"/relay/event", "application/json", bytes.NewReader(body))
+	resp.Body.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	// Alice reconnects
+	alice2 := env.connect("did:plc:alice")
+
+	// Should receive buffered notification with payload
+	msg := alice2.readMsgAs("new_event")
+	if msg["rkey"] != "rk-r2r-buf" {
+		t.Fatalf("expected rk-r2r-buf, got %v", msg["rkey"])
+	}
+	if msg["payload"] != payload {
+		t.Fatalf("expected payload in buffer, got %v", msg["payload"])
+	}
+}
+
+func TestRelayToRelay_NoAsyncVerification(t *testing.T) {
+	env := newTestEnv(t)
+
+	tag := "aabbccddaabbccddaabbccddaabbccdd"
+	alice := env.connect("did:plc:alice")
+	alice.watchTags(tag)
+	time.Sleep(50 * time.Millisecond)
+
+	body, _ := json.Marshal(map[string]any{
+		"tag":     tag,
+		"rkey":    "rk-verify",
+		"payload": "cGF5bG9hZA==",
+	})
+	resp, _ := http.Post(env.srv.URL+"/relay/event", "application/json", bytes.NewReader(body))
+	resp.Body.Close()
+
+	// Alice should receive the event
+	alice.readMsgAs("new_event")
+
+	// No async verification should happen — relay-to-relay has no DID to verify
+	time.Sleep(200 * time.Millisecond)
+
+	env.verifier.mu.Lock()
+	callCount := len(env.verifier.calls)
+	env.verifier.mu.Unlock()
+
+	if callCount != 0 {
+		t.Fatalf("expected 0 verify calls from relay-to-relay path (no DID), got %d", callCount)
+	}
+}
+
+func TestEventPosted_FanOut(t *testing.T) {
+	env := newTestEnv(t)
+
+	// Set up mock HTTP servers to receive fan-out
+	var mu sync.Mutex
+	received := make(map[string]map[string]any)
+
+	mockRelay1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/relay/event" {
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			received["relay1"] = body
+			mu.Unlock()
+			w.WriteHeader(http.StatusAccepted)
+		}
+	}))
+	defer mockRelay1.Close()
+
+	mockRelay2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/relay/event" {
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			received["relay2"] = body
+			mu.Unlock()
+			w.WriteHeader(http.StatusAccepted)
+		}
+	}))
+	defer mockRelay2.Close()
+
+	tag := "aabbccddaabbccddaabbccddaabbccdd"
+	payload := base64.StdEncoding.EncodeToString([]byte("fanout-payload"))
+
+	bob := env.connect("did:plc:bob")
+	bob.postEventWithPayload(tag, "rk-fan", payload, []string{mockRelay1.URL, mockRelay2.URL})
+
+	// Give fan-out time to complete
+	time.Sleep(500 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(received) != 2 {
+		t.Fatalf("expected fan-out to 2 relays, got %d", len(received))
+	}
+	for name, body := range received {
+		if body["tag"] != tag {
+			t.Fatalf("%s: wrong tag %v", name, body["tag"])
+		}
+		if body["rkey"] != "rk-fan" {
+			t.Fatalf("%s: wrong rkey %v", name, body["rkey"])
+		}
+		// No DID should be included in relay-to-relay fan-out
+		if _, hasDID := body["did"]; hasDID {
+			t.Fatalf("%s: relay-to-relay should not contain DID, got %v", name, body["did"])
+		}
+		if body["payload"] != payload {
+			t.Fatalf("%s: wrong payload %v", name, body["payload"])
+		}
+	}
+}
+
+func TestEventPosted_FanOutTimeout(t *testing.T) {
+	env := newTestEnv(t)
+
+	// One relay is responsive, one hangs
+	var mu sync.Mutex
+	var fastReceived bool
+
+	fastRelay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/relay/event" {
+			mu.Lock()
+			fastReceived = true
+			mu.Unlock()
+			w.WriteHeader(http.StatusAccepted)
+		}
+	}))
+	defer fastRelay.Close()
+
+	// Use a URL that will connection-refuse immediately
+	deadURL := "http://127.0.0.1:1" // port 1 is not listening
+
+	tag := "aabbccddaabbccddaabbccddaabbccdd"
+	bob := env.connect("did:plc:bob")
+	bob.postEventWithPayload(tag, "rk-timeout", "cGF5bG9hZA==", []string{fastRelay.URL, deadURL})
+
+	// Give fan-out time — fast relay should complete even though dead one fails
+	time.Sleep(1 * time.Second)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !fastReceived {
+		t.Fatal("fast relay should have received fan-out despite slow relay")
+	}
+}
+
+func TestEventPosted_FanOutPlusLocalDelivery(t *testing.T) {
+	env := newTestEnv(t)
+
+	var mu sync.Mutex
+	var relayReceived bool
+
+	mockRelay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/relay/event" {
+			mu.Lock()
+			relayReceived = true
+			mu.Unlock()
+			w.WriteHeader(http.StatusAccepted)
+		}
+	}))
+	defer mockRelay.Close()
+
+	tag := "aabbccddaabbccddaabbccddaabbccdd"
+	payload := base64.StdEncoding.EncodeToString([]byte("local-and-remote"))
+
+	// Alice has two devices on the same relay
+	alice1 := env.connect("did:plc:alice")
+	alice2 := env.connect("did:plc:alice")
+	alice1.watchTags(tag)
+	alice2.watchTags(tag)
+	time.Sleep(50 * time.Millisecond)
+
+	// Alice device 1 posts — device 2 should get local delivery AND fan-out should happen
+	alice1.postEventWithPayload(tag, "rk-both", payload, []string{mockRelay.URL})
+
+	// Device 2 should receive locally
+	msg := alice2.readMsgAs("new_event")
+	if msg["payload"] != payload {
+		t.Fatalf("expected payload in local delivery, got %v", msg["payload"])
+	}
+
+	// Fan-out should also have happened
+	time.Sleep(500 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if !relayReceived {
+		t.Fatal("expected fan-out to remote relay")
+	}
+}
+
+func TestNormalizeRelayURL(t *testing.T) {
+	tests := []struct {
+		input, want string
+	}{
+		{"ws://127.0.0.1:8080/ws", "http://127.0.0.1:8080"},
+		{"wss://relay.example.com/ws", "https://relay.example.com"},
+		{"ws://127.0.0.1:8080", "http://127.0.0.1:8080"},
+		{"wss://relay.example.com", "https://relay.example.com"},
+		{"http://127.0.0.1:8080", "http://127.0.0.1:8080"},
+		{"https://relay.example.com", "https://relay.example.com"},
+		{"http://127.0.0.1:8080/", "http://127.0.0.1:8080"},
+	}
+	for _, tt := range tests {
+		got := normalizeRelayURL(tt.input)
+		if got != tt.want {
+			t.Errorf("normalizeRelayURL(%q) = %q, want %q", tt.input, got, tt.want)
+		}
 	}
 }

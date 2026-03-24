@@ -2,11 +2,13 @@
 
 use crate::error::{Error, Result};
 use crate::records::{
-    EventData, EventRecord, KeyPackageData, KeyPackageRecord, StealthAddressData,
-    StealthAddressRecord,
+    DrawbridgeConfigRecord, DrawbridgeEntry, EventData, EventRecord, KeyPackageData, KeyPackageRecord,
+    StealthAddressData, StealthAddressRecord,
 };
 use atrium_api::agent::{store::MemorySessionStore, AtpAgent};
-use atrium_api::com::atproto::repo::{create_record, delete_record, list_records};
+use atrium_api::com::atproto::repo::{
+    create_record, delete_record, get_record, list_records, put_record,
+};
 use atrium_api::com::atproto::server::create_session::OutputData as SessionData;
 use atrium_api::types::string::{AtIdentifier, Nsid};
 use atrium_xrpc_client::reqwest::{ReqwestClient, ReqwestClientBuilder};
@@ -25,6 +27,9 @@ const EVENT_NSID: &str = "social.moat.event";
 
 /// Lexicon NSID for stealth addresses
 const STEALTH_ADDRESS_NSID: &str = "social.moat.stealthAddress";
+
+/// Lexicon NSID for Drawbridge configuration
+const DRAWBRIDGE_CONFIG_NSID: &str = "social.moat.drawbridgeConfig";
 
 /// Default PDS URL (Bluesky)
 const DEFAULT_PDS_URL: &str = "https://bsky.social";
@@ -703,6 +708,100 @@ impl MoatAtprotoClient {
         Ok(records)
     }
 
+    /// Publish (or update) this user's relay configuration.
+    ///
+    /// Uses `putRecord` with rkey `"self"` so the record is a singleton —
+    /// calling this again overwrites the previous configuration.
+    ///
+    /// Returns the AT-URI of the record.
+    pub async fn publish_drawbridge_config(&self, url: &str) -> Result<String> {
+        let data = DrawbridgeConfigRecord {
+            drawbridges: vec![DrawbridgeEntry {
+                url: url.to_string(),
+                priority: 1,
+            }],
+        };
+
+        let record_value = serde_json::to_value(&data)?;
+        let ipld_record = json_to_ipld(record_value)?;
+
+        let record = match ipld_record {
+            Ipld::Map(map) => atrium_api::types::Unknown::Object(
+                map.into_iter()
+                    .map(|(k, v)| (k, v.try_into().expect("valid ipld")))
+                    .collect(),
+            ),
+            _ => return Err(Error::Serialization("expected object".to_string())),
+        };
+
+        let input = put_record::InputData {
+            collection: Nsid::new(DRAWBRIDGE_CONFIG_NSID.to_string())
+                .map_err(|e| Error::InvalidRecord(e.to_string()))?,
+            record,
+            repo: AtIdentifier::Did(
+                self.did
+                    .parse()
+                    .map_err(|_| Error::InvalidDid(self.did.clone()))?,
+            ),
+            rkey: "self".to_string(),
+            swap_commit: None,
+            swap_record: None,
+            validate: None,
+        };
+
+        let output = self
+            .agent
+            .api
+            .com
+            .atproto
+            .repo
+            .put_record(input.into())
+            .await
+            .map_err(|e| Error::Pds(e.to_string()))?;
+
+        Ok(output.uri.to_string())
+    }
+
+    /// Fetch a user's Drawbridge configuration.
+    ///
+    /// Resolves the DID's PDS and fetches the `social.moat.drawbridgeConfig` record
+    /// with rkey `"self"`. Returns `None` if the user hasn't published one.
+    pub async fn fetch_drawbridge_config(&self, did: &str) -> Result<Option<DrawbridgeConfigRecord>> {
+        let pds_url = self.resolve_pds_endpoint(did).await?;
+        let pds_agent = self.agent_for_pds(&pds_url);
+
+        let input = get_record::ParametersData {
+            collection: Nsid::new(DRAWBRIDGE_CONFIG_NSID.to_string())
+                .map_err(|e| Error::InvalidRecord(e.to_string()))?,
+            repo: AtIdentifier::Did(
+                did.parse()
+                    .map_err(|_| Error::InvalidDid(did.to_string()))?,
+            ),
+            rkey: "self".to_string(),
+            cid: None,
+        };
+
+        let output = match pds_agent
+            .api
+            .com
+            .atproto
+            .repo
+            .get_record(input.into())
+            .await
+        {
+            Ok(output) => output,
+            Err(_) => return Ok(None),
+        };
+
+        let value = serde_json::to_value(&output.value)
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+
+        match serde_json::from_value::<DrawbridgeConfigRecord>(value) {
+            Ok(record) => Ok(Some(record)),
+            Err(_) => Ok(None),
+        }
+    }
+
     /// Delete all Moat records from the user's PDS.
     ///
     /// This deletes all events, key packages, and stealth addresses.
@@ -710,7 +809,7 @@ impl MoatAtprotoClient {
     ///
     /// Returns the number of records deleted.
     pub async fn delete_all_records(&self) -> Result<usize> {
-        let collections = [EVENT_NSID, KEY_PACKAGE_NSID, STEALTH_ADDRESS_NSID];
+        let collections = [EVENT_NSID, KEY_PACKAGE_NSID, STEALTH_ADDRESS_NSID, DRAWBRIDGE_CONFIG_NSID];
         let mut total_deleted = 0;
 
         for collection in &collections {

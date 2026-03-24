@@ -310,7 +310,7 @@ impl KeyStore {
         Ok(())
     }
 
-    /// Append a message to a conversation's local storage, maintaining timestamp order.
+    /// Append a message to a conversation's local storage, maintaining rkey order.
     /// Returns `Ok(false)` if a message with the same rkey already exists (dedup).
     pub fn append_message(&self, conv_id: &str, message: StoredMessage) -> Result<bool> {
         let mut messages = self.load_messages(conv_id)?;
@@ -321,10 +321,30 @@ impl KeyStore {
         }
         let pos = messages
             .messages
-            .partition_point(|m| m.timestamp <= message.timestamp);
+            .partition_point(|m| m.rkey <= message.rkey);
         messages.messages.insert(pos, message);
         self.store_messages(conv_id, &messages)?;
         Ok(true)
+    }
+
+    /// Update a "pending" message's rkey to the real one and re-sort.
+    /// Matches by message_id when available, falls back to last "pending" message.
+    pub fn fixup_pending_rkey_by_message_id(&self, conv_id: &str, real_rkey: &str, message_id: Option<&[u8]>) -> Result<()> {
+        let mut messages = self.load_messages(conv_id)?;
+        let found = if let Some(mid) = message_id {
+            messages.messages.iter_mut().find(|m| {
+                m.rkey == "pending" && m.message_id.as_deref() == Some(mid)
+            })
+        } else {
+            messages.messages.iter_mut().rev().find(|m| m.rkey == "pending")
+        };
+        if let Some(msg) = found {
+            msg.rkey = real_rkey.to_string();
+        }
+        // Re-sort by rkey
+        messages.messages.sort_by(|a, b| a.rkey.cmp(&b.rkey));
+        self.store_messages(conv_id, &messages)?;
+        Ok(())
     }
 
     /// Store credentials (handle and app password)

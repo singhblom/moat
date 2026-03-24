@@ -31,13 +31,6 @@ class Conversation {
   /// Creation timestamp
   final DateTime createdAt;
 
-  /// Drawbridge hints received from partner devices.
-  /// Keyed by (partnerDid, deviceIdHex) — one hint per partner leaf node.
-  final List<StoredDrawbridgeHint> partnerDrawbridgeHints;
-
-  /// Our own ticket (hex) registered on our relay for this conversation
-  String? ownDrawbridgeTicketHex;
-
   Conversation({
     required this.groupId,
     required this.displayName,
@@ -48,21 +41,11 @@ class Conversation {
     this.epoch = 0,
     required this.keyBundleRef,
     required this.createdAt,
-    List<StoredDrawbridgeHint>? partnerDrawbridgeHints,
-    this.ownDrawbridgeTicketHex,
-  }) : partnerDrawbridgeHints = partnerDrawbridgeHints ?? [];
+  });
 
   /// Group ID as hex string (for display/storage keys)
   String get groupIdHex =>
       groupId.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-
-  /// Add or update a partner Drawbridge hint (keyed by partnerDid + deviceIdHex).
-  void upsertPartnerHint(StoredDrawbridgeHint hint) {
-    partnerDrawbridgeHints.removeWhere(
-      (h) => h.partnerDid == hint.partnerDid && h.deviceIdHex == hint.deviceIdHex,
-    );
-    partnerDrawbridgeHints.add(hint);
-  }
 
   Map<String, dynamic> toJson() => {
         'groupId': base64Encode(groupId),
@@ -74,11 +57,6 @@ class Conversation {
         'epoch': epoch,
         'keyBundleRef': keyBundleRef,
         'createdAt': createdAt.toIso8601String(),
-        if (partnerDrawbridgeHints.isNotEmpty)
-          'partnerDrawbridgeHints':
-              partnerDrawbridgeHints.map((h) => h.toJson()).toList(),
-        if (ownDrawbridgeTicketHex != null)
-          'ownDrawbridgeTicketHex': ownDrawbridgeTicketHex,
       };
 
   factory Conversation.fromJson(Map<String, dynamic> json) => Conversation(
@@ -95,41 +73,5 @@ class Conversation {
         epoch: json['epoch'] as int? ?? 0,
         keyBundleRef: json['keyBundleRef'] as String,
         createdAt: DateTime.parse(json['createdAt'] as String),
-        partnerDrawbridgeHints: (json['partnerDrawbridgeHints'] as List<dynamic>?)
-                ?.map((e) =>
-                    StoredDrawbridgeHint.fromJson(e as Map<String, dynamic>))
-                .toList() ??
-            [],
-        ownDrawbridgeTicketHex: json['ownDrawbridgeTicketHex'] as String?,
-      );
-}
-
-/// Persisted hint from a conversation partner's device.
-class StoredDrawbridgeHint {
-  final String url;
-  final String deviceIdHex;
-  final String ticketHex;
-  final String partnerDid;
-
-  StoredDrawbridgeHint({
-    required this.url,
-    required this.deviceIdHex,
-    required this.ticketHex,
-    required this.partnerDid,
-  });
-
-  Map<String, dynamic> toJson() => {
-        'url': url,
-        'deviceIdHex': deviceIdHex,
-        'ticketHex': ticketHex,
-        'partnerDid': partnerDid,
-      };
-
-  factory StoredDrawbridgeHint.fromJson(Map<String, dynamic> json) =>
-      StoredDrawbridgeHint(
-        url: json['url'] as String,
-        deviceIdHex: json['deviceIdHex'] as String,
-        ticketHex: json['ticketHex'] as String,
-        partnerDid: json['partnerDid'] as String,
       );
 }

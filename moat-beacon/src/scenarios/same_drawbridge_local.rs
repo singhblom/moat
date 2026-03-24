@@ -1,32 +1,24 @@
-//! Two-party Drawbridge push delivery scenario.
+//! Two-party same-Drawbridge local delivery scenario.
 //!
-//! Mirrors `two_party_chat` but gives each participant its own Drawbridge relay
-//! via [`TestWorld::new_with_drawbridge`].  After the fixed
-//! prologue, auto-polling is disabled on all participants; any message delivery
-//! must arrive via the Drawbridge push path.
+//! Both participants connect to a **single shared Drawbridge** relay.  When
+//! Alice sends a message, delivery is local within the relay — no relay-to-relay
+//! HTTP hop.  This tests the co-located deployment mode where users share a
+//! relay (like two users on the same server).
+//!
+//! After the prologue, auto-polling is disabled; delivery must come via push.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
 use crate::actions::Action;
-use crate::client::MoatCliClient;
 use crate::invariants::{
     check_per_sender_ordering, check_delivery, check_no_duplicates, ScenarioState,
 };
 use crate::world::TestWorld;
 
+use super::two_party_push::drain_events_push;
 use super::{execute_action, format_action, vlog};
-
-/// Wait for push-triggered fetches to complete without explicit polling.
-///
-/// Sleeps long enough for:
-/// 1. The sender's moat-cli to send `event_posted` to Drawbridge.
-/// 2. Drawbridge to forward `new_event` to the recipient.
-/// 3. The recipient's moat-cli to call `spawn_targeted_fetch` and retrieve the record.
-pub(crate) async fn drain_events_push(_alice: &MoatCliClient, _bob: &MoatCliClient) {
-    tokio::time::sleep(Duration::from_millis(1000)).await;
-}
 
 pub(crate) fn run_boxed(
     actions: Vec<Action>,
@@ -36,13 +28,13 @@ pub(crate) fn run_boxed(
 }
 
 pub async fn run(actions: Vec<Action>, verbose: bool) {
-    vlog!(verbose, "=== Scenario: two-party-push ===");
+    vlog!(verbose, "=== Scenario: same-drawbridge-local ===");
 
     // ── Prologue ──────────────────────────────────────────────────────────────
-    vlog!(verbose, "[setup] starting TestWorld (with Drawbridge)...");
-    let mut world = TestWorld::new_with_drawbridge(&[("alice", "alice"), ("bob", "bob")], ".postern.test")
+    vlog!(verbose, "[setup] starting TestWorld (shared Drawbridge)...");
+    let mut world = TestWorld::new_with_drawbridge(&[("alice", "shared"), ("bob", "shared")], ".postern.test")
         .await
-        .expect("world setup with drawbridge");
+        .expect("world setup with shared drawbridge");
     let alice = world.client("alice").clone();
     let bob = world.client("bob").clone();
 
@@ -57,9 +49,8 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
         .expect("bob login");
     vlog!(verbose, "[setup] login bob... done");
 
-    // Wait for both participants to connect to their own Drawbridge relay.
-    let drawbridge_deadline =
-        std::time::Instant::now() + Duration::from_secs(5);
+    // Wait for both participants to connect to the shared Drawbridge relay.
+    let drawbridge_deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
         let a = alice.status().await.expect("alice status");
         let b = bob.status().await.expect("bob status");
@@ -74,7 +65,7 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    vlog!(verbose, "[setup] Drawbridge connections established");
+    vlog!(verbose, "[setup] Drawbridge connections established (shared relay)");
 
     bob.watch_handle("alice.postern.test")
         .await
@@ -88,8 +79,7 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // One explicit poll: Bob joins the group (receives Welcome) and picks up
-    // Alice's DrawbridgeHint so he connects as recipient.
+    // Bob joins the group (receives Welcome).
     let stats = bob.poll().await.expect("bob join poll");
     assert!(
         stats.new_conversations > 0,
@@ -105,15 +95,15 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
         stats.new_conversations
     );
 
-    // Give Bob time to send reciprocal DrawbridgeHint, then Alice picks it up.
+    // Give Bob time to publish drawbridge config, then Alice fetches it.
     tokio::time::sleep(Duration::from_millis(500)).await;
     let _ = alice.poll().await;
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Disable auto-polling — delivery must come entirely through Drawbridge.
+    // Disable auto-polling — delivery must come via local Drawbridge push.
     alice.set_poll_interval(0).await.expect("disable alice polling");
     bob.set_poll_interval(0).await.expect("disable bob polling");
-    vlog!(verbose, "[setup] polling disabled (push-only mode)");
+    vlog!(verbose, "[setup] polling disabled (push-only mode via shared relay)");
 
     // ── Random action sequence ─────────────────────────────────────────────────
     if verbose {
@@ -142,7 +132,7 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
     if verbose {
         eprintln!();
     }
-    vlog!(verbose, "[drain] waiting for push events to propagate...");
+    vlog!(verbose, "[drain] waiting for local push events to propagate...");
     drain_events_push(&alice, &bob).await;
 
     let confirmed = state.sent_messages.iter().filter(|m| m.message_id.is_some()).count();

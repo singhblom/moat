@@ -50,7 +50,7 @@ impl DrawbridgeProcess {
             .env("LOG_FORMAT", "text")
             .env("PLC_BASE_URL", plc_base_url)
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::inherit())
             .spawn()
             .context("spawn drawbridge process")?;
 

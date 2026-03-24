@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc d64c49838d5f052df48ec3664ddc46fc2991017f1c38a3efcbfa36c1d8fa32e6 # shrinks to actions = [SendMessage { from: ParticipantId(0), text_idx: 6 }, Poll { participant: ParticipantId(0) }, React { from: ParticipantId(0), message_idx: 0, emoji_idx: 2 }, React { from: ParticipantId(0), message_idx: 0, emoji_idx: 3 }, SendMessage { from: ParticipantId(1), text_idx: 3 }, SendMessage { from: ParticipantId(1), text_idx: 0 }]
+cc 7b0d1ddb795be20325b12ccce1b8447c5c8d26598872a997e4aaa25d642b2457 # shrinks to actions = [SendMessage { from: ParticipantId(0), text_idx: 5 }, React { from: ParticipantId(0), message_idx: 0, emoji_idx: 0 }, SendMessage { from: ParticipantId(0), text_idx: 6 }, Poll { participant: ParticipantId(1) }, SendMessage { from: ParticipantId(0), text_idx: 3 }, React { from: ParticipantId(0), message_idx: 1, emoji_idx: 4 }, SendMessage { from: ParticipantId(1), text_idx: 5 }, Poll { participant: ParticipantId(1) }, SendMessage { from: ParticipantId(0), text_idx: 1 }]

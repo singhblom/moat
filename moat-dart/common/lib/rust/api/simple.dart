@@ -16,69 +16,43 @@ StealthKeypair generateStealthKeypair() =>
 
 /// Encrypt a Welcome for one or more recipients' stealth addresses (multi-device support).
 /// Each recipient pubkey must be 32 bytes.
-Future<Uint8List> encryptForStealth({
-  required List<Uint8List> recipientScanPubkeys,
-  required List<int> welcomeBytes,
-}) => RustLib.instance.api.crateApiSimpleEncryptForStealth(
-  recipientScanPubkeys: recipientScanPubkeys,
-  welcomeBytes: welcomeBytes,
-);
+Future<Uint8List> encryptForStealth(
+        {required List<Uint8List> recipientScanPubkeys,
+        required List<int> welcomeBytes}) =>
+    RustLib.instance.api.crateApiSimpleEncryptForStealth(
+        recipientScanPubkeys: recipientScanPubkeys, welcomeBytes: welcomeBytes);
 
 /// Try to decrypt a stealth-encrypted payload. Returns None if not for us.
-Uint8List? tryDecryptStealth({
-  required List<int> scanPrivkey,
-  required List<int> payload,
-}) => RustLib.instance.api.crateApiSimpleTryDecryptStealth(
-  scanPrivkey: scanPrivkey,
-  payload: payload,
-);
+Uint8List? tryDecryptStealth(
+        {required List<int> scanPrivkey, required List<int> payload}) =>
+    RustLib.instance.api.crateApiSimpleTryDecryptStealth(
+        scanPrivkey: scanPrivkey, payload: payload);
 
 /// Generate candidate tags for recipient scanning.
 ///
 /// Returns a list of (tag, counter) pairs for the given sender in the group.
-List<Uint8List> generateCandidateTags({
-  required MoatSessionHandle handle,
-  required List<int> groupId,
-  required String senderDid,
-  required List<int> senderDeviceId,
-  required BigInt fromCounter,
-  required BigInt count,
-}) => RustLib.instance.api.crateApiSimpleGenerateCandidateTags(
-  handle: handle,
-  groupId: groupId,
-  senderDid: senderDid,
-  senderDeviceId: senderDeviceId,
-  fromCounter: fromCounter,
-  count: count,
-);
+List<Uint8List> generateCandidateTags(
+        {required MoatSessionHandle handle,
+        required List<int> groupId,
+        required String senderDid,
+        required List<int> senderDeviceId,
+        required BigInt fromCounter,
+        required BigInt count}) =>
+    RustLib.instance.api.crateApiSimpleGenerateCandidateTags(
+        handle: handle,
+        groupId: groupId,
+        senderDid: senderDid,
+        senderDeviceId: senderDeviceId,
+        fromCounter: fromCounter,
+        count: count);
 
 /// Derive the next unique tag for publishing an event (increments counter).
-Uint8List deriveNextTag({
-  required MoatSessionHandle handle,
-  required List<int> groupId,
-  required List<int> keyBundle,
-}) => RustLib.instance.api.crateApiSimpleDeriveNextTag(
-  handle: handle,
-  groupId: groupId,
-  keyBundle: keyBundle,
-);
-
-/// Generate a random 32-byte Drawbridge ticket.
-Uint8List generateDrawbridgeTicket() =>
-    RustLib.instance.api.crateApiSimpleGenerateDrawbridgeTicket();
-
-/// Create a DrawbridgeHint event for the session's device.
-EventDto createDrawbridgeHint({
-  required MoatSessionHandle handle,
-  required List<int> groupId,
-  required String url,
-  required List<int> ticket,
-}) => RustLib.instance.api.crateApiSimpleCreateDrawbridgeHint(
-  handle: handle,
-  groupId: groupId,
-  url: url,
-  ticket: ticket,
-);
+Uint8List deriveNextTag(
+        {required MoatSessionHandle handle,
+        required List<int> groupId,
+        required List<int> keyBundle}) =>
+    RustLib.instance.api.crateApiSimpleDeriveNextTag(
+        handle: handle, groupId: groupId, keyBundle: keyBundle);
 
 /// Sign a Drawbridge challenge with the Ed25519 identity key from a key bundle.
 ///
@@ -86,13 +60,10 @@ EventDto createDrawbridgeHint({
 /// The caller is responsible for base64-encoding for JSON transport.
 ///
 /// `message` is typically `"{nonce}\n{relay_url}\n{timestamp}\n"`.
-Future<DrawbridgeChallengeSignature> signDrawbridgeChallenge({
-  required List<int> keyBundle,
-  required List<int> message,
-}) => RustLib.instance.api.crateApiSimpleSignDrawbridgeChallenge(
-  keyBundle: keyBundle,
-  message: message,
-);
+Future<DrawbridgeChallengeSignature> signDrawbridgeChallenge(
+        {required List<int> keyBundle, required List<int> message}) =>
+    RustLib.instance.api.crateApiSimpleSignDrawbridgeChallenge(
+        keyBundle: keyBundle, message: message);
 
 /// Pad plaintext to bucket size (256, 1024, or 4096 bytes).
 Uint8List padToBucket({required List<int> plaintext}) =>
@@ -105,50 +76,42 @@ Uint8List unpad({required List<int> padded}) =>
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MoatSessionHandle>>
 abstract class MoatSessionHandle implements RustOpaqueInterface {
   /// Add a member to a group. Returns welcome result.
-  Future<WelcomeResultDto> addMember({
-    required List<int> groupId,
-    required List<int> keyBundle,
-    required List<int> newMemberKeyPackage,
-  });
+  Future<WelcomeResultDto> addMember(
+      {required List<int> groupId,
+      required List<int> keyBundle,
+      required List<int> newMemberKeyPackage});
 
   /// Create a new MLS group with DID and device name. Returns the group ID.
-  Future<Uint8List> createGroup({
-    required String did,
-    required String deviceName,
-    required List<int> keyBundle,
-  });
+  Future<Uint8List> createGroup(
+      {required String did,
+      required String deviceName,
+      required List<int> keyBundle});
 
   /// Decrypt a ciphertext for a group. Returns decrypt result with any warnings.
-  Future<DecryptResultDto> decryptEvent({
-    required List<int> groupId,
-    required List<int> ciphertext,
-  });
+  Future<DecryptResultDto> decryptEvent(
+      {required List<int> groupId, required List<int> ciphertext});
 
   /// Get the 16-byte device ID.
   Uint8List deviceId();
 
   /// Encrypt an event for a group. Returns encrypt result.
-  Future<EncryptResultDto> encryptEvent({
-    required List<int> groupId,
-    required List<int> keyBundle,
-    required EventDto event,
-  });
+  Future<EncryptResultDto> encryptEvent(
+      {required List<int> groupId,
+      required List<int> keyBundle,
+      required EventDto event});
 
   /// Export the full session state as bytes for persistence.
   Future<Uint8List> exportState();
 
   /// Restore a session from previously exported state bytes.
   static Future<MoatSessionHandle> fromState({required List<int> state}) =>
-      RustLib.instance.api.crateApiSimpleMoatSessionHandleFromState(
-        state: state,
-      );
+      RustLib.instance.api
+          .crateApiSimpleMoatSessionHandleFromState(state: state);
 
   /// Generate a new key package with DID and device name.
   /// Returns (key_package_bytes, key_bundle_bytes).
-  Future<KeyPackageResult> generateKeyPackage({
-    required String did,
-    required String deviceName,
-  });
+  Future<KeyPackageResult> generateKeyPackage(
+      {required String did, required String deviceName});
 
   /// Get the DIDs of all members in a group (deduplicated).
   Future<List<String>> getGroupDids({required List<int> groupId});
@@ -236,31 +199,6 @@ class DrawbridgeChallengeSignature {
           publicKey == other.publicKey;
 }
 
-/// Drawbridge hint payload extracted from a DrawbridgeHint event.
-class DrawbridgeHintPayloadDto {
-  final String url;
-  final Uint8List deviceId;
-  final Uint8List ticket;
-
-  const DrawbridgeHintPayloadDto({
-    required this.url,
-    required this.deviceId,
-    required this.ticket,
-  });
-
-  @override
-  int get hashCode => url.hashCode ^ deviceId.hashCode ^ ticket.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is DrawbridgeHintPayloadDto &&
-          runtimeType == other.runtimeType &&
-          url == other.url &&
-          deviceId == other.deviceId &&
-          ticket == other.ticket;
-}
-
 class EncryptResultDto {
   final Uint8List newGroupState;
   final Uint8List tag;
@@ -311,15 +249,12 @@ class EventDto {
     this.messageId,
   });
 
-  /// Parse the payload as a DrawbridgeHint. Only valid when kind is DrawbridgeHint.
-  /// Returns None if this is not a DrawbridgeHint event or if the payload is malformed.
-  DrawbridgeHintPayloadDto? drawbridgeHintPayload() => RustLib.instance.api
-      .crateApiSimpleEventDtoDrawbridgeHintPayload(that: this);
-
   /// Parse the payload as a reaction. Only valid when kind is Reaction.
   /// Returns None if this is not a Reaction event or if the payload is malformed.
   ReactionPayloadDto? reactionPayload() =>
-      RustLib.instance.api.crateApiSimpleEventDtoReactionPayload(that: this);
+      RustLib.instance.api.crateApiSimpleEventDtoReactionPayload(
+        that: this,
+      );
 
   @override
   int get hashCode =>
@@ -347,15 +282,18 @@ enum EventKindDto {
   welcome,
   checkpoint,
   reaction,
-  drawbridgeHint,
   unknown,
+  ;
 }
 
 class KeyPackageResult {
   final Uint8List keyPackage;
   final Uint8List keyBundle;
 
-  const KeyPackageResult({required this.keyPackage, required this.keyBundle});
+  const KeyPackageResult({
+    required this.keyPackage,
+    required this.keyBundle,
+  });
 
   @override
   int get hashCode => keyPackage.hashCode ^ keyBundle.hashCode;
@@ -399,7 +337,10 @@ class SenderInfoDto {
   /// The sender's device name (format: "did:plc:xxx/Device Name")
   final String deviceName;
 
-  const SenderInfoDto({required this.did, required this.deviceName});
+  const SenderInfoDto({
+    required this.did,
+    required this.deviceName,
+  });
 
   @override
   int get hashCode => did.hashCode ^ deviceName.hashCode;
@@ -417,7 +358,10 @@ class StealthKeypair {
   final Uint8List privateKey;
   final Uint8List publicKey;
 
-  const StealthKeypair({required this.privateKey, required this.publicKey});
+  const StealthKeypair({
+    required this.privateKey,
+    required this.publicKey,
+  });
 
   @override
   int get hashCode => privateKey.hashCode ^ publicKey.hashCode;

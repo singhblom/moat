@@ -249,6 +249,71 @@ pub async fn check_consensus_ordering_n(
     Ok(())
 }
 
+/// For each sender, their messages appear in the same relative order in all
+/// participants' views, and that order matches the original send order.
+///
+/// N-participant version of [`check_per_sender_ordering`].
+pub async fn check_per_sender_ordering_n(
+    clients: &[&MoatCliClient],
+    state: &ScenarioState,
+) -> Result<()> {
+    let mut all_msgs = Vec::new();
+    for client in clients {
+        let msgs = client.get_messages(&state.group_id).await?;
+        all_msgs.push(msgs);
+    }
+
+    // Check ordering for each sender
+    let max_participant = clients.len();
+    for sender_idx in 0..max_participant {
+        let sender = ParticipantId(sender_idx);
+        let sent_ids: Vec<String> = state
+            .sent_messages
+            .iter()
+            .filter(|m| m.from == sender)
+            .filter_map(|m| m.message_id.clone())
+            .collect();
+
+        if sent_ids.is_empty() {
+            continue;
+        }
+
+        let sent_refs: Vec<&str> = sent_ids.iter().map(|s| s.as_str()).collect();
+
+        // Collect each participant's view of this sender's messages
+        let mut orders: Vec<Vec<&str>> = Vec::new();
+        for msgs in &all_msgs {
+            let order: Vec<&str> = msgs
+                .iter()
+                .filter_map(|m| m.message_id.as_deref())
+                .filter(|id| sent_ids.iter().any(|s| s == id))
+                .collect();
+            orders.push(order);
+        }
+
+        // All views must agree
+        for (i, order) in orders.iter().enumerate().skip(1) {
+            if order != &orders[0] {
+                anyhow::bail!(
+                    "Per-sender ordering violated for sender {sender_idx}:\n  Participant 0: {:?}\n  Participant {i}: {:?}",
+                    orders[0],
+                    order,
+                );
+            }
+        }
+
+        // The agreed order must match send order
+        if orders[0] != sent_refs {
+            anyhow::bail!(
+                "Send order violated for sender {sender_idx}:\n  Send order: {:?}\n  All see:    {:?}",
+                sent_refs,
+                orders[0],
+            );
+        }
+    }
+    Ok(())
+}
+
 /// No participant's message list contains the same message ID more than once.
 pub async fn check_no_duplicates_n(
     clients: &[&MoatCliClient],

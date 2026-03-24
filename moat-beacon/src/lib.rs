@@ -1,30 +1,17 @@
 //! moat-beacon: integration & property test harness for the moat stack.
 //!
 //! Beacon orchestrates real processes — `moat-cli --http`, Postern,
-//! Toxiproxy, and (later) Drawbridge — and verifies invariants over
-//! scripted or randomly generated action sequences.
+//! Toxiproxy, and Drawbridge — and verifies invariants over scripted or
+//! randomly generated action sequences.
 //!
-//! # Phase 1 (complete)
-//! - [`TestWorld`] — spins up Postern + one `moat-cli --http` process per
-//!   participant.
-//! - [`MoatCliClient`] — typed HTTP client for the moat-cli REST API.
-//!
-//! # Phase 2 (complete)
-//! - [`ToxiproxyManager`] — find/download/spawn Toxiproxy, create proxies.
-//! - All participant connections now route through `proxy-pds` so tests can
-//!   inject network faults via [`TestWorld::toxiproxy`].
-//!
-//! # Phase 3 (complete)
+//! Key components:
+//! - [`world::TestWorld`] — spins up Postern, Toxiproxy, optional Drawbridge
+//!   relays, and one `moat-cli --http` subprocess per participant.
+//! - [`client::MoatCliClient`] — typed HTTP client for the moat-cli REST API.
 //! - [`actions`] — `Action` enum with `prop_flat_map` fold strategy.
 //! - [`invariants`] — `ScenarioState`, `drain_events`, invariant checkers.
-//!
-//! # Phase 4 (complete)
 //! - [`drawbridge`] — `DrawbridgeProcess`: build Go binary, spawn, health-check.
-//! - [`TestWorld::new_with_drawbridge`] — extended world with push delivery.
-//!
-//! # Phase 5 (complete)
-//! - [`scenarios`] — `Scenario` registry, seed utilities.
-//! - `beacon list` / `beacon run <name>` / `beacon replay <name> <seed>` CLI.
+//! - [`scenarios`] — `Scenario` registry, seed utilities, and CLI (`list` / `run` / `replay`).
 
 pub mod actions;
 pub mod client;

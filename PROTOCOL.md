@@ -172,7 +172,7 @@ Every event’s `kind` is now namespaced as `<domain>.<variant>`:
 
 | Domain | Variants | Purpose |
 |--------|----------|---------|
-| `control.*` | `control.commit`, `control.welcome`, `control.checkpoint`, `control.drawbridge_hint` | MLS state management and coordination; payload is TLS-serialized bytes (commit/welcome/checkpoint) or structured JSON (drawbridge_hint). No `message_id` is present. |
+| `control.*` | `control.commit`, `control.welcome`, `control.checkpoint` | MLS state management and coordination; payload is TLS-serialized bytes. No `message_id` is present. |
 | `message.*` | `message.short_text`, `message.medium_text`, `message.long_text`, `message.image` | User-visible content plus optional previews/external blobs. Each carries a 16-byte `message_id`. |
 | `modifier.*` | `modifier.reaction` (more to follow) | Small toggles or annotations that reference an existing `message_id`. |
 
@@ -232,40 +232,30 @@ The symmetric `key` inside each `external` entry is forward-secret: it lives wit
 
 No specific retention policy is mandated in the current protocol version.
 
-## Drawbridge Hints
+## Drawbridge Discovery
 
-A Drawbridge is a WebSocket relay that provides real-time push notifications for new events. Each user can run their own Drawbridge or use a shared one. The `control.drawbridge_hint` event tells conversation partners which Drawbridge to connect to and how to authenticate.
+A Drawbridge is a WebSocket relay that provides real-time push notifications for new events. Each user connects only to their own Drawbridge (authenticated via DID challenge-response). Drawbridge discovery uses a public ATProto record rather than in-band MLS events.
 
-### Payload Schema
+### Drawbridge Configuration Record
 
-The `control.drawbridge_hint` event payload is JSON:
+Each user publishes their Drawbridge URL(s) as an ATProto record:
 
-```json
+```
+Collection: social.moat.drawbridgeConfig
+RKey: self
+
 {
-  "url": "wss://relay.example.com/ws",
-  "device_id": [16 bytes],
-  "ticket": [32 bytes]
+  "drawbridges": [
+    { "url": "wss://drawbridge.moat.chat", "priority": 1 }
+  ]
 }
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `url` | String | WebSocket URL of the Drawbridge relay |
-| `device_id` | 16 bytes | Sender's device ID (identifies which device this hint applies to) |
-| `ticket` | 32 bytes | Random ticket for recipient authentication on the Drawbridge |
+This is a singleton record (upserted via `putRecord`). Clients fetch partner Drawbridge configs via `getRecord` and cache them in memory.
 
-### Lifecycle
+### Message Delivery
 
-1. After creating a conversation (or when changing Drawbridge), the sender generates a random 32-byte ticket and registers it on their Drawbridge via `register_ticket`.
-2. The sender encrypts a `control.drawbridge_hint` event and publishes it to the group.
-3. Recipients decrypt the hint, connect to the specified Drawbridge URL, and authenticate with the ticket via `ticket_auth`.
-4. Recipients can then `watch_tags` on that Drawbridge to receive real-time `new_event` notifications.
-
-**Adding members:** <a id="adding-members"></a> When Alice adds Carol to a group, Alice bundles the Drawbridge hints of all existing members alongside the Welcome (see [Adding Members](#adding-members-to-an-existing-group)). Carol processes these hints immediately upon joining, connecting to every existing member's relay without waiting for them to come online. Carol then sends a single reciprocal hint (encrypted as a group event) so existing members can discover her relay. This produces exactly one hint event regardless of group size. Existing members do not need to publish anything — they already have each other's hints from before. Hints are only exchanged when the member list changes; regular epoch advances do not trigger new hints.
-
-### Deduplication
-
-One hint per `(sender_did, device_id)` pair per group — the latest hint wins. If a sender changes their Drawbridge or rotates a ticket, they send a new hint; recipients replace the old one.
+When a sender posts an event, their client sends an envelope to their own Drawbridge containing the encrypted payload and the recipient Drawbridge URLs (discovered from `social.moat.drawbridgeConfig`). The sender's Drawbridge fans out to each recipient's Drawbridge via `POST /relay/event`. Recipient Drawbridges deliver immediately to clients watching the matching tag.
 
 ## Transcript Integrity
 

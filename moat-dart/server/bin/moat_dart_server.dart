@@ -70,7 +70,7 @@ Future<void> main(List<String> args) async {
 
   // Wire Drawbridge push notifications to trigger polling.
   if (drawbridgeUrl != null) {
-    DrawbridgeService.instance.onNewEvent = () {
+    DrawbridgeService.instance.onNewEvent = (_) {
       pollingService.pollOnce();
     };
   }
@@ -81,7 +81,6 @@ Future<void> main(List<String> args) async {
     convsService: convsService,
     watchListService: watchListService,
     pollingService: pollingService,
-    drawbridgeUrl: drawbridgeUrl,
   );
 
   // Parse address.

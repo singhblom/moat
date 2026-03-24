@@ -1,6 +1,5 @@
 import 'dart:typed_data';
 import '../models/conversation.dart';
-import '../rust/api/simple.dart';
 import 'auth_service.dart';
 import 'conversations_service.dart';
 import 'drawbridge_service.dart';
@@ -10,7 +9,7 @@ import 'debug_log.dart';
 ///
 /// Encapsulates the full flow: resolve handle, fetch stealth addresses + key
 /// packages, create MLS group, publish stealth-encrypted welcome, register
-/// tags, optionally set up Drawbridge push, and save the conversation.
+/// tags, fetch partner Drawbridge config, and save the conversation.
 ///
 /// Used by both the Flutter app and the headless server so that integration
 /// tests exercise the exact same code path as production.
@@ -18,7 +17,6 @@ Future<Conversation> startConversation({
   required String recipientHandle,
   required AuthService authService,
   required ConversationsService convsService,
-  String? drawbridgeUrl,
 }) async {
   final client = authService.atprotoClient;
 
@@ -61,44 +59,20 @@ Future<Conversation> startConversation({
 
   final groupIdHex = _bytesToHex(result.groupId);
 
-  // 8. Drawbridge setup (if URL provided).
-  String? ownTicketHex;
-  if (drawbridgeUrl != null) {
-    final ticket = generateDrawbridgeTicket();
-    ownTicketHex =
-        ticket.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-
-    // Register ticket on our own relay.
-    DrawbridgeService.instance.registerTicket(groupIdHex, ownTicketHex);
-
-    // Create and publish DrawbridgeHint event.
-    final session = authService.moatSession;
-    final keyBundle = await authService.getKeyBundle();
-    if (session != null && keyBundle != null) {
-      final hintEvent = createDrawbridgeHint(
-        handle: session,
-        groupId: result.groupId,
-        url: drawbridgeUrl,
-        ticket: ticket,
-      );
-
-      final encResult = await session.encryptEvent(
-        groupId: result.groupId,
-        keyBundle: keyBundle,
-        event: hintEvent,
-      );
-      final hintUri =
-          await client.publishEvent(encResult.tag, encResult.ciphertext);
-      await authService.saveMlsState();
-
-      // Notify relay about the hint event.
-      final hintRkey = hintUri.split('/').last;
-      DrawbridgeService.instance
-          .notifyEventPosted(encResult.tag, hintRkey);
-    }
+  // 8. Register tags on own Drawbridge.
+  final session = authService.moatSession;
+  if (session != null) {
+    final tags = session.populateCandidateTags(groupId: result.groupId);
+    DrawbridgeService.instance
+        .addTags(tags.map((t) => Uint8List.fromList(t)).toList());
   }
 
-  // 9. Resolve display name.
+  // 9. Fetch recipient's Drawbridge config and cache it.
+  final recipientRelayUrls = await client.fetchDrawbridgeConfig(recipientDid);
+  DrawbridgeService.instance
+      .cacheDrawbridgeConfig(recipientDid, recipientRelayUrls);
+
+  // 10. Resolve display name.
   String displayName;
   try {
     displayName = await client.resolveHandle(recipientDid);
@@ -106,7 +80,7 @@ Future<Conversation> startConversation({
     displayName = recipientDid;
   }
 
-  // 10. Save conversation.
+  // 11. Save conversation.
   final conversation = Conversation(
     groupId: result.groupId,
     displayName: displayName,
@@ -114,7 +88,6 @@ Future<Conversation> startConversation({
     epoch: result.epoch,
     keyBundleRef: 'key_bundle_$groupIdHex',
     createdAt: DateTime.now(),
-    ownDrawbridgeTicketHex: ownTicketHex,
   );
 
   await convsService.saveConversation(conversation);

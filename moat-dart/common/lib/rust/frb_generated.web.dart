@@ -21,37 +21,29 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   });
 
   CrossPlatformFinalizerArg
-  get rust_arc_decrement_strong_count_MoatSessionHandlePtr => wire
-      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle;
+      get rust_arc_decrement_strong_count_MoatSessionHandlePtr => wire
+          .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle;
 
   @protected
   MoatSessionHandle
-  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-    dynamic raw,
-  );
+      dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          dynamic raw);
 
   @protected
   MoatSessionHandle
-  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-    dynamic raw,
-  );
+      dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          dynamic raw);
 
   @protected
   MoatSessionHandle
-  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-    dynamic raw,
-  );
+      dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          dynamic raw);
 
   @protected
   String dco_decode_String(dynamic raw);
 
   @protected
   bool dco_decode_bool(dynamic raw);
-
-  @protected
-  DrawbridgeHintPayloadDto dco_decode_box_autoadd_drawbridge_hint_payload_dto(
-    dynamic raw,
-  );
 
   @protected
   EventDto dco_decode_box_autoadd_event_dto(dynamic raw);
@@ -70,11 +62,7 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   DrawbridgeChallengeSignature dco_decode_drawbridge_challenge_signature(
-    dynamic raw,
-  );
-
-  @protected
-  DrawbridgeHintPayloadDto dco_decode_drawbridge_hint_payload_dto(dynamic raw);
+      dynamic raw);
 
   @protected
   EncryptResultDto dco_decode_encrypt_result_dto(dynamic raw);
@@ -104,13 +92,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
-  DrawbridgeHintPayloadDto?
-  dco_decode_opt_box_autoadd_drawbridge_hint_payload_dto(dynamic raw);
-
-  @protected
   ReactionPayloadDto? dco_decode_opt_box_autoadd_reaction_payload_dto(
-    dynamic raw,
-  );
+      dynamic raw);
 
   @protected
   SenderInfoDto? dco_decode_opt_box_autoadd_sender_info_dto(dynamic raw);
@@ -147,21 +130,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   MoatSessionHandle
-  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-    SseDeserializer deserializer,
-  );
+      sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          SseDeserializer deserializer);
 
   @protected
   MoatSessionHandle
-  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-    SseDeserializer deserializer,
-  );
+      sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          SseDeserializer deserializer);
 
   @protected
   MoatSessionHandle
-  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-    SseDeserializer deserializer,
-  );
+      sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          SseDeserializer deserializer);
 
   @protected
   String sse_decode_String(SseDeserializer deserializer);
@@ -170,22 +150,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
-  DrawbridgeHintPayloadDto sse_decode_box_autoadd_drawbridge_hint_payload_dto(
-    SseDeserializer deserializer,
-  );
-
-  @protected
   EventDto sse_decode_box_autoadd_event_dto(SseDeserializer deserializer);
 
   @protected
   ReactionPayloadDto sse_decode_box_autoadd_reaction_payload_dto(
-    SseDeserializer deserializer,
-  );
+      SseDeserializer deserializer);
 
   @protected
   SenderInfoDto sse_decode_box_autoadd_sender_info_dto(
-    SseDeserializer deserializer,
-  );
+      SseDeserializer deserializer);
 
   @protected
   BigInt sse_decode_box_autoadd_u_64(SseDeserializer deserializer);
@@ -195,13 +168,7 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   DrawbridgeChallengeSignature sse_decode_drawbridge_challenge_signature(
-    SseDeserializer deserializer,
-  );
-
-  @protected
-  DrawbridgeHintPayloadDto sse_decode_drawbridge_hint_payload_dto(
-    SseDeserializer deserializer,
-  );
+      SseDeserializer deserializer);
 
   @protected
   EncryptResultDto sse_decode_encrypt_result_dto(SseDeserializer deserializer);
@@ -223,8 +190,7 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<Uint8List> sse_decode_list_list_prim_u_8_strict(
-    SseDeserializer deserializer,
-  );
+      SseDeserializer deserializer);
 
   @protected
   List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer);
@@ -233,20 +199,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
-  DrawbridgeHintPayloadDto?
-  sse_decode_opt_box_autoadd_drawbridge_hint_payload_dto(
-    SseDeserializer deserializer,
-  );
-
-  @protected
   ReactionPayloadDto? sse_decode_opt_box_autoadd_reaction_payload_dto(
-    SseDeserializer deserializer,
-  );
+      SseDeserializer deserializer);
 
   @protected
   SenderInfoDto? sse_decode_opt_box_autoadd_sender_info_dto(
-    SseDeserializer deserializer,
-  );
+      SseDeserializer deserializer);
 
   @protected
   BigInt? sse_decode_opt_box_autoadd_u_64(SseDeserializer deserializer);
@@ -256,8 +214,7 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ReactionPayloadDto sse_decode_reaction_payload_dto(
-    SseDeserializer deserializer,
-  );
+      SseDeserializer deserializer);
 
   @protected
   SenderInfoDto sse_decode_sender_info_dto(SseDeserializer deserializer);
@@ -282,24 +239,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
-  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-    MoatSessionHandle self,
-    SseSerializer serializer,
-  );
+      sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          MoatSessionHandle self, SseSerializer serializer);
 
   @protected
   void
-  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-    MoatSessionHandle self,
-    SseSerializer serializer,
-  );
+      sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          MoatSessionHandle self, SseSerializer serializer);
 
   @protected
   void
-  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-    MoatSessionHandle self,
-    SseSerializer serializer,
-  );
+      sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          MoatSessionHandle self, SseSerializer serializer);
 
   @protected
   void sse_encode_String(String self, SseSerializer serializer);
@@ -308,55 +259,31 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
-  void sse_encode_box_autoadd_drawbridge_hint_payload_dto(
-    DrawbridgeHintPayloadDto self,
-    SseSerializer serializer,
-  );
-
-  @protected
   void sse_encode_box_autoadd_event_dto(
-    EventDto self,
-    SseSerializer serializer,
-  );
+      EventDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_box_autoadd_reaction_payload_dto(
-    ReactionPayloadDto self,
-    SseSerializer serializer,
-  );
+      ReactionPayloadDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_box_autoadd_sender_info_dto(
-    SenderInfoDto self,
-    SseSerializer serializer,
-  );
+      SenderInfoDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_box_autoadd_u_64(BigInt self, SseSerializer serializer);
 
   @protected
   void sse_encode_decrypt_result_dto(
-    DecryptResultDto self,
-    SseSerializer serializer,
-  );
+      DecryptResultDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_drawbridge_challenge_signature(
-    DrawbridgeChallengeSignature self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_drawbridge_hint_payload_dto(
-    DrawbridgeHintPayloadDto self,
-    SseSerializer serializer,
-  );
+      DrawbridgeChallengeSignature self, SseSerializer serializer);
 
   @protected
   void sse_encode_encrypt_result_dto(
-    EncryptResultDto self,
-    SseSerializer serializer,
-  );
+      EncryptResultDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_event_dto(EventDto self, SseSerializer serializer);
@@ -369,69 +296,47 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_key_package_result(
-    KeyPackageResult self,
-    SseSerializer serializer,
-  );
+      KeyPackageResult self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_String(List<String> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_list_prim_u_8_strict(
-    List<Uint8List> self,
-    SseSerializer serializer,
-  );
+      List<Uint8List> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_prim_u_8_loose(List<int> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_prim_u_8_strict(
-    Uint8List self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_opt_box_autoadd_drawbridge_hint_payload_dto(
-    DrawbridgeHintPayloadDto? self,
-    SseSerializer serializer,
-  );
+      Uint8List self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_box_autoadd_reaction_payload_dto(
-    ReactionPayloadDto? self,
-    SseSerializer serializer,
-  );
+      ReactionPayloadDto? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_box_autoadd_sender_info_dto(
-    SenderInfoDto? self,
-    SseSerializer serializer,
-  );
+      SenderInfoDto? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_box_autoadd_u_64(BigInt? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_list_prim_u_8_strict(
-    Uint8List? self,
-    SseSerializer serializer,
-  );
+      Uint8List? self, SseSerializer serializer);
 
   @protected
   void sse_encode_reaction_payload_dto(
-    ReactionPayloadDto self,
-    SseSerializer serializer,
-  );
+      ReactionPayloadDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_sender_info_dto(SenderInfoDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_stealth_keypair(
-    StealthKeypair self,
-    SseSerializer serializer,
-  );
+      StealthKeypair self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_64(BigInt self, SseSerializer serializer);
@@ -447,9 +352,7 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_welcome_result_dto(
-    WelcomeResultDto self,
-    SseSerializer serializer,
-  );
+      WelcomeResultDto self, SseSerializer serializer);
 }
 
 // Section: wire_class
@@ -457,21 +360,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 class RustLibWire implements BaseWire {
   RustLibWire.fromExternalLibrary(ExternalLibrary lib);
 
-  void
-  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-    int ptr,
-  ) => wasmModule
-      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-        ptr,
-      );
+  void rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          int ptr) =>
+      wasmModule
+          .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+              ptr);
 
-  void
-  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-    int ptr,
-  ) => wasmModule
-      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-        ptr,
-      );
+  void rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          int ptr) =>
+      wasmModule
+          .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+              ptr);
 }
 
 @JS('wasm_bindgen')
@@ -481,12 +380,10 @@ external RustLibWasmModule get wasmModule;
 @anonymous
 extension type RustLibWasmModule._(JSObject _) implements JSObject {
   external void
-  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-    int ptr,
-  );
+      rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          int ptr);
 
   external void
-  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
-    int ptr,
-  );
+      rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          int ptr);
 }

@@ -1,12 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"log/slog"
 	"math/rand"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // propEnv is a minimal test environment for property tests.
@@ -26,12 +33,6 @@ func newPropEnv() *propEnv {
 	return &propEnv{relay: relay}
 }
 
-func randomTicket(rng *rand.Rand) string {
-	b := make([]byte, 32)
-	rng.Read(b)
-	return hex.EncodeToString(b)
-}
-
 func randomDID(rng *rand.Rand) string {
 	b := make([]byte, 8)
 	rng.Read(b)
@@ -44,104 +45,11 @@ func randomTag(rng *rand.Rand) string {
 	return hex.EncodeToString(b)
 }
 
-// Property: Ticket can only be revoked by owner
-func TestProp_TicketRevokeOnlyByOwner(t *testing.T) {
-	rng := rand.New(rand.NewSource(42))
-
-	for i := 0; i < 100; i++ {
-		env := newPropEnv()
-		ticket := randomTicket(rng)
-		ownerDID := randomDID(rng)
-		otherDID := randomDID(rng)
-
-		// Register ticket
-		env.relay.ticketsMu.Lock()
-		env.relay.tickets[ticket] = ownerDID
-		env.relay.ticketsMu.Unlock()
-
-		// Create mock clients
-		ownerClient := &Client{did: ownerDID, authMode: AuthModeSender, send: make(chan []byte, 10)}
-		otherClient := &Client{did: otherDID, authMode: AuthModeSender, send: make(chan []byte, 10)}
-
-		// Other client tries to revoke - should fail
-		env.relay.handleRevokeTicket(otherClient, &RevokeTicketMsg{Ticket: ticket})
-
-		env.relay.ticketsMu.RLock()
-		_, stillExists := env.relay.tickets[ticket]
-		env.relay.ticketsMu.RUnlock()
-
-		if !stillExists {
-			t.Fatalf("ticket was revoked by non-owner")
-		}
-
-		// Owner revokes - should succeed
-		env.relay.handleRegisterTicket(ownerClient, &RegisterTicketMsg{Ticket: ticket}) // re-register to clear state
-		env.relay.handleRevokeTicket(ownerClient, &RevokeTicketMsg{Ticket: ticket})
-
-		env.relay.ticketsMu.RLock()
-		_, existsAfterOwnerRevoke := env.relay.tickets[ticket]
-		env.relay.ticketsMu.RUnlock()
-
-		if existsAfterOwnerRevoke {
-			t.Fatalf("ticket was NOT revoked by owner")
-		}
-	}
-}
-
-// Property: Revoked ticket cannot authenticate
-func TestProp_RevokedTicketCannotAuth(t *testing.T) {
-	rng := rand.New(rand.NewSource(43))
-
-	for i := 0; i < 100; i++ {
-		env := newPropEnv()
-		ticket := randomTicket(rng)
-		ownerDID := randomDID(rng)
-
-		// Register then revoke
-		env.relay.ticketsMu.Lock()
-		env.relay.tickets[ticket] = ownerDID
-		env.relay.ticketsMu.Unlock()
-
-		ownerClient := &Client{did: ownerDID, authMode: AuthModeSender, send: make(chan []byte, 10)}
-		env.relay.handleRevokeTicket(ownerClient, &RevokeTicketMsg{Ticket: ticket})
-
-		// Try to authenticate with revoked ticket
-		recipientClient := &Client{send: make(chan []byte, 10)}
-		err := env.relay.authenticateTicket(recipientClient, ticket)
-
-		if err == nil {
-			t.Fatalf("revoked ticket was accepted for auth")
-		}
-	}
-}
-
-// Property: Ticket registration is idempotent for same owner
-func TestProp_TicketRegistrationIdempotent(t *testing.T) {
-	rng := rand.New(rand.NewSource(44))
-
-	for i := 0; i < 100; i++ {
-		env := newPropEnv()
-		ticket := randomTicket(rng)
-		ownerDID := randomDID(rng)
-
-		ownerClient := &Client{did: ownerDID, authMode: AuthModeSender, send: make(chan []byte, 10)}
-
-		// Register multiple times
-		for j := 0; j < 5; j++ {
-			env.relay.handleRegisterTicket(ownerClient, &RegisterTicketMsg{Ticket: ticket})
-		}
-
-		env.relay.ticketsMu.RLock()
-		owner, exists := env.relay.tickets[ticket]
-		env.relay.ticketsMu.RUnlock()
-
-		if !exists {
-			t.Fatalf("ticket should exist after registration")
-		}
-		if owner != ownerDID {
-			t.Fatalf("ticket owner mismatch: got %s, want %s", owner, ownerDID)
-		}
-	}
+func randomPayload(rng *rand.Rand) string {
+	size := rng.Intn(4096) + 1
+	b := make([]byte, size)
+	rng.Read(b)
+	return base64.StdEncoding.EncodeToString(b)
 }
 
 // Property: byTag map consistency with client.tags
@@ -157,11 +65,10 @@ func TestProp_ByTagConsistency(t *testing.T) {
 
 		for j := 0; j < numClients; j++ {
 			c := &Client{
-				relay:    env.relay,
-				did:      randomDID(rng),
-				authMode: AuthModeSender,
-				tags:     make(map[string]bool),
-				send:     make(chan []byte, 10),
+				relay: env.relay,
+				did:   randomDID(rng),
+				tags:  make(map[string]bool),
+				send:  make(chan []byte, 10),
 			}
 			clients[j] = c
 			env.relay.register(c)
@@ -206,11 +113,10 @@ func TestProp_UnregisterRemovesFromAllMaps(t *testing.T) {
 
 		did := randomDID(rng)
 		c := &Client{
-			relay:    env.relay,
-			did:      did,
-			authMode: AuthModeSender,
-			tags:     make(map[string]bool),
-			send:     make(chan []byte, 10),
+			relay: env.relay,
+			did:   did,
+			tags:  make(map[string]bool),
+			send:  make(chan []byte, 10),
 		}
 
 		env.relay.register(c)
@@ -247,58 +153,6 @@ func TestProp_UnregisterRemovesFromAllMaps(t *testing.T) {
 	}
 }
 
-// Property: byDID only contains sender-authenticated clients
-func TestProp_ByDIDOnlySenders(t *testing.T) {
-	rng := rand.New(rand.NewSource(47))
-
-	for i := 0; i < 50; i++ {
-		env := newPropEnv()
-
-		// Create mix of senders and recipients
-		for j := 0; j < 10; j++ {
-			if rng.Intn(2) == 0 {
-				// Sender
-				did := randomDID(rng)
-				c := &Client{
-					relay:    env.relay,
-					did:      did,
-					authMode: AuthModeSender,
-					tags:     make(map[string]bool),
-					send:     make(chan []byte, 10),
-				}
-				env.relay.register(c)
-				env.relay.registerDID(c, did)
-			} else {
-				// Recipient
-				ticket := randomTicket(rng)
-				c := &Client{
-					relay:    env.relay,
-					ticket:   ticket,
-					authMode: AuthModeRecipient,
-					tags:     make(map[string]bool),
-					send:     make(chan []byte, 10),
-				}
-				env.relay.register(c)
-				// Recipients should NOT be in byDID
-			}
-		}
-
-		// Verify: all clients in byDID should be senders
-		env.relay.mu.RLock()
-		for did, didClients := range env.relay.byDID {
-			for c := range didClients {
-				if c.authMode != AuthModeSender {
-					t.Fatalf("non-sender in byDID[%s]", did)
-				}
-				if c.did != did {
-					t.Fatalf("client.did mismatch in byDID: got %s, want %s", c.did, did)
-				}
-			}
-		}
-		env.relay.mu.RUnlock()
-	}
-}
-
 // Property: event_posted delivers to exactly watchers minus sender
 func TestProp_EventRoutingExactWatchers(t *testing.T) {
 	rng := rand.New(rand.NewSource(48))
@@ -315,11 +169,10 @@ func TestProp_EventRoutingExactWatchers(t *testing.T) {
 		numClients := rng.Intn(10) + 3
 		for j := 0; j < numClients; j++ {
 			c := &Client{
-				relay:    env.relay,
-				did:      randomDID(rng),
-				authMode: AuthModeSender,
-				tags:     make(map[string]bool),
-				send:     make(chan []byte, 64),
+				relay: env.relay,
+				did:   randomDID(rng),
+				tags:  make(map[string]bool),
+				send:  make(chan []byte, 64),
 			}
 			env.relay.register(c)
 
@@ -399,11 +252,10 @@ func TestProp_UpdateTagsCorrectness(t *testing.T) {
 		env := newPropEnv()
 
 		c := &Client{
-			relay:    env.relay,
-			did:      randomDID(rng),
-			authMode: AuthModeSender,
-			tags:     make(map[string]bool),
-			send:     make(chan []byte, 10),
+			relay: env.relay,
+			did:   randomDID(rng),
+			tags:  make(map[string]bool),
+			send:  make(chan []byte, 10),
 		}
 		env.relay.register(c)
 
@@ -461,4 +313,293 @@ func TestProp_UpdateTagsCorrectness(t *testing.T) {
 		}
 		env.relay.mu.RUnlock()
 	}
+}
+
+// Property: Relay-to-relay routing matches tags — events delivered to watchers only
+func TestProp_RelayToRelayRoutingMatchesTags(t *testing.T) {
+	rng := rand.New(rand.NewSource(60))
+
+	for i := 0; i < 50; i++ {
+		env := newPropEnv()
+
+		// Create clients with random tags
+		numClients := rng.Intn(10) + 2
+		clients := make([]*Client, numClients)
+		for j := 0; j < numClients; j++ {
+			c := &Client{
+				relay: env.relay,
+				did:   randomDID(rng),
+				tags:  make(map[string]bool),
+				send:  make(chan []byte, 64),
+			}
+			clients[j] = c
+			env.relay.register(c)
+			env.relay.registerDID(c, c.did)
+
+			numTags := rng.Intn(5) + 1
+			tags := make([]string, numTags)
+			for k := range tags {
+				tags[k] = randomTag(rng)
+			}
+			env.relay.handleWatchTags(c, &WatchTagsMsg{Tags: tags})
+		}
+
+		// Simulate an inbound relay-to-relay event with a random tag
+		eventTag := randomTag(rng)
+		notification := NewEventMsg{
+			Type:    "new_event",
+			Tag:     eventTag,
+			RKey:    "rk-prop",
+			Payload: "dGVzdA==",
+		}
+
+		env.relay.deliverRelayEvent(&notification)
+
+		// Verify: only clients watching eventTag received it
+		for _, c := range clients {
+			select {
+			case <-c.send:
+				if !c.tags[eventTag] {
+					t.Fatalf("client not watching tag %s received event", eventTag)
+				}
+			default:
+				if c.tags[eventTag] {
+					t.Fatalf("client watching tag %s did NOT receive event", eventTag)
+				}
+			}
+		}
+	}
+}
+
+// Property: Payload survives round-trip through fan-out
+func TestProp_PayloadPreserved(t *testing.T) {
+	rng := rand.New(rand.NewSource(61))
+
+	for i := 0; i < 50; i++ {
+		done := make(chan string, 1)
+
+		mockRelay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/relay/event" {
+				var body map[string]any
+				json.NewDecoder(r.Body).Decode(&body)
+				if p, ok := body["payload"].(string); ok {
+					done <- p
+				}
+				w.WriteHeader(http.StatusAccepted)
+			}
+		}))
+
+		env := newPropEnv()
+		tag := randomTag(rng)
+		payload := randomPayload(rng)
+
+		sender := &Client{
+			relay: env.relay,
+			did:   randomDID(rng),
+			tags:  make(map[string]bool),
+			send:  make(chan []byte, 64),
+		}
+		env.relay.register(sender)
+
+		env.relay.handleEventPosted(sender, &EventPostedMsg{
+			Tag:       tag,
+			RKey:      "rk-payload",
+			Payload:   payload,
+			RelayURLs: []string{mockRelay.URL},
+		})
+
+		select {
+		case receivedPayload := <-done:
+			if receivedPayload != payload {
+				t.Fatalf("iteration %d: payload mismatch: sent %d bytes, received %d bytes",
+					i, len(payload), len(receivedPayload))
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("iteration %d: fan-out timed out", i)
+		}
+		mockRelay.Close()
+	}
+}
+
+// Property: Fan-out reaches all provided URLs
+func TestProp_FanOutReachesAllURLs(t *testing.T) {
+	rng := rand.New(rand.NewSource(62))
+
+	for i := 0; i < 30; i++ {
+		numRelays := rng.Intn(10) + 1
+		var wg sync.WaitGroup
+		wg.Add(numRelays)
+
+		servers := make([]*httptest.Server, numRelays)
+		urls := make([]string, numRelays)
+		for j := 0; j < numRelays; j++ {
+			localWg := &wg
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/relay/event" {
+					localWg.Done()
+					w.WriteHeader(http.StatusAccepted)
+				}
+			}))
+			servers[j] = srv
+			urls[j] = srv.URL
+		}
+
+		env := newPropEnv()
+		sender := &Client{
+			relay: env.relay,
+			did:   randomDID(rng),
+			tags:  make(map[string]bool),
+			send:  make(chan []byte, 64),
+		}
+		env.relay.register(sender)
+
+		env.relay.handleEventPosted(sender, &EventPostedMsg{
+			Tag:       randomTag(rng),
+			RKey:      "rk-all",
+			Payload:   "cGF5bG9hZA==",
+			RelayURLs: urls,
+		})
+
+		// Wait for all relays to receive
+		done := make(chan struct{})
+		go func() { wg.Wait(); close(done) }()
+		select {
+		case <-done:
+			// All relays received
+		case <-time.After(5 * time.Second):
+			t.Fatalf("iteration %d: fan-out to %d relays timed out", i, numRelays)
+		}
+
+		for _, srv := range servers {
+			srv.Close()
+		}
+	}
+}
+
+// Property: Dedup works across both local event_posted and relay-to-relay paths
+func TestProp_DedupAcrossBothPaths(t *testing.T) {
+	rng := rand.New(rand.NewSource(63))
+
+	for i := 0; i < 50; i++ {
+		log := slog.New(slog.NewTextHandler(&discardWriter{}, &slog.HandlerOptions{Level: slog.LevelError}))
+		verifier := newMockVerifier()
+		relay := NewRelay("", "ws://test", nil, verifier, log)
+		ctx, cancel := context.WithCancel(context.Background())
+		relay.Run(ctx)
+		defer cancel()
+
+		srv := httptest.NewServer(relay.Handler())
+		defer srv.Close()
+
+		tag := randomTag(rng)
+		rkey := "rk-" + randomTag(rng)[:8]
+
+		// Create a watcher
+		watcher := &Client{
+			relay: relay,
+			did:   randomDID(rng),
+			tags:  make(map[string]bool),
+			send:  make(chan []byte, 64),
+		}
+		relay.register(watcher)
+		relay.handleWatchTags(watcher, &WatchTagsMsg{Tags: []string{tag}})
+
+		senderDID := randomDID(rng)
+
+		// Path 1: local event_posted
+		sender := &Client{
+			relay: relay,
+			did:   senderDID,
+			tags:  make(map[string]bool),
+			send:  make(chan []byte, 64),
+		}
+		relay.register(sender)
+		relay.handleEventPosted(sender, &EventPostedMsg{Tag: tag, RKey: rkey, Payload: "cGF5bG9hZA=="})
+
+		// Path 2: relay-to-relay with same tag+rkey (no DID)
+		body, _ := json.Marshal(map[string]any{
+			"tag":     tag,
+			"rkey":    rkey,
+			"payload": "cGF5bG9hZA==",
+		})
+		resp, err := http.Post(srv.URL+"/relay/event", "application/json", bytes.NewReader(body))
+		if err == nil {
+			resp.Body.Close()
+		}
+
+		// Watcher should receive exactly 1 message
+		msgCount := 0
+		for {
+			select {
+			case <-watcher.send:
+				msgCount++
+			default:
+				goto done
+			}
+		}
+	done:
+		if msgCount != 1 {
+			t.Fatalf("iteration %d: expected exactly 1 delivery, got %d (dedup failed across paths)", i, msgCount)
+		}
+	}
+}
+
+// Property: update_tags overlap — when a tag is in both add and remove, add wins
+func TestProp_UpdateTagsOverlap(t *testing.T) {
+	rng := rand.New(rand.NewSource(50))
+
+	for i := 0; i < 100; i++ {
+		env := newPropEnv()
+		c := &Client{
+			relay: env.relay,
+			did:   randomDID(rng),
+			tags:  make(map[string]bool),
+			send:  make(chan []byte, 10),
+		}
+		env.relay.register(c)
+
+		// Start with some tags
+		initialTags := make([]string, rng.Intn(5)+1)
+		for j := range initialTags {
+			initialTags[j] = randomTag(rng)
+		}
+		env.relay.handleWatchTags(c, &WatchTagsMsg{Tags: initialTags})
+
+		// Generate overlapping add/remove sets
+		overlapTag := randomTag(rng) // this tag will be in BOTH add and remove
+		toRemove := []string{overlapTag}
+		toAdd := []string{overlapTag}
+
+		// Add some non-overlapping ones too
+		for j := 0; j < rng.Intn(3); j++ {
+			toRemove = append(toRemove, initialTags[rng.Intn(len(initialTags))])
+		}
+		for j := 0; j < rng.Intn(3); j++ {
+			toAdd = append(toAdd, randomTag(rng))
+		}
+
+		env.relay.handleUpdateTags(c, &UpdateTagsMsg{Add: toAdd, Remove: toRemove})
+
+		// The overlap tag should be present (add runs after remove)
+		env.relay.mu.RLock()
+		if !c.tags[overlapTag] {
+			t.Fatalf("iteration %d: overlapping tag should be present after update_tags (add wins over remove)", i)
+		}
+		// Also check byTag consistency
+		if _, ok := env.relay.byTag[overlapTag]; !ok || !env.relay.byTag[overlapTag][c] {
+			t.Fatalf("iteration %d: overlapping tag missing from byTag index", i)
+		}
+		env.relay.mu.RUnlock()
+	}
+}
+
+// --- Helpers for relay-to-relay in property tests ---
+
+// relayToRelayEndpoint creates a test server with the relay handler and returns its URL.
+func relayToRelayEndpoint(t *testing.T, relay *Relay) string {
+	t.Helper()
+	srv := httptest.NewServer(relay.Handler())
+	t.Cleanup(func() { srv.Close() })
+	_ = strings.TrimPrefix(srv.URL, "http") // suppress unused import if needed
+	return srv.URL
 }

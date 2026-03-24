@@ -24,15 +24,6 @@ type PushToken struct {
 	Token    string
 }
 
-// AuthMode represents the client's authentication mode.
-type AuthMode int
-
-const (
-	AuthModeNone      AuthMode = iota
-	AuthModeSender             // DID-authenticated, can event_posted + manage tickets
-	AuthModeRecipient          // Ticket-authenticated, can watch_tags + register_push
-)
-
 // Client represents a single WebSocket connection.
 type Client struct {
 	relay     *Relay
@@ -41,20 +32,16 @@ type Client struct {
 	pushToken *PushToken      // optional
 	send      chan []byte     // outbound message queue
 	authed    bool
-	authMode  AuthMode
 	log       *slog.Logger
 
 	// relayURL is the public-facing relay URL used for challenge verification,
 	// derived per-connection from request headers or relay config.
 	relayURL string
 
-	// Sender-specific (AuthModeSender)
+	// DID-authenticated fields
 	did           string // set after DID authentication
 	nonce         string // challenge nonce, set when challenge is requested
 	challengeSent bool   // true after challenge has been sent
-
-	// Recipient-specific (AuthModeRecipient)
-	ticket string // set after ticket authentication
 }
 
 // NewClient creates a new Client.
@@ -154,54 +141,31 @@ func (c *Client) handlePreAuth(msgType string, msg any) {
 		}
 
 		c.authed = true
-		c.authMode = AuthModeSender
 		c.log = c.log.With("did", c.did)
 		c.sendMsg(AuthenticatedMsg{Type: "authenticated"})
-		c.log.Info("sender authenticated")
+		c.log.Info("authenticated")
 
 		// Flush any buffered notifications
 		c.relay.flushBuffer(c)
 
-	case "ticket_auth":
-		resp, ok := msg.(*TicketAuthMsg)
-		if !ok {
-			c.sendMsg(ErrorMsg{Type: "error", Message: "invalid ticket_auth"})
-			return
-		}
-
-		if err := c.relay.authenticateTicket(c, resp.Ticket); err != nil {
-			c.log.Info("ticket authentication failed", "error", err)
-			c.sendMsg(ErrorMsg{Type: "error", Message: err.Error()})
-			return
-		}
-
-		c.authed = true
-		c.authMode = AuthModeRecipient
-		c.log = c.log.With("ticket_prefix", c.ticket[:16])
-		c.sendMsg(TicketAuthenticatedMsg{Type: "ticket_authenticated"})
-		c.log.Info("recipient authenticated")
-
 	default:
-		c.sendMsg(ErrorMsg{Type: "error", Message: "must authenticate with request_challenge or ticket_auth"})
+		c.sendMsg(ErrorMsg{Type: "error", Message: "must authenticate with request_challenge"})
 	}
 }
 
 func (c *Client) handlePostAuth(msgType string, msg any) {
 	switch msgType {
 	case "watch_tags":
-		// Allowed for both senders and recipients
 		if m, ok := msg.(*WatchTagsMsg); ok {
 			c.relay.handleWatchTags(c, m)
 		}
 
 	case "update_tags":
-		// Allowed for both senders and recipients
 		if m, ok := msg.(*UpdateTagsMsg); ok {
 			c.relay.handleUpdateTags(c, m)
 		}
 
 	case "register_push":
-		// Allowed for both senders and recipients
 		if m, ok := msg.(*RegisterPushMsg); ok {
 			c.relay.mu.Lock()
 			c.pushToken = &PushToken{Platform: m.Platform, Token: m.Token}
@@ -210,33 +174,8 @@ func (c *Client) handlePostAuth(msgType string, msg any) {
 		}
 
 	case "event_posted":
-		// Sender-only: requires DID authentication
-		if c.authMode != AuthModeSender {
-			c.sendMsg(ErrorMsg{Type: "error", Message: "event_posted requires DID authentication"})
-			return
-		}
 		if m, ok := msg.(*EventPostedMsg); ok {
 			c.relay.handleEventPosted(c, m)
-		}
-
-	case "register_ticket":
-		// Sender-only: requires DID authentication
-		if c.authMode != AuthModeSender {
-			c.sendMsg(ErrorMsg{Type: "error", Message: "register_ticket requires DID authentication"})
-			return
-		}
-		if m, ok := msg.(*RegisterTicketMsg); ok {
-			c.relay.handleRegisterTicket(c, m)
-		}
-
-	case "revoke_ticket":
-		// Sender-only: requires DID authentication
-		if c.authMode != AuthModeSender {
-			c.sendMsg(ErrorMsg{Type: "error", Message: "revoke_ticket requires DID authentication"})
-			return
-		}
-		if m, ok := msg.(*RevokeTicketMsg); ok {
-			c.relay.handleRevokeTicket(c, m)
 		}
 
 	default:

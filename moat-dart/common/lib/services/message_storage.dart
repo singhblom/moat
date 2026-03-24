@@ -42,7 +42,7 @@ class MessageStorage {
     }
 
     messages.add(message);
-    messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    messages.sort((a, b) => a.rkey.compareTo(b.rkey));
     await saveMessages(groupIdHex, messages);
   }
 
@@ -60,7 +60,7 @@ class MessageStorage {
       }
     }
 
-    messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    messages.sort((a, b) => a.rkey.compareTo(b.rkey));
     await saveMessages(groupIdHex, messages);
   }
 

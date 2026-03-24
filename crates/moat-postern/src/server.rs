@@ -216,6 +216,42 @@ async fn create_record(
     .into_response()
 }
 
+// ── POST /xrpc/com.atproto.repo.putRecord ─────────────────────────────────────
+
+#[derive(Deserialize)]
+struct PutRecordInput {
+    repo: String,
+    collection: String,
+    rkey: String,
+    record: Value,
+}
+
+async fn put_record(
+    State(state): State<AppState>,
+    Json(input): Json<PutRecordInput>,
+) -> Response {
+    let mut store = match state.store.write() {
+        Ok(s) => s,
+        Err(_) => {
+            return atproto_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "InternalError",
+                "store lock poisoned",
+            )
+        }
+    };
+    let record_json = serde_json::to_vec(&input.record).unwrap_or_default();
+    let cid = compute_cid(&record_json);
+    store.put_record(&input.repo, &input.collection, &input.rkey, input.record);
+    let uri = format!("at://{}/{}/{}", input.repo, input.collection, input.rkey);
+    Json(json!({
+        "uri": uri,
+        "cid": cid,
+        "validationStatus": "unknown",
+    }))
+    .into_response()
+}
+
 // ── GET /xrpc/com.atproto.repo.getRecord ─────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -487,6 +523,10 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/xrpc/com.atproto.repo.createRecord",
             post(create_record),
+        )
+        .route(
+            "/xrpc/com.atproto.repo.putRecord",
+            post(put_record),
         )
         .route("/xrpc/com.atproto.repo.getRecord", get(get_record))
         .route("/xrpc/com.atproto.repo.listRecords", get(list_records))

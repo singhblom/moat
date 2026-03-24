@@ -42,7 +42,6 @@ class _NewConversationScreenState extends State<NewConversationScreen> {
         recipientHandle: handle,
         authService: auth.service,
         convsService: conversations.service,
-        drawbridgeUrl: defaultDrawbridgeUrl,
       );
 
       if (mounted) {
