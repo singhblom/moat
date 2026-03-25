@@ -56,24 +56,27 @@ fn encode_welcome_envelope(welcome: &[u8], hints: &[HintBundleEntry]) -> Vec<u8>
 
 /// Decode a Welcome envelope, returning `(welcome_bytes, hints)`.
 ///
-/// If the data doesn't start with the magic, treats the entire blob as a raw
-/// Welcome with no hints (backward compat).
-fn decode_welcome_envelope(data: &[u8]) -> (Vec<u8>, Vec<HintBundleEntry>) {
-    if data.len() >= 8 && data[..4] == WELCOME_ENVELOPE_MAGIC {
-        let welcome_len =
-            u32::from_be_bytes(data[4..8].try_into().unwrap_or_default()) as usize;
-        if data.len() >= 8 + welcome_len {
-            let welcome = data[8..8 + welcome_len].to_vec();
-            let hints: Vec<HintBundleEntry> = if data.len() > 8 + welcome_len {
-                serde_json::from_slice(&data[8 + welcome_len..]).unwrap_or_default()
-            } else {
-                vec![]
-            };
-            return (welcome, hints);
-        }
+/// All Welcomes must use the envelope format (`[MWE1][len][welcome][hints]`).
+fn decode_welcome_envelope(data: &[u8]) -> Result<(Vec<u8>, Vec<HintBundleEntry>)> {
+    if data.len() < 8 || data[..4] != WELCOME_ENVELOPE_MAGIC {
+        return Err(AppError::Other(
+            "invalid welcome envelope: missing MWE1 magic".to_string(),
+        ));
     }
-    // Legacy: raw Welcome bytes, no hints
-    (data.to_vec(), vec![])
+    let welcome_len =
+        u32::from_be_bytes(data[4..8].try_into().unwrap_or_default()) as usize;
+    if data.len() < 8 + welcome_len {
+        return Err(AppError::Other(
+            "invalid welcome envelope: truncated".to_string(),
+        ));
+    }
+    let welcome = data[8..8 + welcome_len].to_vec();
+    let hints: Vec<HintBundleEntry> = if data.len() > 8 + welcome_len {
+        serde_json::from_slice(&data[8 + welcome_len..]).unwrap_or_default()
+    } else {
+        vec![]
+    };
+    Ok((welcome, hints))
 }
 
 /// Thin wrapper around `Box<dyn StatefulProtocol>` that implements `Debug`
@@ -2772,7 +2775,13 @@ impl App {
         };
 
         // Decode welcome envelope (may contain bundled Drawbridge hints)
-        let (welcome_bytes, _hint_bundle) = decode_welcome_envelope(&plaintext);
+        let (welcome_bytes, _hint_bundle) = match decode_welcome_envelope(&plaintext) {
+            Ok(result) => result,
+            Err(e) => {
+                self.debug_log.log(&format!("try_welcome: {e}"));
+                return false;
+            }
+        };
 
         let group_id = match self.mls.process_welcome(&welcome_bytes) {
             Ok(id) => id,
@@ -3177,8 +3186,9 @@ impl App {
 
         // 7. Encrypt Welcome for ALL of recipient's devices using key encapsulation
         // This allows any of their devices to decrypt and join the conversation
+        let envelope = encode_welcome_envelope(&welcome_result.welcome, &[]);
         let stealth_ciphertext =
-            encrypt_for_stealth(&recipient_stealth_pubkeys, &welcome_result.welcome)?;
+            encrypt_for_stealth(&recipient_stealth_pubkeys, &envelope)?;
 
         // 8. Publish with random tag (not group-derived, since recipient doesn't know group yet)
         let random_tag: [u8; 16] = rand::random();

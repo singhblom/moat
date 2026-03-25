@@ -150,6 +150,16 @@ impl MoatSessionHandle {
         self.inner.lock().unwrap().mark_tag_seen(&arr)
     }
 
+    /// Check if a DID already has a device in the group.
+    #[frb(sync)]
+    pub fn is_did_in_group(&self, group_id: Vec<u8>, did: String) -> Result<bool, String> {
+        self.inner
+            .lock()
+            .unwrap()
+            .is_did_in_group(&group_id, &did)
+            .map_err(|e| e.to_string())
+    }
+
     /// Add a member to a group. Returns welcome result.
     pub fn add_member(
         &self,
