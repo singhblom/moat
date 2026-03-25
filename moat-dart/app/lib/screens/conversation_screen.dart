@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:moat_dart_common/moat_dart_common.dart' hide ConversationRepository;
+import '../providers/auth_provider.dart';
+import '../providers/conversations_provider.dart';
 import '../providers/profile_provider.dart';
 import '../services/conversation_repository.dart';
 import '../widgets/message_bubble.dart';
@@ -447,6 +449,16 @@ class _ConversationScreenState extends State<ConversationScreen> {
               'Participants',
               widget.conversation.participants.join('\n'),
             ),
+            const SizedBox(height: 8),
+            FilledButton.icon(
+              icon: const Icon(Icons.person_add),
+              label: const Text('Add member'),
+              onPressed: () {
+                Navigator.pop(context);
+                _showAddMemberDialog();
+              },
+            ),
+            const SizedBox(height: 8),
             _buildInfoRow(
               context,
               'Created',
@@ -463,6 +475,62 @@ class _ConversationScreenState extends State<ConversationScreen> {
         ),
       ),
     );
+  }
+
+  void _showAddMemberDialog() {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Add member'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            hintText: 'handle.bsky.social',
+            labelText: 'Handle',
+          ),
+          autofocus: true,
+          onSubmitted: (_) => _doAddMember(dialogContext, controller.text),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => _doAddMember(dialogContext, controller.text),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _doAddMember(BuildContext dialogContext, String handle) async {
+    final trimmed = handle.trim();
+    if (trimmed.isEmpty) return;
+    Navigator.pop(dialogContext);
+    try {
+      final authService = context.read<AuthProvider>().service;
+      final convsService = context.read<ConversationsProvider>().service;
+      await addMemberToConversation(
+        memberHandle: trimmed,
+        groupId: widget.conversation.groupId,
+        authService: authService,
+        convsService: convsService,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Added $trimmed')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to add member: $e')),
+        );
+      }
+    }
   }
 
   void _selectMessage(Message message) {

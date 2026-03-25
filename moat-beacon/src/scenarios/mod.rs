@@ -17,7 +17,9 @@ use crate::client::MoatCliClient;
 use crate::invariants::{ScenarioState, SentMessage};
 use crate::world::TestWorld;
 
+pub mod dart_three_party_chat;
 pub mod dart_two_party_chat;
+pub mod mixed_three_party_chat;
 pub mod mixed_two_party_chat;
 pub mod push_latency;
 pub mod push_latency_restart;
@@ -490,6 +492,20 @@ pub static SCENARIOS: &[Scenario] = &[
         run_fn: same_drawbridge_local::run_boxed,
         gen_fn: generate_random_actions,
         seed_fn: actions_from_seed,
+    },
+    Scenario {
+        name: "dart-three-party-chat",
+        description: "Alice + Bob + Carol (all Dart), polling delivery",
+        run_fn: dart_three_party_chat::run_boxed,
+        gen_fn: generate_random_actions_3p,
+        seed_fn: actions_from_seed_3p,
+    },
+    Scenario {
+        name: "mixed-three-party-chat",
+        description: "Alice (Rust) + Bob + Carol (Dart), polling delivery",
+        run_fn: mixed_three_party_chat::run_boxed,
+        gen_fn: generate_random_actions_3p,
+        seed_fn: actions_from_seed_3p,
     },
 ];
 

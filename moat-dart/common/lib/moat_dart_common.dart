@@ -8,6 +8,7 @@ export 'models/bluesky_profile.dart';
 
 // Utils
 export 'utils/message_payload.dart';
+export 'utils/welcome_envelope.dart';
 
 // Storage
 export 'services/storage_backend.dart';
@@ -31,6 +32,7 @@ export 'services/send_queue.dart';
 export 'services/conversation_repository.dart';
 export 'services/conversation_manager.dart';
 export 'services/conversation_starter.dart';
+export 'services/member_adder.dart';
 export 'services/drawbridge_service.dart';
 export 'services/profile_cache_service.dart';
 

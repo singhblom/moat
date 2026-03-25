@@ -4,6 +4,7 @@ import 'atproto_client.dart';
 import 'secure_storage.dart';
 import 'debug_log.dart';
 import '../rust/api/simple.dart';
+import '../utils/welcome_envelope.dart';
 
 /// Authentication state
 enum AuthState {
@@ -249,9 +250,10 @@ class AuthService {
       newMemberKeyPackage: recipientKeyPackage,
     );
 
+    final envelope = encodeWelcomeEnvelope(welcomeResult.welcome);
     final stealthCiphertext = await encryptForStealth(
       recipientScanPubkeys: recipientStealthPubkeys,
-      welcomeBytes: welcomeResult.welcome,
+      welcomeBytes: envelope,
     );
 
     final random = Random.secure();

@@ -122,6 +122,9 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
   /// Check if there are unsaved changes.
   bool hasPendingChanges();
 
+  /// Check if a DID already has a device in the group.
+  bool isDidInGroup({required List<int> groupId, required String did});
+
   /// Mark a tag as seen, advancing the seen counter for that sender.
   ///
   /// Call this after matching a tag from `populate_candidate_tags`.

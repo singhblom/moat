@@ -12,6 +12,7 @@ import 'conversation_manager.dart';
 import 'drawbridge_service.dart';
 import 'secure_storage.dart';
 import 'debug_log.dart';
+import '../utils/welcome_envelope.dart';
 
 /// Stats returned by a single poll cycle.
 class PollStats {
@@ -318,11 +319,59 @@ class PollingService {
         case EventKindDto.commit:
           final newEpoch = result.event.epoch.toInt();
           moatLog('PollingService: Commit received for ${conversation.groupIdHex}, new epoch: $newEpoch');
+
+          // Check if member list changed (e.g. new member added).
+          final groupDids = await _authService.getGroupDids(conversation.groupId);
+          final myDid = _authService.did;
+          final otherDids = groupDids.where((did) => did != myDid).toList();
+          final currentParticipants = List<String>.from(conversation.participants);
+          final membersChanged = otherDids.length != currentParticipants.length ||
+              !otherDids.every((did) => currentParticipants.contains(did));
+
+          if (membersChanged) {
+            // Resolve handles for all participants.
+            final resolvedHandles = <String>[];
+            for (final did in otherDids) {
+              try {
+                resolvedHandles.add(await _authService.atprotoClient.resolveHandle(did));
+              } catch (_) {
+                resolvedHandles.add(did);
+              }
+            }
+            conversation.participants
+              ..clear()
+              ..addAll(otherDids);
+            conversation.displayName = resolvedHandles.join(', ');
+            moatLog('PollingService: Member list changed, new participants: $otherDids');
+          }
+
           await _conversationsService.updateConversation(
             conversation.groupId,
             epoch: newEpoch,
+            displayName: membersChanged ? conversation.displayName : null,
           );
+          if (membersChanged) {
+            await _conversationsService.saveConversation(conversation);
+            // Fetch Drawbridge configs for new members.
+            for (final did in otherDids) {
+              if (!currentParticipants.contains(did)) {
+                try {
+                  final urls = await _authService.atprotoClient.fetchDrawbridgeConfig(did);
+                  DrawbridgeService.instance.cacheDrawbridgeConfig(did, urls);
+                } catch (_) {}
+              }
+            }
+          }
+
           await _authService.populateConversationTags(conversation.groupId);
+          // Update Drawbridge watched tags.
+          final session = _authService.moatSession;
+          if (session != null) {
+            final tags = session.populateCandidateTags(groupId: conversation.groupId);
+            DrawbridgeService.instance.addTags(
+              tags.map((t) => Uint8List.fromList(t)).toList(),
+            );
+          }
           return false;
 
         case EventKindDto.reaction:
@@ -351,7 +400,11 @@ class PollingService {
   }
 
   /// Process a decrypted Welcome message.
-  Future<void> _processWelcome(Uint8List welcomeBytes, String senderDid) async {
+  ///
+  /// Handles both raw MLS Welcome bytes and the envelope format used by the
+  /// Rust CLI's add-member flow (`[MWE1][4-byte len BE][welcome][hints_json]`).
+  Future<void> _processWelcome(Uint8List data, String senderDid) async {
+    final welcomeBytes = decodeWelcomeEnvelope(data);
     final groupId = await _authService.processWelcome(welcomeBytes);
 
     final session = _authService.moatSession;
@@ -367,15 +420,19 @@ class PollingService {
     final myDid = _authService.did;
 
     final otherDids = groupDids.where((did) => did != myDid).toList();
-    final participantDid = otherDids.isNotEmpty ? otherDids.first : senderDid;
 
-    String displayName;
-    try {
-      displayName =
-          await _authService.atprotoClient.resolveHandle(participantDid);
-    } catch (_) {
-      displayName = participantDid;
+    // Resolve handles for ALL participants (multi-party support).
+    final resolvedHandles = <String>[];
+    for (final did in otherDids) {
+      try {
+        resolvedHandles.add(await _authService.atprotoClient.resolveHandle(did));
+      } catch (_) {
+        resolvedHandles.add(did);
+      }
     }
+    final displayName = resolvedHandles.isNotEmpty
+        ? resolvedHandles.join(', ')
+        : senderDid;
 
     moatLog('PollingService: Joined group with participants: $groupDids, display: $displayName');
 
@@ -413,4 +470,5 @@ class PollingService {
   void dispose() {
     stopPolling();
   }
+
 }

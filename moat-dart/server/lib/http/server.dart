@@ -112,6 +112,38 @@ Handler buildRouter({
     }
   });
 
+  // POST /conversations/:group_id/members — add a member to an existing group
+  router.post('/conversations/<groupId>/members',
+      (Request request, String groupId) async {
+    if (!authService.isAuthenticated) {
+      return Response(401,
+          body: jsonEncode({'error': 'not logged in'}), headers: _jsonHeaders);
+    }
+
+    try {
+      final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+      final handle = body['handle'] as String;
+      final groupIdBytes = _hexToBytes(groupId);
+
+      moatLog('Server: Adding $handle to group $groupId');
+
+      await addMemberToConversation(
+        memberHandle: handle,
+        groupId: groupIdBytes,
+        authService: authService,
+        convsService: convsService,
+      );
+
+      moatLog('Server: Added $handle to group $groupId');
+
+      return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
+    } catch (e) {
+      moatLog('Server: Error adding member: $e');
+      return Response(500,
+          body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
+    }
+  });
+
   // GET /conversations/:group_id/messages
   router.get('/conversations/<groupId>/messages', (Request request, String groupId) async {
     final groupIdBytes = _hexToBytes(groupId);
