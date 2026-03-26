@@ -15,6 +15,7 @@
 
 pub mod actions;
 pub mod client;
+pub mod config;
 pub mod drawbridge;
 pub mod invariants;
 pub mod scenarios;

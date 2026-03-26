@@ -1,9 +1,11 @@
-//! Property-based three-party scenario (Drawbridge push delivery).
+//! Combinatorial property-based three-party push delivery test.
 //!
-//! Same as `proptest_three_party` but uses Drawbridge for push-based delivery.
-//! Requires Go toolchain for Drawbridge binary.
+//! Generates a random `WorldConfig` (relay topology, participant kinds) and a
+//! random action sequence, then runs the three-party push scenario with that
+//! configuration.  Requires Go toolchain for Drawbridge binary.
 
-use moat_beacon::actions::action_sequence_3p;
+use moat_beacon::actions::action_sequence_n;
+use moat_beacon::config::world_config_3p;
 use proptest::prelude::*;
 
 proptest! {
@@ -16,11 +18,16 @@ proptest! {
     })]
 
     #[test]
-    fn three_party_push_actions(actions in action_sequence_3p()) {
+    fn three_party_push_combinatorial(
+        (config, actions) in world_config_3p().prop_flat_map(|config| {
+            let n = config.participant_count();
+            (Just(config), action_sequence_n(n))
+        })
+    ) {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("build tokio runtime");
-        rt.block_on(moat_beacon::scenarios::three_party_push::run(actions, false));
+        rt.block_on(moat_beacon::scenarios::three_party_push::run(config, actions, false));
     }
 }

@@ -1,48 +1,68 @@
-//! Three-party Drawbridge push delivery scenario.
+//! Config-driven three-party Drawbridge push delivery scenario.
 //!
-//! Mirrors `three_party_chat` but uses Drawbridge for push delivery.
-//! After the prologue, auto-polling is disabled; delivery must come via push.
+//! The topology (relay assignment, participant kinds) is determined by a
+//! [`WorldConfig`].  After the prologue, auto-polling is disabled on all
+//! participants with a relay; delivery must arrive via Drawbridge push.
+//!
+//! The `run_boxed` wrapper uses a default config (all-Rust, separate relays)
+//! for the scenario registry; the proptest calls `run` directly with a
+//! generated config.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
 use crate::actions::Action;
+use crate::config::WorldConfig;
 use crate::invariants::{
-    check_per_sender_ordering_n, check_delivery_n, check_no_duplicates_n, ScenarioState,
+    check_consensus_ordering_n, check_delivery_n, check_no_duplicates_n, ScenarioState,
 };
 use crate::world::TestWorld;
 
 use super::two_party_push::drain_events_push;
 use super::{execute_action_n, format_action, vlog};
 
+/// Registry-compatible wrapper: uses the default 3-party push topology.
 pub(crate) fn run_boxed(
     actions: Vec<Action>,
     verbose: bool,
 ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
-    Box::pin(run(actions, verbose))
+    let config = WorldConfig::default_3p_push();
+    Box::pin(run(config, actions, verbose))
 }
 
-pub async fn run(actions: Vec<Action>, verbose: bool) {
-    vlog!(verbose, "=== Scenario: three-party-push ===");
+pub async fn run(config: WorldConfig, actions: Vec<Action>, verbose: bool) {
+    vlog!(
+        verbose,
+        "=== Scenario: three-party-push (config: {}) ===",
+        config
+    );
 
-    // ── Prologue ──────────────────────────────────────────────────────────────
-    vlog!(verbose, "[setup] starting TestWorld (with Drawbridge)...");
-    let mut world =
-        TestWorld::new_with_drawbridge(&[("alice", "alice"), ("bob", "bob"), ("carol", "carol")], ".postern.test")
-            .await
-            .expect("world setup with drawbridge");
-    let alice = world.client("alice").clone();
-    let bob = world.client("bob").clone();
-    let carol = world.client("carol").clone();
-    let clients = [&alice, &bob, &carol];
-    let handles = [
-        "alice.postern.test",
-        "bob.postern.test",
-        "carol.postern.test",
-    ];
+    let n = config.participant_count();
+    let push_mode = config.push_mode();
+    let handle_suffix = ".postern.test";
 
-    // Login all three
+    // ── Build world from config ──────────────────────────────────────────────
+    vlog!(verbose, "[setup] starting TestWorld from config...");
+    let mut world = TestWorld::from_config(&config, handle_suffix)
+        .await
+        .expect("world setup from config");
+
+    // Collect clients and full handles.
+    let client_owned: Vec<_> = config
+        .participants
+        .iter()
+        .map(|p| world.client(p.handle).clone())
+        .collect();
+    let clients: Vec<&_> = client_owned.iter().collect();
+    let full_handles: Vec<String> = config
+        .participants
+        .iter()
+        .map(|p| format!("{}{handle_suffix}", p.handle))
+        .collect();
+    let handles: Vec<&str> = full_handles.iter().map(|s| s.as_str()).collect();
+
+    // ── Login all participants ────────────────────────────────────────────────
     for (client, handle) in clients.iter().zip(handles.iter()) {
         client
             .login(handle, "any-password")
@@ -51,81 +71,100 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
         vlog!(verbose, "[setup] login {handle}... done");
     }
 
-    // Wait for Drawbridge connections
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let a = alice.status().await.expect("alice status");
-        let b = bob.status().await.expect("bob status");
-        let c = carol.status().await.expect("carol status");
-        if a.drawbridge_connected && b.drawbridge_connected && c.drawbridge_connected {
-            break;
+    // ── Wait for Drawbridge connections ──────────────────────────────────────
+    if push_mode {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let mut all_connected = true;
+            for client in &clients {
+                let status = client.status().await.expect("participant status");
+                if !status.drawbridge_connected {
+                    all_connected = false;
+                    break;
+                }
+            }
+            if all_connected {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                let mut summary = Vec::new();
+                for (i, client) in clients.iter().enumerate() {
+                    let connected = client
+                        .status()
+                        .await
+                        .map(|s| s.drawbridge_connected)
+                        .unwrap_or(false);
+                    summary.push(format!("{}={connected}", config.participants[i].handle));
+                }
+                panic!("Drawbridge not connected after 5s ({})", summary.join(", "));
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        if std::time::Instant::now() >= deadline {
-            panic!(
-                "Drawbridge not connected after 5s (alice={}, bob={}, carol={})",
-                a.drawbridge_connected, b.drawbridge_connected, c.drawbridge_connected
-            );
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        vlog!(verbose, "[setup] Drawbridge connections established");
     }
-    vlog!(verbose, "[setup] Drawbridge connections established");
 
-    // Bob and Carol watch Alice
-    bob.watch_handle("alice.postern.test")
-        .await
-        .expect("bob watch alice");
-    carol
-        .watch_handle("alice.postern.test")
-        .await
-        .expect("carol watch alice");
+    // ── Watches: everyone watches participant 0 (Alice) ──────────────────────
+    for client in clients.iter().skip(1) {
+        client
+            .watch_handle(handles[0])
+            .await
+            .expect("watch first participant");
+    }
 
-    // Alice starts conversation with Bob
-    let group_id = alice
-        .start_conversation("bob.postern.test")
+    // ── Start conversation: Alice invites Bob ────────────────────────────────
+    let group_id = clients[0]
+        .start_conversation(handles[1])
         .await
         .expect("start conversation");
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    let stats = bob.poll().await.expect("bob join poll");
+    let stats = clients[1].poll().await.expect("bob join poll");
     assert!(
         stats.new_conversations > 0,
         "Bob should have joined the group"
     );
 
-    // Alice adds Carol
-    alice
-        .add_member(&group_id, "carol.postern.test")
-        .await
-        .expect("alice add carol");
+    // ── Add remaining participants (Carol, ...) ──────────────────────────────
+    for i in 2..n {
+        clients[0]
+            .add_member(&group_id, handles[i])
+            .await
+            .unwrap_or_else(|e| panic!("add {} failed: {e}", handles[i]));
 
-    tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
 
-    let stats = carol.poll().await.expect("carol join poll");
-    assert!(
-        stats.new_conversations > 0,
-        "Carol should have joined the group"
-    );
-    let _ = bob.poll().await;
+        let stats = clients[i].poll().await.expect("new member join poll");
+        assert!(
+            stats.new_conversations > 0,
+            "{} should have joined the group",
+            handles[i]
+        );
+        // Existing members pick up the epoch commit.
+        for j in 1..i {
+            let _ = clients[j].poll().await;
+        }
+    }
 
-    // Carol gets Alice's and Bob's hints from the Welcome envelope.
-    // One poll round picks up Carol's reciprocal hint for Alice and Bob.
+    // Exchange DrawbridgeHints: one poll round picks up reciprocal hints.
     tokio::time::sleep(Duration::from_millis(500)).await;
     for client in &clients {
         let _ = client.poll().await;
     }
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Disable auto-polling — delivery must come via Drawbridge push
-    for client in &clients {
-        client
-            .set_poll_interval(0)
-            .await
-            .expect("disable polling");
+    // Disable auto-polling — delivery must come via Drawbridge push.
+    if push_mode {
+        for client in &clients {
+            client
+                .set_poll_interval(0)
+                .await
+                .expect("disable polling");
+        }
+        vlog!(verbose, "[setup] polling disabled (push-only mode)");
     }
-    vlog!(verbose, "[setup] polling disabled (push-only mode)");
 
-    // ── Random action sequence ─────────────────────────────────────────────────
+    // ── Random action sequence ───────────────────────────────────────────────
     if verbose {
         eprintln!();
     }
@@ -144,17 +183,23 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
             format_action(action)
         );
         execute_action_n(
-            action, &clients, &mut world, &handles, true, &mut state, verbose,
+            action,
+            &clients,
+            &mut world,
+            &handles,
+            push_mode,
+            &mut state,
+            verbose,
         )
         .await;
     }
 
-    // ── Drain + invariants ─────────────────────────────────────────────────────
+    // ── Drain + invariants ───────────────────────────────────────────────────
     if verbose {
         eprintln!();
     }
     vlog!(verbose, "[drain] waiting for push events to propagate...");
-    drain_events_push(&alice, &bob).await;
+    drain_events_push(clients[0], clients[1]).await;
 
     let confirmed = state
         .sent_messages
@@ -167,10 +212,10 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
         .expect("delivery invariant violated");
     vlog!(verbose, "[check] delivery... ok ({confirmed} messages)");
 
-    check_per_sender_ordering_n(&clients, &state)
+    check_consensus_ordering_n(&clients, &state)
         .await
-        .expect("per-sender ordering invariant violated");
-    vlog!(verbose, "[check] per-sender ordering... ok");
+        .expect("consensus ordering invariant violated");
+    vlog!(verbose, "[check] consensus ordering... ok");
 
     check_no_duplicates_n(&clients, &state)
         .await

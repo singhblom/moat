@@ -236,7 +236,7 @@ pub fn action_sequence_3p() -> impl Strategy<Value = Vec<Action>> {
     action_sequence_n(3)
 }
 
-fn action_sequence_n(n: usize) -> impl Strategy<Value = Vec<Action>> {
+pub fn action_sequence_n(n: usize) -> impl Strategy<Value = Vec<Action>> {
     (1usize..=10).prop_flat_map(move |len| {
         (0..len).fold(Just(vec![]).boxed(), move |acc, _| {
             acc.prop_flat_map(move |actions| {

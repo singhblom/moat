@@ -19,6 +19,7 @@
 
 
 use crate::client::MoatCliClient;
+use crate::config::WorldConfig;
 use crate::drawbridge::DrawbridgeProcess;
 use crate::toxiproxy::{ProxyHandle, ToxiproxyManager};
 use anyhow::{Context, Result};
@@ -121,6 +122,21 @@ impl TestWorld {
             .collect();
         let kinds = vec![ParticipantKind::RustCli; participants.len()];
         Self::build(&with_labels, &kinds, handle_suffix).await
+    }
+
+    /// Build a `TestWorld` from a [`WorldConfig`].
+    ///
+    /// Each distinct `relay_label` in the config spawns one Drawbridge relay;
+    /// participants sharing a label share a relay.  `push_mode` is derived
+    /// from whether any participant has a relay label.
+    pub async fn from_config(config: &WorldConfig, handle_suffix: &str) -> Result<Self> {
+        let participants: Vec<(&str, Option<&str>)> = config
+            .participants
+            .iter()
+            .map(|p| (p.handle, p.relay_label))
+            .collect();
+        let kinds: Vec<ParticipantKind> = config.participants.iter().map(|p| p.kind.clone()).collect();
+        Self::build(&participants, &kinds, handle_suffix).await
     }
 
     /// Build a `TestWorld` where each participant can be a different implementation.
