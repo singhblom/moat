@@ -432,8 +432,8 @@ fn test_state_version_header() {
     // Check magic bytes
     assert_eq!(&state[0..4], b"MOAT");
 
-    // Check version (little-endian u16 = 3)
-    assert_eq!(state[4], 3);
+    // Check version (little-endian u16 = 4)
+    assert_eq!(state[4], 4);
     assert_eq!(state[5], 0);
 
     // Header is at least 22 bytes (4 magic + 2 version + 16 device_id)

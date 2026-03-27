@@ -175,6 +175,17 @@ async fn post_add_member(
     Ok(Json(json!({ "ok": true })))
 }
 
+async fn delete_member(
+    State(state): State<Arc<ServerState>>,
+    Path((group_id, handle)): Path<(String, String)>,
+) -> HandlerResult<Json<Value>> {
+    let mut app = state.app.lock().await;
+    app.api_kick_member(&group_id, &handle)
+        .await
+        .map_err(app_err)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
 async fn delete_conversation(
     State(state): State<Arc<ServerState>>,
     Path(group_id): Path<String>,
@@ -378,6 +389,10 @@ pub async fn run_http(
             "/conversations/:group_id/members",
             post(post_add_member),
         )
+        .route(
+            "/conversations/:group_id/members/:handle",
+            delete(delete_member),
+        )
         .route("/conversation", put(put_conversation))
         .route("/conversations/:group_id/messages", get(get_messages))
         .route("/conversations/:group_id/messages", post(post_message))
@@ -391,6 +406,7 @@ pub async fn run_http(
         .route("/poll", post(post_poll))
         .route("/poll/:seconds", post(post_poll_interval))
         .route("/events", get(get_events))
+        // TODO: .route("/debug-log/:lines", get(get_debug_log))
         .with_state(state);
 
     println!("Moat HTTP API listening on http://{addr}");

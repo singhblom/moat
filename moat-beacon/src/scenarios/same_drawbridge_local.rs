@@ -109,7 +109,7 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
     if verbose {
         eprintln!();
     }
-    let mut state = ScenarioState { group_id, sent_messages: vec![] };
+    let mut state = ScenarioState { group_id, sent_messages: vec![], members: None };
 
     let total = actions.len();
     for (i, action) in actions.iter().enumerate() {

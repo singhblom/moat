@@ -110,6 +110,7 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
     let mut state = ScenarioState {
         group_id,
         sent_messages: vec![],
+        members: None,
     };
 
     let total = actions.len();

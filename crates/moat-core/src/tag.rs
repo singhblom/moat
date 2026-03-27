@@ -16,15 +16,38 @@ use crate::Result;
 /// Domain separation label for v2 tag derivation
 const TAG_LABEL_V2: &[u8] = b"moat-event-tag-v2";
 
-/// Default gap limit for recipient scanning.
+/// Default gap limit for recipient scanning (current epoch).
 ///
 /// The candidate tag set lives in a local HashMap (O(1) lookup) and each
 /// entry costs one HKDF derivation at populate time — negligible compared
-/// to the network cost of fetching events from PDS. A generous window
-/// avoids missed messages when the recipient was offline for a while.
-/// Drawbridge subscriptions handle real-time delivery; PDS polling with
-/// tag scanning is the catch-all fallback.
-pub const TAG_GAP_LIMIT: u64 = 50;
+/// to the network cost of fetching events from PDS. Drawbridge subscriptions
+/// handle real-time delivery; PDS polling with tag scanning is the catch-all
+/// fallback.
+pub const TAG_GAP_LIMIT: u64 = 10;
+
+/// Maximum number of prior epoch export secrets to retain per group.
+///
+/// Together with the current epoch, this gives coverage across 20 epochs.
+/// Tags are generated with a decaying gap limit: recent epochs get more
+/// candidate tags, ancient epochs get 1 (canary coverage for stranded
+/// messages at counter 0).
+pub const MAX_PRIOR_EPOCHS: usize = 19;
+
+/// Gap limit for a prior epoch at the given age (1 = most recent prior epoch).
+///
+/// Decay schedule:
+///   age 1 → 5,  age 2 → 3,  age 3 → 2,  age 4–19 → 1
+///
+/// Total per sender-device per conversation: 10 + 5 + 3 + 2 + 16×1 = 36.
+pub fn prior_epoch_gap_limit(age: usize) -> u64 {
+    match age {
+        1 => 5,
+        2 => 3,
+        3 => 2,
+        4..=19 => 1,
+        _ => 0,
+    }
+}
 
 /// MLS export_secret label for tag derivation keying material
 pub const TAG_EXPORT_SECRET_LABEL: &str = "moat-event-tag-v2";

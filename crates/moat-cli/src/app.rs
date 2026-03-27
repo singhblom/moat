@@ -445,6 +445,11 @@ pub struct App {
     // the tag before the network publish completes.
     own_published_tags: HashSet<[u8; 16]>,
 
+    // Events that were fetched but could not be processed (tag miss or decrypt
+    // failure). Retried each poll cycle after new events are processed, since
+    // commits in new events may advance epochs and unlock these.
+    unprocessed_events: Vec<(Vec<usize>, moat_atproto::EventRecord, String)>,
+
     // Polling state
     last_poll: Option<Instant>,
     last_device_poll: Option<Instant>,
@@ -586,6 +591,7 @@ impl App {
             new_conv_handle: String::new(),
             tag_map: HashMap::new(),
             own_published_tags: HashSet::new(),
+            unprocessed_events: Vec::new(),
             last_poll: None,
             last_device_poll: None,
             watched_dids: std::collections::HashSet::new(),
@@ -845,6 +851,11 @@ impl App {
     /// HTTP: add a member to an existing group conversation.
     pub async fn api_add_member(&mut self, group_id_hex: &str, handle: &str) -> Result<()> {
         self.add_member_to_group(group_id_hex, handle).await
+    }
+
+    /// HTTP: kick a member from a group conversation by handle.
+    pub async fn api_kick_member(&mut self, group_id_hex: &str, handle: &str) -> Result<()> {
+        self.kick_member_from_group(group_id_hex, handle).await
     }
 
     /// HTTP: delete a conversation locally.
@@ -2378,41 +2389,77 @@ impl App {
             .map(|c| c.did().to_string())
             .unwrap_or_default();
 
-        if !participant_events.is_empty() {
+        // Combine new events with previously unprocessed cached events.
+        // Sort by rkey so events are processed in chronological order.
+        let cached_count = self.unprocessed_events.len();
+        let mut all_events = std::mem::take(&mut self.unprocessed_events);
+        let new_count = participant_events.len();
+        all_events.extend(participant_events);
+        all_events.sort_by(|a, b| a.1.rkey.cmp(&b.1.rkey));
+
+        if !all_events.is_empty() {
             self.debug_log.log(&format!(
-                "poll: processing {} participant events",
-                participant_events.len(),
+                "poll: processing {} events ({} new, {} cached)",
+                all_events.len(),
+                new_count,
+                cached_count,
             ));
         }
-        for (conv_indices, event_record, _did) in participant_events {
-            // Skip events this device published — MLS cannot decrypt messages
-            // from our own sender ratchet, and we already display them
-            // optimistically on send. Events from other devices (same DID) are
-            // fine to decrypt.
-            if self.own_published_tags.contains(&event_record.tag) {
-                continue;
-            }
-            let tag_hex: String = event_record.tag.iter().map(|b| format!("{b:02x}")).collect();
-            if self.tag_map.contains_key(&event_record.tag) {
-                self.debug_log.log(&format!(
-                    "poll: tag matched: {} rkey={}", tag_hex, event_record.rkey
-                ));
-                if self.process_matched_event(&conv_indices, &event_record, &my_did) {
-                    new_messages += 1;
+
+        // Process events in a loop: commits may advance epochs and unlock
+        // previously unprocessable events (new tags or new decryption keys).
+        loop {
+            let mut made_progress = false;
+            let mut still_unprocessed = Vec::new();
+
+            for (conv_indices, event_record, did) in all_events {
+                if self.own_published_tags.contains(&event_record.tag) {
+                    continue;
                 }
-            } else {
-                self.debug_log.log(&format!(
-                    "poll: unknown tag {} rkey={} from {}, trying as welcome",
-                    tag_hex, event_record.rkey, event_record.author_did
-                ));
-                // Unknown tag — try as welcome (sync crypto, only resolve_handle is async)
-                self.try_process_welcome_sync(
-                    &event_record.ciphertext,
-                    &event_record.author_did,
-                    event_record.tag,
-                );
+                let tag_hex: String =
+                    event_record.tag.iter().map(|b| format!("{b:02x}")).collect();
+
+                if self.tag_map.contains_key(&event_record.tag) {
+                    self.debug_log.log(&format!(
+                        "poll: tag matched: {} rkey={}",
+                        tag_hex, event_record.rkey
+                    ));
+                    match self.process_matched_event(&conv_indices, &event_record, &my_did) {
+                        Some(true) => {
+                            new_messages += 1;
+                            made_progress = true;
+                        }
+                        Some(false) => {
+                            made_progress = true;
+                        }
+                        None => {
+                            // Decrypt failed — cache for retry
+                            still_unprocessed.push((conv_indices, event_record, did));
+                        }
+                    }
+                } else {
+                    // Unknown tag — try as welcome
+                    if self.try_process_welcome_sync(
+                        &event_record.ciphertext,
+                        &event_record.author_did,
+                        event_record.tag,
+                    ) {
+                        made_progress = true;
+                    } else {
+                        // Neither tag match nor welcome — cache for retry
+                        still_unprocessed.push((conv_indices, event_record, did));
+                    }
+                }
+            }
+
+            all_events = still_unprocessed;
+            if !made_progress {
+                break;
             }
         }
+
+        // Store remaining unprocessed events for next poll cycle
+        self.unprocessed_events = all_events;
 
         // Sort watched events by rkey (ascending) so Welcomes are processed
         // before derived-tag events.
@@ -2463,8 +2510,9 @@ impl App {
             if self.own_published_tags.contains(&event_record.tag) {
                 continue;
             }
-            if self.process_matched_event(&conv_indices, &event_record, &my_did) {
-                new_messages += 1;
+            match self.process_matched_event(&conv_indices, &event_record, &my_did) {
+                Some(true) => { new_messages += 1; }
+                _ => {}
             }
         }
 
@@ -2494,26 +2542,28 @@ impl App {
     }
 
     /// Decrypt and handle a single event whose tag matched the tag_map.
-    /// Returns `true` if a new message was stored (for poll stats counting).
+    /// Returns `Some(true)` if a new message was stored, `Some(false)` if
+    /// processed successfully but no message (commit/reaction), or `None`
+    /// if decryption failed (caller should cache for retry).
     fn process_matched_event(
         &mut self,
         conv_indices: &[usize],
         event_record: &moat_atproto::EventRecord,
         my_did: &str,
-    ) -> bool {
+    ) -> Option<bool> {
         let conv_id = match self.tag_map.get(&event_record.tag).cloned() {
             Some(id) => id,
-            None => return false,
+            None => return Some(false),
         };
-        self.mls.mark_tag_seen(&event_record.tag);
         let group_id = match hex::decode(&conv_id) {
             Ok(id) => id,
-            Err(_) => return false,
+            Err(_) => return Some(false),
         };
 
         let mut msg_stored = false;
         match self.mls.decrypt_event(&group_id, &event_record.ciphertext) {
             Ok(outcome) => {
+                self.mls.mark_tag_seen(&event_record.tag);
                 for w in outcome.warnings() {
                     self.debug_log
                         .log(&format!("poll: transcript warning: {}", w));
@@ -2562,7 +2612,7 @@ impl App {
                             }
                             Ok(false) => {
                                 // Duplicate rkey — already stored, skip in-memory insert.
-                                return msg_stored;
+                                return Some(msg_stored);
                             }
                             Ok(true) => {
                                 msg_stored = true;
@@ -2746,9 +2796,10 @@ impl App {
             Err(e) => {
                 self.debug_log
                     .log(&format!("poll: decryption failed: {}", e));
+                return None;
             }
         }
-        msg_stored
+        Some(msg_stored)
     }
 
     /// Synchronous welcome processing (no handle resolution — uses DID as name).
@@ -2835,7 +2886,55 @@ impl App {
 
         self.debug_log
             .log("process_welcome: successfully joined group");
+
+        // Replenish key package so we can be re-added to this (or another)
+        // group in the future.  Key packages are single-use: OpenMLS deletes
+        // the init key after a Welcome is consumed, so without replenishment
+        // a removed member can never rejoin.
+        self.replenish_key_package();
+
         true
+    }
+
+    /// Generate a fresh key package (reusing the existing signing key) and publish
+    /// it to the PDS in the background.
+    ///
+    /// Called after every successful Welcome join so the member can be re-added.
+    /// Unlike the initial key-package generation, this preserves the existing
+    /// signing key so that in-progress group operations remain valid.
+    fn replenish_key_package(&mut self) {
+        let client = match &self.client {
+            Some(c) => c.clone(),
+            None => return,
+        };
+        let did = client.did().to_string();
+        let device_name = match self.keys.get_or_create_device_name() {
+            Ok(n) => n,
+            Err(_) => return,
+        };
+        let key_bundle = match self.keys.load_identity_key() {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+        let credential = MoatCredential::new(&did, &device_name, *self.mls.device_id());
+        let key_package = match self.mls.replenish_key_package(&credential, &key_bundle) {
+            Ok(kp) => kp,
+            Err(e) => {
+                self.debug_log
+                    .log(&format!("replenish_key_package: generate failed: {e}"));
+                return;
+            }
+        };
+        let _ = self.save_mls_state();
+        let ciphersuite_name = format!("{:?}", CIPHERSUITE);
+        let tx = self.bg_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = client.publish_key_package(&key_package, &ciphersuite_name).await {
+                let _ = tx.send(BgEvent::PollError(format!(
+                    "replenish_key_package: publish failed: {e}"
+                )));
+            }
+        });
     }
 
     async fn handle_login_key(&mut self, key: KeyEvent) -> Result<bool> {
@@ -3287,10 +3386,12 @@ impl App {
         let stealth_pubkeys: Vec<[u8; 32]> =
             stealth_records.iter().map(|r| r.scan_pubkey).collect();
 
-        // 4. Fetch key package for new member
+        // 4. Fetch key package for new member — use the most recently uploaded
+        //    package (last in ascending rkey order) so that a replenished key
+        //    package takes precedence over an already-consumed earlier one.
         let key_packages = client.fetch_key_packages(&new_did).await?;
         let kp_bytes = key_packages
-            .first()
+            .last()
             .ok_or_else(|| AppError::Other(format!("No key package found for {handle}")))?
             .key_package
             .clone();
@@ -3344,6 +3445,62 @@ impl App {
 
         self.debug_log.log(&format!(
             "add_member: added {handle} to group {}",
+            &group_id_hex[..16.min(group_id_hex.len())]
+        ));
+
+        Ok(())
+    }
+
+    /// Remove (kick) a member from a group conversation by handle.
+    async fn kick_member_from_group(&mut self, group_id_hex: &str, handle: &str) -> Result<()> {
+        let client = self
+            .client
+            .as_ref()
+            .ok_or_else(|| AppError::Other("not logged in".to_string()))?
+            .clone();
+
+        // 1. Resolve handle → DID
+        let did_to_kick = client.resolve_did(handle).await?;
+
+        // 2. Decode group_id
+        let group_id = hex::decode(group_id_hex)
+            .map_err(|e| AppError::Other(format!("invalid group_id hex: {e}")))?;
+
+        // 3. Load key bundle
+        let key_bundle = self.keys.load_identity_key()?;
+
+        // 4. Derive commit tag BEFORE kick (pre-epoch-advance)
+        let commit_tag = self.mls.derive_next_tag(&group_id, &key_bundle)?;
+
+        // 5. Kick user from MLS group
+        let result = self.mls.kick_user(&group_id, &key_bundle, &did_to_kick)?;
+        self.save_mls_state()?;
+
+        // 6. Publish the Commit with pre-epoch tag
+        client.publish_event(&commit_tag, &result.commit).await?;
+
+        // 7. Update GroupMetadata — remove DID/handle
+        if let Some(conv) = self.conversations.iter_mut().find(|c| c.id == group_id_hex) {
+            conv.participant_dids.retain(|d| d != &did_to_kick);
+            conv.participant_handles.retain(|h| h != handle);
+
+            let _ = self.keys.store_group_metadata(
+                group_id_hex,
+                &GroupMetadata {
+                    participant_dids: conv.participant_dids.clone(),
+                    participant_handles: conv.participant_handles.clone(),
+                },
+            );
+        }
+
+        // 8. Re-populate candidate tags for the new epoch
+        self.populate_candidate_tags(group_id_hex, &group_id);
+
+        // 9. Update watched tags
+        self.schedule_watch_tags_update();
+
+        self.debug_log.log(&format!(
+            "kick_member: removed {handle} ({did_to_kick}) from group {}",
             &group_id_hex[..16.min(group_id_hex.len())]
         ));
 

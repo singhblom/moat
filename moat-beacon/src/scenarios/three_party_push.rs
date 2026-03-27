@@ -4,6 +4,10 @@
 //! [`WorldConfig`].  After the prologue, auto-polling is disabled on all
 //! participants with a relay; delivery must arrive via Drawbridge push.
 //!
+//! **Phase 2**: the prologue only adds the first two participants to the group.
+//! Additional members join via `AddMember` actions in the random sequence,
+//! testing the timing interactions between membership changes and push delivery.
+//!
 //! The `run_boxed` wrapper uses a default config (all-Rust, separate relays)
 //! for the scenario registry; the proptest calls `run` directly with a
 //! generated config.
@@ -12,14 +16,13 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
-use crate::actions::Action;
+use crate::actions::{Action, ParticipantId};
 use crate::config::WorldConfig;
 use crate::invariants::{
     check_consensus_ordering_n, check_delivery_n, check_no_duplicates_n, ScenarioState,
 };
 use crate::world::TestWorld;
 
-use super::two_party_push::drain_events_push;
 use super::{execute_action_n, format_action, vlog};
 
 /// Registry-compatible wrapper: uses the default 3-party push topology.
@@ -32,13 +35,20 @@ pub(crate) fn run_boxed(
 }
 
 pub async fn run(config: WorldConfig, actions: Vec<Action>, verbose: bool) {
+    let has_membership_actions = actions.iter().any(|a| {
+        matches!(
+            a,
+            Action::AddMember { .. } | Action::RemoveMember { .. }
+        )
+    });
+
     vlog!(
         verbose,
-        "=== Scenario: three-party-push (config: {}) ===",
-        config
+        "=== Scenario: three-party-push (config: {}, membership_actions: {}) ===",
+        config,
+        has_membership_actions,
     );
 
-    let n = config.participant_count();
     let push_mode = config.push_mode();
     let handle_suffix = ".postern.test";
 
@@ -63,6 +73,8 @@ pub async fn run(config: WorldConfig, actions: Vec<Action>, verbose: bool) {
     let handles: Vec<&str> = full_handles.iter().map(|s| s.as_str()).collect();
 
     // ── Login all participants ────────────────────────────────────────────────
+    // All participants are logged in even if not yet in the group — they need
+    // to be ready for AddMember to succeed (key packages, stealth addresses).
     for (client, handle) in clients.iter().zip(handles.iter()) {
         client
             .login(handle, "any-password")
@@ -111,7 +123,7 @@ pub async fn run(config: WorldConfig, actions: Vec<Action>, verbose: bool) {
             .expect("watch first participant");
     }
 
-    // ── Start conversation: Alice invites Bob ────────────────────────────────
+    // ── Start conversation: Alice invites Bob (only 2 initial members) ───────
     let group_id = clients[0]
         .start_conversation(handles[1])
         .await
@@ -125,24 +137,27 @@ pub async fn run(config: WorldConfig, actions: Vec<Action>, verbose: bool) {
         "Bob should have joined the group"
     );
 
-    // ── Add remaining participants (Carol, ...) ──────────────────────────────
-    for i in 2..n {
-        clients[0]
-            .add_member(&group_id, handles[i])
-            .await
-            .unwrap_or_else(|e| panic!("add {} failed: {e}", handles[i]));
+    // If no membership actions, add all remaining participants in prologue
+    // (backwards-compatible with non-membership strategies).
+    if !has_membership_actions {
+        let n = config.participant_count();
+        for i in 2..n {
+            clients[0]
+                .add_member(&group_id, handles[i])
+                .await
+                .unwrap_or_else(|e| panic!("add {} failed: {e}", handles[i]));
 
-        tokio::time::sleep(Duration::from_millis(500)).await;
+            tokio::time::sleep(Duration::from_millis(500)).await;
 
-        let stats = clients[i].poll().await.expect("new member join poll");
-        assert!(
-            stats.new_conversations > 0,
-            "{} should have joined the group",
-            handles[i]
-        );
-        // Existing members pick up the epoch commit.
-        for j in 1..i {
-            let _ = clients[j].poll().await;
+            let stats = clients[i].poll().await.expect("new member join poll");
+            assert!(
+                stats.new_conversations > 0,
+                "{} should have joined the group",
+                handles[i]
+            );
+            for j in 1..i {
+                let _ = clients[j].poll().await;
+            }
         }
     }
 
@@ -168,9 +183,19 @@ pub async fn run(config: WorldConfig, actions: Vec<Action>, verbose: bool) {
     if verbose {
         eprintln!();
     }
+
+    // Initialize membership tracking: Alice and Bob are the initial members.
+    let initial_members = if has_membership_actions {
+        Some(vec![ParticipantId(0), ParticipantId(1)])
+    } else {
+        // No membership tracking — all participants are assumed to be members
+        None
+    };
+
     let mut state = ScenarioState {
         group_id,
         sent_messages: vec![],
+        members: initial_members,
     };
 
     let total = actions.len();
@@ -198,8 +223,22 @@ pub async fn run(config: WorldConfig, actions: Vec<Action>, verbose: bool) {
     if verbose {
         eprintln!();
     }
-    vlog!(verbose, "[drain] waiting for push events to propagate...");
-    drain_events_push(clients[0], clients[1]).await;
+    // Re-enable polling so all participants can catch up on any events
+    // missed via Drawbridge (e.g. after membership changes).
+    if push_mode {
+        for client in &clients {
+            let _ = client.set_poll_interval(5).await;
+        }
+    }
+    vlog!(verbose, "[drain] waiting for events to propagate...");
+    // Sleep to let Drawbridge events finish, then explicit polls for everyone.
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    for _ in 0..2 {
+        for client in &clients {
+            let _ = client.poll().await;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
 
     let confirmed = state
         .sent_messages

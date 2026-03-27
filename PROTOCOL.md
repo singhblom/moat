@@ -79,7 +79,7 @@ This is the most complex part. The goal: Alice invites Bob without revealing to 
 
 1. While polling Alice's PDS, attempt stealth decryption on unrecognized events
 2. ECDH with own stealth private key → unwrap CEK → decrypt Welcome
-3. Process the MLS Welcome to join the group
+3. Process the MLS Welcome to join the group; immediately upload a **fresh key package** (reusing the existing signing key) so Bob can be re-invited in the future
 4. Generate candidate tags for all group members and register them for future message routing
 
 ## Adding Members to an Existing Group
@@ -88,7 +88,7 @@ When an existing member (Alice) adds a new member (Carol) to a group that alread
 
 **Alice (adder):**
 
-1. Resolve Carol's handle → DID, fetch her stealth public keys and MLS key package
+1. Resolve Carol's handle → DID, fetch her stealth public keys and MLS key package — use the **most recently published** key package (highest rkey) in case Carol has been removed and re-invited before and has already replenished her package
 2. Derive a commit tag using the **current** epoch (pre-advance), since existing members scan for tags at this epoch
 3. Call MLS `add_member` → produces a Welcome (for Carol) and a Commit (for existing members). The epoch advances.
 4. Stealth-encrypt the Welcome for Carol's devices, publish with a **random** tag (same as the initial invite flow)
@@ -98,7 +98,7 @@ When an existing member (Alice) adds a new member (Carol) to a group that alread
 **Carol (new member):**
 
 1. Detect the Welcome via stealth decryption while polling Alice's PDS
-2. Process the Welcome to join the group
+2. Process the Welcome to join the group; immediately upload a **fresh key package** (using the same leaf-node signing key) to the PDS so Carol can be re-invited in the future — MLS key packages are single-use and are deleted from local storage after a Welcome is consumed
 3. Call `get_group_dids` to discover **all** current members (not just the Welcome author), and store the full member list
 4. Process the Drawbridge hint bundle from Alice to connect to all existing members' relays
 5. Generate candidate tags for all members and register them
@@ -150,17 +150,36 @@ When the epoch advances, the counter resets to 0 (the counter map is keyed by ep
 
 ### Recipient Side
 
-Recipients generate **candidate tags** for each group member's device using a scanning window:
+Recipients generate **candidate tags** for each group member's device using a scanning window. To handle messages stranded across epoch boundaries (e.g. a message sent just before an `AddMember` advances the epoch), recipients retain export secrets from recent prior epochs and generate tags with a **decaying gap limit**:
 
 ```
+# Current epoch: full scanning window
 for each member (did, device_id) in group:
     from = seen_counter[(group_id, did, device_id)] + 1   (or 0 if never seen)
     generate tags for counters [from, from + GAP_LIMIT)
+
+# Prior epochs: decreasing windows, always from counter 0
+for each (age, prior_secret) in prior_export_secrets[group_id]:
+    gap = decaying_gap(age)   # 5, 3, 2, 1, 1, 1, ...
+    for each member (did, device_id) in group:
+        generate tags for counters [0, gap) using prior_secret
 ```
 
-The `GAP_LIMIT` (currently 5) is the maximum number of consecutive missed events tolerated per sender device per epoch. When a tag matches an incoming event, the recipient calls `mark_tag_seen` to advance the seen counter, sliding the scanning window forward.
+The decay schedule:
 
-The `seen_counters` map is persisted across sessions. The `tag_metadata` reverse lookup (tag → sender identity + counter) is ephemeral and rebuilt each polling cycle.
+| Epoch age | Gap limit | Purpose |
+|-----------|-----------|---------|
+| 0 (current) | 10 | Normal operation — covers in-flight messages between polls |
+| 1 | 5 | Recent epoch change — catches stragglers from membership operations |
+| 2 | 3 | |
+| 3 | 2 | |
+| 4–19 | 1 | Canary coverage — detects stranded messages at counter 0 |
+
+**Total tags per sender-device per conversation: 36** (10 + 5 + 3 + 2 + 16×1). The budget is comparable to a single-epoch window of 50 but covers 20 epochs of history.
+
+The `GAP_LIMIT` (10) is the maximum number of consecutive missed events tolerated per sender device in the current epoch. When a tag matches an incoming event, the recipient calls `mark_tag_seen` to advance the seen counter, sliding the scanning window forward. On epoch change, seen counters are cleared (senders reset their counters per epoch).
+
+The `seen_counters` map is persisted across sessions. The `tag_metadata` reverse lookup (tag → sender identity + counter) is ephemeral and rebuilt each polling cycle. The `prior_export_secrets` ring buffer (up to 19 entries per group) is persisted across sessions.
 
 ### Stealth Invites
 

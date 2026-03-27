@@ -66,6 +66,18 @@ pub enum Action {
     ComeOnline {
         participant: ParticipantId,
     },
+    /// Add a participant to the group.  Only generated when `new_participant`
+    /// exists in the config but isn't in the group yet.
+    AddMember {
+        adder: ParticipantId,
+        new_participant: ParticipantId,
+    },
+    /// Remove a participant from the group.  Only generated when the target is
+    /// in the group, is not the remover, and at least 2 members remain.
+    RemoveMember {
+        remover: ParticipantId,
+        target: ParticipantId,
+    },
 }
 
 // ── Strategies ────────────────────────────────────────────────────────────────
@@ -282,4 +294,155 @@ fn arb_action_n(num_messages: usize, n: usize) -> BoxedStrategy<Action> {
 /// `GoOffline` / `ComeOnline` transitions.
 pub fn action_sequence_3p_with_offline() -> impl Strategy<Value = Vec<Action>> {
     action_sequence_with_offline_n(3)
+}
+
+// ── Membership-aware strategies ─────────────────────────────────────────────
+
+/// Generation-time model for sequences that include `AddMember`/`RemoveMember`.
+#[derive(Clone, Debug)]
+struct MembershipFoldState {
+    /// Number of `SendMessage` actions generated so far.
+    num_messages: usize,
+    /// Total number of participants available in the config.
+    total_participants: usize,
+    /// Set of participant indices currently in the group.
+    members: Vec<bool>,
+}
+
+/// Generate one action given the current membership fold state.
+///
+/// Generation rules:
+/// - Members may `SendMessage`, `Poll`, `React` (if messages exist).
+/// - If a non-member exists in config, any member may `AddMember`.
+/// - If group has 3+ members, any member may `RemoveMember` another.
+fn arb_action_with_membership(state: MembershipFoldState) -> BoxedStrategy<Action> {
+    let mut choices: Vec<BoxedStrategy<Action>> = vec![];
+    let n = state.total_participants;
+
+    // Collect indices of current members and non-members
+    let member_indices: Vec<usize> = (0..n).filter(|&i| state.members[i]).collect();
+    let non_member_indices: Vec<usize> = (0..n).filter(|&i| !state.members[i]).collect();
+
+    // Members can send messages and poll
+    for &i in &member_indices {
+        let id = ParticipantId(i);
+        choices.push(
+            (0..TEXT_VOCAB.len())
+                .prop_map({
+                    let id = id.clone();
+                    move |text_idx| Action::SendMessage {
+                        from: id.clone(),
+                        text_idx,
+                    }
+                })
+                .boxed(),
+        );
+        choices.push(Just(Action::Poll { participant: id.clone() }).boxed());
+        if state.num_messages > 0 {
+            choices.push(
+                (0..state.num_messages, 0..EMOJI_VOCAB.len())
+                    .prop_map({
+                        let id = id.clone();
+                        move |(message_idx, emoji_idx)| Action::React {
+                            from: id.clone(),
+                            message_idx,
+                            emoji_idx,
+                        }
+                    })
+                    .boxed(),
+            );
+        }
+    }
+
+    // Any member can add a non-member
+    if !non_member_indices.is_empty() {
+        for &adder_idx in &member_indices {
+            for &new_idx in &non_member_indices {
+                choices.push(
+                    Just(Action::AddMember {
+                        adder: ParticipantId(adder_idx),
+                        new_participant: ParticipantId(new_idx),
+                    })
+                    .boxed(),
+                );
+            }
+        }
+    }
+
+    // Any member can remove another member (if 3+ members remain)
+    if member_indices.len() >= 3 {
+        for &remover_idx in &member_indices {
+            for &target_idx in &member_indices {
+                if remover_idx != target_idx {
+                    choices.push(
+                        Just(Action::RemoveMember {
+                            remover: ParticipantId(remover_idx),
+                            target: ParticipantId(target_idx),
+                        })
+                        .boxed(),
+                    );
+                }
+            }
+        }
+    }
+
+    Union::new(choices).boxed()
+}
+
+/// Update the membership fold state after generating an action.
+fn update_membership_state(state: &MembershipFoldState, action: &Action) -> MembershipFoldState {
+    let mut new_state = state.clone();
+    match action {
+        Action::SendMessage { .. } => new_state.num_messages += 1,
+        Action::AddMember { new_participant, .. } => {
+            new_state.members[new_participant.ordinal()] = true;
+        }
+        Action::RemoveMember { target, .. } => {
+            new_state.members[target.ordinal()] = false;
+        }
+        _ => {}
+    }
+    new_state
+}
+
+/// Strategy that produces a valid action sequence for `total_participants`
+/// participants where `initial_members` are in the group at the start.
+///
+/// Membership actions (`AddMember`, `RemoveMember`) are generated alongside
+/// regular messaging actions. Membership changes are **not shrinkable** —
+/// proptest may shrink messaging actions but the membership sequence stays
+/// fixed.
+pub fn action_sequence_with_membership(
+    total_participants: usize,
+    initial_members: &[usize],
+) -> BoxedStrategy<Vec<Action>> {
+    let mut members = vec![false; total_participants];
+    for &i in initial_members {
+        members[i] = true;
+    }
+    let init = MembershipFoldState {
+        num_messages: 0,
+        total_participants,
+        members,
+    };
+    (1usize..=10)
+        .prop_flat_map(move |len| {
+            let init = init.clone();
+            (0..len)
+                .fold(Just((vec![], init)).boxed(), |acc, _| {
+                    acc.prop_flat_map(
+                        |(actions, state): (Vec<Action>, MembershipFoldState)| {
+                            arb_action_with_membership(state.clone()).prop_map(move |a| {
+                                let new_state = update_membership_state(&state, &a);
+                                let mut v = actions.clone();
+                                v.push(a);
+                                (v, new_state)
+                            })
+                        },
+                    )
+                    .boxed()
+                })
+                .prop_map(|(actions, _state)| actions)
+        })
+        .boxed()
 }

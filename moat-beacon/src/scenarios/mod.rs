@@ -101,6 +101,7 @@ pub async fn execute_action(
                     text: text.to_string(),
                     from: from.clone(),
                     message_id,
+                    members_at_send: None,
                 });
             }
         }
@@ -116,13 +117,19 @@ pub async fn execute_action(
         }
 
         Action::React { from, message_idx, emoji_idx } => {
-            let msg = &state.sent_messages[*message_idx];
-            if let Some(ref mid) = msg.message_id {
-                let emoji = EMOJI_VOCAB[emoji_idx % EMOJI_VOCAB.len()];
-                let _ = pick_client(from, alice, bob)
-                    .send_reaction(&state.group_id, mid, emoji)
-                    .await;
-                vlog!(verbose, "  → reacted {:?} to message {}", emoji, message_idx);
+            if *message_idx >= state.sent_messages.len() {
+                // A prior SendMessage may have failed, leaving sent_messages shorter
+                // than the strategy expected.  Skip rather than panic.
+                vlog!(verbose, "  → react skipped (message_idx={} out of range)", message_idx);
+            } else {
+                let msg = &state.sent_messages[*message_idx];
+                if let Some(ref mid) = msg.message_id {
+                    let emoji = EMOJI_VOCAB[emoji_idx % EMOJI_VOCAB.len()];
+                    let _ = pick_client(from, alice, bob)
+                        .send_reaction(&state.group_id, mid, emoji)
+                        .await;
+                    vlog!(verbose, "  → reacted {:?} to message {}", emoji, message_idx);
+                }
             }
         }
 
@@ -168,6 +175,10 @@ pub async fn execute_action(
                     .expect("disable polling after restart");
             }
             vlog!(verbose, "  → {:?} came online", participant);
+        }
+
+        Action::AddMember { .. } | Action::RemoveMember { .. } => {
+            panic!("AddMember/RemoveMember not supported in 2-party execute_action; use execute_action_n");
         }
     }
 }
@@ -244,6 +255,7 @@ pub async fn execute_action_n(
                     text: text.to_string(),
                     from: from.clone(),
                     message_id,
+                    members_at_send: state.members.clone(),
                 });
             }
         }
@@ -263,18 +275,22 @@ pub async fn execute_action_n(
             message_idx,
             emoji_idx,
         } => {
-            let msg = &state.sent_messages[*message_idx];
-            if let Some(ref mid) = msg.message_id {
-                let emoji = EMOJI_VOCAB[emoji_idx % EMOJI_VOCAB.len()];
-                let _ = clients[from.ordinal()]
-                    .send_reaction(&state.group_id, mid, emoji)
-                    .await;
-                vlog!(
-                    verbose,
-                    "  → reacted {:?} to message {}",
-                    emoji,
-                    message_idx
-                );
+            if *message_idx >= state.sent_messages.len() {
+                vlog!(verbose, "  → react skipped (message_idx={} out of range)", message_idx);
+            } else {
+                let msg = &state.sent_messages[*message_idx];
+                if let Some(ref mid) = msg.message_id {
+                    let emoji = EMOJI_VOCAB[emoji_idx % EMOJI_VOCAB.len()];
+                    let _ = clients[from.ordinal()]
+                        .send_reaction(&state.group_id, mid, emoji)
+                        .await;
+                    vlog!(
+                        verbose,
+                        "  → reacted {:?} to message {}",
+                        emoji,
+                        message_idx
+                    );
+                }
             }
         }
 
@@ -314,6 +330,147 @@ pub async fn execute_action_n(
                     .expect("disable polling after restart");
             }
             vlog!(verbose, "  → {} came online", name);
+        }
+
+        Action::AddMember {
+            adder,
+            new_participant,
+        } => {
+            let adder_client = &clients[adder.ordinal()];
+            let new_handle = handles[new_participant.ordinal()];
+            let new_client = &clients[new_participant.ordinal()];
+
+            // The new participant must watch the adder's DID so that their
+            // poll discovers the stealth-encrypted Welcome (published to the
+            // adder's PDS repo).
+            let adder_handle = handles[adder.ordinal()];
+            new_client
+                .watch_handle(adder_handle)
+                .await
+                .unwrap_or_else(|e| panic!("{} watch {} failed: {e}", new_handle, adder_handle));
+
+            adder_client
+                .add_member(&state.group_id, new_handle)
+                .await
+                .unwrap_or_else(|e| panic!("add_member {} failed: {e}", new_handle));
+
+            // Poll the new member until they join (retry up to 10 times).
+            // Use explicit polls only — do NOT re-enable auto-polling, as it
+            // races with explicit polls and can consume the Welcome before the
+            // explicit poll checks for it.
+            let mut joined = false;
+            for attempt in 0..10 {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                let join_stats = new_client.poll().await.expect("new member join poll");
+                vlog!(
+                    verbose,
+                    "  [add_member poll {}/10] new_messages={}, new_conversations={}",
+                    attempt + 1,
+                    join_stats.new_messages,
+                    join_stats.new_conversations
+                );
+                if join_stats.new_conversations > 0 {
+                    joined = true;
+                    break;
+                }
+                // Also check if the conversation already exists (e.g. from a
+                // prior auto-poll or Drawbridge push that raced with us).
+                let convs = new_client
+                    .list_conversations()
+                    .await
+                    .unwrap_or_default();
+                if convs.iter().any(|c| c.id == state.group_id) {
+                    vlog!(
+                        verbose,
+                        "  [add_member] {} already has the group (raced with auto-poll/push)",
+                        new_handle
+                    );
+                    joined = true;
+                    break;
+                }
+            }
+            assert!(
+                joined,
+                "{} should have joined the group after add_member",
+                new_handle
+            );
+
+            // Existing members pick up the epoch commit
+            for (i, client) in clients.iter().enumerate() {
+                if i != new_participant.ordinal() {
+                    let _ = client.poll().await;
+                }
+            }
+
+            // Exchange DrawbridgeHints
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            for client in clients.iter() {
+                let _ = client.poll().await;
+            }
+
+            // Update membership tracking.  If this participant was
+            // previously removed and is being re-added, they won't have
+            // pre-removal messages — clear them from members_at_send of all
+            // existing messages so the delivery check doesn't expect them.
+            if let Some(ref mut members) = state.members {
+                if !members.contains(new_participant) {
+                    // Remove from members_at_send of all prior messages
+                    for sent in &mut state.sent_messages {
+                        if let Some(ref mut m) = sent.members_at_send {
+                            m.retain(|p| p != new_participant);
+                        }
+                    }
+                    members.push(new_participant.clone());
+                }
+            }
+
+            vlog!(
+                verbose,
+                "  → {} added {} to group",
+                adder.short_name(),
+                new_participant.short_name()
+            );
+        }
+
+        Action::RemoveMember { remover, target } => {
+            let remover_client = &clients[remover.ordinal()];
+            let target_handle = handles[target.ordinal()];
+
+            // Flush pending commits to all current members before kicking.
+            // The remover must have processed every epoch-advancing commit
+            // (e.g. a prior AddMember) so they know the target is actually
+            // in the group. Without this, kick_member panics with "not a member".
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            if let Some(ref members) = state.members {
+                for m in members.iter() {
+                    let _ = clients[m.ordinal()].poll().await;
+                }
+            }
+
+            remover_client
+                .kick_member(&state.group_id, target_handle)
+                .await
+                .unwrap_or_else(|e| panic!("kick_member {} failed: {e}", target_handle));
+
+            // Let the commit propagate; remaining members pick up the epoch
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            for (i, client) in clients.iter().enumerate() {
+                if i != target.ordinal() {
+                    let _ = client.poll().await;
+                }
+            }
+
+            // Update membership tracking
+            if let Some(ref mut members) = state.members {
+                members.retain(|m| m != target);
+            }
+
+            vlog!(
+                verbose,
+                "  → {} removed {} from group",
+                remover.short_name(),
+                target.short_name()
+            );
         }
     }
 }
@@ -381,6 +538,21 @@ pub fn format_action(action: &Action) -> String {
         }
         Action::ComeOnline { participant } => {
             format!("ComeOnline {{ participant: {:?} }}", participant)
+        }
+        Action::AddMember {
+            adder,
+            new_participant,
+        } => {
+            format!(
+                "AddMember {{ adder: {:?}, new_participant: {:?} }}",
+                adder, new_participant
+            )
+        }
+        Action::RemoveMember { remover, target } => {
+            format!(
+                "RemoveMember {{ remover: {:?}, target: {:?} }}",
+                remover, target
+            )
         }
     }
 }

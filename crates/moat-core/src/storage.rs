@@ -769,10 +769,38 @@ impl StorageProvider<CURRENT_VERSION> for MlsStorage {
         &self,
         group_id: &GroupId,
     ) -> Result<Option<MessageSecrets>, Self::Error> {
-        self.read_value(
-            MESSAGE_SECRETS_LABEL,
-            &serde_json::to_vec(group_id).map_err(|_| MlsStorageError::Serialization)?,
-        )
+        let key = serde_json::to_vec(group_id).map_err(|_| MlsStorageError::Serialization)?;
+        let storage_key = build_key_from_vec::<CURRENT_VERSION>(MESSAGE_SECRETS_LABEL, key);
+        let raw = {
+            let values = self.values.read().unwrap();
+            match values.get(&storage_key) {
+                Some(v) => v.clone(),
+                None => return Ok(None),
+            }
+        };
+        // Patch max_epochs to MAX_PRIOR_EPOCHS so that the group creator
+        // (whose MessageSecretsStore is initialized with max_epochs=0 by OpenMLS)
+        // retains old epoch decryption keys, enabling decryption of messages
+        // sent before an epoch-advancing operation (AddMember/RemoveMember).
+        let patched = if let Ok(mut val) = serde_json::from_slice::<serde_json::Value>(&raw) {
+            if let Some(obj) = val.as_object_mut() {
+                let current = obj.get("max_epochs").and_then(|v| v.as_u64()).unwrap_or(0);
+                if current < crate::tag::MAX_PRIOR_EPOCHS as u64 {
+                    obj.insert(
+                        "max_epochs".to_string(),
+                        serde_json::Value::Number(
+                            (crate::tag::MAX_PRIOR_EPOCHS as u64).into(),
+                        ),
+                    );
+                }
+            }
+            serde_json::to_vec(&val).unwrap_or(raw)
+        } else {
+            raw
+        };
+        serde_json::from_slice(&patched)
+            .map(Some)
+            .map_err(|_| MlsStorageError::Serialization)
     }
 
     fn write_message_secrets<

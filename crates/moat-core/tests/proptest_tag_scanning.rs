@@ -351,6 +351,87 @@ proptest! {
     }
 }
 
+// --- Group 7: Multi-Epoch Tag Retention ---
+
+proptest! {
+    /// P15: Tags from a prior epoch are still scannable after epoch advance.
+    /// This is the core test for multi-epoch tag retention: Alice sends a
+    /// message, then an epoch-advancing operation happens (add member),
+    /// and Bob (who hasn't delivered anything yet) can still match Alice's
+    /// old-epoch tag via populate_candidate_tags.
+    #[test]
+    fn prior_epoch_tags_scannable(n_before in 1usize..5) {
+        let mut sim = ConversationSim::new(&["Alice", "Bob"]);
+        let mut scanner = TagScanner::new(2);
+        scanner.rebuild_all(&sim);
+
+        // Alice sends messages at the current epoch
+        let mut old_tags = Vec::new();
+        for _ in 0..n_before {
+            let record = sim.send_message(0, b"old-epoch");
+            old_tags.push(record.tag);
+        }
+
+        // Bob has NOT received any of these yet — they sit in his inbox.
+
+        // Advance epoch by adding Charlie — this changes the export secret.
+        // Bob's inbox still has Alice's old-epoch messages ahead of the commit,
+        // so drop them from the inbox to simulate Bob receiving the commit first.
+        for _ in 0..n_before {
+            sim.drop_next(1); // discard Alice's messages from Bob's inbox
+        }
+        let (commit, _, _new_idx) = sim.add_member_sim(0, "Charlie");
+        scanner.grow();
+        // Deliver commit to Bob — his session now has the new epoch + prior secret
+        sim.deliver_commit(1, &commit).unwrap();
+
+        // Now rebuild Bob's candidate tags — should include prior epoch tags
+        scanner.rebuild(&sim, 1);
+
+        // Bob should still be able to scan Alice's old-epoch messages
+        for (i, tag) in old_tags.iter().enumerate() {
+            prop_assert!(
+                scanner.is_candidate(1, tag),
+                "old-epoch message {} should still be scannable after epoch advance", i
+            );
+        }
+    }
+
+    /// P16: Prior export secrets survive state roundtrip.
+    #[test]
+    fn prior_export_secrets_survive_roundtrip(n_before in 1usize..5) {
+        let mut sim = ConversationSim::new(&["Alice", "Bob"]);
+        let mut scanner = TagScanner::new(2);
+        scanner.rebuild_all(&sim);
+
+        // Send messages, then advance epoch
+        for _ in 0..n_before {
+            sim.send_message(0, b"msg");
+        }
+        let (commit, _, new_idx) = sim.add_member_sim(0, "Charlie");
+        scanner.grow();
+        sim.deliver_commit_to_all(&commit, &[0, new_idx]);
+        scanner.rebuild_all(&sim);
+
+        // Capture Bob's candidate set before export
+        let candidates_before: std::collections::HashSet<[u8; 16]> = scanner.candidates[1].clone();
+
+        // Export and reimport Bob's state
+        let state = sim.participants[1].session.export_state().unwrap();
+        let restored = moat_core::MoatSession::from_state(&state).unwrap();
+        sim.participants[1].session = restored;
+
+        // Rebuild candidates after import — should include prior epoch tags
+        scanner.rebuild(&sim, 1);
+        let candidates_after: std::collections::HashSet<[u8; 16]> = scanner.candidates[1].clone();
+
+        prop_assert_eq!(
+            candidates_before, candidates_after,
+            "candidate set (including prior epoch tags) should be identical after state roundtrip"
+        );
+    }
+}
+
 /// P10: Tags differ across sender DIDs at same counter value.
 #[test]
 fn tags_differ_across_senders_at_same_counter() {
@@ -460,7 +541,7 @@ proptest! {
     /// P14: Exceeding GAP_LIMIT skips causes scan failure.
     /// The message's tag falls outside the recipient's scanning window.
     #[test]
-    fn skips_beyond_gap_limit_fail(n_skips in 50usize..60) {
+    fn skips_beyond_gap_limit_fail(n_skips in 10usize..20) {
         let mut sim = ConversationSim::new(&["Alice", "Bob"]);
         let mut scanner = TagScanner::new(2);
         scanner.rebuild_all(&sim);

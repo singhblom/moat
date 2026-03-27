@@ -41,7 +41,7 @@ use openmls_basic_credential::SignatureKeyPair;
 use openmls_traits::OpenMlsProvider;
 use serde::{Deserialize as SerdeDeserialize, Serialize as SerdeSerialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::RwLock;
 
 // Disambiguate from openmls::prelude::* and make accessible as moat_core::X
@@ -60,8 +60,8 @@ pub use crate::padding::{pad_to_bucket, unpad, Bucket};
 pub use crate::stealth::{encrypt_for_stealth, generate_stealth_keypair, try_decrypt_stealth};
 pub(crate) use crate::storage::MoatProvider;
 pub use crate::tag::{
-    derive_event_tag, generate_candidate_tags, TAG_EXPORT_SECRET_LABEL, TAG_EXPORT_SECRET_LEN,
-    TAG_GAP_LIMIT,
+    derive_event_tag, generate_candidate_tags, prior_epoch_gap_limit, MAX_PRIOR_EPOCHS,
+    TAG_EXPORT_SECRET_LABEL, TAG_EXPORT_SECRET_LEN, TAG_GAP_LIMIT,
 };
 
 /// The ciphersuite used by Moat
@@ -117,7 +117,7 @@ pub struct RemoveResult {
 const STATE_MAGIC: &[u8; 4] = b"MOAT";
 
 /// Current state format version.
-const STATE_VERSION: u16 = 3;
+const STATE_VERSION: u16 = 4;
 
 /// Size of the state header: 4 (magic) + 2 (version) + 16 (device_id) = 22 bytes.
 const STATE_HEADER_SIZE: usize = 4 + 2 + 16;
@@ -250,6 +250,11 @@ pub struct MoatSession {
     /// In-memory pending operations for conflict recovery. Maps group_id → operation.
     /// Not persisted — if the app restarts mid-operation, the user retries manually.
     pending_ops: RwLock<HashMap<Vec<u8>, PendingOperation>>,
+    /// Prior epoch export secrets for multi-epoch tag retention.
+    /// Maps group_id → ring buffer of old export secrets (most recent first).
+    /// Used by `populate_candidate_tags` to generate candidate tags with decaying
+    /// gap limits for prior epochs, catching messages stranded across epoch boundaries.
+    prior_export_secrets: RwLock<HashMap<Vec<u8>, VecDeque<Vec<u8>>>>,
 }
 
 impl MoatSession {
@@ -266,6 +271,7 @@ impl MoatSession {
             seen_counters: RwLock::new(HashMap::new()),
             tag_metadata: RwLock::new(HashMap::new()),
             pending_ops: RwLock::new(HashMap::new()),
+            prior_export_secrets: RwLock::new(HashMap::new()),
         }
     }
 
@@ -288,7 +294,7 @@ impl MoatSession {
                     "v{version} state not supported; re-initialize session"
                 )))
             }
-            3 => {}
+            3 | 4 => {}
             _ => {
                 return Err(Error::Deserialization(format!(
                     "unsupported state version: {version}"
@@ -324,7 +330,14 @@ impl MoatSession {
         let (tag_counters, rest) = Self::deserialize_tag_counters(rest)?;
 
         // Parse seen counter entries (may be absent in older state files)
-        let seen_counters = Self::deserialize_seen_counters(rest)?;
+        let (seen_counters, rest) = Self::deserialize_seen_counters_rest(rest)?;
+
+        // v4: Parse prior export secrets (absent in v3)
+        let prior_export_secrets = if version >= 4 && !rest.is_empty() {
+            Self::deserialize_prior_export_secrets(rest)?
+        } else {
+            HashMap::new()
+        };
 
         Ok(Self {
             provider,
@@ -334,6 +347,7 @@ impl MoatSession {
             seen_counters: RwLock::new(seen_counters),
             tag_metadata: RwLock::new(HashMap::new()),
             pending_ops: RwLock::new(HashMap::new()),
+            prior_export_secrets: RwLock::new(prior_export_secrets),
         })
     }
 
@@ -352,6 +366,7 @@ impl MoatSession {
         let hash_chain_bytes = self.serialize_hash_chains();
         let tag_counter_bytes = self.serialize_tag_counters();
         let seen_counter_bytes = self.serialize_seen_counters();
+        let prior_secrets_bytes = self.serialize_prior_export_secrets();
 
         let mut buf = Vec::with_capacity(
             STATE_HEADER_SIZE
@@ -359,7 +374,8 @@ impl MoatSession {
                 + raw_state.len()
                 + hash_chain_bytes.len()
                 + tag_counter_bytes.len()
-                + seen_counter_bytes.len(),
+                + seen_counter_bytes.len()
+                + prior_secrets_bytes.len(),
         );
         buf.extend_from_slice(STATE_MAGIC);
         buf.extend_from_slice(&STATE_VERSION.to_le_bytes());
@@ -373,6 +389,8 @@ impl MoatSession {
         buf.extend_from_slice(&tag_counter_bytes);
         // Seen counter data (recipient-side)
         buf.extend_from_slice(&seen_counter_bytes);
+        // v4: Prior export secrets for multi-epoch tag retention
+        buf.extend_from_slice(&prior_secrets_bytes);
         Ok(buf)
     }
 
@@ -473,6 +491,64 @@ impl MoatSession {
         Ok((key_package_bytes, key_bundle_bytes))
     }
 
+    /// Generate a fresh key package using the **existing** signing key from `key_bundle`.
+    ///
+    /// Unlike `generate_key_package`, this does NOT create a new signing key.
+    /// The existing leaf-node signing key (already embedded in any group the caller
+    /// belongs to) is preserved so that group operations (`add_member`, `kick_user`,
+    /// `encrypt_event`, …) continue to work after the new key package is uploaded.
+    ///
+    /// Use this to replenish the PDS key package after a Welcome has been consumed,
+    /// so the member can be re-invited to a group.
+    ///
+    /// Returns the new key package bytes (suitable for publishing to the PDS).
+    pub fn replenish_key_package(
+        &self,
+        credential: &MoatCredential,
+        key_bundle: &[u8],
+    ) -> Result<Vec<u8>> {
+        let credential_bytes = credential
+            .to_bytes()
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+
+        let bundle: KeyBundle = serde_json::from_slice(key_bundle)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
+
+        // Re-use the existing signing key pair so the leaf-node public key stays
+        // the same (matching what is already stored in every group the member has
+        // joined via a prior Welcome).
+        let signature_keys =
+            SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
+                .map_err(|e| Error::Deserialization(e.to_string()))?;
+
+        // Re-store the signing keys so OpenMLS can find them when building the package.
+        signature_keys
+            .store(self.provider.storage())
+            .map_err(|e| Error::KeyGeneration(e.to_string()))?;
+
+        let basic_credential = BasicCredential::new(credential_bytes);
+        let credential_with_key = CredentialWithKey {
+            credential: basic_credential.into(),
+            signature_key: signature_keys.to_public_vec().into(),
+        };
+
+        let key_package_bundle = KeyPackage::builder()
+            .build(
+                CIPHERSUITE,
+                &self.provider,
+                &signature_keys,
+                credential_with_key,
+            )
+            .map_err(|e| Error::KeyPackageGeneration(e.to_string()))?;
+
+        let key_package_bytes = key_package_bundle
+            .key_package()
+            .tls_serialize_detached()
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+
+        Ok(key_package_bytes)
+    }
+
     /// Create a new MLS group.
     ///
     /// The group state is persisted to storage.
@@ -512,6 +588,7 @@ impl MoatSession {
         let group_config = MlsGroupCreateConfig::builder()
             .ciphersuite(CIPHERSUITE)
             .use_ratchet_tree_extension(true)
+            .max_past_epochs(tag::MAX_PRIOR_EPOCHS)
             .build();
 
         // Create the group (persisted to storage via provider)
@@ -578,6 +655,9 @@ impl MoatSession {
             .validate(self.provider.crypto(), ProtocolVersion::Mls10)
             .map_err(|e| Error::KeyPackageValidation(e.to_string()))?;
 
+        // Save current export secret before epoch advances
+        self.save_prior_export_secret(&group, group_id);
+
         // Add the member
         let (commit, welcome, _group_info) = group
             .add_members(&self.provider, &signature_keys, &[validated_key_package])
@@ -637,6 +717,7 @@ impl MoatSession {
         // Join the group
         let join_config = MlsGroupJoinConfig::builder()
             .use_ratchet_tree_extension(true)
+            .max_past_epochs(tag::MAX_PRIOR_EPOCHS)
             .build();
 
         let group = StagedWelcome::new_from_welcome(&self.provider, &join_config, welcome, None)
@@ -813,6 +894,9 @@ impl MoatSession {
                 Ok(DecryptOutcome::from_result_and_warnings(result, warnings))
             }
             ProcessedMessageContent::StagedCommitMessage(staged_commit) => {
+                // Save current export secret before epoch advances
+                self.save_prior_export_secret(&group, group_id);
+
                 // Check if we have a pending local commit that conflicts with this remote commit
                 let had_pending_op = {
                     let ops = self.pending_ops.read().unwrap();
@@ -1184,11 +1268,10 @@ impl MoatSession {
         buf
     }
 
-    /// Deserialize seen counter state from bytes.
-    fn deserialize_seen_counters(data: &[u8]) -> Result<HashMap<SeenCounterKey, u64>> {
+    /// Deserialize seen counter state from bytes, returning remaining bytes.
+    fn deserialize_seen_counters_rest(data: &[u8]) -> Result<(HashMap<SeenCounterKey, u64>, &[u8])> {
         if data.is_empty() {
-            // No seen counters section — valid for states saved before this feature
-            return Ok(HashMap::new());
+            return Ok((HashMap::new(), data));
         }
         if data.len() < 8 {
             return Err(Error::Deserialization("seen counter data too short".into()));
@@ -1233,7 +1316,93 @@ impl MoatSession {
             offset += 8;
             map.insert((group_id, sender_did, device_id), counter);
         }
+        Ok((map, &data[offset..]))
+    }
+
+    /// Serialize prior export secrets to bytes.
+    ///
+    /// Format: [num_groups: u64] then per group:
+    ///   [group_id_len: u32] [group_id] [num_secrets: u32] then per secret: [32 bytes]
+    fn serialize_prior_export_secrets(&self) -> Vec<u8> {
+        let secrets = self.prior_export_secrets.read().unwrap();
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&(secrets.len() as u64).to_le_bytes());
+        for (group_id, deque) in secrets.iter() {
+            buf.extend_from_slice(&(group_id.len() as u32).to_le_bytes());
+            buf.extend_from_slice(group_id);
+            buf.extend_from_slice(&(deque.len() as u32).to_le_bytes());
+            for secret in deque {
+                buf.extend_from_slice(secret);
+            }
+        }
+        buf
+    }
+
+    /// Deserialize prior export secrets from bytes.
+    fn deserialize_prior_export_secrets(
+        data: &[u8],
+    ) -> Result<HashMap<Vec<u8>, VecDeque<Vec<u8>>>> {
+        if data.len() < 8 {
+            return Ok(HashMap::new());
+        }
+        let num_groups = u64::from_le_bytes(data[..8].try_into().unwrap()) as usize;
+        let mut offset = 8;
+        let mut map = HashMap::with_capacity(num_groups);
+        for _ in 0..num_groups {
+            if offset + 4 > data.len() {
+                return Err(Error::Deserialization(
+                    "prior export secrets truncated".into(),
+                ));
+            }
+            let gid_len =
+                u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+            offset += 4;
+            if offset + gid_len > data.len() {
+                return Err(Error::Deserialization(
+                    "prior export secrets truncated".into(),
+                ));
+            }
+            let group_id = data[offset..offset + gid_len].to_vec();
+            offset += gid_len;
+            if offset + 4 > data.len() {
+                return Err(Error::Deserialization(
+                    "prior export secrets truncated".into(),
+                ));
+            }
+            let num_secrets =
+                u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+            offset += 4;
+            let mut deque = VecDeque::with_capacity(num_secrets);
+            for _ in 0..num_secrets {
+                if offset + 32 > data.len() {
+                    return Err(Error::Deserialization(
+                        "prior export secret truncated".into(),
+                    ));
+                }
+                deque.push_back(data[offset..offset + 32].to_vec());
+                offset += 32;
+            }
+            map.insert(group_id, deque);
+        }
         Ok(map)
+    }
+
+    /// Save the current epoch's export secret to the prior secrets ring buffer.
+    ///
+    /// Call this **before** an epoch-advancing operation (add_member, remove_member,
+    /// merge_staged_commit) so that `populate_candidate_tags` can generate tags for
+    /// messages stranded at the old epoch.
+    fn save_prior_export_secret(&self, group: &MlsGroup, group_id: &[u8]) {
+        if let Ok(secret) = self.derive_tag_export_secret(group) {
+            let mut secrets = self.prior_export_secrets.write().unwrap();
+            let deque = secrets
+                .entry(group_id.to_vec())
+                .or_insert_with(VecDeque::new);
+            deque.push_front(secret);
+            while deque.len() > tag::MAX_PRIOR_EPOCHS {
+                deque.pop_back();
+            }
+        }
     }
 
     /// Derive the epoch fingerprint for a group's current state.
@@ -1465,6 +1634,8 @@ impl MoatSession {
 
         let mut all_tags = Vec::new();
         let mut metadata = self.tag_metadata.write().unwrap();
+
+        // Current epoch: use seen_counters for the scanning window
         for (_leaf_idx, cred) in &members {
             let cred = match cred {
                 Some(c) => c,
@@ -1481,9 +1652,9 @@ impl MoatSession {
                 from_counter,
                 tag::TAG_GAP_LIMIT,
             )?;
-            for (tag, counter) in tags {
+            for (t, counter) in tags {
                 metadata.insert(
-                    tag,
+                    t,
                     (
                         group_id.to_vec(),
                         cred.did().to_string(),
@@ -1491,9 +1662,49 @@ impl MoatSession {
                         counter,
                     ),
                 );
-                all_tags.push(tag);
+                all_tags.push(t);
             }
         }
+
+        // Prior epochs: decaying gap limits, always from counter 0
+        let prior_secrets = self.prior_export_secrets.read().unwrap();
+        if let Some(deque) = prior_secrets.get(group_id) {
+            for (age_minus_1, prior_secret) in deque.iter().enumerate() {
+                let age = age_minus_1 + 1; // age 1 = most recent prior epoch
+                let gap = tag::prior_epoch_gap_limit(age);
+                if gap == 0 {
+                    break;
+                }
+                for (_leaf_idx, cred) in &members {
+                    let cred = match cred {
+                        Some(c) => c,
+                        None => continue,
+                    };
+                    let device_id = cred.device_id();
+                    let tags = tag::generate_candidate_tags(
+                        prior_secret,
+                        group_id,
+                        cred.did(),
+                        device_id,
+                        0, // always scan from counter 0 for old epochs
+                        gap,
+                    )?;
+                    for (t, counter) in tags {
+                        metadata.insert(
+                            t,
+                            (
+                                group_id.to_vec(),
+                                cred.did().to_string(),
+                                *device_id,
+                                counter,
+                            ),
+                        );
+                        all_tags.push(t);
+                    }
+                }
+            }
+        }
+
         Ok(all_tags)
     }
 
@@ -1539,6 +1750,7 @@ impl MoatSession {
         let members = self.get_group_members(group_id)?;
         let seen = self.seen_counters.read().unwrap();
 
+        // Try current epoch first
         for (_leaf_idx, cred) in &members {
             let cred = match cred {
                 Some(c) => c,
@@ -1556,12 +1768,11 @@ impl MoatSession {
                 from_counter,
                 scan_limit,
             )?;
-            for (tag, counter) in tags {
-                if &tag == target_tag {
-                    // Found it — update metadata and seen counter
+            for (t, counter) in tags {
+                if &t == target_tag {
                     let mut metadata = self.tag_metadata.write().unwrap();
                     metadata.insert(
-                        tag,
+                        t,
                         (
                             group_id.to_vec(),
                             cred.did().to_string(),
@@ -1571,7 +1782,6 @@ impl MoatSession {
                     );
                     drop(metadata);
                     drop(seen);
-                    // Advance seen counter to this position
                     let mut seen_w = self.seen_counters.write().unwrap();
                     let current = seen_w.entry(key).or_insert(0);
                     if counter >= *current {
@@ -1581,6 +1791,48 @@ impl MoatSession {
                 }
             }
         }
+
+        // Try prior epoch secrets
+        let prior_secrets = self.prior_export_secrets.read().unwrap();
+        if let Some(deque) = prior_secrets.get(group_id) {
+            for prior_secret in deque.iter() {
+                for (_leaf_idx, cred) in &members {
+                    let cred = match cred {
+                        Some(c) => c,
+                        None => continue,
+                    };
+                    let device_id = cred.device_id();
+                    let tags = tag::generate_candidate_tags(
+                        prior_secret,
+                        group_id,
+                        cred.did(),
+                        device_id,
+                        0,
+                        scan_limit,
+                    )?;
+                    for (t, counter) in tags {
+                        if &t == target_tag {
+                            let mut metadata = self.tag_metadata.write().unwrap();
+                            metadata.insert(
+                                t,
+                                (
+                                    group_id.to_vec(),
+                                    cred.did().to_string(),
+                                    *device_id,
+                                    counter,
+                                ),
+                            );
+                            drop(metadata);
+                            drop(seen);
+                            // Don't advance seen_counters for old-epoch matches
+                            // (they use epoch-specific counters, not the current epoch's)
+                            return Ok(true);
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(false)
     }
 
@@ -1644,6 +1896,9 @@ impl MoatSession {
             .map_err(|e| Error::Deserialization(e.to_string()))?;
         let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
             .map_err(|e| Error::Deserialization(e.to_string()))?;
+
+        // Save current export secret before epoch advances
+        self.save_prior_export_secret(&group, group_id);
 
         // Create the remove proposal
         let leaf_node_index = LeafNodeIndex::new(leaf_index);
@@ -1721,6 +1976,9 @@ impl MoatSession {
             .iter()
             .map(|&idx| LeafNodeIndex::new(idx))
             .collect();
+
+        // Save current export secret before epoch advances
+        self.save_prior_export_secret(&group, group_id);
 
         // Remove all members with this DID
         let (commit, _welcome, _group_info) = group

@@ -17,6 +17,11 @@ pub struct SentMessage {
     /// Confirmed message ID (hex-encoded), present when the sender could read it
     /// back from their own message list immediately after sending.
     pub message_id: Option<String>,
+    /// Participants who were group members at the time this message was sent.
+    /// Used for membership-aware delivery checks.  `None` means "all
+    /// participants" (backwards-compatible with scenarios that don't track
+    /// membership).
+    pub members_at_send: Option<Vec<ParticipantId>>,
 }
 
 /// Accumulated ground-truth for one scenario run.
@@ -24,6 +29,9 @@ pub struct ScenarioState {
     pub group_id: String,
     /// Messages appended in the order they were sent.
     pub sent_messages: Vec<SentMessage>,
+    /// Current group members (indices into the client slice).  `None` means
+    /// membership is not tracked and all clients are assumed to be members.
+    pub members: Option<Vec<ParticipantId>>,
 }
 
 // ── Drain ─────────────────────────────────────────────────────────────────────
@@ -197,7 +205,11 @@ pub async fn drain_events_n(clients: &[&MoatCliClient]) {
     }
 }
 
-/// Every sent message with a confirmed ID appears in all participants' lists.
+/// Every sent message with a confirmed ID appears in the message lists of all
+/// participants who were group members when it was sent.
+///
+/// If `members_at_send` is `None` on a message, all participants are checked
+/// (backwards-compatible with scenarios that don't track membership).
 pub async fn check_delivery_n(
     clients: &[&MoatCliClient],
     state: &ScenarioState,
@@ -208,11 +220,31 @@ pub async fn check_delivery_n(
         all_msgs.push((i, msgs));
     }
 
+    // When membership is tracked, only check delivery for current members.
+    // Removed participants may not have received messages even if they were
+    // members at send time (e.g. removed before draining).
+    let current_members: Option<Vec<usize>> = state
+        .members
+        .as_ref()
+        .map(|ms| ms.iter().map(|m| m.ordinal()).collect());
+
     for sent in &state.sent_messages {
         let Some(ref mid) = sent.message_id else {
             continue;
         };
         for (i, msgs) in &all_msgs {
+            // Skip participants who aren't current members.
+            if let Some(ref current) = current_members {
+                if !current.contains(i) {
+                    continue;
+                }
+            }
+            // Skip participants who weren't members when this message was sent.
+            if let Some(ref members) = sent.members_at_send {
+                if !members.iter().any(|m| m.ordinal() == *i) {
+                    continue;
+                }
+            }
             let found = msgs.iter().any(|m| m.message_id.as_deref() == Some(mid));
             if !found {
                 anyhow::bail!(
@@ -226,23 +258,73 @@ pub async fn check_delivery_n(
 }
 
 /// After drain, all participants see the same sequence of message contents.
+///
+/// When membership tracking is active (`members_at_send` present), only
+/// messages that ALL current members witnessed are compared for ordering.
+/// Messages from before a participant joined or after they were removed are
+/// excluded from the consensus check.
 pub async fn check_consensus_ordering_n(
     clients: &[&MoatCliClient],
     state: &ScenarioState,
 ) -> Result<()> {
-    let mut contents_per_client: Vec<Vec<String>> = Vec::new();
-    for client in clients {
-        let msgs = client.get_messages(&state.group_id).await?;
-        contents_per_client.push(msgs.into_iter().map(|m| m.content).collect());
+    // Determine which participants to check (current members, or all if not tracking)
+    let check_indices: Vec<usize> = match &state.members {
+        Some(members) => members.iter().map(|m| m.ordinal()).collect(),
+        None => (0..clients.len()).collect(),
+    };
+
+    if check_indices.len() < 2 {
+        return Ok(()); // Need at least 2 members to compare ordering
     }
 
-    let first = &contents_per_client[0];
-    for (i, contents) in contents_per_client.iter().enumerate().skip(1) {
-        if contents != first {
+    // Collect message IDs that ALL checked participants should have seen
+    let common_mids: Vec<&str> = state
+        .sent_messages
+        .iter()
+        .filter_map(|sent| {
+            let mid = sent.message_id.as_deref()?;
+            // If membership is tracked, only include messages where all
+            // checked participants were members at send time.
+            if let Some(ref members) = sent.members_at_send {
+                let all_present = check_indices
+                    .iter()
+                    .all(|&idx| members.iter().any(|m| m.ordinal() == idx));
+                if !all_present {
+                    return None;
+                }
+            }
+            Some(mid)
+        })
+        .collect();
+
+    if common_mids.is_empty() {
+        return Ok(()); // No common messages to compare
+    }
+
+    // For each checked participant, extract the relative order of common messages
+    let mut orders: Vec<Vec<String>> = Vec::new();
+    for &idx in &check_indices {
+        let msgs = clients[idx].get_messages(&state.group_id).await?;
+        let order: Vec<String> = msgs
+            .iter()
+            .filter_map(|m| m.message_id.as_deref())
+            .filter(|mid| common_mids.contains(mid))
+            .map(|s| s.to_string())
+            .collect();
+        orders.push(order);
+    }
+
+    let first = &orders[0];
+    for (pos, order) in orders.iter().enumerate().skip(1) {
+        if order != first {
             anyhow::bail!(
-                "Consensus ordering violated between participant 0 and {i}:\n  0: {:?}\n  {i}: {:?}",
+                "Consensus ordering violated between participant {} and {}:\n  {}: {:?}\n  {}: {:?}",
+                check_indices[0],
+                check_indices[pos],
+                check_indices[0],
                 first,
-                contents,
+                check_indices[pos],
+                order,
             );
         }
     }

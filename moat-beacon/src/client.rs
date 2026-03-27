@@ -221,6 +221,25 @@ impl MoatCliClient {
         Ok(())
     }
 
+    /// `DELETE /conversations/:group_id/members/:handle` — kick a member.
+    pub async fn kick_member(&self, group_id: &str, handle: &str) -> Result<()> {
+        let resp = self
+            .http
+            .delete(format!(
+                "{}/conversations/{group_id}/members/{handle}",
+                self.base_url
+            ))
+            .send()
+            .await
+            .context("DELETE /conversations/:group_id/members/:handle")?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body: Value = resp.json().await.unwrap_or_default();
+            anyhow::bail!("kick_member failed ({status}): {body}");
+        }
+        Ok(())
+    }
+
     /// `POST /watch`
     pub async fn watch_handle(&self, handle: &str) -> Result<()> {
         let resp = self
