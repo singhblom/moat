@@ -14,6 +14,7 @@
 //! - [`scenarios`] — `Scenario` registry, seed utilities, and CLI (`list` / `run` / `replay`).
 
 pub mod actions;
+pub mod parallel;
 pub mod client;
 pub mod config;
 pub mod drawbridge;

@@ -87,10 +87,8 @@ pub struct TestWorld {
     participants: HashMap<String, ParticipantProcess>,
     /// Path to the `moat` CLI binary; reused when restarting participants.
     moat_cli_bin: PathBuf,
-    /// Path to the compiled Dart server binary; lazily resolved.
+    /// Path to the compiled Dart server binary; reused when restarting participants.
     dart_server_bin: Option<PathBuf>,
-    /// Path to the Rust FFI dylib for the Dart server.
-    rust_lib_path: Option<PathBuf>,
 }
 
 impl TestWorld {
@@ -261,36 +259,112 @@ impl TestWorld {
                 (None, None)
             };
 
+        // Intermediate holder for a spawned-but-not-yet-ready participant.
+        struct PendingParticipant {
+            short_handle: String,
+            child: Child,
+            client: MoatCliClient,
+            storage: TempDir,
+            spawn_args: Vec<String>,
+            kind: ParticipantKind,
+        }
+
+        // Phase 1: spawn all participant processes (fast — no waiting).
+        let mut pending: Vec<PendingParticipant> = Vec::with_capacity(handles.len());
+        for (i, (&handle, kind)) in handles.iter().zip(kinds.iter()).enumerate() {
+            let full_handle = format!("{handle}{handle_suffix}");
+            let drawbridge_ws = drawbridge_ws_endpoints[i].as_deref();
+
+            let http_port = free_port()?;
+            let http_addr = format!("127.0.0.1:{http_port}");
+            let storage = TempDir::new().context("create temp storage dir")?;
+
+            let mut args = vec![
+                "--storage-dir".to_string(),
+                storage.path().to_str().unwrap().to_string(),
+                "--pds-url".to_string(),
+                pds_proxy.url.clone(),
+                "--http".to_string(),
+                http_addr.clone(),
+            ];
+            if let Some(db_url) = drawbridge_ws {
+                args.push("--drawbridge-url".to_string());
+                args.push(db_url.to_string());
+            }
+            if *kind == ParticipantKind::DartServer {
+                if let Some(ref lib) = rust_lib_path {
+                    args.push("--lib-path".to_string());
+                    args.push(lib.to_str().unwrap().to_string());
+                }
+            }
+
+            let bin = match kind {
+                ParticipantKind::RustCli => moat_cli_bin.clone(),
+                ParticipantKind::DartServer => {
+                    dart_server_bin.clone().expect("dart_server_bin not set")
+                }
+            };
+
+            let child = Command::new(&bin)
+                .args(&args)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::inherit())
+                .spawn()
+                .with_context(|| format!("spawn participant ({kind:?}) for {full_handle}"))?;
+
+            let client = MoatCliClient::new(&format!("http://{http_addr}"));
+
+            pending.push(PendingParticipant {
+                short_handle: handle.to_string(),
+                child,
+                client,
+                storage,
+                spawn_args: args,
+                kind: kind.clone(),
+            });
+        }
+
+        // Phase 2: wait for all HTTP servers to come up concurrently.
+        {
+            let mut join_set: tokio::task::JoinSet<Result<()>> = tokio::task::JoinSet::new();
+            for p in &pending {
+                let client = p.client.clone();
+                let short = p.short_handle.clone();
+                join_set.spawn(async move {
+                    wait_for_http(&client, std::time::Duration::from_secs(10))
+                        .await
+                        .with_context(|| format!("waiting for participant ({short}) to start"))
+                });
+            }
+            while let Some(res) = join_set.join_next().await {
+                res??;
+            }
+        }
+
         let mut world = Self {
             _postern: postern,
             toxiproxy,
             pds_proxy: pds_proxy.clone(),
             postern_url,
-            _drawbridges: vec![],
+            _drawbridges: drawbridges,
             db_verify_proxy,
             participants: HashMap::new(),
             moat_cli_bin,
             dart_server_bin,
-            rust_lib_path,
         };
 
-        for (i, (&handle, kind)) in handles.iter().zip(kinds.iter()).enumerate() {
-            let full_handle = format!("{handle}{handle_suffix}");
-            let drawbridge_ws = drawbridge_ws_endpoints[i].as_deref();
-            world
-                .spawn_participant(
-                    handle,
-                    &full_handle,
-                    &pds_proxy.url.clone(),
-                    drawbridge_ws,
-                    kind.clone(),
-                )
-                .await
-                .with_context(|| format!("spawning participant {handle}"))?;
+        for p in pending {
+            world.participants.insert(
+                p.short_handle,
+                ParticipantProcess {
+                    child: Some(p.child),
+                    storage: p.storage,
+                    spawn_args: p.spawn_args,
+                    kind: p.kind,
+                    client: p.client,
+                },
+            );
         }
-
-        // Move drawbridge processes into world after all participants are spawned.
-        world._drawbridges = drawbridges;
 
         Ok(world)
     }
@@ -364,74 +438,6 @@ impl TestWorld {
             .unwrap_or(false)
     }
 
-    // ── Private helpers ───────────────────────────────────────────────────────
-
-    async fn spawn_participant(
-        &mut self,
-        short_handle: &str,
-        full_handle: &str,
-        pds_url: &str,
-        drawbridge_ws: Option<&str>,
-        kind: ParticipantKind,
-    ) -> Result<()> {
-        let http_port = free_port()?;
-        let http_addr = format!("127.0.0.1:{http_port}");
-        let storage = TempDir::new().context("create temp storage dir")?;
-
-        let mut args = vec![
-            "--storage-dir".to_string(),
-            storage.path().to_str().unwrap().to_string(),
-            "--pds-url".to_string(),
-            pds_url.to_string(),
-            "--http".to_string(),
-            http_addr.clone(),
-        ];
-        if let Some(db_url) = drawbridge_ws {
-            args.push("--drawbridge-url".to_string());
-            args.push(db_url.to_string());
-        }
-        if kind == ParticipantKind::DartServer {
-            if let Some(ref lib) = self.rust_lib_path {
-                args.push("--lib-path".to_string());
-                args.push(lib.to_str().unwrap().to_string());
-            }
-        }
-
-        let bin = match kind {
-            ParticipantKind::RustCli => self.moat_cli_bin.clone(),
-            ParticipantKind::DartServer => self
-                .dart_server_bin
-                .clone()
-                .expect("dart_server_bin not set"),
-        };
-
-        let child = Command::new(&bin)
-            .args(&args)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::inherit())
-            .spawn()
-            .with_context(|| format!("spawn participant ({:?}) for {full_handle}", kind))?;
-
-        let base_url = format!("http://{http_addr}");
-        let client = MoatCliClient::new(&base_url);
-
-        // Wait until the HTTP server is up (up to 10 s).
-        wait_for_http(&client, std::time::Duration::from_secs(10))
-            .await
-            .with_context(|| format!("waiting for participant ({full_handle}) to start"))?;
-
-        self.participants.insert(
-            short_handle.to_string(),
-            ParticipantProcess {
-                child: Some(child),
-                storage,
-                spawn_args: args,
-                kind,
-                client,
-            },
-        );
-        Ok(())
-    }
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────

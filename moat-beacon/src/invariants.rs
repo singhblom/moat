@@ -4,7 +4,7 @@
 //! invariant checkers after all participants have been drained.
 
 use crate::actions::ParticipantId;
-use crate::client::MoatCliClient;
+use crate::client::{Message, MoatCliClient};
 use anyhow::Result;
 use std::time::Duration;
 
@@ -41,8 +41,7 @@ pub struct ScenarioState {
 pub async fn drain_events(alice: &MoatCliClient, bob: &MoatCliClient) {
     tokio::time::sleep(Duration::from_millis(300)).await;
     for _ in 0..2 {
-        let _ = alice.poll().await;
-        let _ = bob.poll().await;
+        let _ = tokio::join!(alice.poll(), bob.poll());
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
@@ -55,8 +54,10 @@ pub async fn check_delivery(
     bob: &MoatCliClient,
     state: &ScenarioState,
 ) -> Result<()> {
-    let alice_msgs = alice.get_messages(&state.group_id).await?;
-    let bob_msgs = bob.get_messages(&state.group_id).await?;
+    let (alice_msgs, bob_msgs) = tokio::try_join!(
+        alice.get_messages(&state.group_id),
+        bob.get_messages(&state.group_id)
+    )?;
 
     for sent in &state.sent_messages {
         let Some(ref mid) = sent.message_id else {
@@ -93,8 +94,10 @@ pub async fn check_consensus_ordering(
     bob: &MoatCliClient,
     state: &ScenarioState,
 ) -> Result<()> {
-    let alice_msgs = alice.get_messages(&state.group_id).await?;
-    let bob_msgs = bob.get_messages(&state.group_id).await?;
+    let (alice_msgs, bob_msgs) = tokio::try_join!(
+        alice.get_messages(&state.group_id),
+        bob.get_messages(&state.group_id)
+    )?;
 
     let alice_contents: Vec<&str> = alice_msgs.iter().map(|m| m.content.as_str()).collect();
     let bob_contents: Vec<&str> = bob_msgs.iter().map(|m| m.content.as_str()).collect();
@@ -119,8 +122,10 @@ pub async fn check_per_sender_ordering(
     bob: &MoatCliClient,
     state: &ScenarioState,
 ) -> Result<()> {
-    let alice_msgs = alice.get_messages(&state.group_id).await?;
-    let bob_msgs = bob.get_messages(&state.group_id).await?;
+    let (alice_msgs, bob_msgs) = tokio::try_join!(
+        alice.get_messages(&state.group_id),
+        bob.get_messages(&state.group_id)
+    )?;
 
     for sender in [ParticipantId::ALICE, ParticipantId::BOB] {
         // Ground-truth: IDs of confirmed messages from this sender, in send order.
@@ -178,8 +183,11 @@ pub async fn check_no_duplicates(
     bob: &MoatCliClient,
     state: &ScenarioState,
 ) -> Result<()> {
-    for (name, client) in [("Alice", alice), ("Bob", bob)] {
-        let msgs = client.get_messages(&state.group_id).await?;
+    let (alice_msgs, bob_msgs) = tokio::try_join!(
+        alice.get_messages(&state.group_id),
+        bob.get_messages(&state.group_id)
+    )?;
+    for (name, msgs) in [("Alice", alice_msgs), ("Bob", bob_msgs)] {
         let mut seen = std::collections::HashSet::new();
         for msg in &msgs {
             if let Some(ref mid) = msg.message_id {
@@ -194,13 +202,42 @@ pub async fn check_no_duplicates(
 
 // ── N-participant invariant checkers ─────────────────────────────────────────
 
+/// Fetch messages for all N clients concurrently.
+///
+/// Returns a `Vec<(index, messages)>` sorted by index so callers can index
+/// by participant position.
+async fn fetch_all_messages(
+    clients: &[&MoatCliClient],
+    group_id: &str,
+) -> Result<Vec<(usize, Vec<Message>)>> {
+    let mut join_set: tokio::task::JoinSet<Result<(usize, Vec<Message>)>> =
+        tokio::task::JoinSet::new();
+    for (i, &client) in clients.iter().enumerate() {
+        let client = client.clone();
+        let group_id = group_id.to_string();
+        join_set.spawn(async move {
+            let msgs = client.get_messages(&group_id).await?;
+            Ok((i, msgs))
+        });
+    }
+    let mut results = Vec::with_capacity(clients.len());
+    while let Some(res) = join_set.join_next().await {
+        results.push(res??);
+    }
+    results.sort_by_key(|(i, _)| *i);
+    Ok(results)
+}
+
 /// Let pending events propagate across N participants.
 pub async fn drain_events_n(clients: &[&MoatCliClient]) {
     tokio::time::sleep(Duration::from_millis(300)).await;
     for _ in 0..2 {
-        for client in clients {
-            let _ = client.poll().await;
+        let mut join_set: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
+        for &client in clients {
+            let client = client.clone();
+            join_set.spawn(async move { let _ = client.poll().await; });
         }
+        while join_set.join_next().await.is_some() {}
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
@@ -214,11 +251,7 @@ pub async fn check_delivery_n(
     clients: &[&MoatCliClient],
     state: &ScenarioState,
 ) -> Result<()> {
-    let mut all_msgs = Vec::new();
-    for (i, client) in clients.iter().enumerate() {
-        let msgs = client.get_messages(&state.group_id).await?;
-        all_msgs.push((i, msgs));
-    }
+    let all_msgs = fetch_all_messages(clients, &state.group_id).await?;
 
     // When membership is tracked, only check delivery for current members.
     // Removed participants may not have received messages even if they were
@@ -302,9 +335,10 @@ pub async fn check_consensus_ordering_n(
     }
 
     // For each checked participant, extract the relative order of common messages
+    let all_msgs = fetch_all_messages(clients, &state.group_id).await?;
     let mut orders: Vec<Vec<String>> = Vec::new();
     for &idx in &check_indices {
-        let msgs = clients[idx].get_messages(&state.group_id).await?;
+        let msgs = &all_msgs[idx].1;
         let order: Vec<String> = msgs
             .iter()
             .filter_map(|m| m.message_id.as_deref())
@@ -339,11 +373,8 @@ pub async fn check_per_sender_ordering_n(
     clients: &[&MoatCliClient],
     state: &ScenarioState,
 ) -> Result<()> {
-    let mut all_msgs = Vec::new();
-    for client in clients {
-        let msgs = client.get_messages(&state.group_id).await?;
-        all_msgs.push(msgs);
-    }
+    let all_msgs_indexed = fetch_all_messages(clients, &state.group_id).await?;
+    let all_msgs: Vec<&Vec<Message>> = all_msgs_indexed.iter().map(|(_, m)| m).collect();
 
     // Check ordering for each sender
     let max_participant = clients.len();
@@ -401,10 +432,10 @@ pub async fn check_no_duplicates_n(
     clients: &[&MoatCliClient],
     state: &ScenarioState,
 ) -> Result<()> {
-    for (i, client) in clients.iter().enumerate() {
-        let msgs = client.get_messages(&state.group_id).await?;
+    let all_msgs = fetch_all_messages(clients, &state.group_id).await?;
+    for (i, msgs) in &all_msgs {
         let mut seen = std::collections::HashSet::new();
-        for msg in &msgs {
+        for msg in msgs {
             if let Some(ref mid) = msg.message_id {
                 if !seen.insert(mid.clone()) {
                     anyhow::bail!("No-duplicates: participant {i} has duplicate message_id {mid}");
