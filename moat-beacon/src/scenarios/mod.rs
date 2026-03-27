@@ -228,12 +228,16 @@ pub async fn ensure_all_online(
 // ── N-participant helpers ─────────────────────────────────────────────────────
 
 /// Execute an action using indexed participant slices (N-participant generalization).
+///
+/// `push_per_participant[i]` is `true` when participant `i` has a Drawbridge
+/// relay and should have polling disabled after a restart.  Pass a slice of
+/// all-`false` for polling-only scenarios.
 pub async fn execute_action_n(
     action: &Action,
     clients: &[&MoatCliClient],
     world: &mut TestWorld,
     handles: &[&str],
-    push_mode: bool,
+    push_per_participant: &[bool],
     state: &mut ScenarioState,
     verbose: bool,
 ) {
@@ -323,7 +327,7 @@ pub async fn execute_action_n(
                 }
             }
             let _ = client.poll().await;
-            if push_mode {
+            if push_per_participant.get(participant.ordinal()).copied().unwrap_or(false) {
                 client
                     .set_poll_interval(0)
                     .await
@@ -340,14 +344,13 @@ pub async fn execute_action_n(
             let new_handle = handles[new_participant.ordinal()];
             let new_client = &clients[new_participant.ordinal()];
 
-            // The new participant must watch the adder's DID so that their
-            // poll discovers the stealth-encrypted Welcome (published to the
-            // adder's PDS repo).
+            // The new participant must watch the adder's DID so their poll
+            // discovers the stealth-encrypted Welcome.  If they are currently
+            // offline their HTTP server is unreachable — that is fine: the
+            // ComeOnline handler re-watches all handles on restart, so they
+            // will find the Welcome when they come back online.
             let adder_handle = handles[adder.ordinal()];
-            new_client
-                .watch_handle(adder_handle)
-                .await
-                .unwrap_or_else(|e| panic!("{} watch {} failed: {e}", new_handle, adder_handle));
+            let _ = new_client.watch_handle(adder_handle).await;
 
             adder_client
                 .add_member(&state.group_id, new_handle)
@@ -358,10 +361,28 @@ pub async fn execute_action_n(
             // Use explicit polls only — do NOT re-enable auto-polling, as it
             // races with explicit polls and can consume the Welcome before the
             // explicit poll checks for it.
+            //
+            // If the new participant is currently offline their HTTP server is
+            // unreachable.  That is fine: when they come back online they will
+            // watch all handles and poll (see ComeOnline), at which point they
+            // will find the Welcome and join.  Skip the join assertion in that
+            // case — the final drain + invariant check covers delivery.
             let mut joined = false;
+            let mut new_member_offline = false;
             for attempt in 0..10 {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                let join_stats = new_client.poll().await.expect("new member join poll");
+                let join_stats = match new_client.poll().await {
+                    Ok(s) => s,
+                    Err(_) => {
+                        new_member_offline = true;
+                        vlog!(
+                            verbose,
+                            "  [add_member] {} is offline — will join on ComeOnline",
+                            new_handle
+                        );
+                        break;
+                    }
+                };
                 vlog!(
                     verbose,
                     "  [add_member poll {}/10] new_messages={}, new_conversations={}",
@@ -389,11 +410,13 @@ pub async fn execute_action_n(
                     break;
                 }
             }
-            assert!(
-                joined,
-                "{} should have joined the group after add_member",
-                new_handle
-            );
+            if !new_member_offline {
+                assert!(
+                    joined,
+                    "{} should have joined the group after add_member",
+                    new_handle
+                );
+            }
 
             // Existing members pick up the epoch commit
             for (i, client) in clients.iter().enumerate() {
@@ -480,7 +503,7 @@ pub async fn ensure_all_online_n(
     world: &mut TestWorld,
     clients: &[&MoatCliClient],
     handles: &[&str],
-    push_mode: bool,
+    push_per_participant: &[bool],
 ) {
     let names: Vec<String> = handles
         .iter()
@@ -506,7 +529,7 @@ pub async fn ensure_all_online_n(
                 }
             }
             let _ = clients[i].poll().await;
-            if push_mode {
+            if push_per_participant.get(i).copied().unwrap_or(false) {
                 clients[i]
                     .set_poll_interval(0)
                     .await

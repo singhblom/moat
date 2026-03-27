@@ -116,7 +116,7 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
             format_action(action)
         );
         execute_action_n(
-            action, &clients, &mut world, &handles, false, &mut state, verbose,
+            action, &clients, &mut world, &handles, &[false; 3], &mut state, verbose,
         )
         .await;
     }

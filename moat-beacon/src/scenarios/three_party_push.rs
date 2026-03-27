@@ -23,7 +23,7 @@ use crate::invariants::{
 };
 use crate::world::TestWorld;
 
-use super::{execute_action_n, format_action, vlog};
+use super::{ensure_all_online_n, execute_action_n, format_action, vlog};
 
 /// Registry-compatible wrapper: uses the default 3-party push topology.
 pub(crate) fn run_boxed(
@@ -50,6 +50,11 @@ pub async fn run(config: WorldConfig, actions: Vec<Action>, verbose: bool) {
     );
 
     let push_mode = config.push_mode();
+    let push_per_participant: Vec<bool> = config
+        .participants
+        .iter()
+        .map(|p| p.relay_label.is_some())
+        .collect();
     let handle_suffix = ".postern.test";
 
     // ── Build world from config ──────────────────────────────────────────────
@@ -83,12 +88,15 @@ pub async fn run(config: WorldConfig, actions: Vec<Action>, verbose: bool) {
         vlog!(verbose, "[setup] login {handle}... done");
     }
 
-    // ── Wait for Drawbridge connections ──────────────────────────────────────
+    // ── Wait for Drawbridge connections (relay participants only) ────────────
     if push_mode {
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         loop {
             let mut all_connected = true;
-            for client in &clients {
+            for (client, &has_relay) in clients.iter().zip(push_per_participant.iter()) {
+                if !has_relay {
+                    continue;
+                }
                 let status = client.status().await.expect("participant status");
                 if !status.drawbridge_connected {
                     all_connected = false;
@@ -101,6 +109,9 @@ pub async fn run(config: WorldConfig, actions: Vec<Action>, verbose: bool) {
             if std::time::Instant::now() >= deadline {
                 let mut summary = Vec::new();
                 for (i, client) in clients.iter().enumerate() {
+                    if !push_per_participant[i] {
+                        continue;
+                    }
                     let connected = client
                         .status()
                         .await
@@ -168,15 +179,15 @@ pub async fn run(config: WorldConfig, actions: Vec<Action>, verbose: bool) {
     }
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Disable auto-polling — delivery must come via Drawbridge push.
-    if push_mode {
-        for client in &clients {
-            client
-                .set_poll_interval(0)
-                .await
-                .expect("disable polling");
+    // Disable auto-polling for participants with a relay — they receive via push.
+    // Participants without a relay keep polling.
+    for (client, &has_relay) in clients.iter().zip(push_per_participant.iter()) {
+        if has_relay {
+            client.set_poll_interval(0).await.expect("disable polling");
         }
-        vlog!(verbose, "[setup] polling disabled (push-only mode)");
+    }
+    if push_mode {
+        vlog!(verbose, "[setup] polling disabled for relay participants");
     }
 
     // ── Random action sequence ───────────────────────────────────────────────
@@ -212,7 +223,7 @@ pub async fn run(config: WorldConfig, actions: Vec<Action>, verbose: bool) {
             &clients,
             &mut world,
             &handles,
-            push_mode,
+            &push_per_participant,
             &mut state,
             verbose,
         )
@@ -223,10 +234,14 @@ pub async fn run(config: WorldConfig, actions: Vec<Action>, verbose: bool) {
     if verbose {
         eprintln!();
     }
-    // Re-enable polling so all participants can catch up on any events
-    // missed via Drawbridge (e.g. after membership changes).
-    if push_mode {
-        for client in &clients {
+    // Bring any offline participants back online before checking invariants.
+    vlog!(verbose, "[drain] ensuring all participants are online...");
+    ensure_all_online_n(&mut world, &clients, &handles, &push_per_participant).await;
+
+    // Re-enable polling for relay participants so they can catch up on any
+    // events missed via Drawbridge (e.g. after membership changes).
+    for (client, &has_relay) in clients.iter().zip(push_per_participant.iter()) {
+        if has_relay {
             let _ = client.set_poll_interval(5).await;
         }
     }

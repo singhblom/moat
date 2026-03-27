@@ -111,7 +111,7 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
             format_action(action)
         );
         execute_action_n(
-            action, &clients, &mut world, &handles, false, &mut state, verbose,
+            action, &clients, &mut world, &handles, &[false; 3], &mut state, verbose,
         )
         .await;
     }
@@ -122,7 +122,7 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
     }
 
     vlog!(verbose, "[drain] ensuring all participants are online...");
-    ensure_all_online_n(&mut world, &clients, &handles, false).await;
+    ensure_all_online_n(&mut world, &clients, &handles, &[false; 3]).await;
 
     vlog!(verbose, "[drain] waiting for events to propagate...");
     drain_events_n(&clients).await;

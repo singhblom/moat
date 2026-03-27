@@ -218,7 +218,7 @@ pub fn action_sequence_with_offline() -> impl Strategy<Value = Vec<Action>> {
     action_sequence_with_offline_n(2)
 }
 
-fn action_sequence_with_offline_n(n: usize) -> impl Strategy<Value = Vec<Action>> {
+pub fn action_sequence_with_offline_n(n: usize) -> impl Strategy<Value = Vec<Action>> {
     let init = OfflineFoldState {
         num_messages: 0,
         online: vec![true; n],
@@ -412,6 +412,9 @@ fn update_membership_state(state: &MembershipFoldState, action: &Action) -> Memb
 /// regular messaging actions. Membership changes are **not shrinkable** —
 /// proptest may shrink messaging actions but the membership sequence stays
 /// fixed.
+///
+/// Use [`action_sequence_with_membership_and_offline`] to also include
+/// `GoOffline`/`ComeOnline` transitions.
 pub fn action_sequence_with_membership(
     total_participants: usize,
     initial_members: &[usize],
@@ -440,6 +443,155 @@ pub fn action_sequence_with_membership(
                             })
                         },
                     )
+                    .boxed()
+                })
+                .prop_map(|(actions, _state)| actions)
+        })
+        .boxed()
+}
+
+// ── Combined membership + offline strategies ─────────────────────────────────
+
+/// Generation-time model that tracks both group membership and online/offline
+/// status for each participant.
+#[derive(Clone, Debug)]
+struct CombinedFoldState {
+    num_messages: usize,
+    total_participants: usize,
+    /// `members[i]` — participant `i` is currently in the group.
+    members: Vec<bool>,
+    /// `online[i]` — participant `i` is currently online.
+    online: Vec<bool>,
+}
+
+/// Generate one action given the current combined fold state.
+///
+/// Generation rules:
+/// - Online members: `SendMessage`, `Poll`, `React`, `GoOffline`,
+///   `AddMember` (any non-member), `RemoveMember` (if 3+ total members).
+/// - Online non-members: `Poll`, `GoOffline`.
+/// - Offline participants (member or not): `ComeOnline` only.
+fn arb_action_combined(state: CombinedFoldState) -> BoxedStrategy<Action> {
+    let mut choices: Vec<BoxedStrategy<Action>> = vec![];
+    let n = state.total_participants;
+
+    let member_count = state.members.iter().filter(|&&m| m).count();
+    let non_member_indices: Vec<usize> = (0..n).filter(|&i| !state.members[i]).collect();
+
+    for i in 0..n {
+        let id = ParticipantId(i);
+        if state.online[i] {
+            choices.push(Just(Action::Poll { participant: id.clone() }).boxed());
+            choices.push(Just(Action::GoOffline { participant: id.clone() }).boxed());
+
+            if state.members[i] {
+                // Send messages
+                choices.push(
+                    (0..TEXT_VOCAB.len())
+                        .prop_map({
+                            let id = id.clone();
+                            move |text_idx| Action::SendMessage { from: id.clone(), text_idx }
+                        })
+                        .boxed(),
+                );
+                // React (only when messages exist)
+                if state.num_messages > 0 {
+                    choices.push(
+                        (0..state.num_messages, 0..EMOJI_VOCAB.len())
+                            .prop_map({
+                                let id = id.clone();
+                                move |(message_idx, emoji_idx)| Action::React {
+                                    from: id.clone(),
+                                    message_idx,
+                                    emoji_idx,
+                                }
+                            })
+                            .boxed(),
+                    );
+                }
+                // Add any non-member
+                for &j in &non_member_indices {
+                    choices.push(
+                        Just(Action::AddMember {
+                            adder: id.clone(),
+                            new_participant: ParticipantId(j),
+                        })
+                        .boxed(),
+                    );
+                }
+                // Remove another member (only when 3+ total members so 2 remain)
+                if member_count >= 3 {
+                    for j in 0..n {
+                        if j != i && state.members[j] {
+                            choices.push(
+                                Just(Action::RemoveMember {
+                                    remover: id.clone(),
+                                    target: ParticipantId(j),
+                                })
+                                .boxed(),
+                            );
+                        }
+                    }
+                }
+            }
+        } else {
+            choices.push(Just(Action::ComeOnline { participant: id.clone() }).boxed());
+        }
+    }
+
+    Union::new(choices).boxed()
+}
+
+fn update_combined_state(state: &CombinedFoldState, action: &Action) -> CombinedFoldState {
+    let mut s = state.clone();
+    match action {
+        Action::SendMessage { .. } => s.num_messages += 1,
+        Action::GoOffline { participant } => s.online[participant.ordinal()] = false,
+        Action::ComeOnline { participant } => s.online[participant.ordinal()] = true,
+        Action::AddMember { new_participant, .. } => {
+            s.members[new_participant.ordinal()] = true;
+        }
+        Action::RemoveMember { target, .. } => {
+            s.members[target.ordinal()] = false;
+        }
+        _ => {}
+    }
+    s
+}
+
+/// Strategy that produces a valid action sequence combining membership changes
+/// (`AddMember`, `RemoveMember`) and online/offline transitions
+/// (`GoOffline`, `ComeOnline`).
+///
+/// `initial_members` lists participant indices that start in the group.
+/// All participants start online.
+pub fn action_sequence_with_membership_and_offline(
+    total_participants: usize,
+    initial_members: &[usize],
+) -> BoxedStrategy<Vec<Action>> {
+    let mut members = vec![false; total_participants];
+    for &i in initial_members {
+        members[i] = true;
+    }
+    let init = CombinedFoldState {
+        num_messages: 0,
+        total_participants,
+        members,
+        online: vec![true; total_participants],
+    };
+    (1usize..=10)
+        .prop_flat_map(move |len| {
+            let init = init.clone();
+            (0..len)
+                .fold(Just((vec![], init)).boxed(), |acc, _| {
+                    acc.prop_flat_map(|(actions, state): (Vec<Action>, CombinedFoldState)| {
+                        arb_action_combined(state.clone()).prop_map(move |a| {
+                            let new_state = update_combined_state(&state, &a);
+                            let mut v = actions.clone();
+                            v.push(a);
+                            (v, new_state)
+                        })
+                    })
                     .boxed()
                 })
                 .prop_map(|(actions, _state)| actions)

@@ -89,19 +89,21 @@ impl fmt::Display for WorldConfig {
 /// Generate a 3-participant `WorldConfig` with varied relay topology and
 /// participant kinds.
 ///
-/// Relay patterns (all participants have a relay):
-/// - 0 = all-same (`"a"`, `"a"`, `"a"`) — shared relay, local delivery
-/// - 1 = all-separate (`"a"`, `"b"`, `"c"`) — per-participant relays
-/// - 2 = two-shared (`"a"`, `"a"`, `"b"`) — mixed topology
+/// Relay patterns:
+/// - 0 = all-none (no relays, polling only) — simplest; shrinks toward this
+/// - 1 = all-same (`"a"`, `"a"`, `"a"`) — shared relay, local delivery
+/// - 2 = all-separate (`"a"`, `"b"`, `"c"`) — per-participant relays
+/// - 3 = two-shared (`"a"`, `"a"`, `"b"`) — mixed relay topology
+/// - 4 = partial (`"a"`, `"b"`, `None`) — two relay, one polling-only
 ///
 /// Kind patterns:
 /// - Without `dart` feature: always all-Rust
 /// - With `dart` feature: all-Rust, all-Dart, or mixed (first Rust, rest Dart)
 ///
 /// Shrinking favours simpler topologies: relay index shrinks toward 0
-/// (all-same), kind index shrinks toward 0 (all-Rust).
+/// (all-none / polling), kind index shrinks toward 0 (all-Rust).
 pub fn world_config_3p() -> BoxedStrategy<WorldConfig> {
-    let relay_idx = 0..3usize;
+    let relay_idx = 0..5usize;
 
     #[cfg(feature = "dart")]
     let kind_idx = 0..3usize;
@@ -110,10 +112,12 @@ pub fn world_config_3p() -> BoxedStrategy<WorldConfig> {
 
     (relay_idx, kind_idx)
         .prop_map(|(relay, kind)| {
-            let labels: [&str; 3] = match relay {
-                0 => ["a", "a", "a"],
-                1 => ["a", "b", "c"],
-                _ => ["a", "a", "b"],
+            let labels: [Option<&'static str>; 3] = match relay {
+                0 => [None, None, None],
+                1 => [Some("a"), Some("a"), Some("a")],
+                2 => [Some("a"), Some("b"), Some("c")],
+                3 => [Some("a"), Some("a"), Some("b")],
+                _ => [Some("a"), Some("b"), None],
             };
             let kinds: [ParticipantKind; 3] = match kind {
                 1 => [
@@ -140,7 +144,7 @@ pub fn world_config_3p() -> BoxedStrategy<WorldConfig> {
                 .map(|((handle, label), kind)| ParticipantConfig {
                     handle,
                     kind: kind.clone(),
-                    relay_label: Some(label),
+                    relay_label: *label,
                 })
                 .collect();
 
