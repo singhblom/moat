@@ -16,6 +16,7 @@ cargo test                   # Run all tests
 cargo test -p moat-core      # Run core crypto tests
 cargo test -p moat-atproto   # Run ATProto tests only (3 tests)
 cargo test -p moat-beacon    # Run integration tests (spins up real moat-cli processes)
+env BEACON_PARALLEL=4 cargo test -p moat-beacon --test proptest_three_party_push  # ~4× faster when run alone
 cargo run -p moat-cli        # Run the TUI (default, no subcommand)
 
 # Flutter tests
