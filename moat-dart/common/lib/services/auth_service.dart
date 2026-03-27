@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
 import 'atproto_client.dart';
+import 'drawbridge_service.dart';
 import 'secure_storage.dart';
 import 'debug_log.dart';
 import '../rust/api/simple.dart';
@@ -18,6 +20,7 @@ enum AuthState {
 class AuthService {
   final AtprotoClient _atprotoClient;
   final SecureStorageService _secureStorage;
+  final String? drawbridgeUrl;
   MoatSessionHandle? _moatSession;
 
   AuthState _state = AuthState.loading;
@@ -28,6 +31,7 @@ class AuthService {
   AuthService({
     required AtprotoClient atprotoClient,
     required SecureStorageService secureStorage,
+    this.drawbridgeUrl,
   })  : _atprotoClient = atprotoClient,
         _secureStorage = secureStorage {
     _atprotoClient.onSessionRefreshed = (session) {
@@ -72,6 +76,7 @@ class AuthService {
         await _ensureKeysPublished();
 
         _state = AuthState.authenticated;
+        await _initDrawbridge();
       } else {
         _state = AuthState.unauthenticated;
       }
@@ -96,6 +101,40 @@ class AuthService {
     await _ensureKeysPublished();
 
     _state = AuthState.authenticated;
+    await _initDrawbridge();
+  }
+
+  /// Call when the app goes to background.
+  ///
+  /// Disconnects Drawbridge (if active) to free the socket.
+  void suspend() {
+    DrawbridgeService.instance.disconnectAll();
+  }
+
+  /// Call when the app returns to the foreground.
+  ///
+  /// Re-establishes the Drawbridge connection if authenticated.
+  Future<void> resume() async {
+    if (!isAuthenticated) return;
+    await _initDrawbridge();
+  }
+
+  /// Connect to Drawbridge and publish own relay URL if `drawbridgeUrl` is set.
+  /// Safe to call multiple times — DrawbridgeService is idempotent.
+  Future<void> _initDrawbridge() async {
+    final url = drawbridgeUrl;
+    if (url == null || _did == null) return;
+
+    final keyBundle = await _secureStorage.loadKeyBundle();
+    if (keyBundle == null) return;
+
+    DrawbridgeService.instance.init(did: _did!, keyBundle: keyBundle);
+    unawaited(DrawbridgeService.instance.connectOwn(url));
+    try {
+      await _atprotoClient.publishDrawbridgeConfig(url);
+    } catch (e) {
+      moatLog('AuthService: Failed to publish drawbridge config: $e');
+    }
   }
 
   /// Logout and clear all data.

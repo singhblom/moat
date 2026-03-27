@@ -49,6 +49,7 @@ Future<void> main(List<String> args) async {
   final authService = AuthService(
     atprotoClient: atprotoClient,
     secureStorage: secureStorage,
+    drawbridgeUrl: drawbridgeUrl,
   );
   final convsService = ConversationsService(storage: convStorage);
   final watchListService = WatchListService(
@@ -69,11 +70,9 @@ Future<void> main(List<String> args) async {
   );
 
   // Wire Drawbridge push notifications to trigger polling.
-  if (drawbridgeUrl != null) {
-    DrawbridgeService.instance.onNewEvent = (_) {
-      pollingService.pollOnce();
-    };
-  }
+  DrawbridgeService.instance.onNewEvent = (_) {
+    pollingService.pollOnce();
+  };
 
   // Build HTTP handler.
   final handler = buildRouter(

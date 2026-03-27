@@ -69,6 +69,7 @@ class MoatApp extends StatelessWidget {
     final authService = AuthService(
       atprotoClient: atprotoClient,
       secureStorage: secureStorage,
+      drawbridgeUrl: defaultDrawbridgeUrl,
     );
     final authProvider = AuthProvider(service: authService)..init();
 
@@ -201,15 +202,12 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
     switch (state) {
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
-        DrawbridgeService.instance.disconnectAll();
+        context.read<AuthProvider>().service.suspend();
         _pollingService?.stopPolling();
         debugPrint('App backgrounded: Drawbridge disconnected, polling stopped');
       case AppLifecycleState.resumed:
         _pollingService?.startPolling();
-        final auth = context.read<AuthProvider>();
-        if (auth.isAuthenticated) {
-          _initDrawbridge(auth);
-        }
+        context.read<AuthProvider>().service.resume();
         debugPrint('App resumed: reconnecting Drawbridge, polling restarted');
       default:
         break;
@@ -265,28 +263,15 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   }
 
   Future<void> _initDrawbridge(AuthProvider auth) async {
-    final keyBundle = await auth.getKeyBundle();
-    if (keyBundle == null || auth.did == null) return;
-
-    final db = DrawbridgeService.instance;
-    db.init(did: auth.did!, keyBundle: Uint8List.fromList(keyBundle));
-
-    db.onNewEvent = (event) {
+    // Wire the app-specific poll-on-push callback and register conversation tags.
+    // AuthService handles the Drawbridge connection itself (via login/resume).
+    DrawbridgeService.instance.onNewEvent = (event) {
       // For now, trigger a poll on any new event notification.
       // Inline decryption using event.payload can be added later.
       _pollingService?.poll();
     };
 
-    await db.connectOwn(defaultDrawbridgeUrl);
     _registerAllTags();
-
-    // Publish own drawbridge config.
-    try {
-      await auth.service.atprotoClient
-          .publishDrawbridgeConfig(defaultDrawbridgeUrl);
-    } catch (e) {
-      debugPrint('Failed to publish drawbridge config: $e');
-    }
 
     // Fetch partner drawbridge configs for all conversations.
     final conversations = context.read<ConversationsProvider>().conversations;
@@ -299,7 +284,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       if (!mounted) return;
       try {
         final urls = await client.fetchDrawbridgeConfig(did);
-        db.cacheDrawbridgeConfig(did, urls);
+        DrawbridgeService.instance.cacheDrawbridgeConfig(did, urls);
       } catch (_) {}
     }
   }

@@ -5,6 +5,9 @@
 //! sends a fixed number of messages and measures per-message delivery latency.
 //! If any message takes longer than `MAX_DELIVERY_MS` to appear in the
 //! recipient's message list, the test fails.
+//!
+//! The `run_with_world` entry point accepts a pre-built [`TestWorld`] so that
+//! Dart and mixed topologies can reuse the same test body.
 
 use std::time::{Duration, Instant};
 
@@ -24,7 +27,7 @@ const MESSAGES_PER_DIRECTION: usize = 3;
 
 /// Wait for a specific message to appear in `recipient`'s message list,
 /// returning the delivery latency.  Returns `None` if the deadline expires.
-async fn wait_for_message(
+pub async fn wait_for_message(
     recipient: &MoatCliClient,
     group_id: &str,
     expected_content: &str,
@@ -43,14 +46,12 @@ async fn wait_for_message(
     }
 }
 
-pub async fn run(verbose: bool) {
-    vlog!(verbose, "=== Scenario: push-latency ===");
+/// Run the push-latency scenario against a pre-built world.
+///
+/// `scenario_name` is used only for log output.
+pub async fn run_with_world(world: TestWorld, scenario_name: &str, verbose: bool) {
+    vlog!(verbose, "=== Scenario: {scenario_name} ===");
 
-    // ── Prologue (same as two_party_push) ────────────────────────────────────
-    vlog!(verbose, "[setup] starting TestWorld (with Drawbridge)...");
-    let world = TestWorld::new_with_drawbridge(&[("alice", "alice"), ("bob", "bob")], ".postern.test")
-        .await
-        .expect("world setup with drawbridge");
     let alice = world.client("alice").clone();
     let bob = world.client("bob").clone();
 
@@ -64,7 +65,6 @@ pub async fn run(verbose: bool) {
     vlog!(verbose, "[setup] both logged in");
 
     // Wait for both participants to connect to their own Drawbridge relay.
-    // Instead of a fixed sleep, poll the status endpoint until connected.
     let drawbridge_deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let alice_status = alice.status().await.expect("alice status");
@@ -74,13 +74,10 @@ pub async fn run(verbose: bool) {
             break;
         }
         if Instant::now() >= drawbridge_deadline {
-            vlog!(
-                verbose,
-                "[setup] WARNING: Drawbridge not connected after 5s (alice={}, bob={})",
-                alice_status.drawbridge_connected,
-                bob_status.drawbridge_connected
+            panic!(
+                "Drawbridge not connected after 5s (alice={}, bob={})",
+                alice_status.drawbridge_connected, bob_status.drawbridge_connected
             );
-            break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -97,7 +94,6 @@ pub async fn run(verbose: bool) {
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Bob joins the group and picks up DrawbridgeHint.
     let stats = bob.poll().await.expect("bob join poll");
     assert!(
         stats.new_conversations > 0,
@@ -105,14 +101,10 @@ pub async fn run(verbose: bool) {
     );
     vlog!(verbose, "[setup] bob joined group");
 
-    // Give Bob time to connect to Drawbridge as recipient and send reciprocal hint.
     tokio::time::sleep(Duration::from_millis(500)).await;
-
-    // Alice picks up Bob's reciprocal DrawbridgeHint so she can push to him.
     let _ = alice.poll().await;
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Disable auto-polling — delivery must come entirely through Drawbridge.
     alice
         .set_poll_interval(0)
         .await
@@ -127,70 +119,49 @@ pub async fn run(verbose: bool) {
     let deadline = Duration::from_millis(MAX_DELIVERY_MS);
     let mut latencies: Vec<(String, Duration)> = Vec::new();
 
-    // Alice → Bob
     for i in 0..MESSAGES_PER_DIRECTION {
         let text = format!("alice-to-bob-{i}");
         alice
             .send_message(&group_id, &text)
             .await
             .expect("alice send");
-
         match wait_for_message(&bob, &group_id, &text, deadline).await {
             Some(latency) => {
-                vlog!(
-                    verbose,
-                    "[latency] {text}: {:.0}ms",
-                    latency.as_secs_f64() * 1000.0
-                );
+                vlog!(verbose, "[latency] {text}: {:.0}ms", latency.as_secs_f64() * 1000.0);
                 latencies.push((text, latency));
             }
-            None => {
-                panic!(
-                    "Push delivery timeout: {text:?} not delivered to Bob within {MAX_DELIVERY_MS}ms"
-                );
-            }
+            None => panic!("Push delivery timeout: {text:?} not delivered to Bob within {MAX_DELIVERY_MS}ms"),
         }
     }
 
-    // Bob → Alice
     for i in 0..MESSAGES_PER_DIRECTION {
         let text = format!("bob-to-alice-{i}");
         bob.send_message(&group_id, &text)
             .await
             .expect("bob send");
-
         match wait_for_message(&alice, &group_id, &text, deadline).await {
             Some(latency) => {
-                vlog!(
-                    verbose,
-                    "[latency] {text}: {:.0}ms",
-                    latency.as_secs_f64() * 1000.0
-                );
+                vlog!(verbose, "[latency] {text}: {:.0}ms", latency.as_secs_f64() * 1000.0);
                 latencies.push((text, latency));
             }
-            None => {
-                panic!(
-                    "Push delivery timeout: {text:?} not delivered to Alice within {MAX_DELIVERY_MS}ms"
-                );
-            }
+            None => panic!("Push delivery timeout: {text:?} not delivered to Alice within {MAX_DELIVERY_MS}ms"),
         }
     }
 
-    // ── Summary ──────────────────────────────────────────────────────────────
-    let avg_ms = latencies.iter().map(|(_, d)| d.as_millis()).sum::<u128>()
-        / latencies.len() as u128;
+    let avg_ms = latencies.iter().map(|(_, d)| d.as_millis()).sum::<u128>() / latencies.len() as u128;
     let max_ms = latencies.iter().map(|(_, d)| d.as_millis()).max().unwrap();
-
     vlog!(verbose, "");
-    vlog!(
-        verbose,
-        "[result] {}/{} messages delivered within {MAX_DELIVERY_MS}ms",
-        latencies.len(),
-        MESSAGES_PER_DIRECTION * 2
-    );
+    vlog!(verbose, "[result] {}/{} messages delivered within {MAX_DELIVERY_MS}ms", latencies.len(), MESSAGES_PER_DIRECTION * 2);
     vlog!(verbose, "[result] avg={avg_ms}ms, max={max_ms}ms");
     vlog!(verbose, "");
     vlog!(verbose, "=== PASSED ===");
 
     drop(world);
+}
+
+pub async fn run(verbose: bool) {
+    let world = TestWorld::new_with_drawbridge(&[("alice", "alice"), ("bob", "bob")], ".postern.test")
+        .await
+        .expect("world setup with drawbridge");
+    run_with_world(world, "push-latency", verbose).await;
 }

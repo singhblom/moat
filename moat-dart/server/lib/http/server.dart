@@ -40,8 +40,6 @@ Handler buildRouter({
       await convsService.init();
       await watchListService.init();
 
-      // Initialize ConversationManager.
-      // Storage is set up at server start, so just ensure auth is wired.
       moatLog('Server: Login successful for $handle');
 
       return Response.ok(
@@ -63,6 +61,7 @@ Handler buildRouter({
         'logged_in': authService.isAuthenticated,
         'handle': authService.handle,
         'did': authService.did,
+        'drawbridge_connected': DrawbridgeService.instance.isOwnConnected,
       }),
       headers: _jsonHeaders,
     );
