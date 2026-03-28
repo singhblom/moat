@@ -164,6 +164,7 @@ Handler buildRouter({
           'is_own': m.isOwn,
           'sender_did': m.senderDid,
           'message_id': m.messageIdHex,
+          'attachment': m.attachment?.toJson(),
         }).toList();
 
     return Response.ok(jsonEncode(messages), headers: _jsonHeaders);

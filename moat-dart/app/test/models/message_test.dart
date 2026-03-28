@@ -192,10 +192,11 @@ void main() {
       expect(restored.mime, original.mime);
     });
 
-    test('toJson uses base64 for binary fields', () {
+    test('toJson includes type discriminator and base64 binary fields', () {
       final attachment = makeAttachment();
       final json = attachment.toJson();
-      // Verify these are base64 strings, not arrays
+      expect(json['type'], 'image');
+      // Binary fields are base64 strings, not arrays
       expect(json['key'], isA<String>());
       expect(json['ciphertextHash'], isA<String>());
       expect(json['contentHash'], isA<String>());
@@ -235,8 +236,8 @@ void main() {
     });
   });
 
-  group('Message with imageAttachment', () {
-    test('toJson / fromJson roundtrip with imageAttachment', () {
+  group('Message with attachment', () {
+    test('toJson / fromJson roundtrip with ImageAttachment', () {
       final message = Message(
         id: 'group1_rkey1',
         groupId: Uint8List.fromList([1, 2, 3, 4]),
@@ -245,7 +246,7 @@ void main() {
         timestamp: DateTime.utc(2025, 1, 15, 12, 0, 0),
         isOwn: false,
         epoch: 1,
-        imageAttachment: ImageAttachment(
+        attachment: ImageAttachment(
           uri: 'at://did:plc:alice/bafkrei',
           key: Uint8List.fromList(List.generate(32, (i) => i)),
           ciphertextHash: Uint8List.fromList(List.generate(32, (i) => i + 1)),
@@ -261,13 +262,14 @@ void main() {
       final json = message.toJson();
       final restored = Message.fromJson(json);
 
-      expect(restored.imageAttachment, isNotNull);
-      expect(restored.imageAttachment!.uri, 'at://did:plc:alice/bafkrei');
-      expect(restored.imageAttachment!.width, 1920);
-      expect(restored.imageAttachment!.mime, 'image/jpeg');
+      expect(restored.attachment, isA<ImageAttachment>());
+      final img = restored.attachment as ImageAttachment;
+      expect(img.uri, 'at://did:plc:alice/bafkrei');
+      expect(img.width, 1920);
+      expect(img.mime, 'image/jpeg');
     });
 
-    test('fromJson with no imageAttachment is backward-compatible', () {
+    test('fromJson with no attachment is backward-compatible', () {
       final message = Message(
         id: 'group1_rkey1',
         groupId: Uint8List.fromList([1, 2, 3, 4]),
@@ -278,13 +280,12 @@ void main() {
         epoch: 0,
       );
       final json = message.toJson();
-      // Ensure imageAttachment key is null
-      expect(json['imageAttachment'], isNull);
+      expect(json['attachment'], isNull);
       final restored = Message.fromJson(json);
-      expect(restored.imageAttachment, isNull);
+      expect(restored.attachment, isNull);
     });
 
-    test('copyWith preserves imageAttachment when not overridden', () {
+    test('copyWith preserves attachment when not overridden', () {
       final attachment = ImageAttachment(
         uri: 'at://did/baf',
         key: Uint8List(32),
@@ -300,10 +301,10 @@ void main() {
         timestamp: DateTime.now(),
         isOwn: false,
         epoch: 0,
-        imageAttachment: attachment,
+        attachment: attachment,
       );
       final updated = message.copyWith(content: 'updated');
-      expect(updated.imageAttachment, same(attachment));
+      expect(updated.attachment, same(attachment));
     });
   });
 }

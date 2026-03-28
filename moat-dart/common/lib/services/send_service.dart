@@ -192,7 +192,7 @@ class SendService {
       epoch: conversation.epoch,
       status: MessageStatus.sent,
       messageId: result.messageId != null ? Uint8List.fromList(result.messageId!) : null,
-      imageAttachment: ImageAttachment(
+      attachment: ImageAttachment(
         uri: uri,
         key: uploadResult.key,
         ciphertextHash: uploadResult.ciphertextHash,

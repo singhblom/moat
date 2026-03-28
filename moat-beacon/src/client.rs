@@ -42,6 +42,24 @@ pub struct Message {
     pub is_own: bool,
     pub sender_did: Option<String>,
     pub message_id: Option<String>,
+    #[serde(default)]
+    pub attachment: Option<ImageAttachmentInfo>,
+}
+
+/// Image attachment metadata returned by the Dart server (camelCase keys from `ImageAttachment.toJson()`).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageAttachmentInfo {
+    pub uri: String,
+    /// Base64-encoded 32-byte decryption key.
+    pub key: String,
+    pub ciphertext_hash: String,
+    pub ciphertext_size: u64,
+    pub content_hash: String,
+    pub thumbhash: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub mime: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -169,6 +187,27 @@ impl MoatCliClient {
         if !status.is_success() {
             let body: Value = resp.json().await.unwrap_or_default();
             anyhow::bail!("send_message failed ({status}): {body}");
+        }
+        Ok(())
+    }
+
+    /// `POST /conversations/:group_id/messages/image` — send raw image bytes.
+    pub async fn send_image(&self, group_id: &str, image_bytes: &[u8]) -> Result<()> {
+        let resp = self
+            .http
+            .post(format!(
+                "{}/conversations/{group_id}/messages/image",
+                self.base_url
+            ))
+            .header("content-type", "application/octet-stream")
+            .body(image_bytes.to_vec())
+            .send()
+            .await
+            .context("POST /messages/image")?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body: Value = resp.json().await.unwrap_or_default();
+            anyhow::bail!("send_image failed ({status}): {body}");
         }
         Ok(())
     }

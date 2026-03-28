@@ -27,3 +27,4 @@ dart = []
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+image = { version = "0.25", default-features = false, features = ["png"] }

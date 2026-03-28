@@ -73,7 +73,7 @@ void main() {
     });
   });
 
-  group('parseImageAttachment', () {
+  group('parseAttachment', () {
     Uint8List key = Uint8List.fromList(List.generate(32, (i) => i));
     Uint8List ciphertextHash = Uint8List.fromList(List.generate(32, (i) => i + 1));
     Uint8List contentHash = Uint8List.fromList(List.generate(32, (i) => i + 2));
@@ -92,7 +92,7 @@ void main() {
         contentHash: contentHash,
       );
 
-      final attachment = parseImageAttachment(payload);
+      final attachment = parseAttachment(payload) as ImageAttachment?;
       expect(attachment, isNotNull);
       expect(attachment!.uri, 'at://did:plc:alice/bafkrei');
       expect(attachment.width, 800);
@@ -107,12 +107,12 @@ void main() {
 
     test('returns null for text messages', () {
       final payload = encodeTextMessagePayload('Hello, world!');
-      expect(parseImageAttachment(payload), isNull);
+      expect(parseAttachment(payload), isNull);
     });
 
     test('returns null for malformed bytes', () {
       final junk = Uint8List.fromList(utf8.encode('not json'));
-      expect(parseImageAttachment(junk), isNull);
+      expect(parseAttachment(junk), isNull);
     });
 
     test('roundtrip: encode then parse recovers same data', () {
@@ -140,7 +140,7 @@ void main() {
         contentHash: original.contentHash,
       );
 
-      final parsed = parseImageAttachment(payload)!;
+      final parsed = parseAttachment(payload)! as ImageAttachment;
       expect(parsed.uri, original.uri);
       expect(parsed.width, original.width);
       expect(parsed.height, original.height);

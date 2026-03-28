@@ -2454,6 +2454,7 @@ name = "moat-beacon"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "image",
  "moat-postern",
  "proptest",
  "reqwest",

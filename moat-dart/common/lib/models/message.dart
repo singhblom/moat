@@ -13,8 +13,22 @@ enum MessageStatus {
   failed,
 }
 
+/// Base class for all message attachment types.
+sealed class Attachment {
+  const Attachment();
+  Map<String, dynamic> toJson();
+
+  factory Attachment.fromJson(Map<String, dynamic> json) {
+    final type = json['type'] as String?;
+    return switch (type) {
+      'image' => ImageAttachment.fromJson(json),
+      _ => throw FormatException('Unknown attachment type: $type'),
+    };
+  }
+}
+
 /// Metadata for an image message, referencing an off-chain encrypted blob.
-class ImageAttachment {
+class ImageAttachment extends Attachment {
   /// at://did/cid — location of the encrypted blob on the sender's PDS.
   final String uri;
 
@@ -49,7 +63,9 @@ class ImageAttachment {
     this.mime,
   });
 
+  @override
   Map<String, dynamic> toJson() => {
+        'type': 'image',
         'uri': uri,
         'key': base64Encode(key),
         'ciphertextHash': base64Encode(ciphertextHash),
@@ -156,8 +172,8 @@ class Message {
   /// Emoji reactions on this message
   final List<Reaction> reactions;
 
-  /// Image attachment metadata (null for text messages).
-  final ImageAttachment? imageAttachment;
+  /// Attachment for non-text messages (image, etc.). Null for plain text.
+  final Attachment? attachment;
 
   Message({
     required this.id,
@@ -172,7 +188,7 @@ class Message {
     this.localId,
     this.messageId,
     this.reactions = const [],
-    this.imageAttachment,
+    this.attachment,
   });
 
   /// The rkey portion of the message ID (for ordering).
@@ -201,7 +217,7 @@ class Message {
         'localId': localId,
         'messageId': messageId != null ? base64Encode(messageId!) : null,
         'reactions': reactions.map((r) => r.toJson()).toList(),
-        'imageAttachment': imageAttachment?.toJson(),
+        'attachment': attachment?.toJson(),
       };
 
   /// Create a copy with updated fields
@@ -218,7 +234,7 @@ class Message {
     String? localId,
     Uint8List? messageId,
     List<Reaction>? reactions,
-    ImageAttachment? imageAttachment,
+    Attachment? attachment,
   }) =>
       Message(
         id: id ?? this.id,
@@ -233,7 +249,7 @@ class Message {
         localId: localId ?? this.localId,
         messageId: messageId ?? this.messageId,
         reactions: reactions ?? this.reactions,
-        imageAttachment: imageAttachment ?? this.imageAttachment,
+        attachment: attachment ?? this.attachment,
       );
 
   factory Message.fromJson(Map<String, dynamic> json) => Message(
@@ -254,9 +270,8 @@ class Message {
                 ?.map((r) => Reaction.fromJson(r as Map<String, dynamic>))
                 .toList() ??
             const [],
-        imageAttachment: json['imageAttachment'] != null
-            ? ImageAttachment.fromJson(
-                json['imageAttachment'] as Map<String, dynamic>)
+        attachment: json['attachment'] != null
+            ? Attachment.fromJson(json['attachment'] as Map<String, dynamic>)
             : null,
       );
 

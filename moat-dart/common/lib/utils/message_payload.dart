@@ -73,31 +73,34 @@ Uint8List encodeImageMessagePayload({
   return Uint8List.fromList(utf8.encode(payload));
 }
 
-/// Parse image attachment metadata from a decrypted event payload.
-/// Returns null if the payload is not an image type or cannot be parsed.
-ImageAttachment? parseImageAttachment(Uint8List payload) {
+/// Parse attachment metadata from a decrypted event payload.
+/// Returns null if the payload has no attachment or cannot be parsed.
+Attachment? parseAttachment(Uint8List payload) {
   try {
     final decoded = utf8.decode(payload);
     final dynamic data = jsonDecode(decoded);
     if (data is! Map<String, dynamic>) return null;
-    if (data['type'] != 'image') return null;
 
-    final ext = data['external'] as Map<String, dynamic>?;
-    if (ext == null) return null;
-
-    return ImageAttachment(
-      uri: ext['uri'] as String,
-      key: base64Decode(ext['key'] as String),
-      ciphertextHash: base64Decode(ext['ciphertext_hash'] as String),
-      ciphertextSize: (ext['ciphertext_size'] as num).toInt(),
-      contentHash: base64Decode(ext['content_hash'] as String),
-      thumbhash: data['preview_thumbhash'] != null
-          ? base64Decode(data['preview_thumbhash'] as String)
-          : null,
-      width: (data['width'] as num?)?.toInt(),
-      height: (data['height'] as num?)?.toInt(),
-      mime: data['mime'] as String?,
-    );
+    switch (data['type']) {
+      case 'image':
+        final ext = data['external'] as Map<String, dynamic>?;
+        if (ext == null) return null;
+        return ImageAttachment(
+          uri: ext['uri'] as String,
+          key: base64Decode(ext['key'] as String),
+          ciphertextHash: base64Decode(ext['ciphertext_hash'] as String),
+          ciphertextSize: (ext['ciphertext_size'] as num).toInt(),
+          contentHash: base64Decode(ext['content_hash'] as String),
+          thumbhash: data['preview_thumbhash'] != null
+              ? base64Decode(data['preview_thumbhash'] as String)
+              : null,
+          width: (data['width'] as num?)?.toInt(),
+          height: (data['height'] as num?)?.toInt(),
+          mime: data['mime'] as String?,
+        );
+      default:
+        return null;
+    }
   } catch (_) {
     return null;
   }

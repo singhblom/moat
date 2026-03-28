@@ -302,7 +302,7 @@ class PollingService {
             messageId: result.event.messageId != null
                 ? Uint8List.fromList(result.event.messageId!)
                 : null,
-            imageAttachment: parseImageAttachment(payload),
+            attachment: parseAttachment(payload),
           );
 
           moatLog('PollingService: Decrypted message: "${text.substring(0, text.length > 20 ? 20 : text.length)}..."');
