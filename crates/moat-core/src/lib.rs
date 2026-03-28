@@ -40,6 +40,7 @@ use openmls::prelude::*;
 use openmls_basic_credential::SignatureKeyPair;
 use openmls_traits::OpenMlsProvider;
 use serde::{Deserialize as SerdeDeserialize, Serialize as SerdeSerialize};
+use serde_with::{base64::Base64, serde_as};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::sync::RwLock;
@@ -68,13 +69,19 @@ pub use crate::tag::{
 pub const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
 
 /// Serialized key bundle containing both key package and private key
+#[serde_as]
 #[derive(Debug, Clone, SerdeSerialize, SerdeDeserialize)]
 pub struct KeyBundle {
+    #[serde_as(as = "Base64")]
     pub key_package: Vec<u8>,
+    #[serde_as(as = "Base64")]
     pub init_private_key: Vec<u8>,
+    #[serde_as(as = "Base64")]
     pub encryption_private_key: Vec<u8>,
+    #[serde_as(as = "Base64")]
     pub signature_key: Vec<u8>,
     /// Raw Ed25519 private key seed (32 bytes). Used for Drawbridge challenge-response auth.
+    #[serde_as(as = "Base64")]
     pub signature_private_key: Vec<u8>,
 }
 

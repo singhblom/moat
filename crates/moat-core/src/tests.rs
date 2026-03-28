@@ -1119,7 +1119,7 @@ fn test_unknown_event_kind_roundtrip() {
 #[test]
 fn test_unknown_domain_deserializes() {
     // Unknown two-part kind
-    let json = r#"{"kind":"alien.zap","group_id":[],"epoch":0,"payload":[]}"#;
+    let json = r#"{"kind":"alien.zap","group_id":"","epoch":0,"payload":""}"#;
     let event: Event = serde_json::from_str(json).unwrap();
     assert_eq!(event.kind, EventKind::Unknown("alien.zap".into()));
 }
@@ -1127,7 +1127,7 @@ fn test_unknown_domain_deserializes() {
 #[test]
 fn test_unknown_single_token_deserializes() {
     // Unknown single-token kind (not a legacy kind)
-    let json = r#"{"kind":"foobar","group_id":[],"epoch":0,"payload":[]}"#;
+    let json = r#"{"kind":"foobar","group_id":"","epoch":0,"payload":""}"#;
     let event: Event = serde_json::from_str(json).unwrap();
     assert_eq!(event.kind, EventKind::Unknown("foobar".into()));
 }

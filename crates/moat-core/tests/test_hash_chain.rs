@@ -166,7 +166,8 @@ fn test_first_event_has_none_prev_hash() {
 #[test]
 fn test_backward_compat_no_transcript_fields() {
     // Simulate a legacy event without the new fields
-    let json = r#"{"kind":"message","group_id":[1,2,3],"epoch":0,"payload":[104,105]}"#;
+    // group_id=[1,2,3] -> base64 "AQID", payload=[104,105] -> base64 "aGk="
+    let json = r#"{"kind":"message","group_id":"AQID","epoch":0,"payload":"aGk="}"#;
     let event: Event = serde_json::from_str(json).unwrap();
 
     assert!(matches!(event.kind, EventKind::Message(_)));

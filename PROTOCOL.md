@@ -44,7 +44,7 @@ Large payloads (full-resolution images, long text, video) live off-chain as repo
 
 ## Sending a Message
 
-1. Serialize the event to JSON: `{kind: "message", group_id, epoch, payload, message_id}`
+1. Serialize the event to JSON: `{kind: "message", group_id, epoch, payload, message_id}` — all binary fields (`group_id`, `payload`, `message_id`, `prev_event_hash`, `epoch_fingerprint`, `sender_device_id`) are encoded as standard base64 strings (RFC 4648)
 2. Pad to a fixed bucket (512B, 1KB, or 4KB control) with a 4-byte length prefix and random fill
 3. MLS-encrypt using the group's current epoch keys
 4. Derive a unique 16-byte tag (see [Tag Derivation](#tag-derivation) below)
@@ -196,6 +196,8 @@ Every event’s `kind` is now namespaced as `<domain>.<variant>`:
 | `modifier.*` | `modifier.reaction` (more to follow) | Small toggles or annotations that reference an existing `message_id`. |
 
 ## Message Payloads & External Blobs
+
+All binary fields in JSON payloads (byte arrays and fixed-length byte sequences) are encoded as standard base64 strings (RFC 4648). This applies to `Event` fields (`group_id`, `payload`, `message_id`, `prev_event_hash`, `epoch_fingerprint`, `sender_device_id`), `ReactionPayload.target_message_id`, `ExternalBlob` fields (`ciphertext_hash`, `content_hash`, `key`), `MediaMessage.preview_thumbhash`, and `MoatCredential.device_id`.
 
 When `event.kind` starts with `message.`, the payload is a structured JSON object describing the user-visible content plus any off-chain pointer. Each payload carries:
 

@@ -117,7 +117,7 @@ class SendService {
 
     final reactionPayloadJson = jsonEncode({
       'emoji': emoji,
-      'target_message_id': targetMessageId,
+      'target_message_id': base64Encode(Uint8List.fromList(targetMessageId)),
     });
     final payload = utf8.encode(reactionPayloadJson);
 

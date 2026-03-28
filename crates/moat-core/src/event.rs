@@ -9,6 +9,7 @@ use crate::{
     message::{MessageBodyKind, MessagePayload, ParsedMessagePayload},
 };
 use serde::{de::Deserializer, Deserialize, Serialize, Serializer};
+use serde_with::serde_as;
 
 /// Top-level event discriminator (domain + variant).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,11 +95,13 @@ impl SenderInfo {
 }
 
 /// Payload for a reaction event, serialized as JSON inside Event.payload.
+#[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReactionPayload {
     /// The emoji string (UTF-8, supports multi-codepoint sequences and custom names like ":duck:")
     pub emoji: String,
     /// The message_id of the target message (16 bytes)
+    #[serde_as(as = "serde_with::base64::Base64")]
     pub target_message_id: Vec<u8>,
 }
 
@@ -109,12 +112,14 @@ pub struct ReactionPayload {
 ///
 /// Note: Sender identity is NOT stored here. It's extracted from MLS credentials
 /// during decryption and returned separately in DecryptResult.sender.
+#[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
     /// The type of event
     pub kind: EventKind,
 
     /// Internal stable group identifier (not exposed in plaintext)
+    #[serde_as(as = "serde_with::base64::Base64")]
     pub group_id: Vec<u8>,
 
     /// The MLS epoch this event was created in
@@ -122,27 +127,32 @@ pub struct Event {
 
     /// The actual payload (message text, commit bytes, welcome bytes, etc.)
     /// For Reaction events, this is a JSON-serialized ReactionPayload.
+    #[serde_as(as = "serde_with::base64::Base64")]
     pub payload: Vec<u8>,
 
     /// Unique message identifier (16 random bytes, generated at send time).
     /// Used to reference messages for reactions. Absent for legacy events.
+    #[serde_as(as = "Option<serde_with::base64::Base64>")]
     #[serde(default)]
     pub message_id: Option<Vec<u8>>,
 
     /// SHA-256 hash of the plaintext Event JSON of the previous event
     /// sent by this device in this group. Forms a per-device hash chain.
     /// `None` for the first event from a device.
+    #[serde_as(as = "Option<serde_with::base64::Base64>")]
     #[serde(default)]
     pub prev_event_hash: Option<Vec<u8>>,
 
     /// 16-byte fingerprint derived from MLS epoch keys via
     /// `export_secret("moat-epoch-fingerprint-v1", 16)`. Recipients
     /// verify it matches their own derived value.
+    #[serde_as(as = "Option<serde_with::base64::Base64>")]
     #[serde(default)]
     pub epoch_fingerprint: Option<Vec<u8>>,
 
     /// The 16-byte device ID of the sender. Used to key the per-device
     /// hash chain on the recipient side. Set by encrypt_event.
+    #[serde_as(as = "Option<serde_with::base64::Base64>")]
     #[serde(default)]
     pub sender_device_id: Option<Vec<u8>>,
 }
@@ -533,9 +543,12 @@ mod tests {
     #[test]
     fn test_backward_compat_no_message_id() {
         // Simulate a legacy event without message_id or transcript integrity fields
-        let json = r#"{"kind":"message","group_id":[1,2,3],"epoch":0,"payload":[104,105]}"#;
+        // group_id=[1,2,3] -> base64 "AQID", payload=[104,105] -> base64 "aGk="
+        let json = r#"{"kind":"message","group_id":"AQID","epoch":0,"payload":"aGk="}"#;
         let event: Event = serde_json::from_str(json).unwrap();
         assert!(matches!(event.kind, EventKind::Message(_)));
+        assert_eq!(event.group_id, vec![1, 2, 3]);
+        assert_eq!(event.payload, vec![104, 105]);
         assert!(event.message_id.is_none());
         assert!(event.prev_event_hash.is_none());
         assert!(event.epoch_fingerprint.is_none());

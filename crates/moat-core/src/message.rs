@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_with::{base64::Base64, serde_as};
 
 /// Structured payloads for `event.kind == "message"`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,8 +103,10 @@ pub struct LongTextMessage {
 }
 
 /// Image payload previewing an external blob.
+#[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MediaMessage {
+    #[serde_as(as = "Base64")]
     pub preview_thumbhash: Vec<u8>,
     #[serde(default)]
     pub width: Option<u32>,
@@ -124,12 +127,16 @@ pub enum MessageBodyKind {
 }
 
 /// Hash/authentication bundle for an external blob referenced by a message.
+#[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExternalBlob {
+    #[serde_as(as = "Base64")]
     pub ciphertext_hash: Vec<u8>,
     pub ciphertext_size: u64,
+    #[serde_as(as = "Base64")]
     pub content_hash: Vec<u8>,
     pub uri: String,
+    #[serde_as(as = "Base64")]
     pub key: Vec<u8>,
 }
 

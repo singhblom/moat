@@ -6,6 +6,7 @@
 //! MLS member but can be grouped by DID for display.
 
 use serde::{Deserialize, Serialize};
+use serde_with::{base64::Base64, serde_as};
 
 /// A structured credential for Moat MLS operations.
 ///
@@ -18,7 +19,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Serialized as JSON for embedding in MLS BasicCredential:
 /// ```json
-/// {"did":"did:plc:abc123","device_name":"My iPhone","device_id":[1,2,3,...]}
+/// {"did":"did:plc:abc123","device_name":"My iPhone","device_id":"AAAAAAAAAAAAAAAAAAAAAA=="}
 /// ```
 ///
 /// # Example
@@ -32,6 +33,7 @@ use serde::{Deserialize, Serialize};
 /// assert_eq!(credential.device_name(), "Work Laptop");
 /// assert_eq!(credential.device_id(), &device_id);
 /// ```
+#[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MoatCredential {
     /// The user's decentralized identifier (e.g., "did:plc:abc123")
@@ -39,6 +41,7 @@ pub struct MoatCredential {
     /// Human-readable device name (e.g., "My iPhone", "Work Laptop")
     device_name: String,
     /// Unique 16-byte device identifier, used for per-event tag derivation
+    #[serde_as(as = "Base64")]
     device_id: [u8; 16],
 }
 
@@ -125,7 +128,7 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(json["did"], "did:plc:test");
         assert_eq!(json["device_name"], "Device");
-        assert!(json["device_id"].is_array());
+        assert!(json["device_id"].is_string());
     }
 
     #[test]
