@@ -162,4 +162,148 @@ void main() {
       });
     });
   });
+
+  group('ImageAttachment', () {
+    ImageAttachment makeAttachment() => ImageAttachment(
+          uri: 'at://did:plc:abc/bafkreixxx',
+          key: Uint8List.fromList(List.generate(32, (i) => i)),
+          ciphertextHash: Uint8List.fromList(List.generate(32, (i) => i + 1)),
+          ciphertextSize: 65536,
+          contentHash: Uint8List.fromList(List.generate(32, (i) => i + 2)),
+          thumbhash: Uint8List.fromList([1, 2, 3, 4, 5]),
+          width: 1920,
+          height: 1080,
+          mime: 'image/jpeg',
+        );
+
+    test('toJson / fromJson roundtrip', () {
+      final original = makeAttachment();
+      final json = original.toJson();
+      final restored = ImageAttachment.fromJson(json);
+
+      expect(restored.uri, original.uri);
+      expect(restored.key, original.key);
+      expect(restored.ciphertextHash, original.ciphertextHash);
+      expect(restored.ciphertextSize, original.ciphertextSize);
+      expect(restored.contentHash, original.contentHash);
+      expect(restored.thumbhash, original.thumbhash);
+      expect(restored.width, original.width);
+      expect(restored.height, original.height);
+      expect(restored.mime, original.mime);
+    });
+
+    test('toJson uses base64 for binary fields', () {
+      final attachment = makeAttachment();
+      final json = attachment.toJson();
+      // Verify these are base64 strings, not arrays
+      expect(json['key'], isA<String>());
+      expect(json['ciphertextHash'], isA<String>());
+      expect(json['contentHash'], isA<String>());
+      expect(json['thumbhash'], isA<String>());
+    });
+
+    test('survives JSON encode/decode cycle', () {
+      final original = makeAttachment();
+      final encoded = jsonEncode(original.toJson());
+      final restored =
+          ImageAttachment.fromJson(jsonDecode(encoded) as Map<String, dynamic>);
+      expect(restored.uri, original.uri);
+      expect(restored.width, original.width);
+    });
+
+    test('copyWith preserves and overrides fields', () {
+      final original = makeAttachment();
+      final updated = original.copyWith(mime: 'image/png', width: 800);
+      expect(updated.mime, 'image/png');
+      expect(updated.width, 800);
+      expect(updated.uri, original.uri);
+      expect(updated.key, original.key);
+    });
+
+    test('nullable fields serialize as null', () {
+      final attachment = ImageAttachment(
+        uri: 'at://did:plc:abc/baf',
+        key: Uint8List(32),
+        ciphertextHash: Uint8List(32),
+        ciphertextSize: 100,
+        contentHash: Uint8List(32),
+      );
+      final json = attachment.toJson();
+      expect(json['thumbhash'], isNull);
+      expect(json['width'], isNull);
+      expect(json['mime'], isNull);
+    });
+  });
+
+  group('Message with imageAttachment', () {
+    test('toJson / fromJson roundtrip with imageAttachment', () {
+      final message = Message(
+        id: 'group1_rkey1',
+        groupId: Uint8List.fromList([1, 2, 3, 4]),
+        senderDid: 'did:plc:alice',
+        content: '[image image/jpeg 1920x1080]',
+        timestamp: DateTime.utc(2025, 1, 15, 12, 0, 0),
+        isOwn: false,
+        epoch: 1,
+        imageAttachment: ImageAttachment(
+          uri: 'at://did:plc:alice/bafkrei',
+          key: Uint8List.fromList(List.generate(32, (i) => i)),
+          ciphertextHash: Uint8List.fromList(List.generate(32, (i) => i + 1)),
+          ciphertextSize: 65536,
+          contentHash: Uint8List.fromList(List.generate(32, (i) => i + 2)),
+          thumbhash: Uint8List.fromList([1, 2, 3]),
+          width: 1920,
+          height: 1080,
+          mime: 'image/jpeg',
+        ),
+      );
+
+      final json = message.toJson();
+      final restored = Message.fromJson(json);
+
+      expect(restored.imageAttachment, isNotNull);
+      expect(restored.imageAttachment!.uri, 'at://did:plc:alice/bafkrei');
+      expect(restored.imageAttachment!.width, 1920);
+      expect(restored.imageAttachment!.mime, 'image/jpeg');
+    });
+
+    test('fromJson with no imageAttachment is backward-compatible', () {
+      final message = Message(
+        id: 'group1_rkey1',
+        groupId: Uint8List.fromList([1, 2, 3, 4]),
+        senderDid: 'did:plc:alice',
+        content: 'Hello',
+        timestamp: DateTime.utc(2025, 1, 1),
+        isOwn: false,
+        epoch: 0,
+      );
+      final json = message.toJson();
+      // Ensure imageAttachment key is null
+      expect(json['imageAttachment'], isNull);
+      final restored = Message.fromJson(json);
+      expect(restored.imageAttachment, isNull);
+    });
+
+    test('copyWith preserves imageAttachment when not overridden', () {
+      final attachment = ImageAttachment(
+        uri: 'at://did/baf',
+        key: Uint8List(32),
+        ciphertextHash: Uint8List(32),
+        ciphertextSize: 1024,
+        contentHash: Uint8List(32),
+      );
+      final message = Message(
+        id: 'g_r',
+        groupId: Uint8List(4),
+        senderDid: 'did:plc:x',
+        content: '[image]',
+        timestamp: DateTime.now(),
+        isOwn: false,
+        epoch: 0,
+        imageAttachment: attachment,
+      );
+      final updated = message.copyWith(content: 'updated');
+      expect(updated.imageAttachment, same(attachment));
+    });
+  });
 }

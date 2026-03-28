@@ -5,6 +5,7 @@ import '../models/message.dart';
 import '../rust/api/simple.dart';
 import '../utils/message_payload.dart';
 import 'auth_service.dart';
+import 'blob_service.dart';
 import 'drawbridge_service.dart';
 import 'debug_log.dart';
 
@@ -93,6 +94,115 @@ class SendService {
       epoch: conversation.epoch,
       status: MessageStatus.sent,
       messageId: result.messageId != null ? Uint8List.fromList(result.messageId!) : null,
+    );
+  }
+
+  /// Send an image message to a conversation.
+  ///
+  /// Steps: process image → encrypt blob → upload → encode payload → MLS encrypt → publish.
+  Future<Message> sendImage({
+    required Conversation conversation,
+    required Uint8List imageBytes,
+    required String localId,
+    required BlobService blobService,
+  }) async {
+    final session = _authService.moatSession;
+    final myDid = _authService.did;
+    final deviceName = _authService.deviceName;
+
+    if (session == null || myDid == null || deviceName == null) {
+      throw SendException('Not authenticated');
+    }
+
+    final keyBundle = await _authService.getKeyBundle();
+    if (keyBundle == null) {
+      throw SendException('No key bundle available');
+    }
+
+    // 1. Process image: validate, resize, generate thumbhash.
+    final processed = await processImageForSend(imageBytes: imageBytes);
+    final processedBytes = Uint8List.fromList(processed.imageBytes);
+
+    // 2. Encrypt and upload blob.
+    final uploadResult = await blobService.encryptAndUpload(processedBytes);
+
+    // 3. Build the at:// URI.
+    final uri = 'at://$myDid/${uploadResult.cid}';
+
+    // 4. Encode image payload.
+    final structuredPayload = encodeImageMessagePayload(
+      thumbhash: Uint8List.fromList(processed.thumbhash),
+      width: processed.width,
+      height: processed.height,
+      mime: processed.mimeType,
+      uri: uri,
+      key: uploadResult.key,
+      ciphertextHash: uploadResult.ciphertextHash,
+      ciphertextSize: uploadResult.ciphertextSize,
+      contentHash: uploadResult.contentHash,
+    );
+
+    moatLog('SendService: Sending image to ${conversation.groupIdHex} (${processed.width}x${processed.height} ${processed.mimeType})');
+
+    // 5. MLS encrypt.
+    final event = EventDto(
+      kind: EventKindDto.message,
+      groupId: conversation.groupId,
+      epoch: BigInt.from(conversation.epoch),
+      payload: structuredPayload,
+    );
+
+    final result = await session.encryptEvent(
+      groupId: conversation.groupId,
+      keyBundle: keyBundle,
+      event: event,
+    );
+
+    await _authService.saveMlsState();
+
+    // 6. Publish event.
+    final eventUri = await _authService.atprotoClient.publishEvent(
+      result.tag,
+      result.ciphertext,
+    );
+
+    moatLog('SendService: Image published: $eventUri');
+
+    final rkey = _extractRkey(eventUri);
+
+    // 7. Notify Drawbridge.
+    final relayUrls = DrawbridgeService.instance
+        .relayUrlsForParticipants(conversation.participants);
+    DrawbridgeService.instance.notifyEventPosted(
+      tag: result.tag,
+      rkey: rkey,
+      payload: result.ciphertext,
+      relayUrls: relayUrls,
+    );
+
+    return Message(
+      id: '${conversation.groupIdHex}_$rkey',
+      localId: localId,
+      groupId: conversation.groupId,
+      senderDid: myDid,
+      senderDeviceId: '$myDid/$deviceName',
+      content: renderMessagePreview(structuredPayload),
+      timestamp: DateTime.now(),
+      isOwn: true,
+      epoch: conversation.epoch,
+      status: MessageStatus.sent,
+      messageId: result.messageId != null ? Uint8List.fromList(result.messageId!) : null,
+      imageAttachment: ImageAttachment(
+        uri: uri,
+        key: uploadResult.key,
+        ciphertextHash: uploadResult.ciphertextHash,
+        ciphertextSize: uploadResult.ciphertextSize,
+        contentHash: uploadResult.contentHash,
+        thumbhash: Uint8List.fromList(processed.thumbhash),
+        width: processed.width,
+        height: processed.height,
+        mime: processed.mimeType,
+      ),
     );
   }
 

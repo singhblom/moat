@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
+import '../models/message.dart';
 
 // Canonical values defined in moat-core/src/message.rs
 const _shortTextMaxBytes = 240;
@@ -39,6 +40,66 @@ String renderMessagePreview(Uint8List payload) {
     return decoded;
   } catch (_) {
     return utf8.decode(payload, allowMalformed: true);
+  }
+}
+
+/// Encode an image message payload for MLS encryption.
+/// All binary fields are standard base64 (RFC 4648), matching moat-core's serde.
+Uint8List encodeImageMessagePayload({
+  required Uint8List thumbhash,
+  required int width,
+  required int height,
+  required String mime,
+  required String uri,
+  required Uint8List key,
+  required Uint8List ciphertextHash,
+  required int ciphertextSize,
+  required Uint8List contentHash,
+}) {
+  final payload = jsonEncode({
+    'type': 'image',
+    'preview_thumbhash': base64Encode(thumbhash),
+    'width': width,
+    'height': height,
+    'mime': mime,
+    'external': {
+      'ciphertext_hash': base64Encode(ciphertextHash),
+      'ciphertext_size': ciphertextSize,
+      'content_hash': base64Encode(contentHash),
+      'uri': uri,
+      'key': base64Encode(key),
+    },
+  });
+  return Uint8List.fromList(utf8.encode(payload));
+}
+
+/// Parse image attachment metadata from a decrypted event payload.
+/// Returns null if the payload is not an image type or cannot be parsed.
+ImageAttachment? parseImageAttachment(Uint8List payload) {
+  try {
+    final decoded = utf8.decode(payload);
+    final dynamic data = jsonDecode(decoded);
+    if (data is! Map<String, dynamic>) return null;
+    if (data['type'] != 'image') return null;
+
+    final ext = data['external'] as Map<String, dynamic>?;
+    if (ext == null) return null;
+
+    return ImageAttachment(
+      uri: ext['uri'] as String,
+      key: base64Decode(ext['key'] as String),
+      ciphertextHash: base64Decode(ext['ciphertext_hash'] as String),
+      ciphertextSize: (ext['ciphertext_size'] as num).toInt(),
+      contentHash: base64Decode(ext['content_hash'] as String),
+      thumbhash: data['preview_thumbhash'] != null
+          ? base64Decode(data['preview_thumbhash'] as String)
+          : null,
+      width: (data['width'] as num?)?.toInt(),
+      height: (data['height'] as num?)?.toInt(),
+      mime: data['mime'] as String?,
+    );
+  } catch (_) {
+    return null;
   }
 }
 

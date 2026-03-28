@@ -303,4 +303,126 @@ void main() {
       expect(record.keyPackage, kp);
     });
   });
+
+  group('uploadBlob', () {
+    test('sends correct content-type and parses CID from response', () async {
+      String? capturedContentType;
+      Uint8List? capturedBody;
+
+      final mockClient = MockClient((request) async {
+        expect(request.url.path, contains('uploadBlob'));
+        capturedContentType = request.headers['content-type'];
+        capturedBody = request.bodyBytes;
+        return http.Response(
+          jsonEncode({
+            'blob': {
+              r'$type': 'blob',
+              'ref': {r'$link': 'bafkreitest123'},
+              'mimeType': 'application/octet-stream',
+              'size': 42,
+            }
+          }),
+          200,
+        );
+      });
+
+      final client = AtprotoClient(httpClient: mockClient);
+      client.restoreSession(_testSession());
+
+      final data = Uint8List.fromList([1, 2, 3, 4, 5]);
+      final cid = await client.uploadBlob(data);
+
+      expect(cid, 'bafkreitest123');
+      expect(capturedContentType, 'application/octet-stream');
+      expect(capturedBody, data);
+    });
+
+    test('throws on non-200 response', () async {
+      final mockClient = MockClient((request) async =>
+          http.Response('{"error": "upload failed"}', 500));
+
+      final client = AtprotoClient(httpClient: mockClient);
+      client.restoreSession(_testSession());
+
+      expect(
+        () => client.uploadBlob(Uint8List.fromList([1, 2, 3])),
+        throwsA(isA<AtprotoException>()),
+      );
+    });
+
+    test('auto-refreshes on 401 then retries', () async {
+      var callCount = 0;
+      final mockClient = MockClient((request) async {
+        if (request.url.path.contains('refreshSession')) {
+          return http.Response(_refreshResponse(), 200);
+        }
+        callCount++;
+        if (callCount == 1) {
+          return http.Response(
+              jsonEncode({'error': 'Token has expired'}), 401);
+        }
+        return http.Response(
+          jsonEncode({
+            'blob': {
+              r'$type': 'blob',
+              'ref': {r'$link': 'bafkreifresh'},
+              'mimeType': 'application/octet-stream',
+              'size': 4,
+            }
+          }),
+          200,
+        );
+      });
+
+      final client = AtprotoClient(httpClient: mockClient);
+      client.restoreSession(_testSession());
+
+      final cid = await client.uploadBlob(Uint8List.fromList([1, 2, 3, 4]));
+      expect(cid, 'bafkreifresh');
+      expect(callCount, 2);
+    });
+  });
+
+  group('fetchBlob', () {
+    test('constructs correct URL and returns body bytes', () async {
+      final expectedBytes = Uint8List.fromList([0xDE, 0xAD, 0xBE, 0xEF]);
+      Uri? capturedUri;
+
+      final mockClient = MockClient((request) async {
+        if (request.url.path.contains('plc.directory') ||
+            request.url.toString().contains('plc.directory')) {
+          // PDS resolution fallback — not needed when pdsOverride is set
+          fail('Should not call PLC directory with pdsOverride');
+        }
+        capturedUri = request.url;
+        return http.Response.bytes(expectedBytes, 200);
+      });
+
+      final client = AtprotoClient(
+          httpClient: mockClient, pdsOverride: 'https://pds.example.com');
+      client.restoreSession(_testSession());
+
+      final bytes = await client.fetchBlob('did:plc:test', 'bafkreitest');
+
+      expect(bytes, expectedBytes);
+      expect(capturedUri?.path, contains('getBlob'));
+      expect(capturedUri?.queryParameters['did'], 'did:plc:test');
+      expect(capturedUri?.queryParameters['cid'], 'bafkreitest');
+    });
+
+    test('throws on 404', () async {
+      final mockClient = MockClient((request) async =>
+          http.Response('{"error": "not found"}', 404));
+
+      final client = AtprotoClient(
+          httpClient: mockClient, pdsOverride: 'https://pds.example.com');
+      client.restoreSession(_testSession());
+
+      expect(
+        () => client.fetchBlob('did:plc:test', 'bafkrei404'),
+        throwsA(isA<AtprotoException>().having(
+            (e) => e.statusCode, 'statusCode', 404)),
+      );
+    });
+  });
 }

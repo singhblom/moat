@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:typed_data';
 import '../models/conversation.dart';
 import '../models/message.dart';
+import 'blob_service.dart';
 import 'send_service.dart';
 import 'debug_log.dart';
 
@@ -70,6 +72,19 @@ class SendQueue {
       conversation: _conversation,
       text: text,
       localId: localId,
+    );
+  }
+
+  /// Send an image directly, bypassing the queue. Returns the sent Message.
+  /// Used by the HTTP server for synchronous send-and-wait semantics.
+  Future<Message> sendImageDirect(
+      Uint8List imageBytes, BlobService blobService) async {
+    final localId = 'local_${DateTime.now().millisecondsSinceEpoch}';
+    return await _sendService.sendImage(
+      conversation: _conversation,
+      imageBytes: imageBytes,
+      localId: localId,
+      blobService: blobService,
     );
   }
 

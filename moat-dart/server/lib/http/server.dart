@@ -23,6 +23,7 @@ Handler buildRouter({
   required ConversationsService convsService,
   required WatchListService watchListService,
   required PollingService pollingService,
+  required BlobService blobService,
 }) {
   final router = Router();
 
@@ -199,6 +200,45 @@ Handler buildRouter({
       );
     } catch (e) {
       moatLog('Server: Error sending message: $e');
+      return Response(500,
+          body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
+    }
+  });
+
+  // POST /conversations/:group_id/messages/image — send an image
+  router.post('/conversations/<groupId>/messages/image',
+      (Request request, String groupId) async {
+    if (!authService.isAuthenticated) {
+      return Response(401,
+          body: jsonEncode({'error': 'not logged in'}), headers: _jsonHeaders);
+    }
+
+    try {
+      final imageBytes = Uint8List.fromList(await request.read().expand((b) => b).toList());
+      if (imageBytes.isEmpty) {
+        return Response(400,
+            body: jsonEncode({'error': 'empty body'}), headers: _jsonHeaders);
+      }
+
+      final groupIdBytes = _hexToBytes(groupId);
+      final conv = convsService.findByGroupId(groupIdBytes);
+      if (conv == null) {
+        return Response.notFound(
+            jsonEncode({'error': 'conversation not found'}),
+            headers: _jsonHeaders);
+      }
+
+      final repo = ConversationManager.instance.getRepository(conv);
+      final message = await repo.sendImageSync(imageBytes, blobService);
+
+      moatLog('Server: Image sent: ${message.id}');
+
+      return Response.ok(
+        jsonEncode(message.toJson()),
+        headers: _jsonHeaders,
+      );
+    } catch (e) {
+      moatLog('Server: Error sending image: $e');
       return Response(500,
           body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
     }

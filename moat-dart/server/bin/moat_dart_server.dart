@@ -74,12 +74,19 @@ Future<void> main(List<String> args) async {
     pollingService.pollOnce();
   };
 
+  // Create BlobService for image support.
+  final blobService = BlobService(
+    atprotoClient: atprotoClient,
+    backend: docBackend,
+  );
+
   // Build HTTP handler.
   final handler = buildRouter(
     authService: authService,
     convsService: convsService,
     watchListService: watchListService,
     pollingService: pollingService,
+    blobService: blobService,
   );
 
   // Parse address.

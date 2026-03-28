@@ -73,6 +73,33 @@ Uint8List padToBucket({required List<int> plaintext}) =>
 Uint8List unpad({required List<int> padded}) =>
     RustLib.instance.api.crateApiSimpleUnpad(padded: padded);
 
+/// Encrypt a blob. Returns encrypted bytes and metadata for ExternalBlob.
+Future<BlobEncryptResult> blobEncrypt({required List<int> plaintext}) =>
+    RustLib.instance.api.crateApiSimpleBlobEncrypt(plaintext: plaintext);
+
+/// Decrypt and verify a blob.
+Future<Uint8List> blobDecrypt(
+        {required List<int> blob,
+        required List<int> key,
+        required List<int> ciphertextHash,
+        required List<int> contentHash}) =>
+    RustLib.instance.api.crateApiSimpleBlobDecrypt(
+        blob: blob,
+        key: key,
+        ciphertextHash: ciphertextHash,
+        contentHash: contentHash);
+
+/// Process an image for sending: validate format, resize if >2048px, generate thumbhash.
+/// Returns processed bytes, dimensions, thumbhash, and MIME type.
+Future<ImageProcessResult> processImageForSend(
+        {required List<int> imageBytes}) =>
+    RustLib.instance.api
+        .crateApiSimpleProcessImageForSend(imageBytes: imageBytes);
+
+/// Decode a thumbhash to RGBA pixels for placeholder rendering.
+Future<ThumbHashResult> decodeThumbhash({required List<int> hash}) =>
+    RustLib.instance.api.crateApiSimpleDecodeThumbhash(hash: hash);
+
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MoatSessionHandle>>
 abstract class MoatSessionHandle implements RustOpaqueInterface {
   /// Add a member to a group. Returns welcome result.
@@ -142,6 +169,44 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
 
   /// Process a welcome message to join a group. Returns the group ID.
   Future<Uint8List> processWelcome({required List<int> welcomeBytes});
+}
+
+class BlobEncryptResult {
+  /// Encrypted bytes: nonce (24 bytes) || ciphertext.
+  final Uint8List blob;
+
+  /// 32-byte symmetric key.
+  final Uint8List key;
+
+  /// SHA-256 of blob (pre-decryption integrity check).
+  final Uint8List ciphertextHash;
+
+  /// SHA-256 of plaintext (post-decryption integrity check and cache key).
+  final Uint8List contentHash;
+
+  const BlobEncryptResult({
+    required this.blob,
+    required this.key,
+    required this.ciphertextHash,
+    required this.contentHash,
+  });
+
+  @override
+  int get hashCode =>
+      blob.hashCode ^
+      key.hashCode ^
+      ciphertextHash.hashCode ^
+      contentHash.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is BlobEncryptResult &&
+          runtimeType == other.runtimeType &&
+          blob == other.blob &&
+          key == other.key &&
+          ciphertextHash == other.ciphertextHash &&
+          contentHash == other.contentHash;
 }
 
 class DecryptResultDto {
@@ -289,6 +354,46 @@ enum EventKindDto {
   ;
 }
 
+class ImageProcessResult {
+  /// Processed image bytes (JPEG or PNG, resized if >2048px).
+  final Uint8List imageBytes;
+  final int width;
+  final int height;
+
+  /// ThumbHash bytes for blurry placeholder preview.
+  final Uint8List thumbhash;
+
+  /// MIME type: "image/jpeg" or "image/png".
+  final String mimeType;
+
+  const ImageProcessResult({
+    required this.imageBytes,
+    required this.width,
+    required this.height,
+    required this.thumbhash,
+    required this.mimeType,
+  });
+
+  @override
+  int get hashCode =>
+      imageBytes.hashCode ^
+      width.hashCode ^
+      height.hashCode ^
+      thumbhash.hashCode ^
+      mimeType.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ImageProcessResult &&
+          runtimeType == other.runtimeType &&
+          imageBytes == other.imageBytes &&
+          width == other.width &&
+          height == other.height &&
+          thumbhash == other.thumbhash &&
+          mimeType == other.mimeType;
+}
+
 class KeyPackageResult {
   final Uint8List keyPackage;
   final Uint8List keyBundle;
@@ -376,6 +481,31 @@ class StealthKeypair {
           runtimeType == other.runtimeType &&
           privateKey == other.privateKey &&
           publicKey == other.publicKey;
+}
+
+class ThumbHashResult {
+  /// Raw RGBA pixel data (width * height * 4 bytes).
+  final Uint8List rgba;
+  final int width;
+  final int height;
+
+  const ThumbHashResult({
+    required this.rgba,
+    required this.width,
+    required this.height,
+  });
+
+  @override
+  int get hashCode => rgba.hashCode ^ width.hashCode ^ height.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ThumbHashResult &&
+          runtimeType == other.runtimeType &&
+          rgba == other.rgba &&
+          width == other.width &&
+          height == other.height;
 }
 
 class WelcomeResultDto {

@@ -513,6 +513,77 @@ class AtprotoClient {
     return allRecords;
   }
 
+  /// Upload an encrypted blob to the user's PDS.
+  /// Returns the CID string (e.g. "bafkrei...").
+  Future<String> uploadBlob(Uint8List data) async {
+    _requireSession();
+
+    final uri = Uri.parse(
+        '${_session!.pdsUrl}/xrpc/com.atproto.repo.uploadBlob');
+    final headers = <String, String>{
+      'Content-Type': 'application/octet-stream',
+      'Accept': 'application/json',
+      'Authorization': 'Bearer ${_session!.accessJwt}',
+    };
+
+    http.Response response;
+    try {
+      response = await _httpClient
+          .post(uri, headers: headers, body: data)
+          .timeout(httpTimeout);
+    } on AtprotoException {
+      rethrow;
+    } catch (e) {
+      throw AtprotoException('blob upload request failed: $e');
+    }
+
+    if (response.statusCode == 401) {
+      await refreshSession();
+      onSessionRefreshed?.call(_session!);
+      headers['Authorization'] = 'Bearer ${_session!.accessJwt}';
+      response = await _httpClient
+          .post(uri, headers: headers, body: data)
+          .timeout(httpTimeout);
+    }
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw AtprotoException(
+          'uploadBlob returned ${response.statusCode}: ${response.body}',
+          statusCode: response.statusCode);
+    }
+
+    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    final cid = (json['blob'] as Map<String, dynamic>?)?['ref']
+        ?[r'$link'] as String?;
+    if (cid == null) {
+      throw AtprotoException('uploadBlob response missing blob.ref.\$link');
+    }
+    return cid;
+  }
+
+  /// Fetch a blob from a user's PDS by DID and CID.
+  /// Returns the raw encrypted bytes (nonce || ciphertext).
+  Future<Uint8List> fetchBlob(String did, String cid) async {
+    final pdsUrl = await resolvePdsEndpoint(did);
+    final uri = Uri.parse(
+        '$pdsUrl/xrpc/com.atproto.sync.getBlob?did=$did&cid=$cid');
+
+    final response =
+        await _httpClient.get(uri).timeout(httpTimeout);
+
+    if (response.statusCode == 404) {
+      throw AtprotoException('blob not found: did=$did cid=$cid',
+          statusCode: 404);
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw AtprotoException(
+          'getBlob returned ${response.statusCode}: ${response.body}',
+          statusCode: response.statusCode);
+    }
+
+    return response.bodyBytes;
+  }
+
   Future<BlueskyProfile?> getProfile(String actorDidOrHandle) async {
     try {
       final response = await _get(

@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1708324464;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1758461791;
 
 // Section: executor
 
@@ -846,6 +846,113 @@ fn wire__crate__api__simple__MoatSessionHandle_process_welcome_impl(
         },
     )
 }
+fn wire__crate__api__simple__blob_decrypt_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "blob_decrypt",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_blob = <Vec<u8>>::sse_decode(&mut deserializer);
+            let api_key = <Vec<u8>>::sse_decode(&mut deserializer);
+            let api_ciphertext_hash = <Vec<u8>>::sse_decode(&mut deserializer);
+            let api_content_hash = <Vec<u8>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::simple::blob_decrypt(
+                        api_blob,
+                        api_key,
+                        api_ciphertext_hash,
+                        api_content_hash,
+                    )?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__simple__blob_encrypt_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "blob_encrypt",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_plaintext = <Vec<u8>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::simple::blob_encrypt(api_plaintext)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__simple__decode_thumbhash_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "decode_thumbhash",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_hash = <Vec<u8>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::simple::decode_thumbhash(api_hash)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__simple__derive_next_tag_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1123,6 +1230,39 @@ fn wire__crate__api__simple__pad_to_bucket_impl(
         },
     )
 }
+fn wire__crate__api__simple__process_image_for_send_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "process_image_for_send",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_image_bytes = <Vec<u8>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::simple::process_image_for_send(api_image_bytes)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__simple__sign_drawbridge_challenge_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -1259,6 +1399,22 @@ impl SseDecode for String {
     }
 }
 
+impl SseDecode for crate::api::simple::BlobEncryptResult {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_blob = <Vec<u8>>::sse_decode(deserializer);
+        let mut var_key = <Vec<u8>>::sse_decode(deserializer);
+        let mut var_ciphertextHash = <Vec<u8>>::sse_decode(deserializer);
+        let mut var_contentHash = <Vec<u8>>::sse_decode(deserializer);
+        return crate::api::simple::BlobEncryptResult {
+            blob: var_blob,
+            key: var_key,
+            ciphertext_hash: var_ciphertextHash,
+            content_hash: var_contentHash,
+        };
+    }
+}
+
 impl SseDecode for bool {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1348,6 +1504,24 @@ impl SseDecode for i32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         deserializer.cursor.read_i32::<NativeEndian>().unwrap()
+    }
+}
+
+impl SseDecode for crate::api::simple::ImageProcessResult {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_imageBytes = <Vec<u8>>::sse_decode(deserializer);
+        let mut var_width = <u32>::sse_decode(deserializer);
+        let mut var_height = <u32>::sse_decode(deserializer);
+        let mut var_thumbhash = <Vec<u8>>::sse_decode(deserializer);
+        let mut var_mimeType = <String>::sse_decode(deserializer);
+        return crate::api::simple::ImageProcessResult {
+            image_bytes: var_imageBytes,
+            width: var_width,
+            height: var_height,
+            thumbhash: var_thumbhash,
+            mime_type: var_mimeType,
+        };
     }
 }
 
@@ -1483,6 +1657,27 @@ impl SseDecode for crate::api::simple::StealthKeypair {
     }
 }
 
+impl SseDecode for crate::api::simple::ThumbHashResult {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_rgba = <Vec<u8>>::sse_decode(deserializer);
+        let mut var_width = <u32>::sse_decode(deserializer);
+        let mut var_height = <u32>::sse_decode(deserializer);
+        return crate::api::simple::ThumbHashResult {
+            rgba: var_rgba,
+            width: var_width,
+            height: var_height,
+        };
+    }
+}
+
+impl SseDecode for u32 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_u32::<NativeEndian>().unwrap()
+    }
+}
+
 impl SseDecode for u64 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1594,9 +1789,15 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        18 => wire__crate__api__simple__encrypt_for_stealth_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__simple__sign_drawbridge_challenge_impl(
+        17 => wire__crate__api__simple__blob_decrypt_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__simple__blob_encrypt_impl(port, ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__simple__decode_thumbhash_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__simple__encrypt_for_stealth_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
+        27 => {
+            wire__crate__api__simple__process_image_for_send_impl(port, ptr, rust_vec_len, data_len)
+        }
+        28 => wire__crate__api__simple__sign_drawbridge_challenge_impl(
             port,
             ptr,
             rust_vec_len,
@@ -1642,15 +1843,15 @@ fn pde_ffi_dispatcher_sync_impl(
             rust_vec_len,
             data_len,
         ),
-        17 => wire__crate__api__simple__derive_next_tag_impl(ptr, rust_vec_len, data_len),
-        19 => {
+        20 => wire__crate__api__simple__derive_next_tag_impl(ptr, rust_vec_len, data_len),
+        22 => {
             wire__crate__api__simple__event_dto_reaction_payload_impl(ptr, rust_vec_len, data_len)
         }
-        20 => wire__crate__api__simple__generate_candidate_tags_impl(ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__simple__generate_stealth_keypair_impl(ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__simple__pad_to_bucket_impl(ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__simple__try_decrypt_stealth_impl(ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__simple__unpad_impl(ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__simple__generate_candidate_tags_impl(ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__simple__generate_stealth_keypair_impl(ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__simple__pad_to_bucket_impl(ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__simple__try_decrypt_stealth_impl(ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__simple__unpad_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1672,6 +1873,29 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<MoatSessionHandle>> for MoatSe
     }
 }
 
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::simple::BlobEncryptResult {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.blob.into_into_dart().into_dart(),
+            self.key.into_into_dart().into_dart(),
+            self.ciphertext_hash.into_into_dart().into_dart(),
+            self.content_hash.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::simple::BlobEncryptResult
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::simple::BlobEncryptResult>
+    for crate::api::simple::BlobEncryptResult
+{
+    fn into_into_dart(self) -> crate::api::simple::BlobEncryptResult {
+        self
+    }
+}
 // Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::simple::DecryptResultDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
@@ -1786,6 +2010,30 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::simple::EventKindDto>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::simple::ImageProcessResult {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.image_bytes.into_into_dart().into_dart(),
+            self.width.into_into_dart().into_dart(),
+            self.height.into_into_dart().into_dart(),
+            self.thumbhash.into_into_dart().into_dart(),
+            self.mime_type.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::simple::ImageProcessResult
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::simple::ImageProcessResult>
+    for crate::api::simple::ImageProcessResult
+{
+    fn into_into_dart(self) -> crate::api::simple::ImageProcessResult {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::simple::KeyPackageResult {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -1870,6 +2118,28 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::simple::StealthKeypair>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::simple::ThumbHashResult {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.rgba.into_into_dart().into_dart(),
+            self.width.into_into_dart().into_dart(),
+            self.height.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::simple::ThumbHashResult
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::simple::ThumbHashResult>
+    for crate::api::simple::ThumbHashResult
+{
+    fn into_into_dart(self) -> crate::api::simple::ThumbHashResult {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::simple::WelcomeResultDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -1915,6 +2185,16 @@ impl SseEncode for String {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <Vec<u8>>::sse_encode(self.into_bytes(), serializer);
+    }
+}
+
+impl SseEncode for crate::api::simple::BlobEncryptResult {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <Vec<u8>>::sse_encode(self.blob, serializer);
+        <Vec<u8>>::sse_encode(self.key, serializer);
+        <Vec<u8>>::sse_encode(self.ciphertext_hash, serializer);
+        <Vec<u8>>::sse_encode(self.content_hash, serializer);
     }
 }
 
@@ -1988,6 +2268,17 @@ impl SseEncode for i32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         serializer.cursor.write_i32::<NativeEndian>(self).unwrap();
+    }
+}
+
+impl SseEncode for crate::api::simple::ImageProcessResult {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <Vec<u8>>::sse_encode(self.image_bytes, serializer);
+        <u32>::sse_encode(self.width, serializer);
+        <u32>::sse_encode(self.height, serializer);
+        <Vec<u8>>::sse_encode(self.thumbhash, serializer);
+        <String>::sse_encode(self.mime_type, serializer);
     }
 }
 
@@ -2090,6 +2381,22 @@ impl SseEncode for crate::api::simple::StealthKeypair {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <Vec<u8>>::sse_encode(self.private_key, serializer);
         <Vec<u8>>::sse_encode(self.public_key, serializer);
+    }
+}
+
+impl SseEncode for crate::api::simple::ThumbHashResult {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <Vec<u8>>::sse_encode(self.rgba, serializer);
+        <u32>::sse_encode(self.width, serializer);
+        <u32>::sse_encode(self.height, serializer);
+    }
+}
+
+impl SseEncode for u32 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_u32::<NativeEndian>(self).unwrap();
     }
 }
 

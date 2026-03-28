@@ -284,7 +284,8 @@ class PollingService {
 
       switch (result.event.kind) {
         case EventKindDto.message:
-          final text = renderMessagePreview(result.event.payload);
+          final payload = Uint8List.fromList(result.event.payload);
+          final text = renderMessagePreview(payload);
           final msgSenderDid = result.sender?.did ?? 'unknown';
           final senderDeviceName = result.sender?.deviceName;
           final isOwn = msgSenderDid == _authService.did;
@@ -301,6 +302,7 @@ class PollingService {
             messageId: result.event.messageId != null
                 ? Uint8List.fromList(result.event.messageId!)
                 : null,
+            imageAttachment: parseImageAttachment(payload),
           );
 
           moatLog('PollingService: Decrypted message: "${text.substring(0, text.length > 20 ? 20 : text.length)}..."');

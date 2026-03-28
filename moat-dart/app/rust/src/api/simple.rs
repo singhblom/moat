@@ -505,6 +505,140 @@ pub fn unpad(padded: Vec<u8>) -> Vec<u8> {
     moat_core::unpad(&padded)
 }
 
+// --- Blob crypto and image processing ---
+
+/// Encrypt a blob. Returns encrypted bytes and metadata for ExternalBlob.
+pub fn blob_encrypt(plaintext: Vec<u8>) -> Result<BlobEncryptResult, String> {
+    moat_core::blob_encrypt(&plaintext)
+        .map(|(blob, key, ciphertext_hash, content_hash)| BlobEncryptResult {
+            blob,
+            key: key.to_vec(),
+            ciphertext_hash,
+            content_hash,
+        })
+        .map_err(|e| e.to_string())
+}
+
+/// Decrypt and verify a blob.
+pub fn blob_decrypt(
+    blob: Vec<u8>,
+    key: Vec<u8>,
+    ciphertext_hash: Vec<u8>,
+    content_hash: Vec<u8>,
+) -> Result<Vec<u8>, String> {
+    let key_arr: [u8; 32] = key
+        .try_into()
+        .map_err(|_| "key must be 32 bytes".to_string())?;
+    moat_core::blob_decrypt(&blob, &key_arr, &ciphertext_hash, &content_hash)
+        .map_err(|e| e.to_string())
+}
+
+/// Process an image for sending: validate format, resize if >2048px, generate thumbhash.
+/// Returns processed bytes, dimensions, thumbhash, and MIME type.
+pub fn process_image_for_send(image_bytes: Vec<u8>) -> Result<ImageProcessResult, String> {
+    use image::{GenericImageView, ImageFormat};
+    use std::io::Cursor;
+
+    let format = image::guess_format(&image_bytes)
+        .map_err(|_| "Unsupported format: only JPEG and PNG are accepted".to_string())?;
+
+    let (mime, img_format) = match format {
+        ImageFormat::Jpeg => ("image/jpeg", ImageFormat::Jpeg),
+        ImageFormat::Png => ("image/png", ImageFormat::Png),
+        _ => return Err("Unsupported format: only JPEG and PNG are accepted".to_string()),
+    };
+
+    let img = image::load_from_memory(&image_bytes)
+        .map_err(|e| format!("Failed to decode image: {}", e))?;
+
+    let (orig_w, orig_h) = img.dimensions();
+    const MAX_DIM: u32 = 2048;
+
+    let (final_bytes, width, height) = if orig_w > MAX_DIM || orig_h > MAX_DIM {
+        let scale = (MAX_DIM as f64 / orig_w.max(orig_h) as f64).min(1.0);
+        let new_w = ((orig_w as f64 * scale).round() as u32).max(1);
+        let new_h = ((orig_h as f64 * scale).round() as u32).max(1);
+        let resized = img.resize(new_w, new_h, image::imageops::FilterType::Lanczos3);
+        let mut buf = Vec::new();
+        resized
+            .write_to(&mut Cursor::new(&mut buf), img_format)
+            .map_err(|e| format!("Failed to encode image: {}", e))?;
+        (buf, new_w, new_h)
+    } else {
+        (image_bytes, orig_w, orig_h)
+    };
+
+    // Re-decode from final bytes for thumbhash generation.
+    let for_hash = image::load_from_memory(&final_bytes)
+        .map_err(|e| format!("Failed to re-decode for ThumbHash: {}", e))?;
+
+    let thumbhash = {
+        const HASH_MAX: u32 = 100;
+        let (w, h) = for_hash.dimensions();
+        let scale = (HASH_MAX as f64 / w.max(h) as f64).min(1.0);
+        let tw = ((w as f64 * scale).round() as u32).max(1);
+        let th = ((h as f64 * scale).round() as u32).max(1);
+        let small = if tw < w || th < h {
+            for_hash.resize(tw, th, image::imageops::FilterType::Triangle)
+        } else {
+            for_hash.clone()
+        };
+        let rgba = small.to_rgba8();
+        let (rw, rh) = rgba.dimensions();
+        thumbhash::rgba_to_thumb_hash(rw as usize, rh as usize, rgba.as_raw())
+    };
+
+    Ok(ImageProcessResult {
+        image_bytes: final_bytes,
+        width,
+        height,
+        thumbhash,
+        mime_type: mime.to_string(),
+    })
+}
+
+/// Decode a thumbhash to RGBA pixels for placeholder rendering.
+pub fn decode_thumbhash(hash: Vec<u8>) -> Result<ThumbHashResult, String> {
+    let result = std::panic::catch_unwind(|| thumbhash::thumb_hash_to_rgba(&hash));
+    let (w, h, rgba) = result
+        .map_err(|_| "thumbhash decode panicked".to_string())?
+        .map_err(|_| "thumbhash decode failed".to_string())?;
+    Ok(ThumbHashResult {
+        rgba,
+        width: w as u32,
+        height: h as u32,
+    })
+}
+
+pub struct BlobEncryptResult {
+    /// Encrypted bytes: nonce (24 bytes) || ciphertext.
+    pub blob: Vec<u8>,
+    /// 32-byte symmetric key.
+    pub key: Vec<u8>,
+    /// SHA-256 of blob (pre-decryption integrity check).
+    pub ciphertext_hash: Vec<u8>,
+    /// SHA-256 of plaintext (post-decryption integrity check and cache key).
+    pub content_hash: Vec<u8>,
+}
+
+pub struct ImageProcessResult {
+    /// Processed image bytes (JPEG or PNG, resized if >2048px).
+    pub image_bytes: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    /// ThumbHash bytes for blurry placeholder preview.
+    pub thumbhash: Vec<u8>,
+    /// MIME type: "image/jpeg" or "image/png".
+    pub mime_type: String,
+}
+
+pub struct ThumbHashResult {
+    /// Raw RGBA pixel data (width * height * 4 bytes).
+    pub rgba: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
 #[frb(init)]
 pub fn init_app() {
     flutter_rust_bridge::setup_default_user_utils();
@@ -947,6 +1081,87 @@ mod tests {
         assert!(matches!(dto.kind, EventKindDto::Unknown));
         assert_eq!(dto.group_id, vec![1, 2, 3]);
         assert_eq!(dto.payload, b"opaque");
+    }
+}
+
+#[cfg(test)]
+mod blob_image_tests {
+    use super::*;
+
+    fn make_png_bytes(w: u32, h: u32) -> Vec<u8> {
+        use image::{DynamicImage, ImageFormat};
+        use std::io::Cursor;
+        let img = DynamicImage::new_rgba8(w, h);
+        let mut buf = Vec::new();
+        img.write_to(&mut Cursor::new(&mut buf), ImageFormat::Png)
+            .unwrap();
+        buf
+    }
+
+    #[test]
+    fn blob_encrypt_decrypt_roundtrip() {
+        let plaintext = b"hello, encrypted blob!".to_vec();
+        let result = blob_encrypt(plaintext.clone()).unwrap();
+        let decrypted = blob_decrypt(
+            result.blob,
+            result.key,
+            result.ciphertext_hash,
+            result.content_hash,
+        )
+        .unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn blob_decrypt_wrong_key_returns_error() {
+        let plaintext = b"test data".to_vec();
+        let result = blob_encrypt(plaintext).unwrap();
+        let wrong_key = vec![0u8; 32];
+        let err = blob_decrypt(result.blob, wrong_key, result.ciphertext_hash, result.content_hash);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn blob_decrypt_corrupted_ciphertext_hash_returns_error() {
+        let plaintext = b"test data".to_vec();
+        let result = blob_encrypt(plaintext).unwrap();
+        let wrong_hash = vec![0u8; 32];
+        let err = blob_decrypt(result.blob, result.key, wrong_hash, result.content_hash);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn process_image_small_png() {
+        let png = make_png_bytes(32, 32);
+        let result = process_image_for_send(png).unwrap();
+        assert_eq!(result.mime_type, "image/png");
+        assert_eq!(result.width, 32);
+        assert_eq!(result.height, 32);
+        assert!(!result.thumbhash.is_empty());
+        assert!(!result.image_bytes.is_empty());
+    }
+
+    #[test]
+    fn process_image_large_resized() {
+        let png = make_png_bytes(4096, 2048);
+        let result = process_image_for_send(png).unwrap();
+        assert!(result.width <= 2048);
+        assert!(result.height <= 2048);
+    }
+
+    #[test]
+    fn process_image_rejects_non_image_bytes() {
+        let err = process_image_for_send(b"not an image".to_vec());
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn decode_thumbhash_roundtrip() {
+        let png = make_png_bytes(32, 32);
+        let processed = process_image_for_send(png).unwrap();
+        let decoded = decode_thumbhash(processed.thumbhash).unwrap();
+        assert!(decoded.width > 0 && decoded.height > 0);
+        assert_eq!(decoded.rgba.len(), (decoded.width * decoded.height * 4) as usize);
     }
 }
 

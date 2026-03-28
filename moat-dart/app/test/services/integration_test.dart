@@ -37,6 +37,28 @@ class FakeSendService implements SendService {
   }
 
   @override
+  Future<Message> sendImage({
+    required Conversation conversation,
+    required Uint8List imageBytes,
+    required String localId,
+    required BlobService blobService,
+  }) async {
+    callCount++;
+    if (shouldFail) throw SendException('Mock failure');
+    return Message(
+      id: '${conversation.groupIdHex}_rkey_img_$callCount',
+      localId: localId,
+      groupId: conversation.groupId,
+      senderDid: 'did:plc:me',
+      content: '[image image/png 1x1]',
+      timestamp: DateTime.utc(2025, 1, 15, 12, 0, callCount),
+      isOwn: true,
+      epoch: 0,
+      status: MessageStatus.sent,
+    );
+  }
+
+  @override
   Future<void> sendReaction({
     required Conversation conversation,
     required List<int> targetMessageId,

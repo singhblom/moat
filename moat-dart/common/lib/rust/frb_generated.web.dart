@@ -43,6 +43,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String dco_decode_String(dynamic raw);
 
   @protected
+  BlobEncryptResult dco_decode_blob_encrypt_result(dynamic raw);
+
+  @protected
   bool dco_decode_bool(dynamic raw);
 
   @protected
@@ -75,6 +78,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   int dco_decode_i_32(dynamic raw);
+
+  @protected
+  ImageProcessResult dco_decode_image_process_result(dynamic raw);
 
   @protected
   KeyPackageResult dco_decode_key_package_result(dynamic raw);
@@ -114,6 +120,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   StealthKeypair dco_decode_stealth_keypair(dynamic raw);
 
   @protected
+  ThumbHashResult dco_decode_thumb_hash_result(dynamic raw);
+
+  @protected
+  int dco_decode_u_32(dynamic raw);
+
+  @protected
   BigInt dco_decode_u_64(dynamic raw);
 
   @protected
@@ -145,6 +157,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   String sse_decode_String(SseDeserializer deserializer);
+
+  @protected
+  BlobEncryptResult sse_decode_blob_encrypt_result(
+      SseDeserializer deserializer);
 
   @protected
   bool sse_decode_bool(SseDeserializer deserializer);
@@ -181,6 +197,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   int sse_decode_i_32(SseDeserializer deserializer);
+
+  @protected
+  ImageProcessResult sse_decode_image_process_result(
+      SseDeserializer deserializer);
 
   @protected
   KeyPackageResult sse_decode_key_package_result(SseDeserializer deserializer);
@@ -223,6 +243,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   StealthKeypair sse_decode_stealth_keypair(SseDeserializer deserializer);
 
   @protected
+  ThumbHashResult sse_decode_thumb_hash_result(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_u_32(SseDeserializer deserializer);
+
+  @protected
   BigInt sse_decode_u_64(SseDeserializer deserializer);
 
   @protected
@@ -254,6 +280,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_String(String self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_blob_encrypt_result(
+      BlobEncryptResult self, SseSerializer serializer);
 
   @protected
   void sse_encode_bool(bool self, SseSerializer serializer);
@@ -293,6 +323,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_image_process_result(
+      ImageProcessResult self, SseSerializer serializer);
 
   @protected
   void sse_encode_key_package_result(
@@ -337,6 +371,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_stealth_keypair(
       StealthKeypair self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_thumb_hash_result(
+      ThumbHashResult self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_u_32(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_64(BigInt self, SseSerializer serializer);

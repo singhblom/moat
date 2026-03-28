@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 import '../models/message.dart';
+import 'blob_service.dart';
 import 'message_storage.dart';
 import 'send_queue.dart';
 import 'debug_log.dart';
@@ -158,6 +159,14 @@ class ConversationRepository {
   /// Send a message and await the result. Used by the HTTP server.
   Future<Message> sendMessageSync(String text) async {
     final message = await sendQueue.sendDirect(text);
+    await _enqueueWrite(() => _storage.appendMessage(groupIdHex, message));
+    return message;
+  }
+
+  /// Send an image and await the result. Used by the HTTP server.
+  Future<Message> sendImageSync(
+      Uint8List imageBytes, BlobService blobService) async {
+    final message = await sendQueue.sendImageDirect(imageBytes, blobService);
     await _enqueueWrite(() => _storage.appendMessage(groupIdHex, message));
     return message;
   }

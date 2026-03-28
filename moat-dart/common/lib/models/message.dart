@@ -13,6 +13,93 @@ enum MessageStatus {
   failed,
 }
 
+/// Metadata for an image message, referencing an off-chain encrypted blob.
+class ImageAttachment {
+  /// at://did/cid — location of the encrypted blob on the sender's PDS.
+  final String uri;
+
+  /// 32-byte symmetric decryption key.
+  final Uint8List key;
+
+  /// SHA-256 of the encrypted blob (pre-decryption integrity check).
+  final Uint8List ciphertextHash;
+
+  /// Size of the encrypted blob in bytes.
+  final int ciphertextSize;
+
+  /// SHA-256 of the plaintext (post-decryption integrity check and cache key).
+  final Uint8List contentHash;
+
+  /// ThumbHash bytes for blurry placeholder preview.
+  final Uint8List? thumbhash;
+
+  final int? width;
+  final int? height;
+  final String? mime;
+
+  const ImageAttachment({
+    required this.uri,
+    required this.key,
+    required this.ciphertextHash,
+    required this.ciphertextSize,
+    required this.contentHash,
+    this.thumbhash,
+    this.width,
+    this.height,
+    this.mime,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'uri': uri,
+        'key': base64Encode(key),
+        'ciphertextHash': base64Encode(ciphertextHash),
+        'ciphertextSize': ciphertextSize,
+        'contentHash': base64Encode(contentHash),
+        'thumbhash': thumbhash != null ? base64Encode(thumbhash!) : null,
+        'width': width,
+        'height': height,
+        'mime': mime,
+      };
+
+  factory ImageAttachment.fromJson(Map<String, dynamic> json) =>
+      ImageAttachment(
+        uri: json['uri'] as String,
+        key: base64Decode(json['key'] as String),
+        ciphertextHash: base64Decode(json['ciphertextHash'] as String),
+        ciphertextSize: json['ciphertextSize'] as int,
+        contentHash: base64Decode(json['contentHash'] as String),
+        thumbhash: json['thumbhash'] != null
+            ? base64Decode(json['thumbhash'] as String)
+            : null,
+        width: json['width'] as int?,
+        height: json['height'] as int?,
+        mime: json['mime'] as String?,
+      );
+
+  ImageAttachment copyWith({
+    String? uri,
+    Uint8List? key,
+    Uint8List? ciphertextHash,
+    int? ciphertextSize,
+    Uint8List? contentHash,
+    Uint8List? thumbhash,
+    int? width,
+    int? height,
+    String? mime,
+  }) =>
+      ImageAttachment(
+        uri: uri ?? this.uri,
+        key: key ?? this.key,
+        ciphertextHash: ciphertextHash ?? this.ciphertextHash,
+        ciphertextSize: ciphertextSize ?? this.ciphertextSize,
+        contentHash: contentHash ?? this.contentHash,
+        thumbhash: thumbhash ?? this.thumbhash,
+        width: width ?? this.width,
+        height: height ?? this.height,
+        mime: mime ?? this.mime,
+      );
+}
+
 /// A single emoji reaction on a message
 class Reaction {
   final String emoji;
@@ -69,6 +156,9 @@ class Message {
   /// Emoji reactions on this message
   final List<Reaction> reactions;
 
+  /// Image attachment metadata (null for text messages).
+  final ImageAttachment? imageAttachment;
+
   Message({
     required this.id,
     required this.groupId,
@@ -82,6 +172,7 @@ class Message {
     this.localId,
     this.messageId,
     this.reactions = const [],
+    this.imageAttachment,
   });
 
   /// The rkey portion of the message ID (for ordering).
@@ -110,6 +201,7 @@ class Message {
         'localId': localId,
         'messageId': messageId != null ? base64Encode(messageId!) : null,
         'reactions': reactions.map((r) => r.toJson()).toList(),
+        'imageAttachment': imageAttachment?.toJson(),
       };
 
   /// Create a copy with updated fields
@@ -126,6 +218,7 @@ class Message {
     String? localId,
     Uint8List? messageId,
     List<Reaction>? reactions,
+    ImageAttachment? imageAttachment,
   }) =>
       Message(
         id: id ?? this.id,
@@ -140,6 +233,7 @@ class Message {
         localId: localId ?? this.localId,
         messageId: messageId ?? this.messageId,
         reactions: reactions ?? this.reactions,
+        imageAttachment: imageAttachment ?? this.imageAttachment,
       );
 
   factory Message.fromJson(Map<String, dynamic> json) => Message(
@@ -160,6 +254,10 @@ class Message {
                 ?.map((r) => Reaction.fromJson(r as Map<String, dynamic>))
                 .toList() ??
             const [],
+        imageAttachment: json['imageAttachment'] != null
+            ? ImageAttachment.fromJson(
+                json['imageAttachment'] as Map<String, dynamic>)
+            : null,
       );
 
   static MessageStatus _parseStatus(String? status) {

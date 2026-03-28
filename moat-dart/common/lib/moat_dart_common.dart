@@ -21,6 +21,7 @@ export 'services/debug_log.dart';
 
 // ATProto
 export 'services/atproto_client.dart';
+export 'services/blob_service.dart';
 
 // Core services
 export 'services/auth_service.dart';
