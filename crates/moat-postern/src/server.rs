@@ -62,6 +62,36 @@ fn base32_lower_nopad(data: &[u8]) -> String {
     out
 }
 
+// ── DAG-JSON normalisation ────────────────────────────────────────────────────
+
+/// Strip base64 padding (`=`) from every `{"$bytes":"…"}` field in a JSON
+/// value, mirroring what the real Bluesky PDS does when it round-trips records
+/// through DAG-CBOR.  ATProto's DAG-JSON spec mandates unpadded base64 for
+/// byte fields, but Dart's `base64Encode` produces padded strings.  Without
+/// this normalisation Postern would accept padded input and echo it back
+/// verbatim, masking the bug that surfaces against the production PDS.
+fn strip_bytes_padding(val: &mut Value) {
+    match val {
+        Value::Object(map) => {
+            if map.len() == 1 {
+                if let Some(Value::String(b64)) = map.get_mut("$bytes") {
+                    b64.retain(|c| c != '=');
+                    return;
+                }
+            }
+            for v in map.values_mut() {
+                strip_bytes_padding(v);
+            }
+        }
+        Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                strip_bytes_padding(v);
+            }
+        }
+        _ => {}
+    }
+}
+
 // ── Shared state ─────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -276,7 +306,9 @@ async fn get_record(
         }
     };
     match store.get_record(&p.repo, &p.collection, &p.rkey) {
-        Some(value) => {
+        Some(v) => {
+            let mut value = v.clone();
+            strip_bytes_padding(&mut value);
             let uri = format!("at://{}/{}/{}", p.repo, p.collection, p.rkey);
             let cid = compute_cid(&serde_json::to_vec(&value).unwrap_or_default());
             Json(json!({ "uri": uri, "cid": cid, "value": value })).into_response()
@@ -328,7 +360,8 @@ async fn list_records(
 
     let items: Vec<Value> = records
         .into_iter()
-        .map(|(rkey, val)| {
+        .map(|(rkey, mut val)| {
+            strip_bytes_padding(&mut val);
             let uri = format!("at://{}/{}/{}", p.repo, p.collection, rkey);
             let cid = compute_cid(&serde_json::to_vec(&val).unwrap_or_default());
             json!({ "uri": uri, "cid": cid, "value": val })
