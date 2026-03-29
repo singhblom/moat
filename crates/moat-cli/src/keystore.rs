@@ -108,6 +108,19 @@ pub struct StoredMessage {
     pub sender_did: Option<String>,
     /// Sender device name (for received messages)
     pub sender_device: Option<String>,
+    /// ExternalBlob metadata for image/long-text messages (backwards compat: None for old messages).
+    #[serde(default)]
+    pub blob_uri: Option<String>,
+    #[serde(default)]
+    pub blob_key: Option<Vec<u8>>,
+    #[serde(default)]
+    pub blob_ciphertext_hash: Option<Vec<u8>>,
+    #[serde(default)]
+    pub blob_ciphertext_size: Option<u64>,
+    #[serde(default)]
+    pub blob_content_hash: Option<Vec<u8>>,
+    #[serde(default)]
+    pub blob_mime: Option<String>,
 }
 
 /// All stored messages for a conversation
@@ -312,12 +325,24 @@ impl KeyStore {
 
     /// Append a message to a conversation's local storage, maintaining rkey order.
     /// Returns `Ok(false)` if a message with the same rkey already exists (dedup).
+    /// Exception: if the existing message is missing blob metadata and the new one has it,
+    /// the blob metadata fields are updated before returning `Ok(false)`.
     pub fn append_message(&self, conv_id: &str, message: StoredMessage) -> Result<bool> {
         let mut messages = self.load_messages(conv_id)?;
-        if message.rkey != "pending"
-            && messages.messages.iter().any(|m| m.rkey == message.rkey)
-        {
-            return Ok(false);
+        if message.rkey != "pending" {
+            if let Some(existing) = messages.messages.iter_mut().find(|m| m.rkey == message.rkey) {
+                // Update blob metadata if the existing entry is missing it.
+                if existing.blob_uri.is_none() && message.blob_uri.is_some() {
+                    existing.blob_uri = message.blob_uri;
+                    existing.blob_key = message.blob_key;
+                    existing.blob_ciphertext_hash = message.blob_ciphertext_hash;
+                    existing.blob_ciphertext_size = message.blob_ciphertext_size;
+                    existing.blob_content_hash = message.blob_content_hash;
+                    existing.blob_mime = message.blob_mime;
+                    self.store_messages(conv_id, &messages)?;
+                }
+                return Ok(false);
+            }
         }
         let pos = messages
             .messages

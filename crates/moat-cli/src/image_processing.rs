@@ -14,11 +14,7 @@ const MAX_DIMENSION: u32 = 2048;
 /// Maximum pixel dimension for ThumbHash input.
 const THUMBHASH_MAX_DIM: u32 = 100;
 
-/// Read a local image file, validate its format, optionally resize it, and
-/// generate a ThumbHash preview.
-///
-/// # Arguments
-/// * `path` — Local file path. `~` is expanded to the home directory.
+/// Validate, optionally resize, and generate a ThumbHash preview from raw image bytes.
 ///
 /// # Returns
 /// `(image_bytes, width, height, thumbhash_bytes, mime_type)`.
@@ -26,17 +22,13 @@ const THUMBHASH_MAX_DIM: u32 = 100;
 /// - `mime_type` is `"image/jpeg"` or `"image/png"`.
 ///
 /// # Errors
-/// Returns a human-readable error string if the file cannot be read, the
-/// format is unsupported, or the image cannot be decoded.
-pub fn process_image_for_send(
-    path: &str,
+/// Returns a human-readable error string if the format is unsupported or the
+/// image cannot be decoded.
+pub fn process_image_from_bytes(
+    bytes: &[u8],
 ) -> Result<(Vec<u8>, u32, u32, Vec<u8>, String), String> {
-    let expanded = expand_tilde(path);
-    let bytes =
-        std::fs::read(&expanded).map_err(|e| format!("Cannot read {}: {}", expanded, e))?;
-
     // Validate format before full decode (fast, reads only the header).
-    let format = image::guess_format(&bytes)
+    let format = image::guess_format(bytes)
         .map_err(|_| "Unsupported format: only JPEG and PNG are accepted".to_string())?;
 
     let (mime, img_format) = match format {
@@ -45,7 +37,7 @@ pub fn process_image_for_send(
         _ => return Err("Unsupported format: only JPEG and PNG are accepted".to_string()),
     };
 
-    let img = image::load_from_memory(&bytes)
+    let img = image::load_from_memory(bytes)
         .map_err(|e| format!("Failed to decode image: {}", e))?;
 
     let (orig_w, orig_h) = img.dimensions();
@@ -57,7 +49,7 @@ pub fn process_image_for_send(
         let encoded = encode_image(&resized, img_format)?;
         (encoded, new_w, new_h)
     } else {
-        (bytes, orig_w, orig_h)
+        (bytes.to_vec(), orig_w, orig_h)
     };
 
     // Re-decode from final_bytes for ThumbHash generation (covers both resized
@@ -68,6 +60,7 @@ pub fn process_image_for_send(
 
     Ok((final_bytes, width, height, thumbhash, mime.to_string()))
 }
+
 
 /// Decode a ThumbHash back to a `DynamicImage` for placeholder rendering.
 ///
@@ -82,7 +75,7 @@ pub fn decode_thumbhash(hash: &[u8]) -> Option<DynamicImage> {
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 /// Expand a leading `~` to the home directory.
-fn expand_tilde(path: &str) -> String {
+pub fn expand_tilde(path: &str) -> String {
     if path.starts_with("~/") || path == "~" {
         if let Some(home) = dirs::home_dir() {
             return path.replacen('~', &home.to_string_lossy(), 1);
@@ -165,19 +158,13 @@ mod tests {
     #[test]
     fn process_image_small_jpeg_unchanged() {
         let jpeg = make_jpeg_bytes(64, 48);
-        let tmp = tempfile::NamedTempFile::with_suffix(".jpg").unwrap();
-        std::fs::write(tmp.path(), &jpeg).unwrap();
-
-        let (bytes, w, h, thumbhash, mime) =
-            process_image_for_send(tmp.path().to_str().unwrap()).unwrap();
+        let (bytes, w, h, thumbhash, mime) = process_image_from_bytes(&jpeg).unwrap();
 
         assert_eq!(mime, "image/jpeg");
         assert_eq!(w, 64);
         assert_eq!(h, 48);
         assert!(!thumbhash.is_empty());
         assert!(!bytes.is_empty());
-        // Small image — bytes might differ slightly (JPEG re-encode on same data)
-        // but dimensions must be unchanged
         let decoded = image::load_from_memory(&bytes).unwrap();
         assert_eq!(decoded.dimensions(), (64, 48));
     }
@@ -185,11 +172,7 @@ mod tests {
     #[test]
     fn process_image_large_jpeg_resized() {
         let jpeg = make_jpeg_bytes(4096, 2048);
-        let tmp = tempfile::NamedTempFile::with_suffix(".jpg").unwrap();
-        std::fs::write(tmp.path(), &jpeg).unwrap();
-
-        let (bytes, w, h, thumbhash, mime) =
-            process_image_for_send(tmp.path().to_str().unwrap()).unwrap();
+        let (bytes, w, h, thumbhash, mime) = process_image_from_bytes(&jpeg).unwrap();
 
         assert_eq!(mime, "image/jpeg");
         assert_eq!(w, 2048);
@@ -202,10 +185,7 @@ mod tests {
     #[test]
     fn process_image_png_accepted() {
         let png = make_png_bytes(32, 32);
-        let tmp = tempfile::NamedTempFile::with_suffix(".png").unwrap();
-        std::fs::write(tmp.path(), &png).unwrap();
-
-        let (_, w, h, _, mime) = process_image_for_send(tmp.path().to_str().unwrap()).unwrap();
+        let (_, w, h, _, mime) = process_image_from_bytes(&png).unwrap();
 
         assert_eq!(mime, "image/png");
         assert_eq!(w, 32);
@@ -214,19 +194,10 @@ mod tests {
 
     #[test]
     fn process_image_unsupported_format_rejected() {
-        // Write a GIF magic header to fool format detection.
+        // GIF magic header — format detection should reject it before full decode.
         let gif_magic = b"GIF89a\x01\x00\x01\x00\x00\x00\x00\x3b";
-        let tmp = tempfile::NamedTempFile::with_suffix(".gif").unwrap();
-        std::fs::write(tmp.path(), gif_magic).unwrap();
-
-        let err = process_image_for_send(tmp.path().to_str().unwrap()).unwrap_err();
+        let err = process_image_from_bytes(gif_magic).unwrap_err();
         assert!(err.contains("Unsupported format"), "unexpected error: {err}");
-    }
-
-    #[test]
-    fn process_image_file_not_found() {
-        let err = process_image_for_send("/tmp/__moat_nonexistent_test_file.jpg").unwrap_err();
-        assert!(err.contains("Cannot read"), "unexpected error: {err}");
     }
 
     #[test]

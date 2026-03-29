@@ -5,8 +5,9 @@
 
 use crate::app::{App, AppError, PollStats};
 use axum::{
+    body::Bytes,
     extract::{Path, State},
-    http::StatusCode,
+    http::{header, StatusCode},
     response::{
         sse::{Event as SseEvent, KeepAlive},
         IntoResponse, Sse,
@@ -240,6 +241,38 @@ async fn post_message(
     Ok(Json(json!({ "ok": true })))
 }
 
+async fn post_image(
+    State(state): State<Arc<ServerState>>,
+    Path(group_id): Path<String>,
+    body: Bytes,
+) -> HandlerResult<Json<Value>> {
+    let mut app = state.app.lock().await;
+    app.api_set_active_conversation(Some(&group_id))
+        .map_err(app_err)?;
+    app.api_send_image_bytes(body.to_vec()).map_err(app_err)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn get_image(
+    State(state): State<Arc<ServerState>>,
+    Path((group_id, message_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let mut app = state.app.lock().await;
+    match app.api_fetch_image_blob(&group_id, &message_id).await {
+        Ok((bytes, mime)) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, mime)],
+            bytes,
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 async fn post_reaction(
     State(state): State<Arc<ServerState>>,
     Path((group_id, message_id)): Path<(String, String)>,
@@ -396,6 +429,8 @@ pub async fn run_http(
         .route("/conversation", put(put_conversation))
         .route("/conversations/:group_id/messages", get(get_messages))
         .route("/conversations/:group_id/messages", post(post_message))
+        .route("/conversations/:group_id/messages/image", post(post_image))
+        .route("/conversations/:group_id/messages/:message_id/image", get(get_image))
         .route(
             "/conversations/:group_id/messages/:message_id/reactions",
             post(post_reaction),

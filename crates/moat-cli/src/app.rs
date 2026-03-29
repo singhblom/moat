@@ -759,6 +759,60 @@ impl App {
         self.send_message_nonblocking()
     }
 
+    /// HTTP: send an image from already-loaded bytes (no temp file needed).
+    pub fn api_send_image_bytes(&mut self, bytes: Vec<u8>) -> Result<()> {
+        self.send_image_bytes_nonblocking(bytes)
+    }
+
+    /// HTTP: fetch, decrypt, and return the image bytes for a received image message.
+    pub async fn api_fetch_image_blob(&mut self, group_id: &str, message_id_hex: &str) -> Result<(Vec<u8>, String)> {
+        use moat_core::blob_decrypt;
+
+        let message_id = hex::decode(message_id_hex)
+            .map_err(|e| AppError::Other(format!("invalid message_id: {e}")))?;
+
+        // Load stored message to find blob metadata.
+        let conv_messages = self.keys.load_messages(group_id)
+            .map_err(|e| AppError::Other(format!("load messages failed: {e}")))?;
+        let stored = conv_messages.messages.iter()
+            .find(|m| m.message_id.as_ref() == Some(&message_id))
+            .ok_or_else(|| AppError::Other("message not found".to_string()))?
+            .clone();
+
+        let uri = stored.blob_uri.ok_or_else(|| AppError::Other("not an image message".to_string()))?;
+        let key_vec = stored.blob_key.ok_or_else(|| AppError::Other("missing blob key".to_string()))?;
+        let ciphertext_hash = stored.blob_ciphertext_hash.ok_or_else(|| AppError::Other("missing ciphertext_hash".to_string()))?;
+        let content_hash = stored.blob_content_hash.ok_or_else(|| AppError::Other("missing content_hash".to_string()))?;
+        let mime = stored.blob_mime.unwrap_or_else(|| "image/jpeg".to_string());
+
+        // Check disk cache first.
+        if let Some(cached) = self.blob_cache.get(&content_hash) {
+            return Ok((cached, mime));
+        }
+
+        // Parse at:// URI → (did, cid).
+        let (did, cid) = uri.strip_prefix("at://")
+            .and_then(|s| {
+                let pos = s.find('/')?;
+                Some((s[..pos].to_string(), s[pos + 1..].to_string()))
+            })
+            .ok_or_else(|| AppError::Other(format!("invalid blob URI: {uri}")))?;
+
+        let key: [u8; 32] = key_vec.as_slice().try_into()
+            .map_err(|_| AppError::Other("blob key has wrong length".to_string()))?;
+
+        let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?.clone();
+        let blob_bytes = client.fetch_blob(&did, &cid).await
+            .map_err(|e| AppError::Other(format!("fetch blob failed: {e}")))?;
+
+        let plaintext = blob_decrypt(&blob_bytes, &key, &ciphertext_hash, &content_hash)
+            .map_err(|e| AppError::Other(format!("blob decrypt failed: {e}")))?;
+
+        let _ = self.blob_cache.put(&content_hash, &plaintext);
+
+        Ok((plaintext, mime))
+    }
+
     /// HTTP: send an emoji reaction by explicit message_id hex.
     pub async fn api_send_reaction(&mut self, message_id_hex: &str, emoji: &str) -> Result<()> {
         let target_message_id = hex::decode(message_id_hex)
@@ -1544,6 +1598,7 @@ impl App {
                     message_id: Some(msg_id.clone()),
                     sender_did: msg.sender_did.clone(),
                     sender_device: msg.sender_device.clone(),
+                    blob_uri: None, blob_key: None, blob_ciphertext_hash: None, blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None,
                 });
             }
         }
@@ -1731,7 +1786,9 @@ impl App {
     }
 
     /// Process and upload an image, then MLS-encrypt and publish an `Image` event.
-    fn send_image_nonblocking(&mut self, path: &str) -> Result<()> {
+    /// Core image send logic: takes already-loaded raw image bytes, spawns the
+    /// processing/upload/publish pipeline in the background.
+    fn send_image_bytes_nonblocking(&mut self, bytes: Vec<u8>) -> Result<()> {
         if self.client.is_none() {
             return Err(AppError::NotLoggedIn);
         }
@@ -1773,6 +1830,8 @@ impl App {
             message_id: Some(pending_message_id.clone()),
             sender_did: Some(my_did),
             sender_device: device_name,
+            blob_uri: None, blob_key: None, blob_ciphertext_hash: None,
+            blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None,
         };
         if let Err(e) = self.keys.append_message(&conv_id, stored_msg) {
             self.debug_log
@@ -1784,12 +1843,11 @@ impl App {
 
         let client = self.client.as_ref().unwrap().clone();
         let tx = self.bg_tx.clone();
-        let path = path.to_string();
 
         tokio::spawn(async move {
             // Image processing runs on the blocking thread pool.
             let result = tokio::task::spawn_blocking(move || {
-                image_processing::process_image_for_send(&path)
+                image_processing::process_image_from_bytes(&bytes)
             })
             .await;
 
@@ -1842,6 +1900,14 @@ impl App {
         });
 
         Ok(())
+    }
+
+    /// TUI entry point: read the file at `path` then call [`send_image_bytes_nonblocking`].
+    fn send_image_nonblocking(&mut self, path: &str) -> Result<()> {
+        let expanded = image_processing::expand_tilde(path);
+        let bytes = std::fs::read(&expanded)
+            .map_err(|e| AppError::Other(format!("Cannot read {}: {}", expanded, e)))?;
+        self.send_image_bytes_nonblocking(bytes)
     }
 
     /// MLS-encrypt an image event after blob upload succeeded, then publish.
@@ -1954,6 +2020,7 @@ impl App {
                     message_id: Some(pending_message_id.clone()),
                     sender_did: msg.sender_did.clone(),
                     sender_device: msg.sender_device.clone(),
+                    blob_uri: None, blob_key: None, blob_ciphertext_hash: None, blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None,
                 },
             );
             if let Some(thumb_img) = image_processing::decode_thumbhash(&thumbhash) {
@@ -2231,6 +2298,7 @@ impl App {
                     message_id: decrypted.event.message_id.clone(),
                     sender_did: sender_did.clone(),
                     sender_device: sender_device.clone(),
+                    blob_uri: None, blob_key: None, blob_ciphertext_hash: None, blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None,
                 };
                 match self.keys.append_message(conv_id, stored_msg) {
                     Ok(false) => {
@@ -2595,6 +2663,24 @@ impl App {
                         let is_own =
                             sender_did.as_ref().map_or(false, |did| did == my_did);
 
+                        // Extract ExternalBlob metadata for image messages (for HTTP download).
+                        let (blob_uri, blob_key, blob_ciphertext_hash, blob_ciphertext_size, blob_content_hash, blob_mime) =
+                            if let Some(moat_core::ParsedMessagePayload::Structured(
+                                moat_core::MessagePayload::Image(ref m),
+                            )) = parsed
+                            {
+                                (
+                                    Some(m.external.uri.clone()),
+                                    Some(m.external.key.clone()),
+                                    Some(m.external.ciphertext_hash.clone()),
+                                    Some(m.external.ciphertext_size),
+                                    Some(m.external.content_hash.clone()),
+                                    m.mime.clone(),
+                                )
+                            } else {
+                                (None, None, None, None, None, None)
+                            };
+
                         // Persist received message locally
                         let stored_msg = crate::keystore::StoredMessage {
                             rkey: event_record.rkey.clone(),
@@ -2604,6 +2690,12 @@ impl App {
                             message_id: decrypted.event.message_id.clone(),
                             sender_did: sender_did.clone(),
                             sender_device: sender_device.clone(),
+                            blob_uri,
+                            blob_key,
+                            blob_ciphertext_hash,
+                            blob_ciphertext_size,
+                            blob_content_hash,
+                            blob_mime,
                         };
                         match self.keys.append_message(&conv_id, stored_msg) {
                             Err(e) => {
@@ -3730,6 +3822,7 @@ impl App {
                 message_id: Some(pending_message_id.clone()),
                 sender_did: Some(my_did),
                 sender_device: self.keys.get_or_create_device_name().ok(),
+                blob_uri: None, blob_key: None, blob_ciphertext_hash: None, blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None,
             };
             if let Err(e) = self.keys.append_message(&conv_id, stored_msg) {
                 self.debug_log
@@ -3812,6 +3905,7 @@ impl App {
             message_id: encrypted.message_id.clone(),
             sender_did: Some(my_did),
             sender_device: self.keys.get_or_create_device_name().ok(),
+            blob_uri: None, blob_key: None, blob_ciphertext_hash: None, blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None,
         };
         if let Err(e) = self.keys.append_message(&conv_id, stored_msg) {
             self.debug_log
