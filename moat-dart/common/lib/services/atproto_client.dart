@@ -6,10 +6,14 @@ import '../models/bluesky_profile.dart';
 import 'debug_log.dart';
 
 /// Decode an ATProto IPLD bytes field: `{"$bytes": "<base64>"}`.
+///
+/// The real ATProto PDS (and Postern) returns unpadded base64 per the DAG-JSON
+/// spec.  `base64.normalize()` re-adds the `=` padding that `base64Decode`
+/// requires before decoding.
 Uint8List _decodeBytesField(dynamic field) {
   if (field is Map) {
     final b64 = field[r'$bytes'] as String?;
-    if (b64 != null) return base64Decode(b64);
+    if (b64 != null) return base64Decode(base64.normalize(b64));
   }
   throw FormatException('Expected ATProto bytes field {"\$bytes": "..."}, got: $field');
 }
@@ -312,13 +316,11 @@ class AtprotoClient {
     final items = response['records'] as List<dynamic>? ?? [];
 
     for (final item in items) {
-      try {
-        final value = item['value'] as Map<String, dynamic>;
-        final record = KeyPackageRecord.fromJson(value);
-        if (!record.isExpired) {
-          records.add(record);
-        }
-      } catch (_) {}
+      final value = item['value'] as Map<String, dynamic>;
+      final record = KeyPackageRecord.fromJson(value);
+      if (!record.isExpired) {
+        records.add(record);
+      }
     }
 
     return records;
@@ -422,18 +424,16 @@ class AtprotoClient {
     final items = response['records'] as List<dynamic>? ?? [];
 
     for (final item in items) {
-      try {
-        final value = item['value'] as Map<String, dynamic>;
-        final v = value['v'] as int?;
-        if (v == 2) {
-          final scanPubkey = _decodeBytesField(value['scanPubkey']);
-          final deviceName = value['deviceName'] as String? ?? 'Unknown';
-          records.add(StealthAddressRecord(
-            scanPubkey: scanPubkey,
-            deviceName: deviceName,
-          ));
-        }
-      } catch (_) {}
+      final value = item['value'] as Map<String, dynamic>;
+      final v = value['v'] as int?;
+      if (v == 2) {
+        final scanPubkey = _decodeBytesField(value['scanPubkey']);
+        final deviceName = value['deviceName'] as String? ?? 'Unknown';
+        records.add(StealthAddressRecord(
+          scanPubkey: scanPubkey,
+          deviceName: deviceName,
+        ));
+      }
     }
 
     return records;
