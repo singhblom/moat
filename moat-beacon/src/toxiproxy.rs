@@ -16,6 +16,8 @@ use std::{
     path::PathBuf,
     process::{Child, Command},
 };
+#[cfg(unix)]
+use std::os::unix::process::CommandExt as _;
 
 /// Pinned Toxiproxy release used when auto-downloading.
 const TOXIPROXY_VERSION: &str = "2.12.0";
@@ -41,7 +43,11 @@ pub struct ProxyHandle {
 ///
 /// The subprocess is killed when this value is dropped.
 pub struct ToxiproxyManager {
-    _child: Child,
+    child: Child,
+    /// OS process group ID (= child PID, since it was spawned with
+    /// `process_group(0)`).  Other children that should be cleaned up
+    /// together should join this group.
+    pub pgid: u32,
     mgmt_port: u16,
     client: Client,
 }
@@ -56,16 +62,19 @@ impl ToxiproxyManager {
 
         let mgmt_port = free_port().context("allocate toxiproxy management port")?;
 
-        let child = Command::new(&bin)
-            .args(["-port", &mgmt_port.to_string()])
+        let mut cmd = Command::new(&bin);
+        cmd.args(["-port", &mgmt_port.to_string()])
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .context("spawn toxiproxy-server")?;
+            .stderr(std::process::Stdio::null());
+        #[cfg(unix)]
+        cmd.process_group(0); // new group; child PID becomes the PGID
+        let child = cmd.spawn().context("spawn toxiproxy-server")?;
 
+        let pgid = child.id();
         let client = Client::new();
         let mgr = Self {
-            _child: child,
+            child,
+            pgid,
             mgmt_port,
             client,
         };
@@ -211,7 +220,8 @@ impl ToxiproxyManager {
 
 impl Drop for ToxiproxyManager {
     fn drop(&mut self) {
-        let _ = self._child.kill();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 

@@ -19,6 +19,7 @@ pub mod client;
 pub mod config;
 pub mod drawbridge;
 pub mod invariants;
+pub(crate) mod pgroup;
 pub mod scenarios;
 pub mod toxiproxy;
 pub mod world;

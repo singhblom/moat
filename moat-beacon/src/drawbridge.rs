@@ -20,12 +20,14 @@ use std::{
     process::{Child, Command},
     time::{Duration, Instant},
 };
+#[cfg(unix)]
+use std::os::unix::process::CommandExt as _;
 
 /// A running Drawbridge WebSocket relay process.
 ///
 /// Killed automatically on drop.
 pub struct DrawbridgeProcess {
-    _child: Child,
+    child: Child,
     /// WebSocket base URL, e.g. `"ws://127.0.0.1:PORT"`.
     /// Append `/ws` to get the full WebSocket endpoint.
     pub ws_url: String,
@@ -39,26 +41,29 @@ impl DrawbridgeProcess {
     /// `plc_base_url` is passed as `PLC_BASE_URL` to the subprocess.
     /// Set it to the `proxy-db-verify` Toxiproxy URL so Drawbridge's DID
     /// resolution and PDS verification calls route through the proxy.
-    pub async fn spawn(plc_base_url: &str) -> Result<Self> {
+    ///
+    /// `pgid` is the process group ID to join (from [`ToxiproxyManager::pgid`]).
+    pub async fn spawn(plc_base_url: &str, pgid: u32) -> Result<Self> {
         let bin = drawbridge_binary().context("obtain drawbridge binary")?;
         let port = free_port().context("allocate drawbridge port")?;
 
-        let child = Command::new(&bin)
-            .env("RELAY_TLS", "false")
+        let mut cmd = Command::new(&bin);
+        cmd.env("RELAY_TLS", "false")
             .env("RELAY_ADDR", format!(":{port}"))
             .env("RELAY_PUBLIC_URL", format!("ws://127.0.0.1:{port}"))
             .env("LOG_FORMAT", "text")
             .env("PLC_BASE_URL", plc_base_url)
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::inherit())
-            .spawn()
-            .context("spawn drawbridge process")?;
+            .stderr(std::process::Stdio::inherit());
+        #[cfg(unix)]
+        cmd.process_group(pgid as i32);
+        let child = cmd.spawn().context("spawn drawbridge process")?;
 
         let http_url = format!("http://127.0.0.1:{port}");
         let ws_url = format!("ws://127.0.0.1:{port}");
 
         let proc = Self {
-            _child: child,
+            child,
             ws_url,
             http_url: http_url.clone(),
         };
@@ -78,7 +83,8 @@ impl DrawbridgeProcess {
 
 impl Drop for DrawbridgeProcess {
     fn drop(&mut self) {
-        let _ = self._child.kill();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 

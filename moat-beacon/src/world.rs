@@ -21,6 +21,7 @@
 use crate::client::MoatCliClient;
 use crate::config::WorldConfig;
 use crate::drawbridge::DrawbridgeProcess;
+use crate::pgroup::{install_signal_handlers, ProcessGroup};
 use crate::toxiproxy::{ProxyHandle, ToxiproxyManager};
 use anyhow::{Context, Result};
 use moat_postern::{AccountConfig, PosternConfig, PosternHandle};
@@ -30,6 +31,8 @@ use std::{
     path::PathBuf,
     process::{Child, Command},
 };
+#[cfg(unix)]
+use std::os::unix::process::CommandExt as _;
 use tempfile::TempDir;
 
 /// Which implementation a participant runs.
@@ -70,6 +73,10 @@ impl Drop for ParticipantProcess {
 
 /// Central orchestrator for a beacon integration scenario.
 pub struct TestWorld {
+    /// Owns the OS process group for all children.  Dropped first (declared
+    /// first) so `killpg` runs before the individual child Drop impls try to
+    /// `kill()` + `wait()` — the individual waits then collect the zombies.
+    process_group: ProcessGroup,
     _postern: PosternHandle,
     /// Toxiproxy subprocess — kept alive so proxies remain functional.
     pub toxiproxy: ToxiproxyManager,
@@ -184,9 +191,16 @@ impl TestWorld {
         let postern_url = postern.url().to_string();
 
         // Spawn Toxiproxy and create a proxy in front of Postern.
+        // Toxiproxy is spawned with process_group(0), making it the leader of
+        // a new process group.  All subsequent children join the same group so
+        // that ProcessGroup::drop (and the signal handler) can kill them all
+        // with a single killpg().
         let toxiproxy = ToxiproxyManager::spawn()
             .await
             .context("spawn toxiproxy")?;
+        let pgid = toxiproxy.pgid;
+        let process_group = ProcessGroup::new(pgid);
+        install_signal_handlers();
 
         let postern_addr = postern_url
             .strip_prefix("http://")
@@ -227,7 +241,7 @@ impl TestWorld {
             let mut dbs = Vec::with_capacity(unique_labels.len());
             let mut label_to_ws: HashMap<&str, String> = HashMap::new();
             for label in &unique_labels {
-                let db = DrawbridgeProcess::spawn(&db_verify.url)
+                let db = DrawbridgeProcess::spawn(&db_verify.url, pgid)
                     .await
                     .with_context(|| format!("spawn drawbridge for relay {label}"))?;
                 label_to_ws.insert(label, db.ws_endpoint());
@@ -305,10 +319,13 @@ impl TestWorld {
                 }
             };
 
-            let child = Command::new(&bin)
-                .args(&args)
+            let mut cmd = Command::new(&bin);
+            cmd.args(&args)
                 .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::inherit())
+                .stderr(std::process::Stdio::inherit());
+            #[cfg(unix)]
+            cmd.process_group(pgid as i32);
+            let child = cmd
                 .spawn()
                 .with_context(|| format!("spawn participant ({kind:?}) for {full_handle}"))?;
 
@@ -342,6 +359,7 @@ impl TestWorld {
         }
 
         let mut world = Self {
+            process_group,
             _postern: postern,
             toxiproxy,
             pds_proxy: pds_proxy.clone(),
@@ -416,10 +434,14 @@ impl TestWorld {
                 .expect("dart_server_bin not set"),
         };
 
-        let child = Command::new(&bin)
-            .args(&proc.spawn_args)
+        let pgid = self.process_group.pgid();
+        let mut cmd = Command::new(&bin);
+        cmd.args(&proc.spawn_args)
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit());
+        #[cfg(unix)]
+        cmd.process_group(pgid as i32);
+        let child = cmd
             .spawn()
             .with_context(|| format!("restart participant for {handle}"))?;
         proc.child = Some(child);
