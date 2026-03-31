@@ -130,7 +130,12 @@ class _ConversationScreenState extends State<ConversationScreen> {
           key: att.key,
           ciphertextHash: att.ciphertextHash,
           contentHash: att.contentHash,
-        );
+        ).catchError((e) {
+          // Remove from cache so next rebuild can retry (possibly with a
+          // different URI for the same content hash).
+          _blobFutures.remove(hexHash);
+          throw e;
+        });
   }
 
   Future<void> _pickImage() async {

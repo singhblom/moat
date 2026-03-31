@@ -77,6 +77,7 @@ pub struct KeyPackageData {
 pub struct BlobRef {
     #[serde(rename = "$type")]
     pub type_: String,
+    #[serde(rename = "ref")]
     pub ref_: BlobLink,
     #[serde(rename = "mimeType")]
     pub mime_type: String,
