@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
-import 'package:moat_dart_common/moat_dart_common.dart' hide ConversationRepository, moatLog;
+import 'package:moat_dart_common/moat_dart_common.dart'
+    hide ConversationRepository, moatLog;
 import 'debug_log.dart';
 
 /// Single owner of all message state for a conversation.
@@ -124,7 +125,11 @@ class ConversationRepository extends ChangeNotifier {
 
     if (_loaded) {
       _mergeIntoLoaded(incoming);
-      await _enqueueWrite(() => _storage.saveMessages(groupIdHex, _persisted));
+      // Snapshot _persisted before enqueueing — unloadMessages() may reassign
+      // _persisted to [] before the async write runs, which would clobber the
+      // message. The snapshot is already sorted by _mergeIntoLoaded.
+      final snapshot = List<Message>.of(_persisted);
+      await _enqueueWrite(() => _storage.saveMessages(groupIdHex, snapshot));
     } else {
       await _enqueueWrite(
           () => _storage.appendMessages(groupIdHex, incoming));
@@ -195,6 +200,34 @@ class ConversationRepository extends ChangeNotifier {
     notifyListeners();
 
     sendQueue?.enqueue(PendingMessage(localId: localId, text: text));
+    return localId;
+  }
+
+  /// Called by the UI to send an image. Returns the localId for optimistic tracking.
+  String sendImage(Uint8List imageBytes, BlobService blobService) {
+    final localId = 'local_img_${DateTime.now().millisecondsSinceEpoch}';
+
+    final optimistic = Message(
+      id: localId,
+      localId: localId,
+      groupId: groupId,
+      senderDid: '',
+      content: '[image]',
+      timestamp: DateTime.now(),
+      isOwn: true,
+      epoch: 0,
+      status: MessageStatus.sending,
+    );
+
+    _optimistic.add(optimistic);
+    notifyListeners();
+
+    sendQueue?.sendImageDirect(imageBytes, blobService).then((sent) {
+      _onSendSuccess(localId, sent);
+    }).catchError((_) {
+      _onSendFailed(localId);
+    });
+
     return localId;
   }
 

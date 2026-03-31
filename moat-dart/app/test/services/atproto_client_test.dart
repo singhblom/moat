@@ -213,7 +213,7 @@ void main() {
       capturedRecord = {};
     });
 
-    MockClient _captureClient() => MockClient((request) async {
+    MockClient captureClient() => MockClient((request) async {
           if (request.url.path.contains('createRecord')) {
             final body = jsonDecode(request.body) as Map<String, dynamic>;
             capturedRecord = body['record'] as Map<String, dynamic>;
@@ -223,7 +223,7 @@ void main() {
         });
 
     test('publishEvent serializes tag and ciphertext as {"\$bytes": "..."}', () async {
-      final client = AtprotoClient(httpClient: _captureClient());
+      final client = AtprotoClient(httpClient: captureClient());
       client.restoreSession(_testSession());
 
       final tag = Uint8List.fromList(List.generate(16, (i) => i));
@@ -242,7 +242,7 @@ void main() {
     });
 
     test('publishKeyPackage serializes keyPackage as {"\$bytes": "..."}', () async {
-      final client = AtprotoClient(httpClient: _captureClient());
+      final client = AtprotoClient(httpClient: captureClient());
       client.restoreSession(_testSession());
 
       final kp = Uint8List.fromList(List.generate(64, (i) => i));
@@ -256,7 +256,7 @@ void main() {
     });
 
     test('publishStealthAddress serializes scanPubkey as {"\$bytes": "..."}', () async {
-      final client = AtprotoClient(httpClient: _captureClient());
+      final client = AtprotoClient(httpClient: captureClient());
       client.restoreSession(_testSession());
 
       final pubkey = Uint8List.fromList(List.generate(32, (i) => i + 1));
@@ -423,6 +423,69 @@ void main() {
         throwsA(isA<AtprotoException>().having(
             (e) => e.statusCode, 'statusCode', 404)),
       );
+    });
+  });
+
+  group('publishEvent with blob ref', () {
+    test('includes blob field in record when blobRef is provided', () async {
+      Map<String, dynamic> capturedRecord = {};
+
+      final mockClient = MockClient((request) async {
+        if (request.url.path.contains('createRecord')) {
+          final body = jsonDecode(request.body) as Map<String, dynamic>;
+          capturedRecord = body['record'] as Map<String, dynamic>;
+          return http.Response(_createRecordResponse(), 200);
+        }
+        fail('Unexpected: ${request.url}');
+      });
+
+      final client = AtprotoClient(httpClient: mockClient);
+      client.restoreSession(_testSession());
+
+      final blobRef = BlobRef(
+        cid: 'bafkreitest123',
+        mimeType: 'application/octet-stream',
+        size: 1024,
+      );
+
+      await client.publishEvent(
+        Uint8List.fromList(List.filled(16, 0xAA)),
+        Uint8List.fromList(List.filled(256, 0xBB)),
+        blobRef: blobRef,
+      );
+
+      expect(capturedRecord.containsKey('blob'), isTrue,
+          reason: 'record must include blob field to pin blob to permanent storage');
+
+      final blob = capturedRecord['blob'] as Map<String, dynamic>;
+      expect(blob[r'$type'], 'blob');
+      expect((blob['ref'] as Map)[r'$link'], 'bafkreitest123');
+      expect(blob['mimeType'], 'application/octet-stream');
+      expect(blob['size'], 1024);
+    });
+
+    test('omits blob field when blobRef is null', () async {
+      Map<String, dynamic> capturedRecord = {};
+
+      final mockClient = MockClient((request) async {
+        if (request.url.path.contains('createRecord')) {
+          final body = jsonDecode(request.body) as Map<String, dynamic>;
+          capturedRecord = body['record'] as Map<String, dynamic>;
+          return http.Response(_createRecordResponse(), 200);
+        }
+        fail('Unexpected: ${request.url}');
+      });
+
+      final client = AtprotoClient(httpClient: mockClient);
+      client.restoreSession(_testSession());
+
+      await client.publishEvent(
+        Uint8List.fromList(List.filled(16, 0xAA)),
+        Uint8List.fromList(List.filled(256, 0xBB)),
+      );
+
+      expect(capturedRecord.containsKey('blob'), isFalse,
+          reason: 'text-only events must not include a blob field');
     });
   });
 }

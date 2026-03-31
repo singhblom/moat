@@ -15,6 +15,7 @@ use axum::{
     routing::{delete, get, post, put},
     Json, Router,
 };
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{path::PathBuf, sync::Arc, time::Duration};
@@ -79,6 +80,23 @@ struct ConversationDto {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImageAttachmentDto {
+    uri: String,
+    /// Base64-encoded 32-byte decryption key.
+    key: String,
+    ciphertext_hash: String,
+    ciphertext_size: u64,
+    content_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mime: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    height: Option<u32>,
+}
+
+#[derive(Serialize)]
 struct MessageDto {
     from: String,
     content: String,
@@ -86,6 +104,8 @@ struct MessageDto {
     is_own: bool,
     sender_did: Option<String>,
     message_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attachment: Option<ImageAttachmentDto>,
 }
 
 // ── Error helper ─────────────────────────────────────────────────────────────
@@ -213,16 +233,39 @@ async fn get_messages(
     let mut app = state.app.lock().await;
     app.api_set_active_conversation(Some(&group_id))
         .map_err(app_err)?;
+    let stored = app.api_load_stored_messages(&group_id);
     let dtos = app
         .api_get_messages()
         .iter()
-        .map(|m| MessageDto {
-            from: m.from.clone(),
-            content: m.content.clone(),
-            timestamp: m.timestamp.to_rfc3339(),
-            is_own: m.is_own,
-            sender_did: m.sender_did.clone(),
-            message_id: m.message_id.as_ref().map(|id| hex::encode(id)),
+        .map(|m| {
+            let message_id_hex = m.message_id.as_ref().map(hex::encode);
+            let attachment = message_id_hex.as_deref().and_then(|id| {
+                let s = stored.get(id)?;
+                let uri = s.blob_uri.clone()?;
+                let key = s.blob_key.as_ref()?;
+                let ct_hash = s.blob_ciphertext_hash.as_ref()?;
+                let ct_size = s.blob_ciphertext_size?;
+                let _co_hash = s.blob_content_hash.as_ref()?;
+                Some(ImageAttachmentDto {
+                    uri,
+                    key: STANDARD.encode(key),
+                    ciphertext_hash: STANDARD.encode(ct_hash),
+                    ciphertext_size: ct_size,
+                    content_hash: STANDARD.encode(s.blob_content_hash.as_ref().unwrap()),
+                    mime: s.blob_mime.clone(),
+                    width: s.blob_width,
+                    height: s.blob_height,
+                })
+            });
+            MessageDto {
+                from: m.from.clone(),
+                content: m.content.clone(),
+                timestamp: m.timestamp.to_rfc3339(),
+                is_own: m.is_own,
+                sender_did: m.sender_did.clone(),
+                message_id: message_id_hex,
+                attachment,
+            }
         })
         .collect();
     Ok(Json(dtos))

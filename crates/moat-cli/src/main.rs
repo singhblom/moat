@@ -289,6 +289,23 @@ async fn login_from_keystore(
     Ok(client)
 }
 
+/// Parse handle and app-password from credentials.txt content.
+fn parse_credentials_txt(text: &str) -> Option<(String, String)> {
+    let mut handle = None;
+    let mut password = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some((key, value)) = line.split_once(':') {
+            match key.trim() {
+                "handle" => handle = Some(value.trim().to_string()),
+                "app-password" => password = Some(value.trim().to_string()),
+                _ => {}
+            }
+        }
+    }
+    Some((handle?, password?))
+}
+
 // ── fetch ──────────────────────────────────────────────────────────
 
 async fn cmd_fetch(storage_dir: Option<PathBuf>, repository: &str) -> anyhow::Result<()> {
@@ -551,7 +568,7 @@ async fn cmd_send_test(
 
     // Publish
     let uri = client
-        .publish_event(&encrypted.tag, &encrypted.ciphertext)
+        .publish_event(&encrypted.tag, &encrypted.ciphertext, None)
         .await?;
 
     println!("Published: {}", uri);
@@ -719,7 +736,7 @@ async fn cmd_remove_device(
     let tag = mls.derive_next_tag(&group_id, &key_bundle)?;
 
     // Publish the commit
-    let uri = client.publish_event(&tag, &result.commit).await?;
+    let uri = client.publish_event(&tag, &result.commit, None).await?;
     println!("Removed device at leaf index {}", leaf_index);
     println!("Published commit: {}", uri);
 
@@ -768,7 +785,7 @@ async fn cmd_kick(
     let tag = mls.derive_next_tag(&group_id, &key_bundle)?;
 
     // Publish the commit
-    let uri = client.publish_event(&tag, &result.commit).await?;
+    let uri = client.publish_event(&tag, &result.commit, None).await?;
     println!("Kicked user {}", did_to_kick);
     println!("Published commit: {}", uri);
 
@@ -813,7 +830,7 @@ async fn cmd_leave(storage_dir: Option<PathBuf>, conversation: &str) -> anyhow::
     let tag = mls.derive_next_tag(&group_id, &key_bundle)?;
 
     // Publish the commit
-    let uri = client.publish_event(&tag, &result.commit).await?;
+    let uri = client.publish_event(&tag, &result.commit, None).await?;
     println!(
         "Left conversation {}",
         &conversation[..16.min(conversation.len())]
@@ -852,20 +869,39 @@ async fn cmd_delete_all(storage_dir: Option<PathBuf>, force: bool) -> anyhow::Re
         }
     }
 
-    // Try to delete PDS records if we can log in
+    // Try to delete PDS records if we can log in.
+    // First try the keystore (data/keys/credentials), then fall back to credentials.txt
+    // in the moat directory (useful when data was created by a different client like Flutter).
     let keys_path = data_dir.join("keys");
-    if keys_path.exists() {
+    let credentials: Option<(String, String)> = if keys_path.exists() {
         let keys = keystore::KeyStore::with_path(keys_path)?;
-        match login_from_keystore(&keys).await {
-            Ok(client) => {
-                eprintln!("Deleting PDS records...");
-                let deleted = client.delete_all_records().await?;
-                eprintln!("Deleted {} records from PDS.", deleted);
+        keys.load_credentials().ok()
+    } else {
+        None
+    }
+    .or_else(|| {
+        let creds_path = moat_dir.join("credentials.txt");
+        let text = std::fs::read_to_string(&creds_path).ok()?;
+        parse_credentials_txt(&text)
+    });
+
+    match credentials {
+        Some((handle, password)) => {
+            match moat_atproto::MoatAtprotoClient::login(&handle, &password).await {
+                Ok(client) => {
+                    eprintln!("Deleting PDS records...");
+                    let deleted = client.delete_all_records().await?;
+                    eprintln!("Deleted {} records from PDS.", deleted);
+                }
+                Err(e) => {
+                    eprintln!("Could not log in to delete PDS records: {}", e);
+                    eprintln!("Continuing with local deletion only.");
+                }
             }
-            Err(e) => {
-                eprintln!("Could not log in to delete PDS records: {}", e);
-                eprintln!("Continuing with local deletion only.");
-            }
+        }
+        None => {
+            eprintln!("No credentials found — skipping PDS record deletion.");
+            eprintln!("(Records on the PDS will need to be deleted manually.)");
         }
     }
 

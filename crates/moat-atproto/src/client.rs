@@ -2,8 +2,8 @@
 
 use crate::error::{Error, Result};
 use crate::records::{
-    DrawbridgeConfigRecord, DrawbridgeEntry, EventData, EventRecord, KeyPackageData, KeyPackageRecord,
-    StealthAddressData, StealthAddressRecord,
+    BlobRef, DrawbridgeConfigRecord, DrawbridgeEntry, EventData, EventRecord, KeyPackageData,
+    KeyPackageRecord, StealthAddressData, StealthAddressRecord,
 };
 use atrium_api::agent::{store::MemorySessionStore, AtpAgent};
 use atrium_api::com::atproto::repo::{
@@ -407,13 +407,23 @@ impl MoatAtprotoClient {
 
     /// Publish an encrypted event to the PDS.
     ///
+    /// If `blob_ref` is provided it is embedded in the record, which causes the
+    /// PDS to promote the blob from temporary to permanent storage. This must be
+    /// set for any event that carries an image attachment.
+    ///
     /// Returns the AT-URI of the created record.
-    pub async fn publish_event(&self, tag: &[u8; 16], ciphertext: &[u8]) -> Result<String> {
+    pub async fn publish_event(
+        &self,
+        tag: &[u8; 16],
+        ciphertext: &[u8],
+        blob_ref: Option<BlobRef>,
+    ) -> Result<String> {
         let data = EventData {
             v: 1,
             tag: *tag,
             ciphertext: ciphertext.to_vec(),
             created_at: Utc::now(),
+            blob: blob_ref,
         };
 
         let record_value = serde_json::to_value(&data)?;

@@ -1,9 +1,9 @@
 import 'package:web/web.dart' as web;
 import 'package:moat_dart_common/moat_dart_common.dart';
 
-/// [DocumentBackend] backed by [window.localStorage] for the web platform.
+/// [DocumentBackend] backed by `window.localStorage` for the web platform.
 ///
-/// Keys are stored as "moat:<path>" (e.g. "moat:conversations/conversations.json").
+/// Keys are stored as "moat:path" (e.g. "moat:conversations/conversations.json").
 /// [list] returns full relative paths (e.g. "messages/abc.json") by scanning
 /// all localStorage keys with the given directory prefix.
 class LocalStorageDocumentBackend implements DocumentBackend {

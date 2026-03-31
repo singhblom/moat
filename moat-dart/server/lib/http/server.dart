@@ -338,6 +338,55 @@ Handler buildRouter({
         headers: _jsonHeaders);
   });
 
+  // GET /conversations/:group_id/messages/:message_id/image — fetch decrypted image
+  router.get(
+      '/conversations/<groupId>/messages/<messageId>/image',
+      (Request request, String groupId, String messageId) async {
+    if (!authService.isAuthenticated) {
+      return Response(401,
+          body: jsonEncode({'error': 'not logged in'}), headers: _jsonHeaders);
+    }
+
+    try {
+      final groupIdBytes = _hexToBytes(groupId);
+      final conv = convsService.findByGroupId(groupIdBytes);
+      if (conv == null) {
+        return Response.notFound(
+            jsonEncode({'error': 'conversation not found'}),
+            headers: _jsonHeaders);
+      }
+
+      final repo = ConversationManager.instance.getRepository(conv);
+      await repo.loadMessages();
+
+      final msg = repo.messages.firstWhere(
+        (m) => m.messageIdHex == messageId,
+        orElse: () => throw StateError('message not found'),
+      );
+
+      final att = msg.attachment;
+      if (att == null || att is! ImageAttachment) {
+        return Response(400,
+            body: jsonEncode({'error': 'not an image message'}),
+            headers: _jsonHeaders);
+      }
+
+      final plaintext = await blobService.fetchAndDecrypt(
+        uri: att.uri,
+        key: att.key,
+        ciphertextHash: att.ciphertextHash,
+        contentHash: att.contentHash,
+      );
+
+      final mime = att.mime ?? 'application/octet-stream';
+      return Response.ok(plaintext, headers: {'content-type': mime});
+    } catch (e) {
+      moatLog('Server: Error fetching image: $e');
+      return Response(500,
+          body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
+    }
+  });
+
   // 404 fallback
   router.all('/<ignored|.*>', (Request request) {
     return Response.notFound(

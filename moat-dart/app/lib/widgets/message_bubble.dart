@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:moat_dart_common/moat_dart_common.dart';
 import 'avatar_widget.dart';
@@ -11,6 +12,8 @@ class MessageBubble extends StatelessWidget {
   final VoidCallback? onLongPress;
   final VoidCallback? onRetry;
   final void Function(String emoji)? onReaction;
+  /// Pre-resolved or in-flight future for image bytes. Non-null for image messages.
+  final Future<Uint8List>? imageFuture;
 
   const MessageBubble({
     super.key,
@@ -21,6 +24,7 @@ class MessageBubble extends StatelessWidget {
     this.onLongPress,
     this.onRetry,
     this.onReaction,
+    this.imageFuture,
   });
 
   @override
@@ -64,51 +68,9 @@ class MessageBubble extends StatelessWidget {
           GestureDetector(
             onLongPress: onLongPress,
             onTap: message.status == MessageStatus.failed ? onRetry : null,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              decoration: BoxDecoration(
-                color: _getBubbleColor(theme, isOwn),
-                borderRadius: BorderRadius.only(
-                  topLeft: Radius.circular(isOwn ? 18 : 4),
-                  topRight: Radius.circular(isOwn ? 4 : 18),
-                  bottomLeft: const Radius.circular(18),
-                  bottomRight: const Radius.circular(18),
-                ),
-              ),
-              child: Wrap(
-                alignment: WrapAlignment.end,
-                crossAxisAlignment: WrapCrossAlignment.end,
-                spacing: 8,
-                runSpacing: 4,
-                children: [
-                  Text(
-                    message.content,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: isOwn
-                          ? theme.colorScheme.onPrimary
-                          : theme.colorScheme.onSurface,
-                    ),
-                  ),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        _formatTime(message.timestamp),
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: isOwn
-                              ? theme.colorScheme.onPrimary.withValues(alpha: 0.7)
-                              : theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                      if (isOwn) ...[
-                        const SizedBox(width: 4),
-                        _buildStatusIndicator(theme),
-                      ],
-                    ],
-                  ),
-                ],
-              ),
-            ),
+            child: message.attachment is ImageAttachment
+                ? _buildImageBubble(theme, isOwn, message.attachment as ImageAttachment)
+                : _buildTextBubble(theme, isOwn),
           ),
           if (message.reactions.isNotEmpty)
             Transform.translate(
@@ -124,6 +86,163 @@ class MessageBubble extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  BorderRadius _bubbleRadius(bool isOwn) => BorderRadius.only(
+        topLeft: Radius.circular(isOwn ? 18 : 4),
+        topRight: Radius.circular(isOwn ? 4 : 18),
+        bottomLeft: const Radius.circular(18),
+        bottomRight: const Radius.circular(18),
+      );
+
+  Widget _buildTextBubble(ThemeData theme, bool isOwn) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: _getBubbleColor(theme, isOwn),
+        borderRadius: _bubbleRadius(isOwn),
+      ),
+      child: Wrap(
+        alignment: WrapAlignment.end,
+        crossAxisAlignment: WrapCrossAlignment.end,
+        spacing: 8,
+        runSpacing: 4,
+        children: [
+          Text(
+            message.content,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: isOwn
+                  ? theme.colorScheme.onPrimary
+                  : theme.colorScheme.onSurface,
+            ),
+          ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                _formatTime(message.timestamp),
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: isOwn
+                      ? theme.colorScheme.onPrimary.withValues(alpha: 0.7)
+                      : theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              if (isOwn) ...[
+                const SizedBox(width: 4),
+                _buildStatusIndicator(theme),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildImageBubble(
+      ThemeData theme, bool isOwn, ImageAttachment att) {
+    final radius = _bubbleRadius(isOwn);
+    final aspectRatio = (att.width != null && att.height != null && att.height! > 0)
+        ? att.width! / att.height!
+        : 4.0 / 3.0;
+
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 260, minWidth: 120),
+      decoration: BoxDecoration(
+        color: _getBubbleColor(theme, isOwn),
+        borderRadius: radius,
+      ),
+      child: ClipRRect(
+        borderRadius: radius,
+        child: Stack(
+          fit: StackFit.passthrough,
+          children: [
+            AspectRatio(
+              aspectRatio: aspectRatio,
+              child: imageFuture == null
+                  ? _buildImagePlaceholder(theme)
+                  : FutureBuilder<Uint8List>(
+                      future: imageFuture,
+                      builder: (context, snap) {
+                        if (snap.hasData) {
+                          return Image.memory(snap.data!, fit: BoxFit.cover);
+                        }
+                        if (snap.hasError) {
+                          return _buildBrokenImage(theme);
+                        }
+                        return _buildImagePlaceholder(theme);
+                      },
+                    ),
+            ),
+            Positioned(
+              bottom: 6,
+              right: 8,
+              child: _buildTimestampOverlay(theme, isOwn),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildImagePlaceholder(ThemeData theme) {
+    return Container(
+      color: theme.colorScheme.surfaceContainerHighest,
+      child: Center(
+        child: CircularProgressIndicator(
+          strokeWidth: 2,
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBrokenImage(ThemeData theme) {
+    return Container(
+      color: theme.colorScheme.surfaceContainerHighest,
+      child: Center(
+        child: Icon(
+          Icons.broken_image_outlined,
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTimestampOverlay(ThemeData theme, bool isOwn) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.black54,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            _formatTime(message.timestamp),
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: Colors.white,
+              fontSize: 11,
+            ),
+          ),
+          if (isOwn) ...[
+            const SizedBox(width: 3),
+            _buildStatusIndicatorOverlay(),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatusIndicatorOverlay() {
+    switch (message.status) {
+      case MessageStatus.sending:
+        return const Icon(Icons.access_time, size: 12, color: Colors.white70);
+      case MessageStatus.sent:
+        return const Icon(Icons.done_all, size: 12, color: Colors.white70);
+      case MessageStatus.failed:
+        return const Icon(Icons.error_outline, size: 12, color: Colors.white70);
+    }
   }
 
   Widget _buildReactionBubble(ThemeData theme) {

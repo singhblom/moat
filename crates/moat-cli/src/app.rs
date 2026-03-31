@@ -9,7 +9,7 @@ use crate::{
     message_helpers::{build_text_payload, needs_blob_upload, render_message_preview, truncate_to_preview},
 };
 use crossterm::event::{KeyCode, KeyEvent};
-use moat_atproto::MoatAtprotoClient;
+use moat_atproto::{BlobRef, MoatAtprotoClient};
 use moat_core::{
     blob_decrypt, blob_encrypt, encrypt_for_stealth, generate_stealth_keypair,
     try_decrypt_stealth, ControlKind, Event, EventKind, ExternalBlob, LongTextMessage,
@@ -752,6 +752,26 @@ impl App {
         &self.messages
     }
 
+    /// HTTP: load stored messages for a group, keyed by hex message_id.
+    /// Used by the HTTP server to enrich `MessageDto` with attachment metadata.
+    pub fn api_load_stored_messages(
+        &self,
+        group_id: &str,
+    ) -> std::collections::HashMap<String, crate::keystore::StoredMessage> {
+        self.keys
+            .load_messages(group_id)
+            .map(|cm| {
+                cm.messages
+                    .into_iter()
+                    .filter_map(|m| {
+                        let id_hex = m.message_id.as_ref().map(|id| hex::encode(id))?;
+                        Some((id_hex, m))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// HTTP: send message to active conversation.
     pub fn api_send_message(&mut self, text: String) -> Result<()> {
         self.input_buffer = text;
@@ -855,7 +875,7 @@ impl App {
 
         let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
         client
-            .publish_event(&encrypted.tag, &encrypted.ciphertext)
+            .publish_event(&encrypted.tag, &encrypted.ciphertext, None)
             .await?;
 
         self.tag_map.insert(encrypted.tag, conv_id.clone());
@@ -1598,7 +1618,7 @@ impl App {
                     message_id: Some(msg_id.clone()),
                     sender_did: msg.sender_did.clone(),
                     sender_device: msg.sender_device.clone(),
-                    blob_uri: None, blob_key: None, blob_ciphertext_hash: None, blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None,
+                    blob_uri: None, blob_key: None, blob_ciphertext_hash: None, blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None, blob_width: None, blob_height: None,
                 });
             }
         }
@@ -1610,7 +1630,7 @@ impl App {
         let msg_id = encrypted.message_id.clone();
         let tx = self.bg_tx.clone();
         tokio::spawn(async move {
-            match client.publish_event(&tag, &ciphertext).await {
+            match client.publish_event(&tag, &ciphertext, None).await {
                 Ok(uri) => {
                     let _ = tx.send(BgEvent::SendPublished { uri, conv_id, tag, ciphertext, message_id: msg_id });
                 }
@@ -1832,6 +1852,7 @@ impl App {
             sender_device: device_name,
             blob_uri: None, blob_key: None, blob_ciphertext_hash: None,
             blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None,
+            blob_width: None, blob_height: None,
         };
         if let Err(e) = self.keys.append_message(&conv_id, stored_msg) {
             self.debug_log
@@ -1943,9 +1964,9 @@ impl App {
         let external = match ExternalBlob::new(
             uri,
             key_arr.to_vec(),
-            ciphertext_hash,
+            ciphertext_hash.clone(),
             ciphertext_size,
-            content_hash,
+            content_hash.clone(),
         ) {
             Ok(e) => e,
             Err(e) => {
@@ -2009,7 +2030,9 @@ impl App {
         {
             msg.content = display_content.clone();
             msg.image_loading = false;
-            // Update the locally stored entry with the final display string.
+            // Update the locally stored entry with the final display string and
+            // full blob metadata so the /image endpoint can fetch and decrypt later.
+            let blob_uri_str = format!("at://{}/{}", client.did(), cid);
             let _ = self.keys.append_message(
                 &conv_id,
                 crate::keystore::StoredMessage {
@@ -2020,7 +2043,14 @@ impl App {
                     message_id: Some(pending_message_id.clone()),
                     sender_did: msg.sender_did.clone(),
                     sender_device: msg.sender_device.clone(),
-                    blob_uri: None, blob_key: None, blob_ciphertext_hash: None, blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None,
+                    blob_uri: Some(blob_uri_str),
+                    blob_key: Some(key_arr.to_vec()),
+                    blob_ciphertext_hash: Some(ciphertext_hash),
+                    blob_ciphertext_size: Some(ciphertext_size),
+                    blob_content_hash: Some(content_hash),
+                    blob_mime: Some(mime.clone()),
+                    blob_width: Some(width),
+                    blob_height: Some(height),
                 },
             );
             if let Some(thumb_img) = image_processing::decode_thumbhash(&thumbhash) {
@@ -2028,14 +2058,16 @@ impl App {
             }
         }
 
-        // Publish the MLS-encrypted event.
+        // Publish the MLS-encrypted event, including the blob ref so the PDS
+        // promotes the uploaded blob from temporary to permanent storage.
+        let blob_ref = BlobRef::new(&cid, ciphertext_size);
         let client = self.client.as_ref().unwrap().clone();
         let tag = encrypted.tag;
         let ciphertext = encrypted.ciphertext;
         let msg_id = encrypted.message_id.clone();
         let tx = self.bg_tx.clone();
         tokio::spawn(async move {
-            match client.publish_event(&tag, &ciphertext).await {
+            match client.publish_event(&tag, &ciphertext, Some(blob_ref)).await {
                 Ok(uri) => {
                     let _ = tx.send(BgEvent::SendPublished { uri, conv_id, tag, ciphertext, message_id: msg_id });
                 }
@@ -2298,7 +2330,7 @@ impl App {
                     message_id: decrypted.event.message_id.clone(),
                     sender_did: sender_did.clone(),
                     sender_device: sender_device.clone(),
-                    blob_uri: None, blob_key: None, blob_ciphertext_hash: None, blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None,
+                    blob_uri: None, blob_key: None, blob_ciphertext_hash: None, blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None, blob_width: None, blob_height: None,
                 };
                 match self.keys.append_message(conv_id, stored_msg) {
                     Ok(false) => {
@@ -2664,7 +2696,7 @@ impl App {
                             sender_did.as_ref().map_or(false, |did| did == my_did);
 
                         // Extract ExternalBlob metadata for image messages (for HTTP download).
-                        let (blob_uri, blob_key, blob_ciphertext_hash, blob_ciphertext_size, blob_content_hash, blob_mime) =
+                        let (blob_uri, blob_key, blob_ciphertext_hash, blob_ciphertext_size, blob_content_hash, blob_mime, blob_width, blob_height) =
                             if let Some(moat_core::ParsedMessagePayload::Structured(
                                 moat_core::MessagePayload::Image(ref m),
                             )) = parsed
@@ -2676,9 +2708,11 @@ impl App {
                                     Some(m.external.ciphertext_size),
                                     Some(m.external.content_hash.clone()),
                                     m.mime.clone(),
+                                    m.width,
+                                    m.height,
                                 )
                             } else {
-                                (None, None, None, None, None, None)
+                                (None, None, None, None, None, None, None, None)
                             };
 
                         // Persist received message locally
@@ -2696,6 +2730,8 @@ impl App {
                             blob_ciphertext_size,
                             blob_content_hash,
                             blob_mime,
+                            blob_width,
+                            blob_height,
                         };
                         match self.keys.append_message(&conv_id, stored_msg) {
                             Err(e) => {
@@ -3386,7 +3422,7 @@ impl App {
         self.client
             .as_ref()
             .unwrap()
-            .publish_event(&random_tag, &stealth_ciphertext)
+            .publish_event(&random_tag, &stealth_ciphertext, None)
             .await?;
 
         // 9. Store conversation metadata
@@ -3504,12 +3540,12 @@ impl App {
             moat_core::encrypt_for_stealth(&stealth_pubkeys, &envelope)?;
         let random_tag: [u8; 16] = rand::random();
         client
-            .publish_event(&random_tag, &stealth_ciphertext)
+            .publish_event(&random_tag, &stealth_ciphertext, None)
             .await?;
 
         // 10. Publish the Commit with pre-epoch tag for existing members
         client
-            .publish_event(&commit_tag, &welcome_result.commit)
+            .publish_event(&commit_tag, &welcome_result.commit, None)
             .await?;
 
         // 11. Update GroupMetadata — add new DID/handle
@@ -3569,7 +3605,7 @@ impl App {
         self.save_mls_state()?;
 
         // 6. Publish the Commit with pre-epoch tag
-        client.publish_event(&commit_tag, &result.commit).await?;
+        client.publish_event(&commit_tag, &result.commit, None).await?;
 
         // 7. Update GroupMetadata — remove DID/handle
         if let Some(conv) = self.conversations.iter_mut().find(|c| c.id == group_id_hex) {
@@ -3822,7 +3858,7 @@ impl App {
                 message_id: Some(pending_message_id.clone()),
                 sender_did: Some(my_did),
                 sender_device: self.keys.get_or_create_device_name().ok(),
-                blob_uri: None, blob_key: None, blob_ciphertext_hash: None, blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None,
+                blob_uri: None, blob_key: None, blob_ciphertext_hash: None, blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None, blob_width: None, blob_height: None,
             };
             if let Err(e) = self.keys.append_message(&conv_id, stored_msg) {
                 self.debug_log
@@ -3905,7 +3941,7 @@ impl App {
             message_id: encrypted.message_id.clone(),
             sender_did: Some(my_did),
             sender_device: self.keys.get_or_create_device_name().ok(),
-            blob_uri: None, blob_key: None, blob_ciphertext_hash: None, blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None,
+            blob_uri: None, blob_key: None, blob_ciphertext_hash: None, blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None, blob_width: None, blob_height: None,
         };
         if let Err(e) = self.keys.append_message(&conv_id, stored_msg) {
             self.debug_log
@@ -3925,7 +3961,7 @@ impl App {
         let tx = self.bg_tx.clone();
 
         tokio::spawn(async move {
-            match client.publish_event(&tag, &ciphertext).await {
+            match client.publish_event(&tag, &ciphertext, None).await {
                 Ok(uri) => {
                     let _ = tx.send(BgEvent::SendPublished {
                         uri,
@@ -4124,7 +4160,7 @@ impl App {
 
                         // Publish the commit with PRE-advance epoch tag so others can see it
                         if let Err(e) = client
-                            .publish_event(&commit_tag, &welcome_result.commit)
+                            .publish_event(&commit_tag, &welcome_result.commit, None)
                             .await
                         {
                             self.debug_log
@@ -4145,7 +4181,7 @@ impl App {
                                     Ok(stealth_ciphertext) => {
                                         let random_tag: [u8; 16] = rand::random();
                                         if let Err(e) = client
-                                            .publish_event(&random_tag, &stealth_ciphertext)
+                                            .publish_event(&random_tag, &stealth_ciphertext, None)
                                             .await
                                         {
                                             self.debug_log.log(&format!(

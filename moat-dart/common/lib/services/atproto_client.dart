@@ -39,6 +39,31 @@ const blueskyPublicApiUrl = 'https://public.api.bsky.app';
 /// HTTP timeout duration
 const httpTimeout = Duration(seconds: 30);
 
+/// ATProto blob reference, embedded in records to pin a blob to permanent storage.
+///
+/// Per the ATProto spec, a blob only moves from temporary to permanent storage
+/// when referenced in a successfully created record. Always uses
+/// `application/octet-stream` as the MIME type since blobs are encrypted.
+class BlobRef {
+  final String cid;
+  final String mimeType;
+  final int size;
+
+  const BlobRef({
+    required this.cid,
+    required this.mimeType,
+    required this.size,
+  });
+
+  /// Serialise to the ATProto blob ref JSON format required in records.
+  Map<String, dynamic> toAtProtoJson() => {
+    r'$type': 'blob',
+    'ref': {r'$link': cid},
+    'mimeType': mimeType,
+    'size': size,
+  };
+}
+
 /// Exception thrown by ATProto operations
 class AtprotoException implements Exception {
   final String message;
@@ -439,7 +464,16 @@ class AtprotoClient {
     return records;
   }
 
-  Future<String> publishEvent(Uint8List tag, Uint8List ciphertext) async {
+  /// Publish an encrypted event to the PDS.
+  ///
+  /// If [blobRef] is provided it is embedded in the record, which causes the
+  /// PDS to promote the blob from temporary to permanent storage. This must be
+  /// set for any event that carries an image attachment.
+  Future<String> publishEvent(
+    Uint8List tag,
+    Uint8List ciphertext, {
+    BlobRef? blobRef,
+  }) async {
     _requireSession();
 
     if (tag.length != 16) {
@@ -447,12 +481,16 @@ class AtprotoClient {
     }
 
     final now = DateTime.now().toUtc();
-    final record = {
+    final record = <String, dynamic>{
       'v': 1,
       'tag': {r'$bytes': base64Encode(tag)},
       'ciphertext': {r'$bytes': base64Encode(ciphertext)},
       'createdAt': now.toIso8601String(),
     };
+
+    if (blobRef != null) {
+      record['blob'] = blobRef.toAtProtoJson();
+    }
 
     final response = await _authedPost(
       '${_session!.pdsUrl}/xrpc/com.atproto.repo.createRecord',

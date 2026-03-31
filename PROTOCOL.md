@@ -124,6 +124,24 @@ When an existing member (Alice) adds a new member (Carol) to a group that alread
 | **Padding** | Message length patterns (512B/1KB/4KB control buckets) |
 | **Unified event schema** | Operation type — messages, commits, welcomes all look the same on-chain |
 
+### Known Privacy Limitation: Image Messages Are Distinguishable
+
+Image messages are **not** hidden by the unified event schema. Two observable signals allow a passive PDS observer to identify events carrying images:
+
+1. **Blob upload timing** — a `com.atproto.repo.uploadBlob` call from the sender's DID immediately precedes the corresponding `com.atproto.repo.createRecord` call. The time gap is typically under one second and is highly correlated.
+2. **Blob ref in record** — the `social.moat.event` record includes an optional `blob` field. Its presence is required to pin the uploaded blob to permanent storage (per the ATProto spec; unreferenced blobs are garbage-collected). This field reveals that the event carries an image.
+
+The `blob.size` field further reveals the encrypted blob size, which correlates with image resolution or quality even after content-based padding.
+
+**The `blob` field is intentionally included despite the leak** because omitting it causes blob garbage-collection and makes images unretrievable. The timing leak makes the presence/absence of the field a secondary concern — the correlation is already observable from network activity alone.
+
+**Future mitigation — dedicated blob storage service:** The correct fix is to upload blobs to a separate service that:
+- Accepts blobs under a secret URL with no reference to the uploader's DID or ATProto account
+- Publishes blobs with a random delay (up to ~2 minutes) to break timing correlation with message send
+- Hosts blobs under stable, content-addressed URLs independent of the sender's PDS
+
+Until such a service exists, image messages should be considered metadata-leaky: an observer can determine that a conversation includes images, approximate when they were sent, and estimate their size. Message *content* remains fully encrypted.
+
 ## Tag Derivation
 
 Every event gets a unique 16-byte tag, derived hierarchically from the MLS group state. This is analogous to BIP-32 HD key derivation: group members who know the export secret can reconstruct all valid tags, while observers see random-looking values.

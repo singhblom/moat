@@ -36,6 +36,14 @@ class PollingService {
   /// Callback when a new conversation is received.
   void Function()? onNewConversation;
 
+  /// Callback when messages arrive for a conversation.
+  /// Defaults to [ConversationManager.instance.notify] if not set.
+  void Function(Conversation, List<Message>)? onMessages;
+
+  /// Callback when a reaction arrives for a conversation.
+  /// Defaults to [ConversationManager.instance.notifyReaction] if not set.
+  void Function(Conversation, List<int>, String, String)? onReaction;
+
   PollingService({
     required AuthService authService,
     required ConversationsService conversationsService,
@@ -307,7 +315,7 @@ class PollingService {
 
           moatLog('PollingService: Decrypted message: "${text.substring(0, text.length > 20 ? 20 : text.length)}..."');
 
-          ConversationManager.instance.notify(conversation, [message]);
+          (onMessages ?? ConversationManager.instance.notify)(conversation, [message]);
 
           await _conversationsService.updateLastMessage(
             conversation.groupId,
@@ -381,7 +389,7 @@ class PollingService {
           if (rp != null) {
             final reactSenderDid = result.sender?.did ?? 'unknown';
             moatLog('PollingService: Reaction "${rp.emoji}" from $reactSenderDid');
-            ConversationManager.instance.notifyReaction(
+            (onReaction ?? ConversationManager.instance.notifyReaction)(
               conversation,
               rp.targetMessageId,
               rp.emoji,

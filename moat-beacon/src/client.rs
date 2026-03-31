@@ -212,6 +212,25 @@ impl MoatCliClient {
         Ok(())
     }
 
+    /// `GET /conversations/:group_id/messages/:message_id/image` — fetch decrypted image bytes.
+    pub async fn fetch_image(&self, group_id: &str, message_id: &str) -> Result<Vec<u8>> {
+        let resp = self
+            .http
+            .get(format!(
+                "{}/conversations/{group_id}/messages/{message_id}/image",
+                self.base_url
+            ))
+            .send()
+            .await
+            .context("GET /messages/:message_id/image")?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("fetch_image failed ({status}): {body}");
+        }
+        Ok(resp.bytes().await.context("read image bytes")?.to_vec())
+    }
+
     /// `POST /conversations/:group_id/messages/:message_id/reactions`
     pub async fn send_reaction(&self, group_id: &str, message_id: &str, emoji: &str) -> Result<()> {
         let resp = self

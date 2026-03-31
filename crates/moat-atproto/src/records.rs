@@ -68,6 +68,41 @@ pub struct KeyPackageData {
     pub created_at: DateTime<Utc>,
 }
 
+/// ATProto blob reference, embedded in records to pin a blob to permanent storage.
+///
+/// Per the ATProto spec, a blob only moves from temporary to permanent storage
+/// when referenced in a successfully created record. The `size` field is the
+/// size of the encrypted ciphertext (not the plaintext).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlobRef {
+    #[serde(rename = "$type")]
+    pub type_: String,
+    pub ref_: BlobLink,
+    #[serde(rename = "mimeType")]
+    pub mime_type: String,
+    pub size: u64,
+}
+
+/// The `{ "$link": "<cid>" }` inner object of a BlobRef.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlobLink {
+    #[serde(rename = "$link")]
+    pub link: String,
+}
+
+impl BlobRef {
+    /// Construct a blob ref from a CID and ciphertext size.
+    /// Always uses `application/octet-stream` since blobs are encrypted.
+    pub fn new(cid: impl Into<String>, ciphertext_size: u64) -> Self {
+        Self {
+            type_: "blob".to_string(),
+            ref_: BlobLink { link: cid.into() },
+            mime_type: "application/octet-stream".to_string(),
+            size: ciphertext_size,
+        }
+    }
+}
+
 /// Record data for creating a new event
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -78,6 +113,8 @@ pub struct EventData {
     #[serde(with = "base64_bytes")]
     pub ciphertext: Vec<u8>,
     pub created_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blob: Option<BlobRef>,
 }
 
 /// Stealth address record stored on PDS (v2: multi-device)
@@ -242,6 +279,7 @@ mod tests {
             tag: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
             ciphertext: vec![0xDE, 0xAD, 0xBE, 0xEF],
             created_at: Utc::now(),
+            blob: None,
         };
 
         let json = serde_json::to_string(&data).unwrap();

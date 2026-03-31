@@ -31,6 +31,10 @@
             "type": "string",
             "format": "datetime",
             "description": "Creation time"
+          },
+          "blob": {
+            "type": "blob",
+            "description": "Encrypted blob attached to this event. Must be present for image messages so the PDS pins the blob to permanent storage. The blob is opaque ciphertext; all content metadata is inside the encrypted payload."
           }
         }
       }

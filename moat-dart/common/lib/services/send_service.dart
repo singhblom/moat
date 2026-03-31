@@ -4,6 +4,7 @@ import '../models/conversation.dart';
 import '../models/message.dart';
 import '../rust/api/simple.dart';
 import '../utils/message_payload.dart';
+import 'atproto_client.dart';
 import 'auth_service.dart';
 import 'blob_service.dart';
 import 'drawbridge_service.dart';
@@ -160,10 +161,17 @@ class SendService {
 
     await _authService.saveMlsState();
 
-    // 6. Publish event.
+    // 6. Publish event, including the blob ref so the PDS promotes the blob
+    //    from temporary to permanent storage.
+    final blobRef = BlobRef(
+      cid: uploadResult.cid,
+      mimeType: 'application/octet-stream',
+      size: uploadResult.ciphertextSize,
+    );
     final eventUri = await _authService.atprotoClient.publishEvent(
       result.tag,
       result.ciphertext,
+      blobRef: blobRef,
     );
 
     moatLog('SendService: Image published: $eventUri');

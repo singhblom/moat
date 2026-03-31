@@ -1,5 +1,7 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:moat_dart_common/moat_dart_common.dart' hide ConversationRepository;
 import '../providers/auth_provider.dart';
 import '../providers/conversations_provider.dart';
@@ -32,6 +34,11 @@ class _ConversationScreenState extends State<ConversationScreen> {
   Message? _selectedMessage;
   /// Global key for the selected message bubble, used to position the emoji bar
   final Map<String, GlobalKey> _messageKeys = {};
+
+  /// Optimistic image bytes keyed by localId — shown immediately after send.
+  final Map<String, Uint8List> _pendingImageBytes = {};
+  /// Cached blob futures keyed by contentHash hex — avoids redundant fetches.
+  final Map<String, Future<Uint8List>> _blobFutures = {};
 
   @override
   void initState() {
@@ -99,6 +106,49 @@ class _ConversationScreenState extends State<ConversationScreen> {
     } else {
       _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
     }
+  }
+
+  /// Returns the image future for a message with an [ImageAttachment], or null.
+  ///
+  /// For just-sent messages, returns a pre-resolved future from local bytes.
+  /// For received messages, fetches and decrypts via [BlobService] (cached).
+  Future<Uint8List>? _resolveImageFuture(BuildContext context, Message message) {
+    final att = message.attachment;
+    if (att is! ImageAttachment) return null;
+
+    // Own optimistic message — bytes are already in memory.
+    if (message.localId != null && _pendingImageBytes.containsKey(message.localId)) {
+      return Future.value(_pendingImageBytes[message.localId!]);
+    }
+
+    // Received (or confirmed) — fetch via BlobService, cache by contentHash.
+    final hexHash = att.contentHash
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join();
+    return _blobFutures[hexHash] ??= context.read<BlobService>().fetchAndDecrypt(
+          uri: att.uri,
+          key: att.key,
+          ciphertextHash: att.ciphertextHash,
+          contentHash: att.contentHash,
+        );
+  }
+
+  Future<void> _pickImage() async {
+    final picker = ImagePicker();
+    final file = await picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+    if (file == null || !mounted) return;
+
+    final bytes = await file.readAsBytes();
+    if (!mounted) return;
+
+    final blobService = context.read<BlobService>();
+    final repo = context.read<ConversationRepository>();
+    final localId = repo.sendImage(bytes, blobService);
+
+    setState(() {
+      _pendingImageBytes[localId] = bytes;
+    });
+    _scrollToBottom();
   }
 
   Future<void> _sendMessage() async {
@@ -281,6 +331,8 @@ class _ConversationScreenState extends State<ConversationScreen> {
         // Ensure we have a GlobalKey for this message
         final key = _messageKeys.putIfAbsent(message.id, () => GlobalKey());
 
+        final imageFuture = _resolveImageFuture(context, message);
+
         return MessageBubble(
           key: key,
           message: message,
@@ -292,6 +344,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
               ? () => provider.retryMessage(message.localId ?? message.id)
               : null,
           onReaction: (emoji) => provider.sendReaction(message, emoji),
+          imageFuture: imageFuture,
         );
       },
     );
@@ -346,12 +399,24 @@ class _ConversationScreenState extends State<ConversationScreen> {
                   textInputAction: TextInputAction.newline,
                   keyboardType: TextInputType.multiline,
                   textCapitalization: TextCapitalization.sentences,
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     hintText: 'Message',
                     border: InputBorder.none,
-                    contentPadding: EdgeInsets.symmetric(
+                    contentPadding: const EdgeInsets.symmetric(
                       horizontal: 16,
                       vertical: 12,
+                    ),
+                    suffixIcon: AnimatedOpacity(
+                      opacity: hasText ? 0.0 : 1.0,
+                      duration: const Duration(milliseconds: 200),
+                      child: IgnorePointer(
+                        ignoring: hasText,
+                        child: IconButton(
+                          icon: const Icon(Icons.image_outlined),
+                          onPressed: _pickImage,
+                          tooltip: 'Send image',
+                        ),
+                      ),
                     ),
                   ),
                   onChanged: (_) => setState(() {}),

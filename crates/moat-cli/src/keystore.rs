@@ -121,6 +121,10 @@ pub struct StoredMessage {
     pub blob_content_hash: Option<Vec<u8>>,
     #[serde(default)]
     pub blob_mime: Option<String>,
+    #[serde(default)]
+    pub blob_width: Option<u32>,
+    #[serde(default)]
+    pub blob_height: Option<u32>,
 }
 
 /// All stored messages for a conversation

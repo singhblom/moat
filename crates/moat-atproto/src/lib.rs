@@ -9,4 +9,4 @@ mod records;
 
 pub use client::MoatAtprotoClient;
 pub use error::{Error, Result};
-pub use records::{DrawbridgeConfigRecord, DrawbridgeEntry, EventRecord, KeyPackageRecord, StealthAddressRecord};
+pub use records::{BlobRef, DrawbridgeConfigRecord, DrawbridgeEntry, EventRecord, KeyPackageRecord, StealthAddressRecord};

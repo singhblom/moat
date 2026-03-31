@@ -2,6 +2,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:moat_dart_common/moat_dart_common.dart' hide DebugLog;
+import 'services/conversation_manager.dart' as app_cm;
 import 'providers/auth_provider.dart';
 import 'providers/conversations_provider.dart';
 import 'providers/profile_provider.dart';
@@ -83,8 +84,12 @@ class MoatApp extends StatelessWidget {
     final profileCacheService =
         ProfileCacheService(client: atprotoClient, backend: docBackend);
 
+    final blobService =
+        BlobService(atprotoClient: atprotoClient, backend: docBackend);
+
     return MultiProvider(
       providers: [
+        Provider<BlobService>.value(value: blobService),
         ChangeNotifierProvider(create: (_) => ThemeProvider()),
         ChangeNotifierProvider.value(value: authProvider),
         ChangeNotifierProvider.value(value: conversationsProvider),
@@ -244,7 +249,13 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
         authService: auth.service,
         storage: widget.msgStorage,
       );
+      app_cm.ConversationManager.instance.init(
+        authService: auth.service,
+        storage: widget.msgStorage,
+      );
 
+      _pollingService!.onMessages = app_cm.ConversationManager.instance.notify;
+      _pollingService!.onReaction = app_cm.ConversationManager.instance.notifyReaction;
       _pollingService!.onNewConversation = () {
         context.read<ConversationsProvider>().refresh();
       };
@@ -257,6 +268,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       _pollingService = null;
       _pollingStarted = false;
       ConversationManager.instance.clear();
+      app_cm.ConversationManager.instance.clear();
       DrawbridgeService.instance.reset();
       debugPrint('PollingService stopped, Drawbridge reset');
     }

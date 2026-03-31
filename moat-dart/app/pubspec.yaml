@@ -60,6 +60,9 @@ dependencies:
   flutter_native_splash: ^2.4.0
   web_socket_channel: ^3.0.3
 
+  # Image picker (gallery / camera)
+  image_picker: ^1.1.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
