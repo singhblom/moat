@@ -6,6 +6,7 @@ import 'package:moat_dart_common/moat_dart_common.dart' hide ConversationReposit
 import '../providers/auth_provider.dart';
 import '../providers/conversations_provider.dart';
 import '../providers/profile_provider.dart';
+import '../utils/display_name.dart';
 import '../services/conversation_repository.dart';
 import '../widgets/message_bubble.dart';
 
@@ -57,20 +58,11 @@ class _ConversationScreenState extends State<ConversationScreen> {
     profileProvider.preloadProfiles(widget.conversation.participants);
   }
 
-  /// Get display name for a sender DID
-  String _getSenderDisplayName(String did) {
-    final profileProvider = context.read<ProfileProvider>();
-    final profile = profileProvider.getCachedProfile(did);
-    if (profile != null) {
-      return profile.displayName ?? profile.handle;
-    }
-    // Fallback: truncate DID
-    if (did.startsWith('did:plc:')) {
-      final shortId = did.substring(8);
-      return shortId.length > 8 ? shortId.substring(0, 8) : shortId;
-    }
-    return did.isNotEmpty ? did : 'unknown';
-  }
+  String _resolveDidDisplayName(String did) =>
+      resolveDidDisplayName(context.read<ProfileProvider>(), did);
+
+  String _resolveConversationDisplayName() =>
+      widget.conversation.resolveDisplayName(_resolveDidDisplayName);
 
   @override
   void dispose() {
@@ -196,7 +188,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
             : null,
         title: hasSelection
             ? null
-            : Text(widget.conversation.displayName),
+            : Text(_resolveConversationDisplayName()),
         actions: hasSelection
             ? [
                 IconButton(
@@ -342,7 +334,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
           key: key,
           message: message,
           showSender: showSender,
-          senderName: showSender ? _getSenderDisplayName(message.senderDid) : null,
+          senderName: showSender ? _resolveDidDisplayName(message.senderDid) : null,
           senderDid: showSender ? message.senderDid : null,
           onLongPress: () => _selectMessage(message),
           onRetry: message.status == MessageStatus.failed
@@ -512,7 +504,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
               style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: 16),
-            _buildInfoRow(context, 'Name', widget.conversation.displayName),
+            _buildInfoRow(context, 'Name', _resolveConversationDisplayName()),
             _buildInfoRow(context, 'Epoch', widget.conversation.epoch.toString()),
             _buildInfoRow(
               context,

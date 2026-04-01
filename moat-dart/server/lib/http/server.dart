@@ -72,7 +72,7 @@ Handler buildRouter({
   router.get('/conversations', (Request request) {
     final convs = convsService.conversations.map((c) => {
           'id': c.groupIdHex,
-          'name': c.displayName,
+          'name': c.resolveDisplayName((did) => did),
           'participant_dids': c.participants,
           'epoch': c.epoch,
           'unread': c.unreadCount,

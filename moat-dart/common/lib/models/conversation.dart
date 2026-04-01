@@ -6,8 +6,9 @@ class Conversation {
   /// Unique conversation ID (MLS group ID)
   final Uint8List groupId;
 
-  /// Display name (derived from participants or user-set)
-  String displayName;
+  /// Display name (user-set override). When null, the UI resolves a name
+  /// dynamically from participant profiles.
+  String? displayName;
 
   /// Participant DIDs
   final List<String> participants;
@@ -33,7 +34,7 @@ class Conversation {
 
   Conversation({
     required this.groupId,
-    required this.displayName,
+    this.displayName,
     required this.participants,
     this.lastMessagePreview,
     this.lastMessageAt,
@@ -42,6 +43,17 @@ class Conversation {
     required this.keyBundleRef,
     required this.createdAt,
   });
+
+  /// Resolve a display name for this conversation.
+  ///
+  /// Returns [displayName] when explicitly set, otherwise builds a name from
+  /// participants using [resolveDid] (e.g. profile lookup). Callers supply the
+  /// resolver so the model stays independent of any caching/network layer.
+  String resolveDisplayName(String Function(String did) resolveDid) {
+    if (displayName != null) return displayName!;
+    if (participants.isEmpty) return 'unknown';
+    return participants.map(resolveDid).join(', ');
+  }
 
   /// Group ID as hex string (for display/storage keys)
   String get groupIdHex =>
@@ -61,7 +73,7 @@ class Conversation {
 
   factory Conversation.fromJson(Map<String, dynamic> json) => Conversation(
         groupId: base64Decode(json['groupId'] as String),
-        displayName: json['displayName'] as String,
+        displayName: json['displayName'] as String?,
         participants: (json['participants'] as List<dynamic>)
             .map((e) => e as String)
             .toList(),

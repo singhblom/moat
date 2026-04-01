@@ -72,18 +72,9 @@ Future<Conversation> startConversation({
   DrawbridgeService.instance
       .cacheDrawbridgeConfig(recipientDid, recipientRelayUrls);
 
-  // 10. Resolve display name.
-  String displayName;
-  try {
-    displayName = await client.resolveHandle(recipientDid);
-  } catch (_) {
-    displayName = recipientDid;
-  }
-
-  // 11. Save conversation.
+  // 10. Save conversation.
   final conversation = Conversation(
     groupId: result.groupId,
-    displayName: displayName,
     participants: [recipientDid],
     epoch: result.epoch,
     keyBundleRef: 'key_bundle_$groupIdHex',

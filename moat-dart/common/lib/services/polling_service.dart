@@ -339,26 +339,15 @@ class PollingService {
               !otherDids.every((did) => currentParticipants.contains(did));
 
           if (membersChanged) {
-            // Resolve handles for all participants.
-            final resolvedHandles = <String>[];
-            for (final did in otherDids) {
-              try {
-                resolvedHandles.add(await _authService.atprotoClient.resolveHandle(did));
-              } catch (_) {
-                resolvedHandles.add(did);
-              }
-            }
             conversation.participants
               ..clear()
               ..addAll(otherDids);
-            conversation.displayName = resolvedHandles.join(', ');
             moatLog('PollingService: Member list changed, new participants: $otherDids');
           }
 
           await _conversationsService.updateConversation(
             conversation.groupId,
             epoch: newEpoch,
-            displayName: membersChanged ? conversation.displayName : null,
           );
           if (membersChanged) {
             await _conversationsService.saveConversation(conversation);
@@ -431,27 +420,14 @@ class PollingService {
 
     final otherDids = groupDids.where((did) => did != myDid).toList();
 
-    // Resolve handles for ALL participants (multi-party support).
-    final resolvedHandles = <String>[];
-    for (final did in otherDids) {
-      try {
-        resolvedHandles.add(await _authService.atprotoClient.resolveHandle(did));
-      } catch (_) {
-        resolvedHandles.add(did);
-      }
-    }
-    final displayName = resolvedHandles.isNotEmpty
-        ? resolvedHandles.join(', ')
-        : senderDid;
-
-    moatLog('PollingService: Joined group with participants: $groupDids, display: $displayName');
+    moatLog('PollingService: Joined group with participants: $groupDids');
 
     final groupIdHex =
         groupId.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
+    // Leave displayName null — the UI resolves it from participant profiles.
     final conversation = Conversation(
       groupId: groupId,
-      displayName: displayName,
       participants: otherDids.isNotEmpty ? otherDids : [senderDid],
       epoch: epoch,
       keyBundleRef: 'key_bundle_$groupIdHex',

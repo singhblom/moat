@@ -7,6 +7,8 @@ import '../providers/theme_provider.dart';
 import '../providers/watch_list_provider.dart';
 import '../services/conversation_manager.dart';
 import '../services/conversation_repository.dart';
+import '../providers/profile_provider.dart';
+import '../utils/display_name.dart';
 import '../widgets/avatar_widget.dart';
 import 'conversation_screen.dart';
 import 'new_conversation_screen.dart';
@@ -152,22 +154,27 @@ class _ConversationTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final profileProvider = context.watch<ProfileProvider>();
+    final displayName = conversation.resolveDisplayName(
+      (did) => resolveDidDisplayName(profileProvider, did),
+    );
+
     // Use avatar for 1:1 chats, initials for group chats
     final Widget leadingWidget;
     if (conversation.participants.length == 1) {
       leadingWidget = AvatarWidget(
         did: conversation.participants.first,
         size: 48,
-        fallbackText: conversation.displayName.isNotEmpty
-            ? conversation.displayName[0].toUpperCase()
+        fallbackText: displayName.isNotEmpty
+            ? displayName[0].toUpperCase()
             : '?',
       );
     } else {
       leadingWidget = CircleAvatar(
         backgroundColor: Theme.of(context).colorScheme.primaryContainer,
         child: Text(
-          conversation.displayName.isNotEmpty
-              ? conversation.displayName[0].toUpperCase()
+          displayName.isNotEmpty
+              ? displayName[0].toUpperCase()
               : '?',
           style: TextStyle(
             color: Theme.of(context).colorScheme.onPrimaryContainer,
@@ -179,7 +186,7 @@ class _ConversationTile extends StatelessWidget {
     return ListTile(
       leading: leadingWidget,
       title: Text(
-        conversation.displayName,
+        displayName,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),

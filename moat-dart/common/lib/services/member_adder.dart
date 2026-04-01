@@ -102,16 +102,6 @@ Future<void> addMemberToConversation({
     if (!conversation.participants.contains(newDid)) {
       conversation.participants.add(newDid);
     }
-    // Re-resolve all participant handles for display name.
-    final resolvedHandles = <String>[];
-    for (final did in conversation.participants) {
-      try {
-        resolvedHandles.add(await client.resolveHandle(did));
-      } catch (_) {
-        resolvedHandles.add(did);
-      }
-    }
-    conversation.displayName = resolvedHandles.join(', ');
     await convsService.saveConversation(conversation);
   }
 
