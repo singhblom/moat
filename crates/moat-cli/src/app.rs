@@ -265,7 +265,6 @@ pub(crate) enum BgEvent {
     DrawbridgeNewEvent {
         tag: [u8; 16],
         rkey: String,
-        did: String,
         /// Base64-decoded ciphertext, if included in the relay message.
         payload: Option<Vec<u8>>,
     },
@@ -285,6 +284,7 @@ pub(crate) enum BgEvent {
 
     /// Signal to notify own Drawbridge about a published event (async).
     DrawbridgeNotifyEventPosted {
+        did: String,
         tag: [u8; 16],
         rkey: String,
         payload: Vec<u8>,
@@ -1338,11 +1338,14 @@ impl App {
                     self.messages.sort_by(|a, b| a.rkey.cmp(&b.rkey));
                 }
 
-                // Notify Drawbridge about the published event with payload + relay URLs
+                // Notify Drawbridge about the published event with payload + relay URLs.
+                // Include our own DID in the envelope so the relay can use it for
+                // PDS verification without storing it on the connection.
                 if self.drawbridge.has_own_connection() {
-                    // Collect relay URLs for all partner DIDs in this conversation
+                    let did = self.client.as_ref().map(|c| c.did().to_string()).unwrap_or_default();
                     let drawbridge_urls = self.drawbridge_urls_for_conversation(&conv_id);
                     let _ = self.bg_tx.send(BgEvent::DrawbridgeNotifyEventPosted {
+                        did,
                         tag,
                         rkey,
                         payload: ciphertext,
@@ -1353,12 +1356,11 @@ impl App {
             BgEvent::SendFailed(e) => {
                 self.set_error(format!("Send error: {e}"));
             }
-            BgEvent::DrawbridgeNewEvent { tag, rkey, did, payload } => {
+            BgEvent::DrawbridgeNewEvent { tag, rkey, payload } => {
                 self.debug_log.log(&format!(
-                    "drawbridge: new_event tag={} rkey={} did={} payload={}",
+                    "drawbridge: new_event tag={} rkey={} payload={}",
                     hex::encode(&tag),
                     &rkey,
-                    if did.is_empty() { "(relay)" } else { &did[..20.min(did.len())] },
                     if payload.is_some() { "yes" } else { "no" }
                 ));
 
@@ -1376,11 +1378,9 @@ impl App {
                     }
                 }
 
-                // Fallback: trigger PDS fetch
-                if !did.is_empty() {
-                    self.spawn_targeted_fetch(&did);
-                }
-                // If no DID (relay-to-relay), next regular poll will pick it up
+                // No inline payload (or decrypt failed): next regular poll picks it up.
+                // The relay no longer includes sender DID in new_event; per-event
+                // targeted fetches are not needed since polling is the reliable path.
             }
 
             BgEvent::DrawbridgeDisconnected { url, reason } => {
@@ -1695,8 +1695,8 @@ impl App {
                     }
                 }
             }
-            BgEvent::DrawbridgeNotifyEventPosted { tag, rkey, payload, drawbridge_urls } => {
-                if let Err(e) = self.drawbridge.notify_event_posted(&tag, &rkey, &payload, &drawbridge_urls).await {
+            BgEvent::DrawbridgeNotifyEventPosted { did, tag, rkey, payload, drawbridge_urls } => {
+                if let Err(e) = self.drawbridge.notify_event_posted(&did, &tag, &rkey, &payload, &drawbridge_urls).await {
                     self.debug_log
                         .log(&format!("drawbridge: event_posted failed: {}", e));
                 }

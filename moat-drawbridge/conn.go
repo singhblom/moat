@@ -38,8 +38,7 @@ type Client struct {
 	// derived per-connection from request headers or relay config.
 	relayURL string
 
-	// DID-authenticated fields
-	did           string // set after DID authentication
+	// Pre-auth handshake fields — zeroed after authentication completes.
 	nonce         string // challenge nonce, set when challenge is requested
 	challengeSent bool   // true after challenge has been sent
 }
@@ -74,7 +73,7 @@ func (c *Client) sendMsg(v any) {
 	case c.send <- data:
 	default:
 		// Send buffer full, drop message
-		c.log.Warn("send buffer full, dropping message", "did", c.did)
+		c.log.Warn("send buffer full, dropping message")
 	}
 }
 
@@ -95,7 +94,7 @@ func (c *Client) readPump() {
 		_, data, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-				c.log.Info("connection closed unexpectedly", "did", c.did, "error", err)
+				c.log.Info("connection closed unexpectedly", "error", err)
 			}
 			return
 		}
@@ -141,12 +140,13 @@ func (c *Client) handlePreAuth(msgType string, msg any) {
 		}
 
 		c.authed = true
-		c.log = c.log.With("did", c.did)
+		// Zero pre-auth state — no longer needed.
+		c.nonce = ""
+		c.challengeSent = false
 		c.sendMsg(AuthenticatedMsg{Type: "authenticated"})
 		c.log.Info("authenticated")
-
-		// Flush any buffered notifications
-		c.relay.flushBuffer(c)
+		// Disconnect buffer flush now happens in handleWatchTags when the
+		// client re-registers its tags, keyed by tag rather than by DID.
 
 	default:
 		c.sendMsg(ErrorMsg{Type: "error", Message: "must authenticate with request_challenge"})

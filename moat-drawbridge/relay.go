@@ -27,11 +27,10 @@ const (
 type Relay struct {
 	mu      sync.RWMutex
 	clients map[*Client]bool
-	byDID   map[string]map[*Client]bool
 	byTag   map[string]map[*Client]bool
 
 	bufferMu sync.Mutex
-	buffers  map[string]*DisconnectBuffer
+	buffers  map[string]*DisconnectBuffer // keyed by tag hex
 
 	dedupMu sync.Mutex
 	dedup   map[string]time.Time
@@ -51,9 +50,9 @@ type Relay struct {
 	log       *slog.Logger
 }
 
-// DisconnectBuffer holds notifications for a recently-disconnected client.
+// DisconnectBuffer holds notifications for a tag whose last watcher disconnected.
+// Keyed by tag hex in Relay.buffers.
 type DisconnectBuffer struct {
-	did       string
 	messages  []NewEventMsg
 	expiresAt time.Time
 }
@@ -64,7 +63,6 @@ type DisconnectBuffer struct {
 func NewRelay(publicURL, fallbackURL string, resolver DIDResolver, verifier PDSVerifier, log *slog.Logger) *Relay {
 	return &Relay{
 		clients:     make(map[*Client]bool),
-		byDID:       make(map[string]map[*Client]bool),
 		byTag:       make(map[string]map[*Client]bool),
 		buffers:     make(map[string]*DisconnectBuffer),
 		dedup:       make(map[string]time.Time),
@@ -142,63 +140,39 @@ func (r *Relay) unregister(c *Client) {
 	}
 	delete(r.clients, c)
 
-	// Remove from tag index
+	// Remove from tag index; collect tags that now have no remaining watchers.
+	var emptyTags []string
 	for tag := range c.tags {
 		if clients, ok := r.byTag[tag]; ok {
 			delete(clients, c)
 			if len(clients) == 0 {
 				delete(r.byTag, tag)
-			}
-		}
-	}
-
-	// Remove from DID index
-	did := c.did
-	if did != "" {
-		if clients, ok := r.byDID[did]; ok {
-			delete(clients, c)
-			if len(clients) == 0 {
-				delete(r.byDID, did)
+				emptyTags = append(emptyTags, tag)
 			}
 		}
 	}
 
 	r.mu.Unlock()
 
-	// Create disconnect buffer if client was authenticated
-	if did != "" {
+	// Create a disconnect buffer for each tag that lost its last watcher.
+	// Any client that reconnects and watches one of these tags will receive
+	// the buffered events, regardless of which DID it authenticated with.
+	if len(emptyTags) > 0 {
 		r.bufferMu.Lock()
-		// Only create buffer if no other connections exist for this DID
-		r.mu.RLock()
-		hasOtherConns := len(r.byDID[did]) > 0
-		r.mu.RUnlock()
-		if !hasOtherConns {
-			r.buffers[did] = &DisconnectBuffer{
-				did:       did,
+		for _, tag := range emptyTags {
+			r.buffers[tag] = &DisconnectBuffer{
 				expiresAt: time.Now().Add(30 * time.Second),
 			}
-			r.log.Info("created disconnect buffer", "did", did)
 		}
 		r.bufferMu.Unlock()
+		r.log.Info("created disconnect buffers", "tag_count", len(emptyTags))
 	}
 
 	close(c.send)
 }
 
-func (r *Relay) registerDID(c *Client, did string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	c.did = did
-	if r.byDID[did] == nil {
-		r.byDID[did] = make(map[*Client]bool)
-	}
-	r.byDID[did][c] = true
-}
-
 func (r *Relay) handleWatchTags(c *Client, msg *WatchTagsMsg) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	// Remove old tags
 	for tag := range c.tags {
@@ -220,12 +194,16 @@ func (r *Relay) handleWatchTags(c *Client, msg *WatchTagsMsg) {
 		r.byTag[tag][c] = true
 	}
 
-	r.log.Info("tags registered", "did", c.did, "count", len(msg.Tags))
+	r.mu.Unlock()
+
+	r.log.Info("tags registered", "count", len(msg.Tags))
+
+	// Flush any buffered events for the newly watched tags.
+	r.flushBuffersForTags(c, msg.Tags)
 }
 
 func (r *Relay) handleUpdateTags(c *Client, msg *UpdateTagsMsg) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	for _, tag := range msg.Remove {
 		delete(c.tags, tag)
@@ -245,13 +223,22 @@ func (r *Relay) handleUpdateTags(c *Client, msg *UpdateTagsMsg) {
 		r.byTag[tag][c] = true
 	}
 
-	r.log.Debug("tags updated", "did", c.did, "added", len(msg.Add), "removed", len(msg.Remove))
+	r.mu.Unlock()
+
+	r.log.Debug("tags updated", "added", len(msg.Add), "removed", len(msg.Remove))
+
+	// Flush any buffered events for newly added tags.
+	if len(msg.Add) > 0 {
+		r.flushBuffersForTags(c, msg.Add)
+	}
 }
 
 func (r *Relay) handleEventPosted(c *Client, msg *EventPostedMsg) {
-	// Check rate limit
-	if r.rateLimiter.IsLimited(c.did) {
-		r.log.Warn("rate limited event_posted", "did", c.did, "tag", msg.Tag)
+	// Rate-limit by the sender DID supplied in the envelope. The DID is
+	// unverified at this point but asyncVerify below will catch fakes and
+	// record failures so the rate-limiter tightens on repeat offenders.
+	if r.rateLimiter.IsLimited(msg.DID) {
+		r.log.Warn("rate limited event_posted", "did", msg.DID, "tag", msg.Tag)
 		return
 	}
 
@@ -269,41 +256,38 @@ func (r *Relay) handleEventPosted(c *Client, msg *EventPostedMsg) {
 		Type:    "new_event",
 		Tag:     msg.Tag,
 		RKey:    msg.RKey,
-		DID:     c.did,
 		Payload: msg.Payload,
 	}
 
-	// Collect local recipients (other devices of same DID watching this tag)
+	// Collect local recipients watching this tag (exclude the originating connection).
 	r.mu.RLock()
 	tagClients := r.byTag[msg.Tag]
 	var recipients []*Client
 	for client := range tagClients {
-		// Send to everyone watching this tag except the originating connection
 		if client != c {
 			recipients = append(recipients, client)
 		}
 	}
 	r.mu.RUnlock()
 
-	// Send to connected local recipients
 	for _, client := range recipients {
 		client.sendMsg(notification)
 	}
 
-	// Buffer for disconnected DIDs
+	// Buffer for clients that are currently disconnected from this tag.
 	r.bufferNotification(msg.Tag, notification)
 
-	r.log.Info("event routed", "did", c.did, "tag", msg.Tag, "rkey", msg.RKey,
+	r.log.Info("event routed", "did", msg.DID, "tag", msg.Tag, "rkey", msg.RKey,
 		"local_recipients", len(recipients), "relay_urls", len(msg.RelayURLs))
 
-	// Fan out to recipient Drawbridges (no DID — untrustworthy on unauthenticated endpoint)
+	// Fan out to recipient Drawbridges.
 	if len(msg.RelayURLs) > 0 {
 		go r.fanOut(msg.Tag, msg.RKey, msg.Payload, msg.RelayURLs)
 	}
 
-	// Async PDS verification
+	// Async PDS verification — uses the DID from the envelope.
 	if r.verifier != nil {
-		go r.asyncVerify(c.did, msg.RKey, msg.Tag)
+		go r.asyncVerify(msg.DID, msg.RKey, msg.Tag)
 	}
 }
 
@@ -430,29 +414,30 @@ func (r *Relay) deliverRelayEvent(notification *NewEventMsg) {
 func (r *Relay) bufferNotification(tag string, notification NewEventMsg) {
 	r.bufferMu.Lock()
 	defer r.bufferMu.Unlock()
-
-	for did, buf := range r.buffers {
-		// We don't have the buffered client's tags anymore, so we buffer all notifications.
-		// This is slightly over-broad but simple. The client will ignore irrelevant ones.
-		_ = did
+	if buf, ok := r.buffers[tag]; ok {
 		buf.messages = append(buf.messages, notification)
 	}
 }
 
-func (r *Relay) flushBuffer(c *Client) {
+// flushBuffersForTags drains disconnect buffers for the given tags and delivers
+// any buffered events to c. Called from handleWatchTags and handleUpdateTags
+// so that a reconnecting client receives events missed while offline.
+func (r *Relay) flushBuffersForTags(c *Client, tags []string) {
 	r.bufferMu.Lock()
-	buf, ok := r.buffers[c.did]
-	if ok {
-		delete(r.buffers, c.did)
+	var msgs []NewEventMsg
+	for _, tag := range tags {
+		if buf, ok := r.buffers[tag]; ok {
+			msgs = append(msgs, buf.messages...)
+			delete(r.buffers, tag)
+		}
 	}
 	r.bufferMu.Unlock()
 
-	if !ok || len(buf.messages) == 0 {
+	if len(msgs) == 0 {
 		return
 	}
-
-	r.log.Info("flushing disconnect buffer", "did", c.did, "count", len(buf.messages))
-	for _, msg := range buf.messages {
+	r.log.Info("flushing disconnect buffers", "count", len(msgs))
+	for _, msg := range msgs {
 		c.sendMsg(msg)
 	}
 }
@@ -499,10 +484,10 @@ func (r *Relay) cleanupBuffers() {
 	defer r.bufferMu.Unlock()
 
 	now := time.Now()
-	for did, buf := range r.buffers {
+	for tag, buf := range r.buffers {
 		if now.After(buf.expiresAt) {
-			r.log.Info("disconnect buffer expired", "did", did)
-			delete(r.buffers, did)
+			r.log.Info("disconnect buffer expired", "tag", tag)
+			delete(r.buffers, tag)
 		}
 	}
 }

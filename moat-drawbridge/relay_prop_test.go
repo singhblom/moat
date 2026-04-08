@@ -66,7 +66,6 @@ func TestProp_ByTagConsistency(t *testing.T) {
 		for j := 0; j < numClients; j++ {
 			c := &Client{
 				relay: env.relay,
-				did:   randomDID(rng),
 				tags:  make(map[string]bool),
 				send:  make(chan []byte, 10),
 			}
@@ -111,16 +110,13 @@ func TestProp_UnregisterRemovesFromAllMaps(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		env := newPropEnv()
 
-		did := randomDID(rng)
 		c := &Client{
 			relay: env.relay,
-			did:   did,
 			tags:  make(map[string]bool),
 			send:  make(chan []byte, 10),
 		}
 
 		env.relay.register(c)
-		env.relay.registerDID(c, did)
 
 		// Watch some tags
 		tags := make([]string, rng.Intn(5)+1)
@@ -132,18 +128,11 @@ func TestProp_UnregisterRemovesFromAllMaps(t *testing.T) {
 		// Unregister
 		env.relay.unregister(c)
 
-		// Check not in clients
+		// Check not in clients or byTag
 		env.relay.mu.RLock()
 		if env.relay.clients[c] {
 			t.Fatalf("client still in clients map after unregister")
 		}
-
-		// Check not in byDID
-		if didClients, ok := env.relay.byDID[did]; ok && didClients[c] {
-			t.Fatalf("client still in byDID map after unregister")
-		}
-
-		// Check not in byTag
 		for _, tag := range tags {
 			if tagClients, ok := env.relay.byTag[tag]; ok && tagClients[c] {
 				t.Fatalf("client still in byTag[%s] after unregister", tag)
@@ -170,7 +159,6 @@ func TestProp_EventRoutingExactWatchers(t *testing.T) {
 		for j := 0; j < numClients; j++ {
 			c := &Client{
 				relay: env.relay,
-				did:   randomDID(rng),
 				tags:  make(map[string]bool),
 				send:  make(chan []byte, 64),
 			}
@@ -253,7 +241,6 @@ func TestProp_UpdateTagsCorrectness(t *testing.T) {
 
 		c := &Client{
 			relay: env.relay,
-			did:   randomDID(rng),
 			tags:  make(map[string]bool),
 			send:  make(chan []byte, 10),
 		}
@@ -328,13 +315,11 @@ func TestProp_RelayToRelayRoutingMatchesTags(t *testing.T) {
 		for j := 0; j < numClients; j++ {
 			c := &Client{
 				relay: env.relay,
-				did:   randomDID(rng),
 				tags:  make(map[string]bool),
 				send:  make(chan []byte, 64),
 			}
 			clients[j] = c
 			env.relay.register(c)
-			env.relay.registerDID(c, c.did)
 
 			numTags := rng.Intn(5) + 1
 			tags := make([]string, numTags)
@@ -395,7 +380,6 @@ func TestProp_PayloadPreserved(t *testing.T) {
 
 		sender := &Client{
 			relay: env.relay,
-			did:   randomDID(rng),
 			tags:  make(map[string]bool),
 			send:  make(chan []byte, 64),
 		}
@@ -447,7 +431,6 @@ func TestProp_FanOutReachesAllURLs(t *testing.T) {
 		env := newPropEnv()
 		sender := &Client{
 			relay: env.relay,
-			did:   randomDID(rng),
 			tags:  make(map[string]bool),
 			send:  make(chan []byte, 64),
 		}
@@ -497,19 +480,15 @@ func TestProp_DedupAcrossBothPaths(t *testing.T) {
 		// Create a watcher
 		watcher := &Client{
 			relay: relay,
-			did:   randomDID(rng),
 			tags:  make(map[string]bool),
 			send:  make(chan []byte, 64),
 		}
 		relay.register(watcher)
 		relay.handleWatchTags(watcher, &WatchTagsMsg{Tags: []string{tag}})
 
-		senderDID := randomDID(rng)
-
 		// Path 1: local event_posted
 		sender := &Client{
 			relay: relay,
-			did:   senderDID,
 			tags:  make(map[string]bool),
 			send:  make(chan []byte, 64),
 		}
@@ -552,7 +531,6 @@ func TestProp_UpdateTagsOverlap(t *testing.T) {
 		env := newPropEnv()
 		c := &Client{
 			relay: env.relay,
-			did:   randomDID(rng),
 			tags:  make(map[string]bool),
 			send:  make(chan []byte, 10),
 		}

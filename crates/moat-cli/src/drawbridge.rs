@@ -194,8 +194,12 @@ impl DrawbridgeManager {
     /// The relay will:
     /// 1. Deliver locally to any of our other devices watching this tag
     /// 2. Fan out to each recipient's Drawbridge via POST /relay/event
+    ///
+    /// `did` is included in the envelope so the relay can use it for PDS
+    /// verification and rate-limiting without storing it on the connection.
     pub async fn notify_event_posted(
         &mut self,
+        did: &str,
         tag: &[u8; 16],
         rkey: &str,
         payload: &[u8],
@@ -208,6 +212,7 @@ impl DrawbridgeManager {
 
         let msg = serde_json::json!({
             "type": "event_posted",
+            "did": did,
             "tag": hex::encode(tag),
             "rkey": rkey,
             "payload": base64_encode(payload),
@@ -315,13 +320,6 @@ async fn own_read_loop(
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
                                 .to_string();
-                            // DID is included for local delivery (same relay),
-                            // omitted for relay-to-relay forwarded events
-                            let did = msg
-                                .get("did")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string();
                             // Payload is the base64-encoded ciphertext
                             let payload = msg
                                 .get("payload")
@@ -335,7 +333,6 @@ async fn own_read_loop(
                                     let _ = bg_tx.send(BgEvent::DrawbridgeNewEvent {
                                         tag,
                                         rkey,
-                                        did,
                                         payload,
                                     });
                                 }

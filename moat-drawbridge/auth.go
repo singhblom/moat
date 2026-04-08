@@ -185,10 +185,9 @@ func (r *Relay) authenticate(c *Client, resp *ChallengeResponseMsg) error {
 		return fmt.Errorf("signature verification failed: %w", err)
 	}
 
-	// Authentication successful (signature is valid)
-	r.registerDID(c, resp.DID)
-
-	// Async verify that the public key exists in the DID's key package records
+	// Async verify that the public key exists in the DID's key package records.
+	// The DID is not stored on the connection — it is only used transiently
+	// here and later sourced per-event from the event_posted envelope.
 	go r.asyncVerifyKeyPackage(resp.DID, pubKeyBytes)
 
 	return nil

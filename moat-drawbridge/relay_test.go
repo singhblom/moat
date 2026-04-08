@@ -257,13 +257,14 @@ func (tc *testClient) watchTags(tags ...string) {
 
 func (tc *testClient) postEvent(tag, rkey string) {
 	tc.t.Helper()
-	tc.sendJSON(map[string]any{"type": "event_posted", "tag": tag, "rkey": rkey})
+	tc.sendJSON(map[string]any{"type": "event_posted", "did": tc.did, "tag": tag, "rkey": rkey})
 }
 
 func (tc *testClient) postEventWithPayload(tag, rkey, payload string, relayURLs []string) {
 	tc.t.Helper()
 	tc.sendJSON(map[string]any{
 		"type":       "event_posted",
+		"did":        tc.did,
 		"tag":        tag,
 		"rkey":       rkey,
 		"payload":    payload,
@@ -404,9 +405,6 @@ func TestWatchAndNotify(t *testing.T) {
 	if msg["rkey"] != "abc123" {
 		t.Fatalf("wrong rkey: %v", msg["rkey"])
 	}
-	if msg["did"] != "did:plc:bob" {
-		t.Fatalf("wrong did: %v", msg["did"])
-	}
 }
 
 func TestUpdateTags(t *testing.T) {
@@ -520,8 +518,9 @@ func TestDisconnectBuffer(t *testing.T) {
 	bob.postEvent(tag, "buffered-rk")
 	time.Sleep(100 * time.Millisecond)
 
-	// Alice reconnects
+	// Alice reconnects and re-registers the same tag — buffer flushes on watch_tags.
 	alice2 := env.connect("did:plc:alice")
+	alice2.watchTags(tag)
 
 	// Should receive buffered notification
 	msg := alice2.readMsgAs("new_event")
@@ -543,9 +542,9 @@ func TestDisconnectBufferExpiry(t *testing.T) {
 	alice1.conn.Close()
 	time.Sleep(100 * time.Millisecond)
 
-	// Manually expire the buffer
+	// Manually expire the buffer (keyed by tag, not by DID).
 	env.relay.bufferMu.Lock()
-	if buf, ok := env.relay.buffers["did:plc:alice"]; ok {
+	if buf, ok := env.relay.buffers[tag]; ok {
 		buf.expiresAt = time.Now().Add(-1 * time.Second)
 	}
 	env.relay.bufferMu.Unlock()
@@ -555,8 +554,9 @@ func TestDisconnectBufferExpiry(t *testing.T) {
 	bob.postEvent(tag, "late-rk")
 	time.Sleep(100 * time.Millisecond)
 
-	// Alice reconnects - should NOT receive buffered notification
+	// Alice reconnects and re-registers the tag — no buffer exists so nothing is flushed.
 	alice2 := env.connect("did:plc:alice")
+	alice2.watchTags(tag)
 	alice2.expectNoMsg(200 * time.Millisecond)
 }
 
@@ -606,10 +606,10 @@ func TestPushTokenRegistration(t *testing.T) {
 
 	var found bool
 	for client := range env.relay.clients {
-		if client.did == "did:plc:alice" && client.pushToken != nil {
-			if client.pushToken.Platform == "fcm" && client.pushToken.Token == "test-token-123" {
-				found = true
-			}
+		if client.pushToken != nil &&
+			client.pushToken.Platform == "fcm" &&
+			client.pushToken.Token == "test-token-123" {
+			found = true
 		}
 	}
 	if !found {
@@ -738,9 +738,6 @@ func TestEventPostedWithPayload(t *testing.T) {
 	if msg["rkey"] != "rk1" {
 		t.Fatalf("wrong rkey: %v", msg["rkey"])
 	}
-	if msg["did"] != "did:plc:bob" {
-		t.Fatalf("wrong did: %v", msg["did"])
-	}
 	if msg["payload"] != payload {
 		t.Fatalf("expected payload %q, got %v", payload, msg["payload"])
 	}
@@ -764,8 +761,9 @@ func TestEventPostedPayloadInDisconnectBuffer(t *testing.T) {
 	bob.postEventWithPayload(tag, "rk-buf", payload, nil)
 	time.Sleep(100 * time.Millisecond)
 
-	// Alice reconnects
+	// Alice reconnects and re-registers the tag — buffer flushes on watch_tags.
 	alice2 := env.connect("did:plc:alice")
+	alice2.watchTags(tag)
 
 	// Should receive buffered notification with payload
 	msg := alice2.readMsgAs("new_event")
@@ -814,9 +812,9 @@ func TestRelayToRelay_BasicDelivery(t *testing.T) {
 	if msg["rkey"] != "rk-r2r" {
 		t.Fatalf("wrong rkey: %v", msg["rkey"])
 	}
-	// No DID in relay-to-relay notifications — it's untrustworthy
-	if msg["did"] != "" {
-		t.Fatalf("expected no DID in relay-to-relay notification, got %v", msg["did"])
+	// No DID field in new_event — the relay no longer forwards sender identity.
+	if _, hasDID := msg["did"]; hasDID {
+		t.Fatalf("expected no DID field in new_event, got %v", msg["did"])
 	}
 	if msg["payload"] != payload {
 		t.Fatalf("wrong payload: %v", msg["payload"])
@@ -933,8 +931,9 @@ func TestRelayToRelay_DisconnectBuffer(t *testing.T) {
 	resp.Body.Close()
 	time.Sleep(100 * time.Millisecond)
 
-	// Alice reconnects
+	// Alice reconnects and re-registers the tag — buffer flushes on watch_tags.
 	alice2 := env.connect("did:plc:alice")
+	alice2.watchTags(tag)
 
 	// Should receive buffered notification with payload
 	msg := alice2.readMsgAs("new_event")
@@ -943,6 +942,60 @@ func TestRelayToRelay_DisconnectBuffer(t *testing.T) {
 	}
 	if msg["payload"] != payload {
 		t.Fatalf("expected payload in buffer, got %v", msg["payload"])
+	}
+}
+
+// TestRateLimiting_DIDFromEnvelope verifies that the rate limiter keys by the DID
+// supplied in the event_posted envelope (not by a connection-level field).
+func TestRateLimiting_DIDFromEnvelope(t *testing.T) {
+	env := newTestEnv(t)
+	alice := env.connect("did:plc:alice")
+	bob := env.connect("did:plc:bob")
+
+	tag := "aabbccddaabbccddaabbccddaabbccdd"
+	alice.watchTags(tag)
+	time.Sleep(50 * time.Millisecond)
+
+	// Record 3 failures for bob's DID to trigger the rate limit.
+	env.relay.rateLimiter.RecordFailure("did:plc:bob")
+	env.relay.rateLimiter.RecordFailure("did:plc:bob")
+	env.relay.rateLimiter.RecordFailure("did:plc:bob")
+
+	// Bob posts an event with his DID in the envelope.
+	bob.postEvent(tag, "rate-limited-rk")
+
+	// Alice should NOT receive it — the envelope DID is rate-limited.
+	alice.expectNoMsg(200 * time.Millisecond)
+}
+
+// TestDisconnectBuffer_FlushByTag verifies that the disconnect buffer is keyed
+// by tag rather than by DID: a reconnecting client with any DID that watches the
+// same tag receives events buffered while the tag was unwatched.
+func TestDisconnectBuffer_FlushByTag(t *testing.T) {
+	env := newTestEnv(t)
+	bob := env.connect("did:plc:bob")
+
+	tag := "aabbccddaabbccddaabbccddaabbccdd"
+
+	// Alice connects, watches tag, then disconnects.
+	alice := env.connect("did:plc:alice")
+	alice.watchTags(tag)
+	time.Sleep(50 * time.Millisecond)
+	alice.conn.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	// Bob posts while Alice is disconnected.
+	bob.postEvent(tag, "rk-tag-flush")
+	time.Sleep(100 * time.Millisecond)
+
+	// Carol — a different DID — reconnects and watches the same tag.
+	carol := env.connect("did:plc:carol")
+	carol.watchTags(tag)
+
+	// Carol receives the buffered event: buffer flushes on tag match, not DID match.
+	msg := carol.readMsgAs("new_event")
+	if msg["rkey"] != "rk-tag-flush" {
+		t.Fatalf("expected rk-tag-flush, got %v", msg["rkey"])
 	}
 }
 

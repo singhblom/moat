@@ -25,10 +25,9 @@ type ErrorMsg struct {
 }
 
 type NewEventMsg struct {
-	Type    string `json:"type"` // "new_event"
+	Type    string `json:"type"`              // "new_event"
 	Tag     string `json:"tag"`
 	RKey    string `json:"rkey"`
-	DID     string `json:"did"`
 	Payload string `json:"payload,omitempty"` // base64-encoded ciphertext
 }
 
@@ -58,7 +57,8 @@ type UpdateTagsMsg struct {
 }
 
 type EventPostedMsg struct {
-	Type      string   `json:"type"` // "event_posted"
+	Type      string   `json:"type"`                 // "event_posted"
+	DID       string   `json:"did,omitempty"`        // sender DID, for PDS verification
 	Tag       string   `json:"tag"`
 	RKey      string   `json:"rkey"`
 	Payload   string   `json:"payload,omitempty"`    // base64-encoded ciphertext

@@ -255,6 +255,9 @@ class DrawbridgeService {
   // -- Envelope sending ------------------------------------------------------
 
   /// Notify own relay that an event was posted, with ciphertext for fan-out.
+  ///
+  /// The sender DID is included in the envelope so the relay can use it for
+  /// PDS verification and rate-limiting without storing it per-connection.
   void notifyEventPosted({
     required Uint8List tag,
     required String rkey,
@@ -265,6 +268,7 @@ class DrawbridgeService {
     final tagHex = _bytesToHex(tag);
     _ownChannel!.sink.add(jsonEncode({
       'type': 'event_posted',
+      'did': _did,
       'tag': tagHex,
       'rkey': rkey,
       'payload': base64Encode(payload),
