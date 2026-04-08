@@ -31,6 +31,10 @@ type Client struct {
 	// derived per-connection from request headers or relay config.
 	relayURL string
 
+	// deviceID is set when the client sends register_push; used by the relay to
+	// track which devices are currently connected for FCM suppression.
+	deviceID string
+
 	// Pre-auth handshake fields — zeroed after authentication completes.
 	nonce         string // challenge nonce, set when challenge is requested
 	challengeSent bool   // true after challenge has been sent
@@ -176,6 +180,9 @@ func (c *Client) handlePostAuth(msgType string, msg any) {
 				ExpiresAt: time.Now().Add(time.Duration(expiry) * time.Second),
 			}
 			c.relay.registerPush(reg)
+			// Associate this device_id with the live connection so the relay can
+			// suppress FCM notifications while the socket is open.
+			c.relay.setClientDeviceID(c, m.DeviceID)
 			c.log.Info("push token registered", "platform", m.Platform, "device_id", m.DeviceID)
 		}
 

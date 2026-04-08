@@ -21,6 +21,11 @@ var upgrader = websocket.Upgrader{
 
 const (
 	fanOutTimeout = 5 * time.Second
+
+	// graceWindow is the duration after a device_id-bearing client disconnects
+	// during which isDeviceOnline still returns true. This prevents duplicate
+	// FCM notifications during reconnect races.
+	graceWindow = 10 * time.Second
 )
 
 // PushRegistration holds a device's push notification registration.
@@ -35,9 +40,11 @@ type PushRegistration struct {
 
 // Relay is the central hub that manages client connections and notification routing.
 type Relay struct {
-	mu      sync.RWMutex
-	clients map[*Client]bool
-	byTag   map[string]map[*Client]bool
+	mu               sync.RWMutex
+	clients          map[*Client]bool
+	byTag            map[string]map[*Client]bool
+	byDevice         map[string]*Client    // keyed by device_id; only set for clients that sent register_push
+	recentDisconnects map[string]time.Time // device_id → disconnectedAt; cleared after graceWindow
 
 	bufferMu sync.Mutex
 	buffers  map[string]*DisconnectBuffer // keyed by tag hex
@@ -75,18 +82,20 @@ type DisconnectBuffer struct {
 // the relay URL from request headers or the TLS-based fallbackURL.
 func NewRelay(publicURL, fallbackURL string, resolver DIDResolver, verifier PDSVerifier, log *slog.Logger) *Relay {
 	return &Relay{
-		clients:     make(map[*Client]bool),
-		byTag:       make(map[string]map[*Client]bool),
-		buffers:     make(map[string]*DisconnectBuffer),
-		dedup:       make(map[string]time.Time),
-		pushTokens:  make(map[string]*PushRegistration),
-		resolver:    resolver,
-		verifier:    verifier,
-		rateLimiter: NewRateLimiter(),
-		publicURL:   publicURL,
-		relayURL:    fallbackURL,
-		startTime:   time.Now(),
-		log:         log,
+		clients:           make(map[*Client]bool),
+		byTag:             make(map[string]map[*Client]bool),
+		byDevice:          make(map[string]*Client),
+		recentDisconnects: make(map[string]time.Time),
+		buffers:           make(map[string]*DisconnectBuffer),
+		dedup:             make(map[string]time.Time),
+		pushTokens:        make(map[string]*PushRegistration),
+		resolver:          resolver,
+		verifier:          verifier,
+		rateLimiter:       NewRateLimiter(),
+		publicURL:         publicURL,
+		relayURL:          fallbackURL,
+		startTime:         time.Now(),
+		log:               log,
 	}
 }
 
@@ -164,6 +173,12 @@ func (r *Relay) unregister(c *Client) {
 				emptyTags = append(emptyTags, tag)
 			}
 		}
+	}
+
+	// Remove from device index and record disconnect time for the grace window.
+	if c.deviceID != "" {
+		delete(r.byDevice, c.deviceID)
+		r.recentDisconnects[c.deviceID] = time.Now()
 	}
 
 	r.mu.Unlock()
@@ -491,6 +506,43 @@ func (r *Relay) cleanupExpiredPushTokens() {
 	}
 }
 
+// setClientDeviceID associates deviceID with the live client connection so that
+// isDeviceOnline can suppress FCM notifications while the socket is open.
+// Called from the register_push handler; safe to call multiple times.
+func (r *Relay) setClientDeviceID(c *Client, deviceID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c.deviceID = deviceID
+	r.byDevice[deviceID] = c
+	// Clear any recent-disconnect entry — the device is back online.
+	delete(r.recentDisconnects, deviceID)
+}
+
+// isDeviceOnline returns true if a client presenting this device_id is currently
+// connected, or disconnected within the last graceWindow. The grace window
+// prevents duplicate notifications when a client reconnects quickly.
+func (r *Relay) isDeviceOnline(deviceID string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if _, ok := r.byDevice[deviceID]; ok {
+		return true
+	}
+	if t, ok := r.recentDisconnects[deviceID]; ok {
+		return time.Since(t) < graceWindow
+	}
+	return false
+}
+
+func (r *Relay) cleanupRecentDisconnects() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for deviceID, t := range r.recentDisconnects {
+		if time.Since(t) >= graceWindow {
+			delete(r.recentDisconnects, deviceID)
+		}
+	}
+}
+
 func (r *Relay) asyncVerify(did, rkey, tag string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -513,6 +565,7 @@ func (r *Relay) cleanupLoop(ctx context.Context) {
 			r.cleanupDedup()
 			r.cleanupBuffers()
 			r.cleanupExpiredPushTokens()
+			r.cleanupRecentDisconnects()
 		}
 	}
 }

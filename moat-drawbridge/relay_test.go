@@ -683,6 +683,98 @@ func TestPushTokensForTag(t *testing.T) {
 	}
 }
 
+func TestIsDeviceOnline_Connected(t *testing.T) {
+	env := newTestEnv(t)
+	alice := env.connect("did:plc:alice")
+	alice.sendJSON(map[string]any{
+		"type":      "register_push",
+		"device_id": "device-alice",
+		"platform":  "fcm",
+		"token":     "tok",
+		"tags":      []string{"aa"},
+	})
+	time.Sleep(50 * time.Millisecond)
+
+	if !env.relay.isDeviceOnline("device-alice") {
+		t.Fatal("expected device to be online while connected")
+	}
+	if env.relay.isDeviceOnline("device-unknown") {
+		t.Fatal("expected unknown device to be offline")
+	}
+}
+
+func TestIsDeviceOnline_GraceWindow(t *testing.T) {
+	env := newTestEnv(t)
+	alice := env.connect("did:plc:alice")
+	alice.sendJSON(map[string]any{
+		"type":      "register_push",
+		"device_id": "device-alice",
+		"platform":  "fcm",
+		"token":     "tok",
+		"tags":      []string{"aa"},
+	})
+	time.Sleep(50 * time.Millisecond)
+
+	// Disconnect alice
+	alice.conn.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	// Should still appear online within the grace window.
+	if !env.relay.isDeviceOnline("device-alice") {
+		t.Fatal("expected device to still be online within grace window after disconnect")
+	}
+
+	// Manually expire the grace window to avoid a 10s sleep in the test.
+	env.relay.mu.Lock()
+	env.relay.recentDisconnects["device-alice"] = time.Now().Add(-graceWindow - time.Millisecond)
+	env.relay.mu.Unlock()
+
+	if env.relay.isDeviceOnline("device-alice") {
+		t.Fatal("expected device to be offline after grace window expired")
+	}
+}
+
+func TestIsDeviceOnline_ReconnectClearsGrace(t *testing.T) {
+	env := newTestEnv(t)
+
+	// First connection registers and then disconnects.
+	alice := env.connect("did:plc:alice")
+	alice.sendJSON(map[string]any{
+		"type":      "register_push",
+		"device_id": "device-alice",
+		"platform":  "fcm",
+		"token":     "tok",
+		"tags":      []string{"aa"},
+	})
+	time.Sleep(50 * time.Millisecond)
+	alice.conn.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	// Manually expire the grace window.
+	env.relay.mu.Lock()
+	env.relay.recentDisconnects["device-alice"] = time.Now().Add(-graceWindow - time.Millisecond)
+	env.relay.mu.Unlock()
+
+	if env.relay.isDeviceOnline("device-alice") {
+		t.Fatal("expected offline after grace window expired")
+	}
+
+	// Second connection registers with the same device_id.
+	alice2 := env.connect("did:plc:alice2")
+	alice2.sendJSON(map[string]any{
+		"type":      "register_push",
+		"device_id": "device-alice",
+		"platform":  "fcm",
+		"token":     "tok2",
+		"tags":      []string{"aa"},
+	})
+	time.Sleep(50 * time.Millisecond)
+
+	if !env.relay.isDeviceOnline("device-alice") {
+		t.Fatal("expected device online after reconnect")
+	}
+}
+
 func TestPreAuthRejectsOtherMessages(t *testing.T) {
 	env := newTestEnv(t)
 	conn := env.connectRaw()
