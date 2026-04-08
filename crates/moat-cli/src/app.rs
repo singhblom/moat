@@ -3180,14 +3180,34 @@ impl App {
             self.resolve_conversation_handle(&conv);
         }
 
-        // Connect to own Drawbridge if configured
-        if let Some(ref url) = self.drawbridge_url.clone() {
-            if let Ok(sig_key) = self.keys.load_identity_key() {
-                let _ = self.bg_tx.send(BgEvent::DrawbridgeConnectOwn {
-                    url: url.clone(),
-                    did: did.clone(),
-                    signature_key: sig_key,
-                });
+        // Connect to own Drawbridge.
+        //
+        // URL resolution order:
+        //   1. Explicit --drawbridge-url override
+        //   2. PDS-advertised via com.atproto.server.describeServer
+        //   3. Hardcoded default (wss://moat-drawbridge.fly.dev/ws)
+        {
+            let url = if let Some(ref explicit) = self.drawbridge_url {
+                Some(explicit.clone())
+            } else if let Some(client) = &self.client {
+                client
+                    .describe_server_drawbridge_url(&self.pds_url.clone().unwrap_or_else(|| {
+                        moat_atproto::DEFAULT_PDS_URL.to_string()
+                    }))
+                    .await
+                    .or_else(|| Some(moat_atproto::DEFAULT_DRAWBRIDGE_URL.to_string()))
+            } else {
+                Some(moat_atproto::DEFAULT_DRAWBRIDGE_URL.to_string())
+            };
+
+            if let Some(url) = url {
+                if let Ok(sig_key) = self.keys.load_identity_key() {
+                    let _ = self.bg_tx.send(BgEvent::DrawbridgeConnectOwn {
+                        url,
+                        did: did.clone(),
+                        signature_key: sig_key,
+                    });
+                }
             }
         }
 

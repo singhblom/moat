@@ -966,6 +966,27 @@ impl MoatAtprotoClient {
     /// Resolves the sender's PDS endpoint from their DID, then fetches the blob
     /// via `com.atproto.sync.getBlob`. The returned bytes are the raw encrypted
     /// blob (`nonce || ciphertext`) — callers must decrypt with `blob_decrypt`.
+    /// Call `com.atproto.server.describeServer` on `pds_url` and return the
+    /// Drawbridge endpoint advertised under `services['social.moat.drawbridge']`,
+    /// or `None` if the PDS does not advertise one or the call fails.
+    pub async fn describe_server_drawbridge_url(&self, pds_url: &str) -> Option<String> {
+        let url = format!("{pds_url}/xrpc/com.atproto.server.describeServer");
+        let response = self.http_client.get(&url).send().await.ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        let json: serde_json::Value = response.json().await.ok()?;
+        let endpoint = json
+            .get("services")?
+            .get("social.moat.drawbridge")?
+            .get("endpoint")?
+            .as_str()?;
+        if endpoint.is_empty() {
+            return None;
+        }
+        Some(endpoint.to_string())
+    }
+
     pub async fn fetch_blob(&self, did: &str, cid: &str) -> Result<Vec<u8>> {
         let pds_url = self.resolve_pds_endpoint(did).await?;
         let url = format!(

@@ -101,6 +101,9 @@ struct AppState {
     /// Shared override for the `serviceEndpoint` in DID documents.
     /// Set via `PosternHandle::set_pds_endpoint_override` at runtime.
     pds_endpoint_override: Arc<Mutex<Option<String>>>,
+    /// Drawbridge URL advertised in `describeServer`.
+    /// Set via `PosternHandle::set_drawbridge_url` at runtime.
+    drawbridge_url: Arc<Mutex<Option<String>>>,
 }
 
 // ── Error helper ─────────────────────────────────────────────────────────────
@@ -536,6 +539,25 @@ async fn refresh_session() -> Response {
     .into_response()
 }
 
+// ── GET /xrpc/com.atproto.server.describeServer ───────────────────────────────
+
+async fn describe_server(State(state): State<AppState>) -> Json<Value> {
+    let drawbridge_url = state.drawbridge_url.lock().unwrap().clone();
+    let services = match drawbridge_url {
+        Some(url) => json!({
+            "social.moat.drawbridge": {
+                "type": "DrawbridgeService",
+                "endpoint": url,
+            }
+        }),
+        None => json!({}),
+    };
+    Json(json!({
+        "availableUserDomains": [],
+        "services": services,
+    }))
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 
 fn build_router(state: AppState) -> Router {
@@ -544,6 +566,10 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/xrpc/com.atproto.identity.resolveHandle",
             get(resolve_handle),
+        )
+        .route(
+            "/xrpc/com.atproto.server.describeServer",
+            get(describe_server),
         )
         .route(
             "/xrpc/com.atproto.server.createSession",
@@ -604,11 +630,13 @@ pub async fn spawn_postern(config: PosternConfig) -> PosternHandle {
     let server_url = format!("http://127.0.0.1:{}", local_addr.port());
 
     let pds_endpoint_override: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let drawbridge_url: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
     let state = AppState {
         store,
         server_url: server_url.clone(),
         pds_endpoint_override: pds_endpoint_override.clone(),
+        drawbridge_url: drawbridge_url.clone(),
     };
     let app = build_router(state);
 
@@ -627,5 +655,6 @@ pub async fn spawn_postern(config: PosternConfig) -> PosternHandle {
         data_dir,
         shutdown: Some(shutdown_tx),
         pds_endpoint_override,
+        drawbridge_url,
     }
 }

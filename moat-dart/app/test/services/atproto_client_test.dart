@@ -426,6 +426,103 @@ void main() {
     });
   });
 
+  group('describeServerDrawbridgeUrl', () {
+    test('returns endpoint when PDS advertises social.moat.drawbridge', () async {
+      final mockClient = MockClient((request) async {
+        expect(request.url.path, '/xrpc/com.atproto.server.describeServer');
+        return http.Response(
+          jsonEncode({
+            'availableUserDomains': ['bsky.social'],
+            'services': {
+              'social.moat.drawbridge': {
+                'type': 'DrawbridgeService',
+                'endpoint': 'wss://drawbridge.example.com/ws',
+              },
+            },
+          }),
+          200,
+        );
+      });
+
+      final client = AtprotoClient(httpClient: mockClient);
+      final url = await client.describeServerDrawbridgeUrl('https://pds.example.com');
+      expect(url, 'wss://drawbridge.example.com/ws');
+    });
+
+    test('returns null when services map is absent', () async {
+      final mockClient = MockClient((request) async => http.Response(
+            jsonEncode({'availableUserDomains': ['bsky.social']}),
+            200,
+          ));
+
+      final client = AtprotoClient(httpClient: mockClient);
+      final url = await client.describeServerDrawbridgeUrl('https://pds.example.com');
+      expect(url, isNull);
+    });
+
+    test('returns null when social.moat.drawbridge key is absent', () async {
+      final mockClient = MockClient((request) async => http.Response(
+            jsonEncode({
+              'services': {
+                'atproto.labeler': {'type': 'AtprotoLabeler', 'endpoint': 'https://other.com'},
+              },
+            }),
+            200,
+          ));
+
+      final client = AtprotoClient(httpClient: mockClient);
+      final url = await client.describeServerDrawbridgeUrl('https://pds.example.com');
+      expect(url, isNull);
+    });
+
+    test('returns null when endpoint field is absent', () async {
+      final mockClient = MockClient((request) async => http.Response(
+            jsonEncode({
+              'services': {
+                'social.moat.drawbridge': {'type': 'DrawbridgeService'},
+              },
+            }),
+            200,
+          ));
+
+      final client = AtprotoClient(httpClient: mockClient);
+      final url = await client.describeServerDrawbridgeUrl('https://pds.example.com');
+      expect(url, isNull);
+    });
+
+    test('returns null when endpoint is an empty string', () async {
+      final mockClient = MockClient((request) async => http.Response(
+            jsonEncode({
+              'services': {
+                'social.moat.drawbridge': {'type': 'DrawbridgeService', 'endpoint': ''},
+              },
+            }),
+            200,
+          ));
+
+      final client = AtprotoClient(httpClient: mockClient);
+      final url = await client.describeServerDrawbridgeUrl('https://pds.example.com');
+      expect(url, isNull);
+    });
+
+    test('returns null on HTTP error without throwing', () async {
+      final mockClient = MockClient((request) async =>
+          http.Response(jsonEncode({'error': 'ServerError'}), 500));
+
+      final client = AtprotoClient(httpClient: mockClient);
+      final url = await client.describeServerDrawbridgeUrl('https://pds.example.com');
+      expect(url, isNull);
+    });
+
+    test('returns null on network exception without throwing', () async {
+      final mockClient = MockClient((request) async => throw Exception('connection refused'));
+
+      final client = AtprotoClient(httpClient: mockClient);
+      final url = await client.describeServerDrawbridgeUrl('https://pds.example.com');
+      expect(url, isNull);
+    });
+  });
+
   group('publishEvent with blob ref', () {
     test('includes blob field in record when blobRef is provided', () async {
       Map<String, dynamic> capturedRecord = {};

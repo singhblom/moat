@@ -254,6 +254,12 @@ impl TestWorld {
                 .map(|(_, label)| label.map(|l| label_to_ws[l].clone()))
                 .collect();
 
+            // Advertise the first relay URL via Postern's describeServer so all
+            // participants can discover it after login without a CLI flag.
+            if let Some(url) = label_to_ws.values().next() {
+                postern.set_drawbridge_url(url);
+            }
+
             (dbs, Some(db_verify), endpoints)
         } else {
             let endpoints: Vec<Option<String>> = participants.iter().map(|_| None).collect();
@@ -301,10 +307,7 @@ impl TestWorld {
                 "--http".to_string(),
                 http_addr.clone(),
             ];
-            if let Some(db_url) = drawbridge_ws {
-                args.push("--drawbridge-url".to_string());
-                args.push(db_url.to_string());
-            }
+            let _ = drawbridge_ws; // URL is discovered via describeServer; no CLI flag needed
             if *kind == ParticipantKind::DartServer {
                 if let Some(ref lib) = rust_lib_path {
                     args.push("--lib-path".to_string());

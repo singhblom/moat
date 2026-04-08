@@ -273,11 +273,31 @@ No specific retention policy is mandated in the current protocol version.
 
 ## Drawbridge Discovery
 
-A Drawbridge is a WebSocket relay that provides real-time push notifications for new events. Each user connects only to their own Drawbridge (authenticated via DID challenge-response). Drawbridge discovery uses a public ATProto record rather than in-band MLS events.
+A Drawbridge is a WebSocket relay that provides real-time push notifications for new events. Each user connects only to their own Drawbridge (authenticated via DID challenge-response).
+
+### Selecting a Drawbridge URL
+
+Clients resolve their own Drawbridge URL in priority order:
+
+1. **PDS-advertised URL** — after login, the client calls `com.atproto.server.describeServer` on the user's PDS. If the response includes a `services['social.moat.drawbridge']['endpoint']` entry, that URL is used. This lets PDS operators bundle a default Drawbridge for their users with no configuration required on the client side.
+2. **Client default** — if the PDS does not advertise a Drawbridge, the client falls back to its own hardcoded default (e.g. `wss://moat-drawbridge.fly.dev/ws`).
+
+Example `describeServer` response advertising a Drawbridge:
+
+```json
+{
+  "services": {
+    "social.moat.drawbridge": {
+      "type": "DrawbridgeService",
+      "endpoint": "wss://drawbridge.example.com/ws"
+    }
+  }
+}
+```
 
 ### Drawbridge Configuration Record
 
-Each user publishes their Drawbridge URL(s) as an ATProto record:
+Once a client has connected to a Drawbridge, it publishes that URL as an ATProto record so that conversation partners can discover it for fan-out delivery:
 
 ```
 Collection: social.moat.drawbridgeConfig

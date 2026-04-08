@@ -35,6 +35,11 @@ pub struct PosternHandle {
     /// Used by `TestWorld` to route Drawbridge's PDS verification calls
     /// through a `proxy-db-verify` Toxiproxy proxy.
     pub(crate) pds_endpoint_override: Arc<Mutex<Option<String>>>,
+    /// Drawbridge URL advertised via `com.atproto.server.describeServer`.
+    ///
+    /// When `Some(url)`, `describeServer` includes a `social.moat.drawbridge`
+    /// entry in its `services` map.  When `None`, `services` is empty.
+    pub(crate) drawbridge_url: Arc<Mutex<Option<String>>>,
 }
 
 impl PosternHandle {
@@ -54,6 +59,20 @@ impl PosternHandle {
     /// key-package verification calls are routed through the proxy.
     pub fn set_pds_endpoint_override(&self, url: &str) {
         *self.pds_endpoint_override.lock().unwrap() = Some(url.to_string());
+    }
+
+    /// Set the Drawbridge URL advertised via `com.atproto.server.describeServer`.
+    ///
+    /// After calling this, `GET /xrpc/com.atproto.server.describeServer` will
+    /// include `services['social.moat.drawbridge']['endpoint']` in its response.
+    pub fn set_drawbridge_url(&self, url: &str) {
+        *self.drawbridge_url.lock().unwrap() = Some(url.to_string());
+    }
+
+    /// Clear the advertised Drawbridge URL so `describeServer` returns no
+    /// `social.moat.drawbridge` entry.
+    pub fn clear_drawbridge_url(&self) {
+        *self.drawbridge_url.lock().unwrap() = None;
     }
 }
 

@@ -763,6 +763,71 @@ async fn blob_accessible_from_any_did() {
 
 // ── 8. State isolation between instances ─────────────────────────────────────
 
+// ── describeServer ────────────────────────────────────────────────────────────
+
+/// Without a drawbridge URL configured, `services` is an empty object.
+#[tokio::test]
+async fn describe_server_no_drawbridge() {
+    let postern = postern_one_account().await;
+
+    let resp = reqwest::get(format!(
+        "{}/xrpc/com.atproto.server.describeServer",
+        postern.url()
+    ))
+    .await
+    .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["services"], json!({}));
+}
+
+/// After `set_drawbridge_url`, `describeServer` includes the endpoint under
+/// `services['social.moat.drawbridge']`.
+#[tokio::test]
+async fn describe_server_with_drawbridge() {
+    let postern = postern_one_account().await;
+    postern.set_drawbridge_url("wss://drawbridge.example.com/ws");
+
+    let resp = reqwest::get(format!(
+        "{}/xrpc/com.atproto.server.describeServer",
+        postern.url()
+    ))
+    .await
+    .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["services"]["social.moat.drawbridge"]["endpoint"],
+        "wss://drawbridge.example.com/ws"
+    );
+    assert_eq!(
+        body["services"]["social.moat.drawbridge"]["type"],
+        "DrawbridgeService"
+    );
+}
+
+/// `clear_drawbridge_url` removes the entry so `services` is empty again.
+#[tokio::test]
+async fn describe_server_clear_drawbridge() {
+    let postern = postern_one_account().await;
+    postern.set_drawbridge_url("wss://drawbridge.example.com/ws");
+    postern.clear_drawbridge_url();
+
+    let body: Value = reqwest::get(format!(
+        "{}/xrpc/com.atproto.server.describeServer",
+        postern.url()
+    ))
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+
+    assert_eq!(body["services"], json!({}));
+}
+
 /// Two Postern instances are fully isolated: records written to one are not
 /// visible in the other.
 #[tokio::test]

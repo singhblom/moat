@@ -246,6 +246,30 @@ class AtprotoClient {
     _session = null;
   }
 
+  /// Calls `com.atproto.server.describeServer` on [pdsUrl] and returns the
+  /// drawbridge endpoint advertised under `services['social.moat.drawbridge']`,
+  /// or null if the PDS does not advertise one or the call fails.
+  Future<String?> describeServerDrawbridgeUrl(String pdsUrl) async {
+    try {
+      final response = await _get(
+        '$pdsUrl/xrpc/com.atproto.server.describeServer',
+      );
+      final services = response['services'];
+      if (services is Map) {
+        final entry = services['social.moat.drawbridge'];
+        if (entry is Map) {
+          final endpoint = entry['endpoint'];
+          if (endpoint is String && endpoint.isNotEmpty) {
+            return endpoint;
+          }
+        }
+      }
+    } catch (e) {
+      moatLog('AtprotoClient: describeServer drawbridge lookup failed: $e');
+    }
+    return null;
+  }
+
   Future<String> resolveDid(String handle) async {
     _requireSession();
 

@@ -70,7 +70,7 @@ class MoatApp extends StatelessWidget {
     final authService = AuthService(
       atprotoClient: atprotoClient,
       secureStorage: secureStorage,
-      drawbridgeUrl: defaultDrawbridgeUrl,
+      drawbridgeUrl: null,
     );
     final authProvider = AuthProvider(service: authService)..init();
 
