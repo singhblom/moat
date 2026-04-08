@@ -66,9 +66,17 @@ type EventPostedMsg struct {
 }
 
 type RegisterPushMsg struct {
-	Type     string `json:"type"`     // "register_push"
-	Platform string `json:"platform"` // "fcm" or "apns"
-	Token    string `json:"token"`
+	Type      string   `json:"type"`               // "register_push"
+	DeviceID  string   `json:"device_id"`
+	Platform  string   `json:"platform"`           // "fcm" or "apns"
+	Token     string   `json:"token"`
+	Tags      []string `json:"tags"`
+	ExpirySec int64    `json:"expiry_sec,omitempty"` // optional, defaults to 30 days
+}
+
+type UnregisterPushMsg struct {
+	Type     string `json:"type"`      // "unregister_push"
+	DeviceID string `json:"device_id"`
 }
 
 // Relay-to-relay inbound event (received via POST /relay/event).
@@ -114,6 +122,12 @@ func parseMessage(data []byte) (string, any, error) {
 		return env.Type, &msg, nil
 	case "register_push":
 		var msg RegisterPushMsg
+		if err := json.Unmarshal(data, &msg); err != nil {
+			return env.Type, nil, err
+		}
+		return env.Type, &msg, nil
+	case "unregister_push":
+		var msg UnregisterPushMsg
 		if err := json.Unmarshal(data, &msg); err != nil {
 			return env.Type, nil, err
 		}

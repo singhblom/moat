@@ -18,21 +18,14 @@ const (
 	sendBufSize    = 64
 )
 
-// PushToken holds a client's push notification token.
-type PushToken struct {
-	Platform string // "fcm" or "apns"
-	Token    string
-}
-
 // Client represents a single WebSocket connection.
 type Client struct {
-	relay     *Relay
-	conn      *websocket.Conn
-	tags      map[string]bool // watched tags
-	pushToken *PushToken      // optional
-	send      chan []byte     // outbound message queue
-	authed    bool
-	log       *slog.Logger
+	relay  *Relay
+	conn   *websocket.Conn
+	tags   map[string]bool // watched tags
+	send   chan []byte     // outbound message queue
+	authed bool
+	log    *slog.Logger
 
 	// relayURL is the public-facing relay URL used for challenge verification,
 	// derived per-connection from request headers or relay config.
@@ -167,10 +160,29 @@ func (c *Client) handlePostAuth(msgType string, msg any) {
 
 	case "register_push":
 		if m, ok := msg.(*RegisterPushMsg); ok {
-			c.relay.mu.Lock()
-			c.pushToken = &PushToken{Platform: m.Platform, Token: m.Token}
-			c.relay.mu.Unlock()
-			c.log.Info("push token registered", "platform", m.Platform)
+			expiry := int64(30 * 24 * 3600)
+			if m.ExpirySec > 0 {
+				expiry = m.ExpirySec
+			}
+			tags := make(map[string]bool, len(m.Tags))
+			for _, t := range m.Tags {
+				tags[t] = true
+			}
+			reg := &PushRegistration{
+				DeviceID:  m.DeviceID,
+				Platform:  m.Platform,
+				Token:     m.Token,
+				Tags:      tags,
+				ExpiresAt: time.Now().Add(time.Duration(expiry) * time.Second),
+			}
+			c.relay.registerPush(reg)
+			c.log.Info("push token registered", "platform", m.Platform, "device_id", m.DeviceID)
+		}
+
+	case "unregister_push":
+		if m, ok := msg.(*UnregisterPushMsg); ok {
+			c.relay.unregisterPush(m.DeviceID)
+			c.log.Info("push token unregistered", "device_id", m.DeviceID)
 		}
 
 	case "event_posted":

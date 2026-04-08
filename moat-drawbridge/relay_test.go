@@ -590,30 +590,96 @@ func TestAsyncVerification(t *testing.T) {
 func TestPushTokenRegistration(t *testing.T) {
 	env := newTestEnv(t)
 	alice := env.connect("did:plc:alice")
+	tag := "aabbccdd00112233aabbccdd00112233"
 
 	alice.sendJSON(map[string]any{
-		"type":     "register_push",
-		"platform": "fcm",
-		"token":    "test-token-123",
+		"type":      "register_push",
+		"device_id": "device-alice-1",
+		"platform":  "fcm",
+		"token":     "test-token-123",
+		"tags":      []string{tag},
 	})
 
 	// Give time for message processing
 	time.Sleep(100 * time.Millisecond)
 
-	// Verify via relay internals
-	env.relay.mu.RLock()
-	defer env.relay.mu.RUnlock()
+	env.relay.pushMu.RLock()
+	reg := env.relay.pushTokens["device-alice-1"]
+	env.relay.pushMu.RUnlock()
 
-	var found bool
-	for client := range env.relay.clients {
-		if client.pushToken != nil &&
-			client.pushToken.Platform == "fcm" &&
-			client.pushToken.Token == "test-token-123" {
-			found = true
-		}
-	}
-	if !found {
+	if reg == nil {
 		t.Fatal("push token not registered")
+	}
+	if reg.Platform != "fcm" {
+		t.Errorf("platform: got %q, want %q", reg.Platform, "fcm")
+	}
+	if reg.Token != "test-token-123" {
+		t.Errorf("token: got %q, want %q", reg.Token, "test-token-123")
+	}
+	if !reg.Tags[tag] {
+		t.Errorf("tag %q not in registration", tag)
+	}
+}
+
+func TestPushTokenUnregistration(t *testing.T) {
+	env := newTestEnv(t)
+	alice := env.connect("did:plc:alice")
+
+	alice.sendJSON(map[string]any{
+		"type":      "register_push",
+		"device_id": "device-alice-2",
+		"platform":  "fcm",
+		"token":     "test-token-456",
+		"tags":      []string{"aabbccdd00112233aabbccdd00112233"},
+	})
+	time.Sleep(100 * time.Millisecond)
+
+	alice.sendJSON(map[string]any{
+		"type":      "unregister_push",
+		"device_id": "device-alice-2",
+	})
+	time.Sleep(100 * time.Millisecond)
+
+	env.relay.pushMu.RLock()
+	reg := env.relay.pushTokens["device-alice-2"]
+	env.relay.pushMu.RUnlock()
+
+	if reg != nil {
+		t.Fatal("push token should have been removed")
+	}
+}
+
+func TestPushTokensForTag(t *testing.T) {
+	env := newTestEnv(t)
+	alice := env.connect("did:plc:alice")
+	bob := env.connect("did:plc:bob")
+	tag := "aabbccdd00112233aabbccdd00112233"
+	otherTag := "1111111111111111111111111111111"
+
+	alice.sendJSON(map[string]any{
+		"type":      "register_push",
+		"device_id": "device-alice-3",
+		"platform":  "fcm",
+		"token":     "token-alice",
+		"tags":      []string{tag},
+	})
+	bob.sendJSON(map[string]any{
+		"type":      "register_push",
+		"device_id": "device-bob-3",
+		"platform":  "apns",
+		"token":     "token-bob",
+		"tags":      []string{otherTag},
+	})
+	time.Sleep(100 * time.Millisecond)
+
+	regs := env.relay.pushTokensForTag(tag)
+	if len(regs) != 1 || regs[0].DeviceID != "device-alice-3" {
+		t.Fatalf("pushTokensForTag(%q): got %v, want [device-alice-3]", tag, regs)
+	}
+
+	regs = env.relay.pushTokensForTag(otherTag)
+	if len(regs) != 1 || regs[0].DeviceID != "device-bob-3" {
+		t.Fatalf("pushTokensForTag(%q): got %v, want [device-bob-3]", otherTag, regs)
 	}
 }
 

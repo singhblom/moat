@@ -23,6 +23,16 @@ const (
 	fanOutTimeout = 5 * time.Second
 )
 
+// PushRegistration holds a device's push notification registration.
+// Stored relay-wide, keyed by device_id.
+type PushRegistration struct {
+	DeviceID  string
+	Platform  string // "fcm" or "apns"
+	Token     string
+	Tags      map[string]bool
+	ExpiresAt time.Time
+}
+
 // Relay is the central hub that manages client connections and notification routing.
 type Relay struct {
 	mu      sync.RWMutex
@@ -34,6 +44,9 @@ type Relay struct {
 
 	dedupMu sync.Mutex
 	dedup   map[string]time.Time
+
+	pushMu     sync.RWMutex
+	pushTokens map[string]*PushRegistration // keyed by device_id
 
 	resolver    DIDResolver
 	verifier    PDSVerifier
@@ -66,6 +79,7 @@ func NewRelay(publicURL, fallbackURL string, resolver DIDResolver, verifier PDSV
 		byTag:       make(map[string]map[*Client]bool),
 		buffers:     make(map[string]*DisconnectBuffer),
 		dedup:       make(map[string]time.Time),
+		pushTokens:  make(map[string]*PushRegistration),
 		resolver:    resolver,
 		verifier:    verifier,
 		rateLimiter: NewRateLimiter(),
@@ -442,6 +456,41 @@ func (r *Relay) flushBuffersForTags(c *Client, tags []string) {
 	}
 }
 
+func (r *Relay) registerPush(reg *PushRegistration) {
+	r.pushMu.Lock()
+	defer r.pushMu.Unlock()
+	r.pushTokens[reg.DeviceID] = reg
+}
+
+func (r *Relay) unregisterPush(deviceID string) {
+	r.pushMu.Lock()
+	defer r.pushMu.Unlock()
+	delete(r.pushTokens, deviceID)
+}
+
+func (r *Relay) pushTokensForTag(tag string) []*PushRegistration {
+	r.pushMu.RLock()
+	defer r.pushMu.RUnlock()
+	var result []*PushRegistration
+	for _, reg := range r.pushTokens {
+		if reg.Tags[tag] {
+			result = append(result, reg)
+		}
+	}
+	return result
+}
+
+func (r *Relay) cleanupExpiredPushTokens() {
+	r.pushMu.Lock()
+	defer r.pushMu.Unlock()
+	now := time.Now()
+	for deviceID, reg := range r.pushTokens {
+		if now.After(reg.ExpiresAt) {
+			delete(r.pushTokens, deviceID)
+		}
+	}
+}
+
 func (r *Relay) asyncVerify(did, rkey, tag string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -463,6 +512,7 @@ func (r *Relay) cleanupLoop(ctx context.Context) {
 		case <-ticker.C:
 			r.cleanupDedup()
 			r.cleanupBuffers()
+			r.cleanupExpiredPushTokens()
 		}
 	}
 }
