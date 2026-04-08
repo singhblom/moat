@@ -515,6 +515,36 @@ fn moat_cli_binary() -> Result<PathBuf> {
     Ok(bin)
 }
 
+/// Returns `true` if any `.dart` file under `dir` has a modification time
+/// strictly newer than `since`.  Directories named `.dart_tool`, `build`, or
+/// `.git` are skipped to keep the walk fast.
+fn dart_source_is_newer(dir: &std::path::Path, since: std::time::SystemTime) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str == ".dart_tool" || name_str == "build" || name_str == ".git" {
+            continue;
+        }
+        if path.is_dir() {
+            if dart_source_is_newer(&path, since) {
+                return true;
+            }
+        } else if path.extension().map_or(false, |e| e == "dart") {
+            let mtime = std::fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            if mtime > since {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Path to the compiled `moat_dart_server` binary and Rust FFI dylib.
 ///
 /// Builds the Rust FFI lib (`rust_lib_moat_flutter`) and compiles the Dart
@@ -569,8 +599,17 @@ fn dart_server_binary() -> Result<(PathBuf, PathBuf)> {
     std::fs::create_dir_all(&dart_bin_dir).context("create moat-dart-server output dir")?;
     let dart_bin = dart_bin_dir.join("moat_dart_server");
 
-    if !dart_bin.exists() {
-        eprintln!("beacon: moat_dart_server not found, compiling…");
+    let dart_needs_rebuild = !dart_bin.exists() || {
+        let bin_mtime = std::fs::metadata(&dart_bin)
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        // Rebuild if any .dart file in moat-dart/ is newer than the binary.
+        let dart_src_dir = workspace_root.join("moat-dart");
+        dart_source_is_newer(&dart_src_dir, bin_mtime)
+    };
+
+    if dart_needs_rebuild {
+        eprintln!("beacon: moat_dart_server missing or stale, compiling…");
         let dart_source = workspace_root
             .join("moat-dart")
             .join("server")
