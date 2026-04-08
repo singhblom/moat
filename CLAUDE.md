@@ -53,6 +53,7 @@ Rust workspace + Flutter app:
 3. **Private keys stay local** - Never stored on PDS, kept in `~/.moat/keys/`.
 4. **Storage is automatic** - `FileStorage` persists MLS state to `~/.moat/mls.bin` on every operation.
 5. **Network calls are async** - Uses Tokio; be aware of sync/async boundaries.
+6. **Maximize shared code between UI and http** - Both the dart app and the moat-cli rust app contain both a http interface and a UI. As much logic as possible must be shared between these two interfaces as possible. The only was Beacon can test the apps is through the http interface so any logic outside of that is not tested by the Beacon integration tests.
 
 ## Key Types
 
