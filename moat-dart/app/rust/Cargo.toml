@@ -20,6 +20,7 @@ getrandom = { version = "0.2", features = ["js"] }
 [dev-dependencies]
 ed25519-dalek = "2"
 proptest = "1"
+tempfile = "3"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }

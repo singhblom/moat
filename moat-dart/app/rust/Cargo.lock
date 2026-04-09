@@ -2032,6 +2032,7 @@ dependencies = [
  "moat-core",
  "proptest",
  "serde_json",
+ "tempfile",
  "thumbhash",
 ]
 

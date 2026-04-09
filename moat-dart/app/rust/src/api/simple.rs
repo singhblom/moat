@@ -639,6 +639,147 @@ pub struct ThumbHashResult {
     pub height: u32,
 }
 
+// ---- FCM push decrypt (native-only: uses std::fs) ----
+//
+// The web platform uses a different I/O model (IndexedDB); a companion
+// `decrypt_push_payload_web` function will be added when Web Push is
+// implemented, taking state bytes directly instead of a file path.
+
+/// Result of decrypting a push notification payload.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug)]
+pub struct DecryptedPush {
+    /// DID of the message sender, extracted from their MLS credential.
+    pub sender_did: Option<String>,
+    /// Human-readable preview for the notification body (truncated to 200 chars).
+    /// `None` for protocol messages (commit, welcome, checkpoint) that should not
+    /// generate a visible notification.
+    pub plaintext_preview: Option<String>,
+    /// The MLS group ID the message belongs to.
+    pub group_id: Vec<u8>,
+    /// 16-byte message ID for deduplication (present for Message and Reaction events).
+    pub message_id: Option<Vec<u8>>,
+}
+
+/// Decrypt a push notification payload for use in a background message handler
+/// or iOS Notification Service Extension.
+///
+/// Reads the MLS session state from `state_path`, scans `group_ids` to find
+/// which group the `tag` belongs to, decrypts `ciphertext`, advances the seen
+/// counter, and writes the updated state back to `state_path` atomically
+/// (write to `<state_path>.push_tmp`, then rename).
+///
+/// Returns `Err` if the tag is not matched in any group or if decrypt fails.
+///
+/// # Concurrency
+/// The rename is atomic on POSIX. If the foreground app races to write state
+/// simultaneously one update will win; the dedup map in moat-core makes
+/// double-processing safe.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn decrypt_push_payload(
+    state_path: String,
+    group_ids: Vec<Vec<u8>>,
+    tag: Vec<u8>,
+    ciphertext: Vec<u8>,
+) -> Result<DecryptedPush, String> {
+    // 1. Load session.
+    let state_bytes = std::fs::read(&state_path)
+        .map_err(|e| format!("failed to read state file: {e}"))?;
+    let session = MoatSession::from_state(&state_bytes).map_err(|e| e.to_string())?;
+
+    // 2. Validate tag length.
+    let tag_arr: [u8; 16] = tag
+        .try_into()
+        .map_err(|_| "tag must be 16 bytes".to_string())?;
+
+    // 3. Find the group whose candidate tags include this tag.
+    let mut matched_group: Option<Vec<u8>> = None;
+    'outer: for group_id in &group_ids {
+        let candidates = session
+            .populate_candidate_tags(group_id)
+            .map_err(|e| e.to_string())?;
+        for candidate in candidates {
+            if candidate == tag_arr {
+                matched_group = Some(group_id.clone());
+                break 'outer;
+            }
+        }
+    }
+    let group_id = matched_group.ok_or_else(|| "tag not matched in any group".to_string())?;
+
+    // 4. Decrypt.
+    let outcome = session
+        .decrypt_event(&group_id, &ciphertext)
+        .map_err(|e| e.to_string())?;
+    let result = outcome.into_result();
+
+    // 5. Advance seen counter so the next populate_candidate_tags starts past this message.
+    session.mark_tag_seen(&tag_arr);
+
+    // 6. Persist updated state atomically.
+    let new_state = session.export_state().map_err(|e| e.to_string())?;
+    let tmp_path = format!("{}.push_tmp", state_path);
+    std::fs::write(&tmp_path, &new_state)
+        .map_err(|e| format!("failed to write tmp state: {e}"))?;
+    std::fs::rename(&tmp_path, &state_path)
+        .map_err(|e| format!("failed to rename state: {e}"))?;
+
+    // 7. Build and return the result.
+    let plaintext_preview = push_plaintext_preview(&result.event);
+    let sender_did = result.sender.map(|s| s.did);
+    Ok(DecryptedPush {
+        sender_did,
+        plaintext_preview,
+        group_id,
+        message_id: result.event.message_id,
+    })
+}
+
+/// Derive a notification preview string from a decrypted event.
+#[cfg(not(target_arch = "wasm32"))]
+fn push_plaintext_preview(event: &Event) -> Option<String> {
+    use moat_core::{MessagePayload, ParsedMessagePayload};
+    match &event.kind {
+        EventKind::Message(_) => match ParsedMessagePayload::from_bytes(&event.payload) {
+            ParsedMessagePayload::Structured(MessagePayload::ShortText(m))
+            | ParsedMessagePayload::Structured(MessagePayload::MediumText(m)) => {
+                let t = &m.text;
+                Some(if t.len() > 200 {
+                    format!("{}…", &t[..200])
+                } else {
+                    t.clone()
+                })
+            }
+            ParsedMessagePayload::Structured(MessagePayload::LongText(m)) => {
+                let t = &m.preview_text;
+                Some(if t.len() > 200 {
+                    format!("{}…", &t[..200])
+                } else {
+                    t.clone()
+                })
+            }
+            ParsedMessagePayload::Structured(MessagePayload::Image(media)) => {
+                Some(push_media_label(media.mime.as_deref()).to_string())
+            }
+            ParsedMessagePayload::LegacyPlaintext(bytes) => String::from_utf8(bytes).ok(),
+        },
+        EventKind::Modifier(ModifierKind::Reaction) => event
+            .reaction_payload()
+            .map(|rp| format!("Reacted with {}", rp.emoji)),
+        _ => None,
+    }
+}
+
+/// Map a MIME type to a human-readable emoji label for media messages.
+#[cfg(not(target_arch = "wasm32"))]
+fn push_media_label(mime: Option<&str>) -> &'static str {
+    match mime {
+        Some(m) if m == "image/gif" => "🎞️ GIF",
+        Some(m) if m.starts_with("video/") => "🎬 Video",
+        _ => "📷 Photo",
+    }
+}
+
 #[frb(init)]
 pub fn init_app() {
     flutter_rust_bridge::setup_default_user_utils();
@@ -1233,5 +1374,147 @@ mod proptest_drawbridge {
             let sig = Signature::from_bytes(&result.signature.try_into().unwrap());
             prop_assert!(vk.verify(&wrong, &sig).is_err());
         }
+    }
+}
+
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+mod push_tests {
+    use super::*;
+    use moat_core::{MessagePayload, TextMessage};
+
+    /// Helper: set up a two-party group (Alice creator, Bob member) and return the
+    /// group_id, Alice's key bundle, and both session handles.
+    fn two_party_group() -> (Vec<u8>, Vec<u8>, MoatSessionHandle, MoatSessionHandle) {
+        let alice = MoatSessionHandle::new_session();
+        let alice_kp = alice
+            .generate_key_package("did:plc:alice".into(), "Desktop".into())
+            .unwrap();
+        let group_id = alice
+            .create_group("did:plc:alice".into(), "Desktop".into(), alice_kp.key_bundle.clone())
+            .unwrap();
+
+        let bob = MoatSessionHandle::new_session();
+        let bob_kp = bob
+            .generate_key_package("did:plc:bob".into(), "Phone".into())
+            .unwrap();
+
+        let welcome = alice
+            .add_member(group_id.clone(), alice_kp.key_bundle.clone(), bob_kp.key_package)
+            .unwrap();
+        bob.process_welcome(welcome.welcome).unwrap();
+
+        (group_id, alice_kp.key_bundle, alice, bob)
+    }
+
+    #[test]
+    fn test_decrypt_push_payload_text_message() {
+        let (group_id, alice_kb, alice, bob) = two_party_group();
+
+        // Alice encrypts a structured short-text message.
+        let payload = serde_json::to_vec(&MessagePayload::ShortText(TextMessage {
+            text: "Hello, Bob!".into(),
+        }))
+        .unwrap();
+        let encrypted = alice
+            .encrypt_event(
+                group_id.clone(),
+                alice_kb,
+                EventDto {
+                    kind: EventKindDto::Message,
+                    group_id: group_id.clone(),
+                    epoch: 0,
+                    payload,
+                    message_id: None,
+                },
+            )
+            .unwrap();
+
+        // Save Bob's state to a temp file.
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let state_path = tmp.path().to_str().unwrap().to_string();
+        let bob_state_before = bob.export_state().unwrap();
+        std::fs::write(&state_path, &bob_state_before).unwrap();
+
+        // Decrypt via push path.
+        let result = decrypt_push_payload(
+            state_path.clone(),
+            vec![group_id.clone()],
+            encrypted.tag,
+            encrypted.ciphertext,
+        )
+        .expect("decrypt_push_payload should succeed");
+
+        assert_eq!(result.group_id, group_id);
+        assert_eq!(result.sender_did, Some("did:plc:alice".to_string()));
+        assert_eq!(result.plaintext_preview, Some("Hello, Bob!".to_string()));
+        assert!(result.message_id.is_some());
+        assert_eq!(result.message_id.as_ref().unwrap().len(), 16);
+
+        // State file must have been updated (seen counter advanced).
+        let bob_state_after = std::fs::read(&state_path).unwrap();
+        assert_ne!(bob_state_after, bob_state_before);
+    }
+
+    #[test]
+    fn test_decrypt_push_payload_tag_not_found() {
+        let (group_id, _alice_kb, _alice, bob) = two_party_group();
+
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let state_path = tmp.path().to_str().unwrap().to_string();
+        std::fs::write(&state_path, bob.export_state().unwrap()).unwrap();
+
+        // Valid group ID but a tag that won't match any candidate.
+        let err = decrypt_push_payload(
+            state_path,
+            vec![group_id],
+            vec![0u8; 16], // wrong tag
+            vec![0u8; 64],
+        );
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("tag not matched"));
+    }
+
+    #[test]
+    fn test_decrypt_push_payload_wrong_ciphertext() {
+        let (group_id, alice_kb, alice, bob) = two_party_group();
+
+        // Alice encrypts a message to get a valid tag.
+        let encrypted = alice
+            .encrypt_event(
+                group_id.clone(),
+                alice_kb,
+                EventDto {
+                    kind: EventKindDto::Message,
+                    group_id: group_id.clone(),
+                    epoch: 0,
+                    payload: b"test".to_vec(),
+                    message_id: None,
+                },
+            )
+            .unwrap();
+
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let state_path = tmp.path().to_str().unwrap().to_string();
+        std::fs::write(&state_path, bob.export_state().unwrap()).unwrap();
+
+        // Correct tag, corrupted ciphertext → decrypt error.
+        let err = decrypt_push_payload(
+            state_path,
+            vec![group_id],
+            encrypted.tag,
+            vec![0u8; 64], // garbage
+        );
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_push_media_label() {
+        assert_eq!(push_media_label(None), "📷 Photo");
+        assert_eq!(push_media_label(Some("image/jpeg")), "📷 Photo");
+        assert_eq!(push_media_label(Some("image/png")), "📷 Photo");
+        assert_eq!(push_media_label(Some("image/gif")), "🎞️ GIF");
+        assert_eq!(push_media_label(Some("video/mp4")), "🎬 Video");
+        assert_eq!(push_media_label(Some("video/webm")), "🎬 Video");
     }
 }
