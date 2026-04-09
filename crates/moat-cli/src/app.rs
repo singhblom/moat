@@ -1666,6 +1666,17 @@ impl App {
                         // Register all current tags on our own relay
                         self.send_all_watched_tags().await;
 
+                        // Register push token so the relay can suppress FCM while
+                        // this WebSocket is live and deliver when we disconnect.
+                        {
+                            let device_id_hex = hex::encode(self.mls.device_id());
+                            let token = format!("moat-cli-{device_id_hex}");
+                            let tags: Vec<[u8; 16]> = self.tag_map.keys().copied().collect();
+                            if let Err(e) = self.drawbridge.register_push(&device_id_hex, &token, &tags).await {
+                                self.debug_log.log(&format!("drawbridge: register_push failed: {e}"));
+                            }
+                        }
+
                         // Publish our relay config so partners can discover us
                         if let Some(ref client) = self.client {
                             let client = client.clone();

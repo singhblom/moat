@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -55,6 +56,8 @@ type Relay struct {
 	pushMu     sync.RWMutex
 	pushTokens map[string]*PushRegistration // keyed by device_id
 
+	pushSender FCMSender
+
 	resolver    DIDResolver
 	verifier    PDSVerifier
 	rateLimiter *RateLimiter
@@ -80,7 +83,8 @@ type DisconnectBuffer struct {
 // NewRelay creates a new Relay instance.
 // publicURL is an explicit override (from RELAY_PUBLIC_URL); pass "" to derive
 // the relay URL from request headers or the TLS-based fallbackURL.
-func NewRelay(publicURL, fallbackURL string, resolver DIDResolver, verifier PDSVerifier, log *slog.Logger) *Relay {
+// pushSender handles FCM/APNs delivery; pass a NoopFCMSender when not configured.
+func NewRelay(publicURL, fallbackURL string, resolver DIDResolver, verifier PDSVerifier, pushSender FCMSender, log *slog.Logger) *Relay {
 	return &Relay{
 		clients:           make(map[*Client]bool),
 		byTag:             make(map[string]map[*Client]bool),
@@ -89,6 +93,7 @@ func NewRelay(publicURL, fallbackURL string, resolver DIDResolver, verifier PDSV
 		buffers:           make(map[string]*DisconnectBuffer),
 		dedup:             make(map[string]time.Time),
 		pushTokens:        make(map[string]*PushRegistration),
+		pushSender:        pushSender,
 		resolver:          resolver,
 		verifier:          verifier,
 		rateLimiter:       NewRateLimiter(),
@@ -121,11 +126,16 @@ func (r *Relay) clientRelayURL(req *http.Request) string {
 }
 
 // Handler returns an http.Handler with the relay's endpoints.
+// When the relay is running with a RecordingFCMSender, the test-only
+// /test/push-log routes are also registered.
 func (r *Relay) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", r.serveWS)
 	mux.HandleFunc("/relay/event", r.relayEventHandler)
 	mux.HandleFunc("/health", r.healthHandler)
+	if rec, ok := r.pushSender.(*RecordingFCMSender); ok {
+		rec.RegisterHTTPRoutes(mux)
+	}
 	return mux
 }
 
@@ -306,6 +316,9 @@ func (r *Relay) handleEventPosted(c *Client, msg *EventPostedMsg) {
 	// Buffer for clients that are currently disconnected from this tag.
 	r.bufferNotification(msg.Tag, notification)
 
+	// Dispatch FCM/APNs to registered devices that are not currently connected.
+	go r.dispatchPushForTag(msg.Tag, msg.RKey, msg.Payload)
+
 	r.log.Info("event routed", "did", msg.DID, "tag", msg.Tag, "rkey", msg.RKey,
 		"local_recipients", len(recipients), "relay_urls", len(msg.RelayURLs))
 
@@ -416,8 +429,11 @@ func (r *Relay) relayEventHandler(w http.ResponseWriter, req *http.Request) {
 	// Deliver to local clients watching this tag
 	r.deliverRelayEvent(&notification)
 
-	// Buffer for disconnected DIDs
+	// Buffer for disconnected clients.
 	r.bufferNotification(msg.Tag, notification)
+
+	// Dispatch FCM/APNs to registered devices that are not currently connected.
+	go r.dispatchPushForTag(msg.Tag, msg.RKey, msg.Payload)
 
 	r.log.Info("relay event received", "tag", msg.Tag, "rkey", msg.RKey,
 		"source_ip", req.RemoteAddr)
@@ -539,6 +555,30 @@ func (r *Relay) cleanupRecentDisconnects() {
 	for deviceID, t := range r.recentDisconnects {
 		if time.Since(t) >= graceWindow {
 			delete(r.recentDisconnects, deviceID)
+		}
+	}
+}
+
+// dispatchPushForTag sends FCM/APNs notifications to all registered devices
+// watching tag that are not currently connected (or within the grace window).
+// Called as a goroutine from handleEventPosted and relayEventHandler.
+func (r *Relay) dispatchPushForTag(tag, rkey, payload string) {
+	regs := r.pushTokensForTag(tag)
+	for _, reg := range regs {
+		if r.isDeviceOnline(reg.DeviceID) {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := r.pushSender.Send(ctx, reg.Token, tag, rkey, payload)
+		cancel()
+		if err != nil {
+			if errors.Is(err, ErrTokenUnregistered) {
+				r.log.Debug("push token unregistered, removing registration",
+					"device_id", reg.DeviceID)
+				r.unregisterPush(reg.DeviceID)
+			} else {
+				r.log.Warn("FCM send failed", "error", err, "device_id", reg.DeviceID)
+			}
 		}
 	}
 }

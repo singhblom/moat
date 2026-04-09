@@ -14,6 +14,7 @@
 
 use anyhow::{Context, Result};
 use reqwest::Client;
+use serde::Deserialize;
 use std::{
     net::TcpListener,
     path::PathBuf,
@@ -22,6 +23,16 @@ use std::{
 };
 #[cfg(unix)]
 use std::os::unix::process::CommandExt as _;
+
+/// A single FCM push captured by a recording-mode Drawbridge relay.
+/// Returned by [`DrawbridgeProcess::fetch_push_log`].
+#[derive(Debug, Deserialize)]
+pub struct RecordedPush {
+    pub token: String,
+    pub tag: String,
+    pub rkey: String,
+    pub payload: String,
+}
 
 /// A running Drawbridge WebSocket relay process.
 ///
@@ -44,6 +55,23 @@ impl DrawbridgeProcess {
     ///
     /// `pgid` is the process group ID to join (from [`ToxiproxyManager::pgid`]).
     pub async fn spawn(plc_base_url: &str, pgid: u32) -> Result<Self> {
+        Self::spawn_with_env(plc_base_url, pgid, &[]).await
+    }
+
+    /// Spawn a Drawbridge relay with `FCM_SENDER=recording` set.
+    ///
+    /// The relay will capture every FCM send in memory and expose it via
+    /// `GET /test/push-log`.  Use [`fetch_push_log`] and [`reset_push_log`]
+    /// from tests to assert FCM dispatch behaviour.
+    pub async fn spawn_with_recording_fcm(plc_base_url: &str, pgid: u32) -> Result<Self> {
+        Self::spawn_with_env(plc_base_url, pgid, &[("FCM_SENDER", "recording")]).await
+    }
+
+    async fn spawn_with_env(
+        plc_base_url: &str,
+        pgid: u32,
+        extra_env: &[(&str, &str)],
+    ) -> Result<Self> {
         let bin = drawbridge_binary().context("obtain drawbridge binary")?;
         let port = free_port().context("allocate drawbridge port")?;
 
@@ -55,6 +83,9 @@ impl DrawbridgeProcess {
             .env("PLC_BASE_URL", plc_base_url)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::inherit());
+        for (k, v) in extra_env {
+            cmd.env(k, v);
+        }
         #[cfg(unix)]
         cmd.process_group(pgid as i32);
         let child = cmd.spawn().context("spawn drawbridge process")?;
@@ -78,6 +109,38 @@ impl DrawbridgeProcess {
     /// Full WebSocket endpoint URL, e.g. `"ws://127.0.0.1:PORT/ws"`.
     pub fn ws_endpoint(&self) -> String {
         format!("{}/ws", self.ws_url)
+    }
+
+    /// Fetch all FCM pushes recorded since the last reset.
+    /// Only works when the relay was started with `spawn_with_recording_fcm`.
+    pub async fn fetch_push_log(&self) -> Result<Vec<RecordedPush>> {
+        let client = Client::new();
+        let url = format!("{}/test/push-log", self.http_url);
+        client
+            .get(&url)
+            .send()
+            .await
+            .context("GET /test/push-log")?
+            .json()
+            .await
+            .context("parse push log")
+    }
+
+    /// Clear all recorded FCM pushes on the relay.
+    /// Only works when the relay was started with `spawn_with_recording_fcm`.
+    pub async fn reset_push_log(&self) -> Result<()> {
+        let client = Client::new();
+        let url = format!("{}/test/push-log/reset", self.http_url);
+        let resp = client
+            .post(&url)
+            .send()
+            .await
+            .context("POST /test/push-log/reset")?;
+        let status = resp.status();
+        if !status.is_success() {
+            anyhow::bail!("reset_push_log failed: {status}");
+        }
+        Ok(())
     }
 }
 

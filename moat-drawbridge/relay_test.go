@@ -109,7 +109,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	verifier := newMockVerifier()
 	log := slog.New(slog.NewTextHandler(&discardWriter{}, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	relay := NewRelay("", "ws://test-relay", resolver, verifier, log)
+	relay := NewRelay("", "ws://test-relay", resolver, verifier, &NoopFCMSender{}, log)
 	ctx, cancel := context.WithCancel(context.Background())
 	relay.Run(ctx)
 

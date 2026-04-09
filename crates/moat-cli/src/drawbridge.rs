@@ -250,6 +250,39 @@ impl DrawbridgeManager {
         Ok(())
     }
 
+    /// Register this device for push notifications on the relay.
+    ///
+    /// Called automatically after a successful `connect_own` + `watch_tags` so the
+    /// relay can suppress FCM delivery while this WebSocket is live.
+    /// Uses a stable device_id (from the MLS session) so the relay can match
+    /// disconnects to the right push registration.
+    pub async fn register_push(
+        &mut self,
+        device_id: &str,
+        token: &str,
+        tags: &[[u8; 16]],
+    ) -> Result<(), String> {
+        let own = self
+            .own
+            .as_mut()
+            .ok_or("not connected to own Drawbridge")?;
+
+        let tag_strings: Vec<String> = tags.iter().map(|t| hex::encode(t)).collect();
+        let msg = serde_json::json!({
+            "type": "register_push",
+            "device_id": device_id,
+            "platform": "moat-cli",
+            "token": token,
+            "tags": tag_strings,
+        });
+        own.writer
+            .send(Message::Text(msg.to_string()))
+            .await
+            .map_err(|e| format!("send register_push: {e}"))?;
+
+        Ok(())
+    }
+
     /// Get the number of active connections (for status bar).
     pub fn active_connection_count(&self) -> usize {
         if self.own.is_some() { 1 } else { 0 }

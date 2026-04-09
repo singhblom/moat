@@ -10,7 +10,6 @@ import (
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -23,7 +22,7 @@ type propEnv struct {
 
 func newPropEnv() *propEnv {
 	log := slog.New(slog.NewTextHandler(&discardWriter{}, &slog.HandlerOptions{Level: slog.LevelError}))
-	relay := NewRelay("", "ws://test", nil, nil, log)
+	relay := NewRelay("", "ws://test", nil, nil, &NoopFCMSender{}, log)
 	ctx, cancel := context.WithCancel(context.Background())
 	relay.Run(ctx)
 	go func() {
@@ -33,11 +32,6 @@ func newPropEnv() *propEnv {
 	return &propEnv{relay: relay}
 }
 
-func randomDID(rng *rand.Rand) string {
-	b := make([]byte, 8)
-	rng.Read(b)
-	return "did:plc:" + hex.EncodeToString(b)
-}
 
 func randomTag(rng *rand.Rand) string {
 	b := make([]byte, 16)
@@ -466,7 +460,7 @@ func TestProp_DedupAcrossBothPaths(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		log := slog.New(slog.NewTextHandler(&discardWriter{}, &slog.HandlerOptions{Level: slog.LevelError}))
 		verifier := newMockVerifier()
-		relay := NewRelay("", "ws://test", nil, verifier, log)
+		relay := NewRelay("", "ws://test", nil, verifier, &NoopFCMSender{}, log)
 		ctx, cancel := context.WithCancel(context.Background())
 		relay.Run(ctx)
 		defer cancel()
@@ -571,13 +565,3 @@ func TestProp_UpdateTagsOverlap(t *testing.T) {
 	}
 }
 
-// --- Helpers for relay-to-relay in property tests ---
-
-// relayToRelayEndpoint creates a test server with the relay handler and returns its URL.
-func relayToRelayEndpoint(t *testing.T, relay *Relay) string {
-	t.Helper()
-	srv := httptest.NewServer(relay.Handler())
-	t.Cleanup(func() { srv.Close() })
-	_ = strings.TrimPrefix(srv.URL, "http") // suppress unused import if needed
-	return srv.URL
-}

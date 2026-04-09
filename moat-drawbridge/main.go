@@ -21,7 +21,8 @@ func main() {
 	resolver := NewPLCResolver(cache)
 	verifier := NewPDSVerifier(resolver)
 
-	relay := NewRelay(cfg.PublicURL, cfg.RelayURL(), resolver, verifier, log)
+	sender := newFCMSender(cfg, log)
+	relay := NewRelay(cfg.PublicURL, cfg.RelayURL(), resolver, verifier, sender, log)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -79,6 +80,12 @@ type Config struct {
 	// Required when TLS is terminated by a proxy (e.g. Fly.io) so the server
 	// knows its public-facing wss:// address even though it listens on plain ws://.
 	PublicURL string
+	// FCMSenderMode selects the push sender: "firebase", "noop", or "recording".
+	// "recording" is for integration tests only — never use in production.
+	FCMSenderMode  string
+	// FCMCredentials is the path to a Firebase service account JSON file.
+	// Required when FCMSenderMode is "firebase".
+	FCMCredentials string
 }
 
 // RelayURL returns the TLS-based fallback relay URL, used when no explicit
@@ -97,10 +104,12 @@ func (c *Config) RelayURL() string {
 
 func loadConfig() Config {
 	cfg := Config{
-		TLS:       envOrDefault("RELAY_TLS", "true") == "true",
-		Domain:    os.Getenv("RELAY_DOMAIN"),
-		PublicURL: os.Getenv("RELAY_PUBLIC_URL"),
-		LogFormat: envOrDefault("LOG_FORMAT", "json"),
+		TLS:            envOrDefault("RELAY_TLS", "true") == "true",
+		Domain:         os.Getenv("RELAY_DOMAIN"),
+		PublicURL:      os.Getenv("RELAY_PUBLIC_URL"),
+		LogFormat:      envOrDefault("LOG_FORMAT", "json"),
+		FCMSenderMode:  fcmSenderMode(),
+		FCMCredentials: os.Getenv("FCM_CREDENTIALS_FILE"),
 	}
 
 	if addr := os.Getenv("RELAY_ADDR"); addr != "" {
@@ -112,6 +121,39 @@ func loadConfig() Config {
 	}
 
 	return cfg
+}
+
+// fcmSenderMode resolves the FCM_SENDER env var, defaulting to "firebase" when
+// FCM_CREDENTIALS_FILE is set and "noop" otherwise.
+func fcmSenderMode() string {
+	if m := os.Getenv("FCM_SENDER"); m != "" {
+		return m
+	}
+	if os.Getenv("FCM_CREDENTIALS_FILE") != "" {
+		return "firebase"
+	}
+	return "noop"
+}
+
+// newFCMSender constructs the appropriate FCMSender from the config.
+func newFCMSender(cfg Config, log *slog.Logger) FCMSender {
+	switch cfg.FCMSenderMode {
+	case "firebase":
+		s, err := NewFirebaseFCMSender(cfg.FCMCredentials)
+		if err != nil {
+			log.Error("failed to init Firebase FCM sender, falling back to noop", "error", err)
+			return &NoopFCMSender{}
+		}
+		log.Info("Firebase FCM sender initialised")
+		return s
+	case "recording":
+		// WARNING: recording mode is for integration tests only.
+		// The /test/push-log endpoints are unauthenticated.
+		log.Warn("FCM recording mode enabled — for testing only, do not run in production")
+		return &RecordingFCMSender{}
+	default: // "noop" or unrecognised value
+		return &NoopFCMSender{}
+	}
 }
 
 func envOrDefault(key, def string) string {

@@ -84,9 +84,10 @@ pub struct TestWorld {
     pub pds_proxy: ProxyHandle,
     /// Direct Postern URL (useful for out-of-band inspection).
     postern_url: String,
-    /// Drawbridge relay instances, keyed by participant short handle or "shared".
-    /// Dropped on `TestWorld` drop, which kills the child processes.
-    _drawbridges: Vec<DrawbridgeProcess>,
+    /// Drawbridge relay instances. Dropped on `TestWorld` drop, which kills the
+    /// child processes. Exposed publicly so tests can call push-log methods on
+    /// recording-mode relays.
+    pub drawbridges: Vec<DrawbridgeProcess>,
     /// `proxy-db-verify` proxy: routes Drawbridge's PDS verification calls through
     /// Toxiproxy so tests can inject faults on the Drawbridge → Postern path.
     /// Only present when Drawbridge is enabled.
@@ -107,7 +108,7 @@ impl TestWorld {
     pub async fn new(handles: &[&str], handle_suffix: &str) -> Result<Self> {
         let participants: Vec<_> = handles.iter().map(|h| (*h, None)).collect();
         let kinds = vec![ParticipantKind::RustCli; handles.len()];
-        Self::build(&participants, &kinds, handle_suffix).await
+        Self::build(&participants, &kinds, handle_suffix, false).await
     }
 
     /// Build a `TestWorld` with Drawbridge relay(s).
@@ -126,7 +127,7 @@ impl TestWorld {
             .map(|(h, label)| (*h, Some(*label)))
             .collect();
         let kinds = vec![ParticipantKind::RustCli; participants.len()];
-        Self::build(&with_labels, &kinds, handle_suffix).await
+        Self::build(&with_labels, &kinds, handle_suffix, false).await
     }
 
     /// Build a `TestWorld` from a [`WorldConfig`].
@@ -141,7 +142,7 @@ impl TestWorld {
             .map(|p| (p.handle, p.relay_label))
             .collect();
         let kinds: Vec<ParticipantKind> = config.participants.iter().map(|p| p.kind.clone()).collect();
-        Self::build(&participants, &kinds, handle_suffix).await
+        Self::build(&participants, &kinds, handle_suffix, false).await
     }
 
     /// Build a `TestWorld` where each participant can be a different implementation.
@@ -155,13 +156,54 @@ impl TestWorld {
         handle_suffix: &str,
     ) -> Result<Self> {
         let participants: Vec<_> = handles.iter().map(|h| (*h, None)).collect();
-        Self::build(&participants, kinds, handle_suffix).await
+        Self::build(&participants, kinds, handle_suffix, false).await
+    }
+
+    /// Like [`new_with_drawbridge`] but spawns Drawbridge relay(s) in FCM
+    /// recording mode (`FCM_SENDER=recording`). Use [`push_log`] and
+    /// [`reset_push_log`] to assert on FCM dispatch in tests.
+    ///
+    /// All participants run the Rust CLI (`moat-cli --http`).
+    pub async fn new_with_drawbridge_recording_fcm(
+        participants: &[(&str, &str)],
+        handle_suffix: &str,
+    ) -> Result<Self> {
+        let with_labels: Vec<_> = participants
+            .iter()
+            .map(|(h, label)| (*h, Some(*label)))
+            .collect();
+        let kinds = vec![ParticipantKind::RustCli; participants.len()];
+        Self::build(&with_labels, &kinds, handle_suffix, true).await
+    }
+
+    /// Fetch all FCM pushes recorded by the first Drawbridge relay since the
+    /// last reset. Panics if the world was not created with
+    /// [`new_with_drawbridge_recording_fcm`].
+    pub async fn push_log(&self) -> Vec<crate::drawbridge::RecordedPush> {
+        self.drawbridges
+            .first()
+            .expect("no drawbridge in this TestWorld")
+            .fetch_push_log()
+            .await
+            .expect("fetch_push_log failed")
+    }
+
+    /// Clear the FCM push log on the first Drawbridge relay. Panics if the
+    /// world was not created with [`new_with_drawbridge_recording_fcm`].
+    pub async fn reset_push_log(&self) {
+        self.drawbridges
+            .first()
+            .expect("no drawbridge in this TestWorld")
+            .reset_push_log()
+            .await
+            .expect("reset_push_log failed");
     }
 
     async fn build(
         participants: &[(&str, Option<&str>)],
         kinds: &[ParticipantKind],
         handle_suffix: &str,
+        recording_fcm: bool,
     ) -> Result<Self> {
         assert_eq!(
             participants.len(),
@@ -241,9 +283,12 @@ impl TestWorld {
             let mut dbs = Vec::with_capacity(unique_labels.len());
             let mut label_to_ws: HashMap<&str, String> = HashMap::new();
             for label in &unique_labels {
-                let db = DrawbridgeProcess::spawn(&db_verify.url, pgid)
-                    .await
-                    .with_context(|| format!("spawn drawbridge for relay {label}"))?;
+                let db = if recording_fcm {
+                    DrawbridgeProcess::spawn_with_recording_fcm(&db_verify.url, pgid).await
+                } else {
+                    DrawbridgeProcess::spawn(&db_verify.url, pgid).await
+                }
+                .with_context(|| format!("spawn drawbridge for relay {label}"))?;
                 label_to_ws.insert(label, db.ws_endpoint());
                 dbs.push(db);
             }
@@ -367,7 +412,7 @@ impl TestWorld {
             toxiproxy,
             pds_proxy: pds_proxy.clone(),
             postern_url,
-            _drawbridges: drawbridges,
+            drawbridges,
             db_verify_proxy,
             participants: HashMap::new(),
             moat_cli_bin,
