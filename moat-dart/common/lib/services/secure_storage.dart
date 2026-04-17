@@ -13,6 +13,7 @@ const _deviceNameKey = 'moat_device_name';
 const _watchListKey = 'moat_watch_list';
 const _lastRkeysKey = 'moat_last_rkeys';
 const _tagMapKey = 'moat_tag_map';
+const _deviceIdKey = 'moat_device_id';
 
 /// Secure storage service for credentials and cryptographic keys.
 /// Backend-agnostic: use [FileStorageBackend] for server, FlutterStorageBackend for app.
@@ -224,6 +225,16 @@ class SecureStorageService {
 
   Future<void> deleteTagMap() async {
     await _storage.delete(_tagMapKey);
+  }
+
+  // --- Device ID management ---
+
+  Future<void> saveDeviceId(String deviceId) async {
+    await _storage.write(_deviceIdKey, deviceId);
+  }
+
+  Future<String?> loadDeviceId() async {
+    return await _storage.read(_deviceIdKey);
   }
 
   // --- Full clear ---

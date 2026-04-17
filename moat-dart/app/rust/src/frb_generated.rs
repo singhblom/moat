@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1758461791;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -236129284;
 
 // Section: executor
 
@@ -953,6 +953,47 @@ fn wire__crate__api__simple__decode_thumbhash_impl(
         },
     )
 }
+fn wire__crate__api__simple__decrypt_push_payload_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "decrypt_push_payload",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_state_path = <String>::sse_decode(&mut deserializer);
+            let api_group_ids = <Vec<Vec<u8>>>::sse_decode(&mut deserializer);
+            let api_tag = <Vec<u8>>::sse_decode(&mut deserializer);
+            let api_ciphertext = <Vec<u8>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::simple::decrypt_push_payload(
+                        api_state_path,
+                        api_group_ids,
+                        api_tag,
+                        api_ciphertext,
+                    )?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__simple__derive_next_tag_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1438,6 +1479,22 @@ impl SseDecode for crate::api::simple::DecryptResultDto {
     }
 }
 
+impl SseDecode for crate::api::simple::DecryptedPush {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_senderDid = <Option<String>>::sse_decode(deserializer);
+        let mut var_plaintextPreview = <Option<String>>::sse_decode(deserializer);
+        let mut var_groupId = <Vec<u8>>::sse_decode(deserializer);
+        let mut var_messageId = <Option<Vec<u8>>>::sse_decode(deserializer);
+        return crate::api::simple::DecryptedPush {
+            sender_did: var_senderDid,
+            plaintext_preview: var_plaintextPreview,
+            group_id: var_groupId,
+            message_id: var_messageId,
+        };
+    }
+}
+
 impl SseDecode for crate::api::simple::DrawbridgeChallengeSignature {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1570,6 +1627,17 @@ impl SseDecode for Vec<u8> {
             ans_.push(<u8>::sse_decode(deserializer));
         }
         return ans_;
+    }
+}
+
+impl SseDecode for Option<String> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<String>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
     }
 }
 
@@ -1792,12 +1860,15 @@ fn pde_ffi_dispatcher_primary_impl(
         17 => wire__crate__api__simple__blob_decrypt_impl(port, ptr, rust_vec_len, data_len),
         18 => wire__crate__api__simple__blob_encrypt_impl(port, ptr, rust_vec_len, data_len),
         19 => wire__crate__api__simple__decode_thumbhash_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__simple__encrypt_for_stealth_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
-        27 => {
+        20 => {
+            wire__crate__api__simple__decrypt_push_payload_impl(port, ptr, rust_vec_len, data_len)
+        }
+        22 => wire__crate__api__simple__encrypt_for_stealth_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
+        28 => {
             wire__crate__api__simple__process_image_for_send_impl(port, ptr, rust_vec_len, data_len)
         }
-        28 => wire__crate__api__simple__sign_drawbridge_challenge_impl(
+        29 => wire__crate__api__simple__sign_drawbridge_challenge_impl(
             port,
             ptr,
             rust_vec_len,
@@ -1843,15 +1914,15 @@ fn pde_ffi_dispatcher_sync_impl(
             rust_vec_len,
             data_len,
         ),
-        20 => wire__crate__api__simple__derive_next_tag_impl(ptr, rust_vec_len, data_len),
-        22 => {
+        21 => wire__crate__api__simple__derive_next_tag_impl(ptr, rust_vec_len, data_len),
+        23 => {
             wire__crate__api__simple__event_dto_reaction_payload_impl(ptr, rust_vec_len, data_len)
         }
-        23 => wire__crate__api__simple__generate_candidate_tags_impl(ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__simple__generate_stealth_keypair_impl(ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__simple__pad_to_bucket_impl(ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__simple__try_decrypt_stealth_impl(ptr, rust_vec_len, data_len),
-        30 => wire__crate__api__simple__unpad_impl(ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__simple__generate_candidate_tags_impl(ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__simple__generate_stealth_keypair_impl(ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__simple__pad_to_bucket_impl(ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__simple__try_decrypt_stealth_impl(ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__simple__unpad_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1916,6 +1987,29 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::simple::DecryptResultDto>
     for crate::api::simple::DecryptResultDto
 {
     fn into_into_dart(self) -> crate::api::simple::DecryptResultDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::simple::DecryptedPush {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.sender_did.into_into_dart().into_dart(),
+            self.plaintext_preview.into_into_dart().into_dart(),
+            self.group_id.into_into_dart().into_dart(),
+            self.message_id.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::simple::DecryptedPush
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::simple::DecryptedPush>
+    for crate::api::simple::DecryptedPush
+{
+    fn into_into_dart(self) -> crate::api::simple::DecryptedPush {
         self
     }
 }
@@ -2215,6 +2309,16 @@ impl SseEncode for crate::api::simple::DecryptResultDto {
     }
 }
 
+impl SseEncode for crate::api::simple::DecryptedPush {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <Option<String>>::sse_encode(self.sender_did, serializer);
+        <Option<String>>::sse_encode(self.plaintext_preview, serializer);
+        <Vec<u8>>::sse_encode(self.group_id, serializer);
+        <Option<Vec<u8>>>::sse_encode(self.message_id, serializer);
+    }
+}
+
 impl SseEncode for crate::api::simple::DrawbridgeChallengeSignature {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -2316,6 +2420,16 @@ impl SseEncode for Vec<u8> {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <u8>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<String> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <String>::sse_encode(value, serializer);
         }
     }
 }

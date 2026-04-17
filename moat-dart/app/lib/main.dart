@@ -1,5 +1,11 @@
+import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart' hide Message;
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:moat_dart_common/moat_dart_common.dart' hide DebugLog;
 import 'services/conversation_manager.dart' as app_cm;
@@ -13,10 +19,132 @@ import 'screens/conversations_screen.dart';
 import 'services/flutter_storage_backend.dart';
 import 'services/flutter_storage_factory.dart';
 import 'services/debug_log.dart';
+import 'services/push_service.dart';
+import 'firebase_options.dart';
+
+const _notificationChannelId = 'moat_messages';
+const _androidDetails = AndroidNotificationDetails(
+  _notificationChannelId,
+  'Messages',
+  channelDescription: 'Moat encrypted messages',
+  importance: Importance.high,
+  priority: Priority.high,
+);
+
+Future<void> _showNotification(String body) async {
+  final plugin = FlutterLocalNotificationsPlugin();
+  await plugin.initialize(
+    settings: const InitializationSettings(
+      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+    ),
+  );
+  await plugin.show(
+    id: 0,
+    title: 'New message',
+    body: body,
+    notificationDetails: const NotificationDetails(android: _androidDetails),
+  );
+}
+
+/// Top-level background message handler — required by firebase_messaging.
+/// Must be a top-level function (not a closure or instance method).
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await RustLib.init();
+
+  final data = message.data;
+  final tagHex = data['tag'] as String?;
+  final rkey = data['rkey'] as String?;
+  final payloadB64 = data['payload'] as String?;
+
+  if (tagHex == null || rkey == null || payloadB64 == null) {
+    await _showNotification('Open Moat to read');
+    return;
+  }
+
+  try {
+    final tag = _hexToBytes(tagHex);
+    final ciphertext = base64Decode(payloadB64);
+
+    final appDir = await getApplicationDocumentsDirectory();
+
+    // Load group IDs from plain-file document storage (no platform channel needed).
+    final convStorage = ConversationStorage(backend: IoDocumentBackend(appDir));
+    final conversations = await convStorage.loadAll();
+    final groupIds = conversations.map((c) => c.groupId).toList();
+
+    // Read MLS state from secure storage and write to a temp file for the FFI.
+    final secureStorage = SecureStorageService(storage: FlutterStorageBackend());
+    final mlsStateBytes = await secureStorage.loadMlsState();
+    if (mlsStateBytes == null) {
+      await _showNotification('Open Moat to read');
+      return;
+    }
+
+    final tmpPath = '${appDir.path}/moat_mls_state.push_tmp';
+    await File(tmpPath).writeAsBytes(mlsStateBytes);
+
+    try {
+      final result = await decryptPushPayload(
+        statePath: tmpPath,
+        groupIds: groupIds,
+        tag: tag,
+        ciphertext: ciphertext,
+      );
+
+      // Persist the updated MLS state (seen counter advanced by decrypt).
+      final updatedState = await File(tmpPath).readAsBytes();
+      await secureStorage.saveMlsState(updatedState);
+
+      // Persist the decrypted message so the app shows it instantly on open.
+      if (result.plaintextPreview != null && result.senderDid != null) {
+        final groupId = Uint8List.fromList(result.groupId);
+        final groupIdHex =
+            groupId.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+        final msg = Message(
+          id: '${groupIdHex}_$rkey',
+          groupId: groupId,
+          senderDid: result.senderDid!,
+          content: result.plaintextPreview!,
+          timestamp: DateTime.now(),
+          isOwn: false,
+          epoch: 0,
+          messageId: result.messageId != null
+              ? Uint8List.fromList(result.messageId!)
+              : null,
+        );
+        final msgStorage = MessageStorage(backend: IoDocumentBackend(appDir));
+        await msgStorage.appendMessage(groupIdHex, msg);
+      }
+
+      final body = result.plaintextPreview ?? 'Open Moat to read';
+      await _showNotification(body);
+    } finally {
+      await File(tmpPath).delete().catchError((_) => File(tmpPath));
+    }
+  } catch (e) {
+    debugPrint('[moat] Background decrypt failed: $e');
+    await _showNotification('Open Moat to read');
+  }
+}
+
+Uint8List _hexToBytes(String hex) {
+  final result = Uint8List(hex.length ~/ 2);
+  for (var i = 0; i < result.length; i++) {
+    result[i] = int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16);
+  }
+  return result;
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   debugPrint('[moat] main() started');
+
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
   await DebugLog.instance.init();
   debugPrint('[moat] DebugLog initialized');
   try {
@@ -30,7 +158,10 @@ Future<void> main() async {
   final storageBackend = FlutterStorageBackend();
 
   debugPrint('[moat] Starting app...');
-  runApp(MoatApp(docBackend: docBackend, storageBackend: storageBackend));
+  runApp(MoatApp(
+    docBackend: docBackend,
+    storageBackend: storageBackend,
+  ));
 }
 
 /// Apply custom fonts to the text theme.
@@ -186,6 +317,8 @@ class AuthGate extends StatefulWidget {
 
 class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   PollingService? _pollingService;
+  // ignore: unused_field — held to prevent GC; callbacks reference it
+  PushService? _pushService;
   bool _pollingStarted = false;
 
   @override
@@ -263,15 +396,30 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       debugPrint('PollingService started');
 
       _initDrawbridge(auth);
+      _initPush();
     } else if (!auth.isAuthenticated && _pollingStarted) {
       _pollingService?.dispose();
       _pollingService = null;
+      _pushService = null;
       _pollingStarted = false;
       ConversationManager.instance.clear();
       app_cm.ConversationManager.instance.clear();
       DrawbridgeService.instance.reset();
       debugPrint('PollingService stopped, Drawbridge reset');
     }
+  }
+
+  Future<void> _initPush() async {
+    final pushService = PushService(secureStorage: widget.secureStorage);
+    _pushService = pushService;
+    pushService.onToken = (deviceId, token) {
+      DrawbridgeService.instance.registerPush(
+        deviceId: deviceId,
+        platform: 'fcm',
+        token: token,
+      );
+    };
+    await pushService.init();
   }
 
   Future<void> _initDrawbridge(AuthProvider auth) async {

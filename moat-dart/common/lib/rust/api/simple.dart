@@ -6,9 +6,9 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `from_core`, `into_core`
+// These functions are ignored because they are not marked as `pub`: `from_core`, `into_core`, `push_media_label`, `push_plaintext_preview`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `MoatError`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `fmt`, `from`, `from`, `from`, `from`
 
 /// Generate a stealth keypair. Returns (private_key, public_key) each 32 bytes.
 StealthKeypair generateStealthKeypair() =>
@@ -99,6 +99,31 @@ Future<ImageProcessResult> processImageForSend(
 /// Decode a thumbhash to RGBA pixels for placeholder rendering.
 Future<ThumbHashResult> decodeThumbhash({required List<int> hash}) =>
     RustLib.instance.api.crateApiSimpleDecodeThumbhash(hash: hash);
+
+/// Decrypt a push notification payload for use in a background message handler
+/// or iOS Notification Service Extension.
+///
+/// Reads the MLS session state from `state_path`, scans `group_ids` to find
+/// which group the `tag` belongs to, decrypts `ciphertext`, advances the seen
+/// counter, and writes the updated state back to `state_path` atomically
+/// (write to `<state_path>.push_tmp`, then rename).
+///
+/// Returns `Err` if the tag is not matched in any group or if decrypt fails.
+///
+/// # Concurrency
+/// The rename is atomic on POSIX. If the foreground app races to write state
+/// simultaneously one update will win; the dedup map in moat-core makes
+/// double-processing safe.
+Future<DecryptedPush> decryptPushPayload(
+        {required String statePath,
+        required List<Uint8List> groupIds,
+        required List<int> tag,
+        required List<int> ciphertext}) =>
+    RustLib.instance.api.crateApiSimpleDecryptPushPayload(
+        statePath: statePath,
+        groupIds: groupIds,
+        tag: tag,
+        ciphertext: ciphertext);
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MoatSessionHandle>>
 abstract class MoatSessionHandle implements RustOpaqueInterface {
@@ -240,6 +265,47 @@ class DecryptResultDto {
           event == other.event &&
           sender == other.sender &&
           warnings == other.warnings;
+}
+
+/// Result of decrypting a push notification payload.
+class DecryptedPush {
+  /// DID of the message sender, extracted from their MLS credential.
+  final String? senderDid;
+
+  /// Human-readable preview for the notification body (truncated to 200 chars).
+  /// `None` for protocol messages (commit, welcome, checkpoint) that should not
+  /// generate a visible notification.
+  final String? plaintextPreview;
+
+  /// The MLS group ID the message belongs to.
+  final Uint8List groupId;
+
+  /// 16-byte message ID for deduplication (present for Message and Reaction events).
+  final Uint8List? messageId;
+
+  const DecryptedPush({
+    this.senderDid,
+    this.plaintextPreview,
+    required this.groupId,
+    this.messageId,
+  });
+
+  @override
+  int get hashCode =>
+      senderDid.hashCode ^
+      plaintextPreview.hashCode ^
+      groupId.hashCode ^
+      messageId.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DecryptedPush &&
+          runtimeType == other.runtimeType &&
+          senderDid == other.senderDid &&
+          plaintextPreview == other.plaintextPreview &&
+          groupId == other.groupId &&
+          messageId == other.messageId;
 }
 
 /// Result of signing a Drawbridge challenge.

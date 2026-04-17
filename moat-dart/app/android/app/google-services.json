@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "220662113437",
+    "project_id": "moat-app-f0ada",
+    "storage_bucket": "moat-app-f0ada.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:220662113437:android:9462f32e832a4e20972074",
+        "android_client_info": {
+          "package_name": "social.moat.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD6AR77XCoyWCBN2Zj255zmQ7dFve4UPDA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

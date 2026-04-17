@@ -53,6 +53,11 @@ class DrawbridgeService {
   /// Tags currently registered on own relay.
   final Set<String> _watchedTagHexes = {};
 
+  /// Push token to register with the relay after authentication.
+  String? _pushDeviceId;
+  String? _pushToken;
+  String? _pushPlatform;
+
   /// Drawbridge config cache: DID → list of relay URLs.
   final Map<String, List<String>> _configCache = {};
 
@@ -119,6 +124,7 @@ class DrawbridgeService {
           moatLog('DrawbridgeService: Own relay authenticated');
           _ownAuthenticated = true;
           _sendWatchedTags();
+          _sendPushRegistration();
         case 'new_event':
           _handleNewEvent(msg);
         case 'error':
@@ -252,6 +258,48 @@ class DrawbridgeService {
     }));
   }
 
+  // -- Push token registration -----------------------------------------------
+
+  /// Set the push token to register with the Drawbridge relay.
+  /// If already authenticated, sends immediately; otherwise sent on next auth.
+  void registerPush({
+    required String deviceId,
+    required String platform,
+    required String token,
+  }) {
+    _pushDeviceId = deviceId;
+    _pushPlatform = platform;
+    _pushToken = token;
+    _sendPushRegistration();
+  }
+
+  void unregisterPush(String deviceId) {
+    _pushDeviceId = null;
+    _pushToken = null;
+    _pushPlatform = null;
+    if (!_ownAuthenticated || _ownChannel == null) return;
+    _ownChannel!.sink.add(jsonEncode({
+      'type': 'unregister_push',
+      'device_id': deviceId,
+    }));
+  }
+
+  void _sendPushRegistration() {
+    if (!_ownAuthenticated || _ownChannel == null) return;
+    final deviceId = _pushDeviceId;
+    final token = _pushToken;
+    final platform = _pushPlatform;
+    if (deviceId == null || token == null || platform == null) return;
+    _ownChannel!.sink.add(jsonEncode({
+      'type': 'register_push',
+      'device_id': deviceId,
+      'platform': platform,
+      'token': token,
+      'tags': _watchedTagHexes.toList(),
+    }));
+    moatLog('DrawbridgeService: Registered push token for device $deviceId');
+  }
+
   // -- Envelope sending ------------------------------------------------------
 
   /// Notify own relay that an event was posted, with ciphertext for fan-out.
@@ -338,6 +386,9 @@ class DrawbridgeService {
     _configCache.clear();
     _keyBundle = null;
     _did = null;
+    _pushDeviceId = null;
+    _pushToken = null;
+    _pushPlatform = null;
     _reconnectAttempts = 0;
     _disposed = false;
   }

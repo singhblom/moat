@@ -62,6 +62,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   DecryptResultDto dco_decode_decrypt_result_dto(dynamic raw);
 
   @protected
+  DecryptedPush dco_decode_decrypted_push(dynamic raw);
+
+  @protected
   DrawbridgeChallengeSignature dco_decode_drawbridge_challenge_signature(
       dynamic raw);
 
@@ -94,6 +97,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
+
+  @protected
+  String? dco_decode_opt_String(dynamic raw);
 
   @protected
   ReactionPayloadDto? dco_decode_opt_box_autoadd_reaction_payload_dto(
@@ -181,6 +187,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   DecryptResultDto sse_decode_decrypt_result_dto(SseDeserializer deserializer);
 
   @protected
+  DecryptedPush sse_decode_decrypted_push(SseDeserializer deserializer);
+
+  @protected
   DrawbridgeChallengeSignature sse_decode_drawbridge_challenge_signature(
       SseDeserializer deserializer);
 
@@ -215,6 +224,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
+
+  @protected
+  String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
   ReactionPayloadDto? sse_decode_opt_box_autoadd_reaction_payload_dto(
@@ -306,6 +318,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       DecryptResultDto self, SseSerializer serializer);
 
   @protected
+  void sse_encode_decrypted_push(DecryptedPush self, SseSerializer serializer);
+
+  @protected
   void sse_encode_drawbridge_challenge_signature(
       DrawbridgeChallengeSignature self, SseSerializer serializer);
 
@@ -343,6 +358,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_prim_u_8_strict(
       Uint8List self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_String(String? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_box_autoadd_reaction_payload_dto(
