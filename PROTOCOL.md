@@ -316,6 +316,32 @@ This is a singleton record (upserted via `putRecord`). Clients fetch partner Dra
 
 When a sender posts an event, their client sends an envelope to their own Drawbridge containing the encrypted payload and the recipient Drawbridge URLs (discovered from `social.moat.drawbridgeConfig`). The sender's Drawbridge fans out to each recipient's Drawbridge via `POST /relay/event`. Recipient Drawbridges deliver immediately to clients watching the matching tag.
 
+### Privacy Properties of Drawbridge
+
+Drawbridge holds the DID transiently during the challenge-response handshake and during async PDS verification of each posted event. It is never stored in any in-memory index, never associated with a connection beyond the auth handshake, and never logged after auth. An adversary with a memory snapshot sees `(connection, tags)` per client and `(tag, payload)` in the disconnect buffer — no DIDs. The disconnect buffer is keyed by tag (not by DID or device).
+
+### Push Notifications
+
+When a recipient device is offline, Drawbridge delivers via FCM (Android) or APNs (iOS, via FCM HTTP v1). The push payload contains only `(tag, rkey, payload)` — no sender DID, no plaintext, no metadata beyond what is already public on the PDS. FCM/APNs therefore see:
+
+- The push token (known to the device OS and FCM/APNs)
+- The encrypted payload (same ciphertext that would appear on the PDS)
+- The rotating tag (a 16-byte pseudorandom value; unlinkable across epochs)
+
+The client app decrypts the payload in a background handler before displaying the notification. The decrypted text is never sent to FCM/APNs.
+
+**Device ID** — Each app installation generates a random 32-byte `device_id` stored in secure storage. The device ID is used by Drawbridge to suppress FCM delivery when the device's WebSocket is live, and to identify a registration for token refresh or explicit deregistration. It is not linked to the user's DID.
+
+**Offline detection** — Drawbridge tracks `(device_id, connection)`. FCM is only sent when `isDeviceOnline(device_id)` returns false, i.e. the device has no live WebSocket and is past a 10-second grace window (to avoid duplicates during reconnect races).
+
+**Push registration wire schema:**
+```json
+{ "type": "register_push", "device_id": "<32-hex>", "platform": "fcm", "token": "<fcm-token>", "tags": ["<hex>", ...], "expiry_sec": 2592000 }
+{ "type": "unregister_push", "device_id": "<32-hex>" }
+```
+
+**FCM credentials** — The FCM service account key is held by the Drawbridge operator (configured via `FCM_CREDENTIALS_FILE` env var). It is not part of the app binary. The Firebase project is tied to the app's package name (`social.moat.app`); operators running a public Drawbridge who wish to support the official app store build may request a service account key from the project maintainer.
+
 ## Transcript Integrity
 
 MLS provides confidentiality and authenticity for individual messages, but the PDS (as an untrusted relay) can still withhold, reorder, or replay events without detection by MLS alone. Moat adds two mechanisms on top of MLS to detect these attacks:

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -57,6 +58,12 @@ type Relay struct {
 	pushTokens map[string]*PushRegistration // keyed by device_id
 
 	pushSender FCMSender
+
+	// metrics — updated atomically, no lock needed
+	metricPushDispatched  atomic.Int64 // successful FCM sends
+	metricPushFailed      atomic.Int64 // FCM send errors (excluding unregistered)
+	metricPushUnregistered atomic.Int64 // tokens removed due to ErrTokenUnregistered
+	metricPushExpirations atomic.Int64 // tokens removed by cleanupExpiredPushTokens
 
 	resolver    DIDResolver
 	verifier    PDSVerifier
@@ -133,6 +140,7 @@ func (r *Relay) Handler() http.Handler {
 	mux.HandleFunc("/ws", r.serveWS)
 	mux.HandleFunc("/relay/event", r.relayEventHandler)
 	mux.HandleFunc("/health", r.healthHandler)
+	mux.HandleFunc("/metrics", r.metricsHandler)
 	if rec, ok := r.pushSender.(*RecordingFCMSender); ok {
 		rec.RegisterHTTPRoutes(mux)
 	}
@@ -515,10 +523,15 @@ func (r *Relay) cleanupExpiredPushTokens() {
 	r.pushMu.Lock()
 	defer r.pushMu.Unlock()
 	now := time.Now()
+	var expired int64
 	for deviceID, reg := range r.pushTokens {
 		if now.After(reg.ExpiresAt) {
 			delete(r.pushTokens, deviceID)
+			expired++
 		}
+	}
+	if expired > 0 {
+		r.metricPushExpirations.Add(expired)
 	}
 }
 
@@ -576,9 +589,13 @@ func (r *Relay) dispatchPushForTag(tag, rkey, payload string) {
 				r.log.Debug("push token unregistered, removing registration",
 					"device_id", reg.DeviceID)
 				r.unregisterPush(reg.DeviceID)
+				r.metricPushUnregistered.Add(1)
 			} else {
 				r.log.Warn("FCM send failed", "error", err, "device_id", reg.DeviceID)
+				r.metricPushFailed.Add(1)
 			}
+		} else {
+			r.metricPushDispatched.Add(1)
 		}
 	}
 }
@@ -633,6 +650,22 @@ func (r *Relay) cleanupBuffers() {
 			delete(r.buffers, tag)
 		}
 	}
+}
+
+func (r *Relay) metricsHandler(w http.ResponseWriter, req *http.Request) {
+	r.pushMu.RLock()
+	pushTokensRegistered := len(r.pushTokens)
+	r.pushMu.RUnlock()
+
+	resp := map[string]any{
+		"push_dispatches_total":   r.metricPushDispatched.Load(),
+		"push_failures_total":     r.metricPushFailed.Load(),
+		"push_unregistered_total": r.metricPushUnregistered.Load(),
+		"push_expirations_total":  r.metricPushExpirations.Load(),
+		"push_tokens_registered":  pushTokensRegistered,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 func (r *Relay) healthHandler(w http.ResponseWriter, req *http.Request) {

@@ -37,14 +37,18 @@ cargo run -p moat-cli -- export --events /tmp/e.json --repository handle.bsky.so
 
 ## Workspace Structure
 
-Rust workspace + Flutter app:
+Rust workspace + Dart/Flutter packages + Go service:
 
 - **moat-core** - Pure MLS cryptography, no network/IO. Provides `MoatSession` API for all crypto operations.
 - **moat-atproto** - Async ATProto client for PDS interactions (key packages, events, stealth addresses). Has `pds_override` field for routing all calls to a specific PDS (used in integration tests).
 - **moat-cli** - Ratatui terminal UI that orchestrates core + atproto. Also runs as a headless HTTP API server via `--http <addr>`. Accepts `--pds-url <url>` to override the PDS endpoint.
 - **moat-postern** - Minimal in-process ATProto PDS for integration testing. Implements record CRUD, blob upload/download, handle resolution, and session creation. No password validation. Returns real CIDv1 values.
 - **moat-beacon** - Integration test harness. `TestWorld` spins up Postern in-process and one `moat-cli --http` subprocess per participant. `MoatCliClient` provides typed HTTP wrappers for all API endpoints.
-- **moat-flutter/** - Flutter app (Android + Web). Contains its own Rust crate at `moat-flutter/rust/` that wraps moat-core via flutter_rust_bridge.
+- **moat-dart/** - Dart/Flutter monorepo containing three packages:
+  - **moat-dart/app/** - Flutter app (Android + Web). Contains its own Rust crate at `moat-dart/app/rust/` that wraps moat-core via flutter_rust_bridge. FRB codegen outputs to `moat-dart/common/lib/rust/`.
+  - **moat-dart/common/** - Shared Dart library (models, services, FFI bindings). Used by both the Flutter app and the headless server.
+  - **moat-dart/server/** - Headless Dart HTTP server (`moat_dart_server`) used by moat-beacon integration tests as a Dart-side participant.
+- **moat-drawbridge/** - Go WebSocket relay for real-time event delivery and FCM push notifications. Built separately (`go build ./...` in `moat-drawbridge/`). Configured via env vars (see below).
 
 ## Architecture Principles
 
@@ -158,6 +162,48 @@ cargo install -f wasm-bindgen-cli  # version must match Cargo.lock (currently 0.
 - **Bundled locally** in `moat-flutter/fonts/` — Roboto and Platypi (both variable fonts with italic variants). Google Fonts CDN is blocked by `require-corp` COEP header, so fonts must be local.
 - **Variable font weights** — Use `fontVariations: [FontVariation.weight(N)]` (from `dart:ui`), NOT `fontWeight: FontWeight.wN`. FontWeight doesn't work with variable .ttf files.
 - **Theme font setup** — Per-style fontFamily in `_applyFonts()`. Do NOT set `fontFamily` at the top-level `ThemeData` — it overrides all textTheme styles.
+
+## Drawbridge
+
+`moat-drawbridge/` is a Go service. Build and test:
+
+```bash
+cd moat-drawbridge
+go build ./...
+go test ./...
+```
+
+### Environment Variables
+
+| Variable | Description |
+|---|---|
+| `FCM_CREDENTIALS_FILE` | Path to Firebase service account JSON. When set, FCM delivery is enabled. |
+| `FCM_SENDER` | Override sender mode: `firebase` (default when credentials set), `noop`, `recording` (tests only). |
+| `RELAY_PUBLIC_URL` | Override the relay's public-facing WebSocket URL (used in auth challenges). |
+| `PLC_BASE_URL` | Override the PLC directory URL for DID resolution (default: `https://plc.directory`). |
+
+### Observability
+
+`GET /metrics` returns a JSON snapshot of push counters:
+
+```json
+{
+  "push_dispatches_total": 42,
+  "push_failures_total": 0,
+  "push_unregistered_total": 1,
+  "push_expirations_total": 0,
+  "push_tokens_registered": 3
+}
+```
+
+`GET /health` returns connection and uptime info.
+
+### Push Notification Notes
+
+- Push tokens and device IDs are **never logged at info level** — debug only.
+- FCM is only sent when the device has no live WebSocket and is past the 10s grace window.
+- The `recording` sender mode (`FCM_SENDER=recording`) exposes `GET /test/push-log` and `POST /test/push-log/reset` for integration tests only.
+- Firebase project: `moat-app-f0ada` (package `social.moat.app`). Service account key is not in the repo — pass via `FCM_CREDENTIALS_FILE` at deploy time.
 
 ## Testing
 
