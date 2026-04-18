@@ -15,6 +15,15 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// pairWSURL derives the /pair endpoint URL from a main-WS relay URL by
+// replacing the trailing "/ws" path segment with "/pair".
+func pairWSURL(mainWsURL string) string {
+	if strings.HasSuffix(mainWsURL, "/ws") {
+		return mainWsURL[:len(mainWsURL)-3] + "/pair"
+	}
+	return mainWsURL + "/pair"
+}
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
@@ -47,6 +56,8 @@ type Relay struct {
 	byTag            map[string]map[*Client]bool
 	byDevice         map[string]*Client    // keyed by device_id; only set for clients that sent register_push
 	recentDisconnects map[string]time.Time // device_id → disconnectedAt; cleared after graceWindow
+
+	pairs *PairRegistry
 
 	bufferMu sync.Mutex
 	buffers  map[string]*DisconnectBuffer // keyed by tag hex
@@ -104,6 +115,7 @@ func NewRelay(publicURL, fallbackURL string, resolver DIDResolver, verifier PDSV
 		resolver:          resolver,
 		verifier:          verifier,
 		rateLimiter:       NewRateLimiter(),
+		pairs:             newPairRegistry(),
 		publicURL:         publicURL,
 		relayURL:          fallbackURL,
 		startTime:         time.Now(),
@@ -138,6 +150,7 @@ func (r *Relay) clientRelayURL(req *http.Request) string {
 func (r *Relay) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", r.serveWS)
+	mux.HandleFunc("/pair", r.servePairWS)
 	mux.HandleFunc("/relay/event", r.relayEventHandler)
 	mux.HandleFunc("/health", r.healthHandler)
 	mux.HandleFunc("/metrics", r.metricsHandler)
@@ -215,6 +228,10 @@ func (r *Relay) unregister(c *Client) {
 		r.log.Info("created disconnect buffers", "tag_count", len(emptyTags))
 	}
 
+	// Cancel any pending pairing sessions before closing the send channel so
+	// that pair_closed notifications can still be queued to c.send (they'll
+	// be drained by the write pump before it exits).
+	r.pairs.onMainWSDisconnect(c)
 	close(c.send)
 }
 
@@ -623,6 +640,7 @@ func (r *Relay) cleanupLoop(ctx context.Context) {
 			r.cleanupBuffers()
 			r.cleanupExpiredPushTokens()
 			r.cleanupRecentDisconnects()
+			r.pairs.cleanupExpired()
 		}
 	}
 }
@@ -652,6 +670,122 @@ func (r *Relay) cleanupBuffers() {
 	}
 }
 
+// handlePairOffer registers a new pairing offer from an authenticated client.
+func (r *Relay) handlePairOffer(c *Client, msg *PairOfferMsg) {
+	if msg.Token == "" {
+		c.sendMsg(ErrorMsg{Type: "error", Message: "pair_offer: token required"})
+		return
+	}
+	if err := r.pairs.Offer(c, msg.Token); err != nil {
+		c.sendMsg(ErrorMsg{Type: "error", Message: err.Error()})
+		return
+	}
+	c.sendMsg(PairPendingMsg{Type: "pair_pending", Token: msg.Token})
+	r.log.Info("pair offer registered")
+}
+
+// handlePairJoin matches a joining client to an existing offer and notifies
+// both sides with the pair-WS URL they should open.
+func (r *Relay) handlePairJoin(c *Client, msg *PairJoinMsg) {
+	if msg.Token == "" {
+		c.sendMsg(ErrorMsg{Type: "error", Message: "pair_join: token required"})
+		return
+	}
+	sess, err := r.pairs.Join(c, msg.Token)
+	if err != nil {
+		c.sendMsg(ErrorMsg{Type: "error", Message: err.Error()})
+		return
+	}
+	pairURL := pairWSURL(sess.Offerer.relayURL)
+	ready := PairReadyMsg{Type: "pair_ready", Token: msg.Token, PairURL: pairURL}
+	sess.Offerer.sendMsg(ready)
+	c.sendMsg(ready)
+	r.log.Info("pair session ready")
+}
+
+// servePairWS handles the dedicated /pair WebSocket endpoint for bulk sync
+// traffic. The first (and only JSON) frame must be pair_attach{token}; all
+// subsequent frames are raw binary forwarded verbatim to the peer.
+func (r *Relay) servePairWS(w http.ResponseWriter, req *http.Request) {
+	conn, err := upgrader.Upgrade(w, req, nil)
+	if err != nil {
+		r.log.Error("pair WS upgrade failed", "error", err)
+		return
+	}
+
+	// Read the single pair_attach handshake frame.
+	conn.SetReadLimit(maxMessageSize)
+	conn.SetReadDeadline(time.Now().Add(pongWait))
+	_, data, err := conn.ReadMessage()
+	conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		conn.Close()
+		return
+	}
+
+	msgType, msg, err := parseMessage(data)
+	if err != nil || msgType != "pair_attach" {
+		conn.WriteControl(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseUnsupportedData, "expected pair_attach"),
+			time.Now().Add(writeWait))
+		conn.Close()
+		return
+	}
+	attach := msg.(*PairAttachMsg)
+	if attach.Token == "" {
+		conn.WriteControl(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseUnsupportedData, "pair_attach: token required"),
+			time.Now().Add(writeWait))
+		conn.Close()
+		return
+	}
+
+	pc := &PairConn{
+		conn: conn,
+		send: make(chan []byte, pairSendBufSize),
+	}
+
+	// Attach blocks until the peer also attaches or the session TTL expires.
+	peer, sess, err := r.pairs.Attach(pc, attach.Token)
+	if err != nil {
+		r.log.Info("pair attach rejected", "error", err)
+		conn.WriteControl(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, err.Error()),
+			time.Now().Add(writeWait))
+		conn.Close()
+		return
+	}
+
+	// Notify this side that both peers are attached and transfer may begin.
+	pairedData, _ := json.Marshal(PairedMsg{Type: "paired"})
+	conn.SetWriteDeadline(time.Now().Add(writeWait))
+	if err := conn.WriteMessage(websocket.TextMessage, pairedData); err != nil {
+		r.pairs.terminateSession(attach.Token, "write_error")
+		return
+	}
+	conn.SetWriteDeadline(time.Time{})
+
+	// Determine transfer direction for byte tracking.
+	sess.mu.Lock()
+	direction := 0 // A→B
+	if sess.B == pc {
+		direction = 1 // B→A
+	}
+	sess.mu.Unlock()
+
+	token := attach.Token
+	onByteCap := func() {
+		r.pairs.metricByteCaps.Add(1)
+		r.pairs.terminateSession(token, "byte_cap")
+	}
+
+	go runPairWritePump(pc)
+	runPairForwarder(pc, peer.send, sess, r.pairs, direction, onByteCap)
+	// Forwarder exited — the connection dropped or was terminated. Clean up any
+	// remaining session state (no-op if already terminated by the peer side).
+	r.pairs.terminateSession(token, "peer_gone")
+}
+
 func (r *Relay) metricsHandler(w http.ResponseWriter, req *http.Request) {
 	r.pushMu.RLock()
 	pushTokensRegistered := len(r.pushTokens)
@@ -663,6 +797,12 @@ func (r *Relay) metricsHandler(w http.ResponseWriter, req *http.Request) {
 		"push_unregistered_total": r.metricPushUnregistered.Load(),
 		"push_expirations_total":  r.metricPushExpirations.Load(),
 		"push_tokens_registered":  pushTokensRegistered,
+		// Pairing metrics
+		"pair_sessions_open":          r.pairs.metricOpen.Load(),
+		"pair_sessions_total":         r.pairs.metricTotal.Load(),
+		"pair_bytes_total":            r.pairs.metricBytes.Load(),
+		"pair_timeouts_total":         r.pairs.metricTimeouts.Load(),
+		"pair_byte_cap_closes_total":  r.pairs.metricByteCaps.Load(),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)

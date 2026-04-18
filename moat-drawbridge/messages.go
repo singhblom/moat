@@ -88,6 +88,51 @@ type RelayEventMsg struct {
 	Payload string `json:"payload,omitempty"`
 }
 
+// --- Pairing messages (Phase 1: multi-device history sync) ---
+//
+// Control plane (main WS, Client → Relay):
+
+type PairOfferMsg struct {
+	Type  string `json:"type"`  // "pair_offer"
+	Token string `json:"token"` // 32 random bytes, hex-encoded
+}
+
+type PairJoinMsg struct {
+	Type  string `json:"type"`  // "pair_join"
+	Token string `json:"token"`
+}
+
+// Control plane (main WS, Relay → Client):
+
+type PairPendingMsg struct {
+	Type  string `json:"type"`  // "pair_pending"
+	Token string `json:"token"` // echoed back to confirm registration
+}
+
+type PairReadyMsg struct {
+	Type    string `json:"type"`     // "pair_ready"
+	Token   string `json:"token"`
+	PairURL string `json:"pair_url"` // wss://<relay>/pair — open a new WS here
+}
+
+type PairClosedMsg struct {
+	Type   string `json:"type"`   // "pair_closed"
+	Reason string `json:"reason"` // "peer_gone", "byte_cap", "ttl_expired", etc.
+}
+
+// Pair WS (Client → Relay, first and only JSON frame):
+
+type PairAttachMsg struct {
+	Type  string `json:"type"`  // "pair_attach"
+	Token string `json:"token"`
+}
+
+// Pair WS (Relay → Client, sent once both sides have attached):
+
+type PairedMsg struct {
+	Type string `json:"type"` // "paired"
+}
+
 // parseMessage deserializes a raw JSON message into the appropriate typed struct.
 func parseMessage(data []byte) (string, any, error) {
 	var env Envelope
@@ -134,6 +179,24 @@ func parseMessage(data []byte) (string, any, error) {
 		return env.Type, &msg, nil
 	case "request_challenge":
 		var msg RequestChallengeMsg
+		if err := json.Unmarshal(data, &msg); err != nil {
+			return env.Type, nil, err
+		}
+		return env.Type, &msg, nil
+	case "pair_offer":
+		var msg PairOfferMsg
+		if err := json.Unmarshal(data, &msg); err != nil {
+			return env.Type, nil, err
+		}
+		return env.Type, &msg, nil
+	case "pair_join":
+		var msg PairJoinMsg
+		if err := json.Unmarshal(data, &msg); err != nil {
+			return env.Type, nil, err
+		}
+		return env.Type, &msg, nil
+	case "pair_attach":
+		var msg PairAttachMsg
 		if err := json.Unmarshal(data, &msg); err != nil {
 			return env.Type, nil, err
 		}

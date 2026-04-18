@@ -342,6 +342,76 @@ The client app decrypts the payload in a background handler before displaying th
 
 **FCM credentials** — The FCM service account key is held by the Drawbridge operator (configured via `FCM_CREDENTIALS_FILE` env var). It is not part of the app binary. The Firebase project is tied to the app's package name (`social.moat.app`); operators running a public Drawbridge who wish to support the official app store build may request a service account key from the project maintainer.
 
+### Pairing Mode (Multi-Device History Sync)
+
+Drawbridge provides a **pairing mode** that lets two devices with the same DID rendezvous and stream opaque binary data between them. Bulk sync traffic runs on a dedicated `/pair` WebSocket so it never competes with live event delivery.
+
+#### Two-Socket Architecture
+
+Each client uses two sockets simultaneously during a sync:
+
+- **Main WS** (`/ws`, existing DID-authed connection) — control plane only  
+- **Pair WS** (`/pair`, one new socket per pairing session) — bulk binary data
+
+#### Handshake
+
+1. Both clients are already authenticated on `/ws`.
+2. Out of band (via a ring MLS message in the device ring group), the offerer and joiner agree on a random 32-byte token (hex-encoded, 64 chars).
+3. On the main WS:
+   - Offerer: `→ pair_offer{token}` / Relay: `→ pair_pending{token}`
+   - Joiner: `→ pair_join{token}` / Relay: `→ pair_ready{token, pair_url}` (sent to both)
+4. Each client opens a new WebSocket to `pair_url` (`wss://<relay>/pair`).
+5. First frame on the pair WS (JSON): `pair_attach{token}`. No DID challenge — the token is the auth.
+6. Once both sides have attached, relay sends `paired` on both pair WSes. From then on, only opaque binary frames flow; the relay forwards them verbatim.
+7. Either side closing its pair WS ends the session. The relay sends `pair_closed{reason}` on the main WS to the surviving peer.
+
+#### Wire Schemas
+
+Main WS (client → relay):
+```
+{ "type": "pair_offer", "token": "<64-hex>" }
+{ "type": "pair_join",  "token": "<64-hex>" }
+```
+
+Main WS (relay → client):
+```
+{ "type": "pair_pending", "token": "<64-hex>" }
+{ "type": "pair_ready",   "token": "<64-hex>", "pair_url": "wss://<relay>/pair" }
+{ "type": "pair_closed",  "reason": "<peer_gone|byte_cap|ttl_expired|...>" }
+```
+
+Pair WS (client → relay, first frame only):
+```
+{ "type": "pair_attach", "token": "<64-hex>" }
+```
+
+Pair WS (relay → client, sent once both sides attached):
+```
+{ "type": "paired" }
+```
+
+Pair WS (after `paired`): raw binary WebSocket frames forwarded verbatim.
+
+#### Limits
+
+| Parameter | Value |
+|---|---|
+| Token TTL | 5 minutes from `pair_offer` |
+| Max attaches per token | 2 (offer + join) |
+| Max frame size (pair WS) | 1 MiB |
+| Max bytes per session | 256 MiB |
+| Max bytes per connection per second | 8 MiB/s |
+
+Exceeding the byte cap closes both pair WSes and delivers `pair_closed{reason:"byte_cap"}` on the main WS.
+
+#### Security and Privacy
+
+- **Tokens are capabilities**: a 32-byte random token is issued only over an authenticated main WS and is valid for two attaches within 5 minutes. The relay does not verify that both sides share the same DID — that trust comes from the MLS device ring session layered on top.
+- **Content opacity**: the relay sees only opaque binary frames after `pair_attach`. All payload data is encrypted as MLS application messages inside the device ring before being handed to the pair WS.
+- **Tokens are never logged**: attach tokens are treated as credentials and omitted from relay logs at all severity levels.
+- **Byte metrics are aggregated**: per-session byte counts are tracked internally for cap enforcement but exposed only as relay-wide totals in `/metrics`, never per-session.
+- **TLS + MLS**: Drawbridge TLS protects against network observers; the device ring MLS session provides end-to-end confidentiality and mutual authentication between devices, protecting against the relay operator.
+
 ## Transcript Integrity
 
 MLS provides confidentiality and authenticity for individual messages, but the PDS (as an untrusted relay) can still withhold, reorder, or replay events without detection by MLS alone. Moat adds two mechanisms on top of MLS to detect these attacks:

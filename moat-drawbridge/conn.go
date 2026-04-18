@@ -66,6 +66,7 @@ func (c *Client) sendMsg(v any) {
 		c.log.Error("failed to marshal message", "error", err)
 		return
 	}
+	defer func() { recover() }() // ignore send-on-closed-channel if client is disconnecting
 	select {
 	case c.send <- data:
 	default:
@@ -195,6 +196,16 @@ func (c *Client) handlePostAuth(msgType string, msg any) {
 	case "event_posted":
 		if m, ok := msg.(*EventPostedMsg); ok {
 			c.relay.handleEventPosted(c, m)
+		}
+
+	case "pair_offer":
+		if m, ok := msg.(*PairOfferMsg); ok {
+			c.relay.handlePairOffer(c, m)
+		}
+
+	case "pair_join":
+		if m, ok := msg.(*PairJoinMsg); ok {
+			c.relay.handlePairJoin(c, m)
 		}
 
 	default:
