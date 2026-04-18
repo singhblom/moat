@@ -41,6 +41,7 @@ use openmls_basic_credential::SignatureKeyPair;
 use openmls_traits::OpenMlsProvider;
 use serde::{Deserialize as SerdeDeserialize, Serialize as SerdeSerialize};
 use serde_with::{base64::Base64, serde_as};
+use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::sync::RwLock;
@@ -117,6 +118,15 @@ pub struct RemoveResult {
     /// The commit message to broadcast to other members
     pub commit: Vec<u8>,
     /// The group ID
+    pub group_id: Vec<u8>,
+}
+
+/// Opaque handle for the device ring MLS group.
+///
+/// Constructed via [`MoatSession::device_ring_id`]. Downstream code passes this
+/// through rather than re-deriving or guessing the group ID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RingContext {
     pub group_id: Vec<u8>,
 }
 
@@ -407,6 +417,20 @@ impl MoatSession {
     /// session is first created, and persisted through `export_state()`/`from_state()`.
     pub fn device_id(&self) -> &[u8; 16] {
         &self.device_id
+    }
+
+    /// Derive the device ring group ID for a given DID.
+    ///
+    /// `HKDF-SHA256(ikm=did_utf8, salt=b"moat-device-ring-salt-v1", info=b"moat-device-ring-v1", L=32)`
+    ///
+    /// Deterministic: any device with the same DID derives the same group ID.
+    /// Returns a [`RingContext`] so callers treat the ring group explicitly.
+    pub fn device_ring_id(did: &str) -> RingContext {
+        let hk = Hkdf::<Sha256>::new(Some(b"moat-device-ring-salt-v1"), did.as_bytes());
+        let mut out = vec![0u8; 32];
+        hk.expand(b"moat-device-ring-v1", &mut out)
+            .expect("32 bytes is a valid HKDF-SHA256 output length");
+        RingContext { group_id: out }
     }
 
     /// Check if there are unsaved changes.

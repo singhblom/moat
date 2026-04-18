@@ -4092,12 +4092,14 @@ impl App {
                 }
             };
 
-            // Build a set of (DID, device_name) pairs for existing members
-            let existing_devices: std::collections::HashSet<(String, String)> = current_members
+            // Build a set of (DID, device_id) pairs for existing members.
+            // Keyed by device_id (not device_name) so two devices sharing a name but
+            // different device_ids are both added.
+            let existing_devices: std::collections::HashSet<(String, [u8; 16])> = current_members
                 .iter()
                 .filter_map(|(_, cred)| {
                     cred.as_ref()
-                        .map(|c| (c.did().to_string(), c.device_name().to_string()))
+                        .map(|c| (c.did().to_string(), *c.device_id()))
                 })
                 .collect();
 
@@ -4130,7 +4132,7 @@ impl App {
 
                 let device_key = (
                     credential.did().to_string(),
-                    credential.device_name().to_string(),
+                    *credential.device_id(),
                 );
 
                 self.debug_log.log(&format!(
@@ -4375,6 +4377,30 @@ mod tests {
             unread: 0,
         };
         assert_eq!(conv.display_name(), "did:plc:alice, did:plc:bob");
+    }
+
+    #[test]
+    fn poll_devices_dedup_uses_device_id_not_name() {
+        // Two credentials with the same device_name but different device_ids must
+        // produce distinct dedup keys so both get added to the group.
+        use moat_core::MoatCredential;
+        use std::collections::HashSet;
+
+        let id_a = [1u8; 16];
+        let id_b = [2u8; 16];
+        let cred_a = MoatCredential::new("did:plc:alice", "My Phone", id_a);
+        let cred_b = MoatCredential::new("did:plc:alice", "My Phone", id_b);
+
+        let existing: HashSet<(String, [u8; 16])> = vec![
+            (cred_a.did().to_string(), *cred_a.device_id()),
+        ]
+        .into_iter()
+        .collect();
+
+        // cred_a is already present
+        assert!(existing.contains(&(cred_a.did().to_string(), *cred_a.device_id())));
+        // cred_b has the same name but different id — must not be considered present
+        assert!(!existing.contains(&(cred_b.did().to_string(), *cred_b.device_id())));
     }
 
     #[test]
