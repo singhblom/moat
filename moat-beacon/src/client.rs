@@ -63,6 +63,12 @@ pub struct ImageAttachmentInfo {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct RingStatus {
+    pub ring_group_id: Option<String>,
+    pub coord_group_count: usize,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct PollStats {
     pub new_messages: usize,
     pub new_conversations: usize,
@@ -296,6 +302,34 @@ impl MoatCliClient {
             anyhow::bail!("kick_member failed ({status}): {body}");
         }
         Ok(())
+    }
+
+    /// `POST /ring-tick` — trigger one device-ring tick synchronously.
+    pub async fn ring_tick(&self) -> Result<()> {
+        let resp = self
+            .http
+            .post(format!("{}/ring-tick", self.base_url))
+            .send()
+            .await
+            .context("POST /ring-tick")?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body: Value = resp.json().await.unwrap_or_default();
+            anyhow::bail!("ring_tick failed ({status}): {body}");
+        }
+        Ok(())
+    }
+
+    /// `GET /ring-status` — return the current ring state.
+    pub async fn ring_status(&self) -> Result<RingStatus> {
+        self.http
+            .get(format!("{}/ring-status", self.base_url))
+            .send()
+            .await
+            .context("GET /ring-status")?
+            .json()
+            .await
+            .context("parse ring-status response")
     }
 
     /// `POST /watch`

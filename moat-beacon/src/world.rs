@@ -500,6 +500,58 @@ impl TestWorld {
         Ok(())
     }
 
+    /// Spawn a second moat-cli process for the same Postern account.
+    ///
+    /// Use this to simulate a second device for an existing user.  The new
+    /// process connects to the same PDS proxy but uses a fresh storage directory,
+    /// giving it a distinct `device_id`.  The caller must log in using the same
+    /// handle/password as the first device.
+    ///
+    /// The new participant is registered under `label` in this world.
+    pub async fn spawn_second_device(&mut self, label: &str) -> Result<MoatCliClient> {
+        let http_port = free_port()?;
+        let http_addr = format!("127.0.0.1:{http_port}");
+        let storage = TempDir::new().context("create temp storage dir for second device")?;
+
+        let args = vec![
+            "--storage-dir".to_string(),
+            storage.path().to_str().unwrap().to_string(),
+            "--pds-url".to_string(),
+            self.pds_proxy.url.clone(),
+            "--http".to_string(),
+            http_addr.clone(),
+        ];
+
+        let pgid = self.process_group.pgid();
+        let mut cmd = Command::new(&self.moat_cli_bin);
+        cmd.args(&args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::inherit());
+        #[cfg(unix)]
+        cmd.process_group(pgid as i32);
+        let child = cmd
+            .spawn()
+            .with_context(|| format!("spawn second device for {label}"))?;
+
+        let client = MoatCliClient::new(&format!("http://{http_addr}"));
+        wait_for_http(&client, std::time::Duration::from_secs(10))
+            .await
+            .with_context(|| format!("waiting for second device ({label}) to start"))?;
+
+        self.participants.insert(
+            label.to_string(),
+            ParticipantProcess {
+                child: Some(child),
+                storage,
+                spawn_args: args,
+                kind: ParticipantKind::RustCli,
+                client: client.clone(),
+            },
+        );
+
+        Ok(client)
+    }
+
     /// Returns `true` if the participant process is currently running.
     pub fn participant_is_online(&self, handle: &str) -> bool {
         self.participants

@@ -2,7 +2,9 @@
 //!
 //! Keys are stored in ~/.moat/keys/ with appropriate file permissions.
 
+use moat_core::GroupKind;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -23,7 +25,7 @@ pub enum KeyStoreError {
 }
 
 /// Metadata about a conversation/group
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GroupMetadata {
     #[serde(
         alias = "participant_did",
@@ -37,6 +39,30 @@ pub struct GroupMetadata {
         default
     )]
     pub participant_handles: Vec<String>,
+    /// Classification of this group (User/Ring/DeviceCoord). Defaults to User
+    /// for backwards compatibility with groups stored before Phase 2.
+    #[serde(default)]
+    pub kind: GroupKind,
+}
+
+/// Persisted state for the device ring driver.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RingState {
+    /// Hex-encoded ring group ID, or None if no ring exists yet.
+    #[serde(default)]
+    pub ring_group_id: Option<String>,
+    /// Unix timestamp (ms) when the ring was created.
+    #[serde(default)]
+    pub ring_created_at: Option<i64>,
+    /// Map from sibling device_id (hex) → coord group_id (hex).
+    #[serde(default)]
+    pub coord_groups: HashMap<String, String>,
+    /// device_ids (hex) of siblings from whom we've received a Hello.
+    #[serde(default)]
+    pub sibling_sent_hello: HashSet<String>,
+    /// Cursor (rkey) for incremental own-PDS stealth scan.
+    #[serde(default)]
+    pub own_events_cursor: Option<String>,
 }
 
 /// Deserialize a field that may be a single string (old format) or a Vec<String> (new format).
@@ -235,6 +261,26 @@ impl KeyStore {
         }
 
         Ok(groups)
+    }
+
+    /// Load the device ring driver state from `ring.json`.
+    /// Returns a default (empty) state if the file does not exist yet.
+    pub fn load_ring_state(&self) -> Result<RingState> {
+        let path = self.base_path.join("ring.json");
+        if !path.exists() {
+            return Ok(RingState::default());
+        }
+        let data = fs::read(&path)?;
+        let state: RingState = serde_json::from_slice(&data)?;
+        Ok(state)
+    }
+
+    /// Persist the device ring driver state to `ring.json`.
+    pub fn save_ring_state(&self, state: &RingState) -> Result<()> {
+        let path = self.base_path.join("ring.json");
+        let json = serde_json::to_vec_pretty(state)?;
+        fs::write(&path, json)?;
+        Ok(())
     }
 
     /// Store group metadata (participant info, etc.)
@@ -667,10 +713,12 @@ mod tests {
         let meta_a = GroupMetadata {
             participant_dids: vec!["did:plc:aaa".to_string()],
             participant_handles: vec!["alice.bsky.social".to_string()],
+            ..Default::default()
         };
         let meta_b = GroupMetadata {
             participant_dids: vec!["did:plc:bbb".to_string()],
             participant_handles: vec!["bob.bsky.social".to_string()],
+            ..Default::default()
         };
 
         store.store_group_metadata("group-a", &meta_a).unwrap();
@@ -766,6 +814,7 @@ mod tests {
                 "bob.bsky.social".to_string(),
                 "carol.bsky.social".to_string(),
             ],
+            ..Default::default()
         };
 
         store.store_group_metadata("group-multi", &meta).unwrap();

@@ -30,6 +30,7 @@ pub mod same_drawbridge_local;
 pub mod three_party_chat;
 pub mod three_party_push;
 pub mod three_party_restart;
+pub mod two_device_bootstrap;
 pub mod two_party_chat;
 pub mod two_party_fanout;
 pub mod two_party_push;
@@ -704,6 +705,13 @@ pub static SCENARIOS: &[Scenario] = &[
         run_fn: mixed_three_party_chat::run_boxed,
         gen_fn: generate_random_actions_3p,
         seed_fn: actions_from_seed_3p,
+    },
+    Scenario {
+        name: "two-device-bootstrap",
+        description: "One user, two devices — device ring bootstrap via coord groups",
+        run_fn: two_device_bootstrap::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
     },
 ];
 

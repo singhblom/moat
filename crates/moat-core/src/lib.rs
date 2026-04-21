@@ -24,6 +24,7 @@
 
 pub mod blob;
 pub(crate) mod credential;
+pub(crate) mod device_ring;
 pub(crate) mod error;
 pub(crate) mod event;
 pub mod message;
@@ -41,7 +42,6 @@ use openmls_basic_credential::SignatureKeyPair;
 use openmls_traits::OpenMlsProvider;
 use serde::{Deserialize as SerdeDeserialize, Serialize as SerdeSerialize};
 use serde_with::{base64::Base64, serde_as};
-use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::sync::RwLock;
@@ -49,9 +49,13 @@ use std::sync::RwLock;
 // Disambiguate from openmls::prelude::* and make accessible as moat_core::X
 pub use crate::credential::MoatCredential;
 pub use crate::error::{Error, ErrorCode, Result};
+pub use crate::device_ring::{
+    classify_group_kind, decode_coord_msg, encode_coord_msg, reconcile_rings, CoordGroupResult,
+    CoordMsg, GroupKind, ReconcileDecision,
+};
 pub use crate::event::{
-    ControlKind, DecryptOutcome, Event, EventKind, MessageKind,
-    ModifierKind, ReactionPayload, SenderInfo, TranscriptWarning,
+    ControlKind, DecryptOutcome, Event, EventKind, MessageKind, ModifierKind, ReactionPayload,
+    SenderInfo, TranscriptWarning,
 };
 pub use crate::message::{
     ExternalBlob, LongTextMessage, MediaMessage, MessageBodyKind, MessagePayload,
@@ -121,14 +125,6 @@ pub struct RemoveResult {
     pub group_id: Vec<u8>,
 }
 
-/// Opaque handle for the device ring MLS group.
-///
-/// Constructed via [`MoatSession::device_ring_id`]. Downstream code passes this
-/// through rather than re-deriving or guessing the group ID.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RingContext {
-    pub group_id: Vec<u8>,
-}
 
 /// Magic bytes for versioned state format.
 const STATE_MAGIC: &[u8; 4] = b"MOAT";
@@ -419,18 +415,35 @@ impl MoatSession {
         &self.device_id
     }
 
-    /// Derive the device ring group ID for a given DID.
+    /// Create a new device ring MLS group with a random 32-byte group ID.
     ///
-    /// `HKDF-SHA256(ikm=did_utf8, salt=b"moat-device-ring-salt-v1", info=b"moat-device-ring-v1", L=32)`
+    /// The ring is created with only the caller as its initial member; siblings
+    /// are added later via [`add_device`]. Returns the raw group ID bytes.
+    pub fn create_device_ring(
+        &self,
+        credential: &MoatCredential,
+        key_bundle: &[u8],
+    ) -> Result<Vec<u8>> {
+        self.create_group(credential, key_bundle)
+    }
+
+    /// Create a pairwise device coordination group between this device and a sibling.
     ///
-    /// Deterministic: any device with the same DID derives the same group ID.
-    /// Returns a [`RingContext`] so callers treat the ring group explicitly.
-    pub fn device_ring_id(did: &str) -> RingContext {
-        let hk = Hkdf::<Sha256>::new(Some(b"moat-device-ring-salt-v1"), did.as_bytes());
-        let mut out = vec![0u8; 32];
-        hk.expand(b"moat-device-ring-v1", &mut out)
-            .expect("32 bytes is a valid HKDF-SHA256 output length");
-        RingContext { group_id: out }
+    /// Creates an MLS group, immediately adds the sibling via their key package,
+    /// and returns the group ID, commit, and welcome for the sibling.
+    pub fn create_device_coord_group(
+        &self,
+        credential: &MoatCredential,
+        key_bundle: &[u8],
+        sibling_key_package: &[u8],
+    ) -> Result<crate::device_ring::CoordGroupResult> {
+        let group_id = self.create_group(credential, key_bundle)?;
+        let welcome_result = self.add_member(&group_id, key_bundle, sibling_key_package)?;
+        Ok(crate::device_ring::CoordGroupResult {
+            group_id,
+            commit: welcome_result.commit,
+            welcome: welcome_result.welcome,
+        })
     }
 
     /// Check if there are unsaved changes.

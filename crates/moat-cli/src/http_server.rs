@@ -387,6 +387,21 @@ async fn post_poll(State(state): State<Arc<ServerState>>) -> impl IntoResponse {
     }
 }
 
+async fn post_ring_tick(State(state): State<Arc<ServerState>>) -> Json<Value> {
+    let mut app = state.app.lock().await;
+    app.do_ring_tick().await;
+    Json(json!({ "ok": true }))
+}
+
+async fn get_ring_status(State(state): State<Arc<ServerState>>) -> Json<Value> {
+    let app = state.app.lock().await;
+    let (ring_group_id, coord_group_count) = app.api_ring_status();
+    Json(json!({
+        "ring_group_id": ring_group_id,
+        "coord_group_count": coord_group_count,
+    }))
+}
+
 async fn get_events(
     State(state): State<Arc<ServerState>>,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<SseEvent, std::convert::Infallible>>> {
@@ -423,6 +438,9 @@ fn spawn_headless_loop(app: Arc<tokio::sync::Mutex<App>>) {
                 let mut app = app.lock().await;
                 if app.should_poll_devices() {
                     app.do_device_poll().await;
+                }
+                if app.should_do_ring_tick() {
+                    app.do_ring_tick().await;
                 }
             }
             tokio::time::sleep(Duration::from_millis(16)).await;
@@ -483,6 +501,8 @@ pub async fn run_http(
         .route("/watch/:did", delete(delete_watch))
         .route("/poll", post(post_poll))
         .route("/poll/:seconds", post(post_poll_interval))
+        .route("/ring-tick", post(post_ring_tick))
+        .route("/ring-status", get(get_ring_status))
         .route("/events", get(get_events))
         // TODO: .route("/debug-log/:lines", get(get_debug_log))
         .with_state(state);

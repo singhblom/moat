@@ -2,6 +2,7 @@
 
 mod app;
 mod blob_cache;
+mod device_ring;
 mod drawbridge;
 mod http_server;
 mod image_processing;
@@ -257,6 +258,9 @@ async fn run_app(
         // Device polling runs async but only every 30s (not latency-critical)
         if app.should_poll_devices() {
             app.do_device_poll().await;
+        }
+        if app.should_do_ring_tick() {
+            app.do_ring_tick().await;
         }
     }
 }

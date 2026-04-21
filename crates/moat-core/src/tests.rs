@@ -7,7 +7,6 @@ use crate::{
     pad_to_bucket,
     tag::derive_event_tag,
     unpad, Error, ErrorCode, Event, EventKind, MoatCredential, MoatSession, ParsedMessagePayload,
-    RingContext,
 };
 
 fn short_text_payload(text: &str) -> MessagePayload {
@@ -1275,40 +1274,3 @@ fn test_long_text_message_with_external_blob() {
     }
 }
 
-// ── device_ring_id ──────────────────────────────────────────────────────────
-
-#[test]
-fn ring_id_is_deterministic_for_same_did() {
-    let a = MoatSession::device_ring_id("did:plc:alice123");
-    let b = MoatSession::device_ring_id("did:plc:alice123");
-    assert_eq!(a, b);
-}
-
-#[test]
-fn ring_id_differs_for_different_dids() {
-    let alice = MoatSession::device_ring_id("did:plc:alice123");
-    let bob = MoatSession::device_ring_id("did:plc:bob456");
-    assert_ne!(alice, bob);
-}
-
-#[test]
-fn ring_id_is_32_bytes() {
-    let ctx = MoatSession::device_ring_id("did:plc:test");
-    assert_eq!(ctx.group_id.len(), 32);
-}
-
-#[test]
-fn ring_id_is_independent_of_session_state() {
-    // device_ring_id is a pure function of DID; two separate sessions agree
-    let ctx1 = MoatSession::device_ring_id("did:plc:shared");
-    let _session = MoatSession::new(); // creates fresh session with random device_id
-    let ctx2 = MoatSession::device_ring_id("did:plc:shared");
-    assert_eq!(ctx1, ctx2);
-}
-
-#[test]
-fn ring_context_returns_ring_context_type() {
-    let ctx = MoatSession::device_ring_id("did:plc:alice");
-    // Verify the return type is RingContext by using it
-    let _: RingContext = ctx;
-}
