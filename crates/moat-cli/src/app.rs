@@ -358,6 +358,43 @@ pub(crate) enum BgEvent {
         /// Decrypted image bytes (JPEG or PNG).
         bytes: Vec<u8>,
     },
+
+    // ── Drawbridge pairing (main WS control plane) ───────────────────────────
+
+    /// Send `pair_offer{token}` on the main Drawbridge WS.
+    DrawbridgeSendPairOffer {
+        token: Vec<u8>,
+    },
+    /// Send `pair_join{token}` on the main Drawbridge WS.
+    DrawbridgeSendPairJoin {
+        token: Vec<u8>,
+    },
+    /// Relay acknowledged our offer; waiting for a joiner.
+    PairPending,
+    /// Both sides matched; open the `/pair` WS.
+    PairReady {
+        pair_url: String,
+        token: Vec<u8>,
+    },
+    /// A pairing session ended (either side closed).
+    PairClosed {
+        reason: String,
+    },
+    /// Open and attach to the `/pair` WebSocket.
+    DrawbridgeConnectPair {
+        url: String,
+        token: Vec<u8>,
+    },
+    /// Send binary data on the pair WS (ring-MLS ciphertext).
+    DrawbridgeSendPairBinary {
+        data: Vec<u8>,
+    },
+    /// A binary frame arrived on the pair WS.
+    PairFrameReceived {
+        data: Vec<u8>,
+    },
+    /// Pair WS is fully attached (both sides present).
+    PairConnected,
 }
 
 impl BgEvent {
@@ -370,7 +407,11 @@ impl BgEvent {
         match self {
             BgEvent::DrawbridgeConnectOwn { .. }
             | BgEvent::DrawbridgeNotifyEventPosted { .. }
-            | BgEvent::DrawbridgeWatchTags { .. } => true,
+            | BgEvent::DrawbridgeWatchTags { .. }
+            | BgEvent::DrawbridgeSendPairOffer { .. }
+            | BgEvent::DrawbridgeSendPairJoin { .. }
+            | BgEvent::DrawbridgeConnectPair { .. }
+            | BgEvent::DrawbridgeSendPairBinary { .. } => true,
 
             BgEvent::PollFetched { .. }
             | BgEvent::SendPublished { .. }
@@ -386,7 +427,12 @@ impl BgEvent {
             | BgEvent::BlobFetched { .. }
             | BgEvent::BlobFetchFailed { .. }
             | BgEvent::ImageUploaded { .. }
-            | BgEvent::ImageBlobFetched { .. } => false,
+            | BgEvent::ImageBlobFetched { .. }
+            | BgEvent::PairPending
+            | BgEvent::PairReady { .. }
+            | BgEvent::PairClosed { .. }
+            | BgEvent::PairFrameReceived { .. }
+            | BgEvent::PairConnected => false,
         }
     }
 }
@@ -496,6 +542,12 @@ pub struct App {
 
     /// When was the last ring tick run?
     last_ring_tick: Option<Instant>,
+
+    /// Active history sync session (Some while a pair WS session is in progress).
+    sync_session: Option<crate::sync::SyncSession>,
+
+    /// Pairing token for the in-flight pair WS session.
+    pending_pair_token: Option<Vec<u8>>,
 }
 
 impl App {
@@ -621,6 +673,8 @@ impl App {
             poll_interval_override: None,
             ring_driver,
             last_ring_tick: None,
+            sync_session: None,
+            pending_pair_token: None,
         })
     }
 
@@ -1573,6 +1627,42 @@ impl App {
                     }
                 }
             }
+
+            // ── Drawbridge pairing (async side handled by handle_bg_event_async) ──
+            BgEvent::DrawbridgeSendPairOffer { .. }
+            | BgEvent::DrawbridgeSendPairJoin { .. }
+            | BgEvent::DrawbridgeConnectPair { .. }
+            | BgEvent::DrawbridgeSendPairBinary { .. } => {}
+
+            BgEvent::PairPending => {
+                self.debug_log.log("sync: pair offer registered, waiting for joiner");
+            }
+
+            BgEvent::PairReady { pair_url, token } => {
+                self.debug_log.log(&format!("sync: pair_ready — opening pair WS at {pair_url}"));
+                // Build the sync session now so it's ready when PairConnected arrives.
+                self.pending_pair_token = Some(token.clone());
+                let _ = self.bg_tx.send(BgEvent::DrawbridgeConnectPair {
+                    url: pair_url,
+                    token,
+                });
+            }
+
+            BgEvent::PairClosed { reason } => {
+                self.debug_log.log(&format!("sync: pair WS closed: {reason}"));
+                self.drawbridge.clear_pair();
+                self.sync_session = None;
+                self.pending_pair_token = None;
+            }
+
+            BgEvent::PairConnected => {
+                self.debug_log.log("sync: pair WS paired — starting sync session");
+                self.start_sync_session();
+            }
+
+            BgEvent::PairFrameReceived { data } => {
+                self.process_sync_frame(data);
+            }
         }
     }
 
@@ -1762,6 +1852,34 @@ impl App {
                 if let Err(e) = self.drawbridge.watch_tags(&tags).await {
                     self.debug_log
                         .log(&format!("drawbridge: watch_tags failed: {}", e));
+                }
+            }
+            BgEvent::DrawbridgeSendPairOffer { token } => {
+                if let Err(e) = self.drawbridge.send_pair_offer(&token).await {
+                    self.debug_log.log(&format!("drawbridge: pair_offer failed: {e}"));
+                }
+            }
+            BgEvent::DrawbridgeSendPairJoin { token } => {
+                if let Err(e) = self.drawbridge.send_pair_join(&token).await {
+                    self.debug_log.log(&format!("drawbridge: pair_join failed: {e}"));
+                }
+            }
+            BgEvent::DrawbridgeConnectPair { url, token } => {
+                self.debug_log.log(&format!("sync: connecting to pair WS at {url}"));
+                match self.drawbridge.connect_pair(&url, &token).await {
+                    Ok(()) => {
+                        self.debug_log.log("sync: pair WS connected, waiting for paired");
+                    }
+                    Err(e) => {
+                        self.debug_log.log(&format!("sync: pair WS connect failed: {e}"));
+                        self.sync_session = None;
+                        self.pending_pair_token = None;
+                    }
+                }
+            }
+            BgEvent::DrawbridgeSendPairBinary { data } => {
+                if let Err(e) = self.drawbridge.send_pair_binary(data).await {
+                    self.debug_log.log(&format!("sync: send_pair_binary failed: {e}"));
                 }
             }
             _ => {} // Non-async events handled by handle_bg_event
@@ -4731,6 +4849,44 @@ impl App {
             }
         }
 
+        // ── 6. Trigger history sync if we are the offerer ─────────────────────
+        if self.ring_driver.ring_has_new_sibling {
+            self.ring_driver.ring_has_new_sibling = false;
+            if self.drawbridge.has_own_connection() && self.sync_session.is_none() {
+                if let Some(ring_id) = self.ring_driver.ring_group_id.clone() {
+                    let our_leaf = self.mls.get_own_leaf_index(&ring_id, &key_bundle)
+                        .ok()
+                        .flatten()
+                        .unwrap_or(u32::MAX);
+                    if our_leaf == 0 {
+                        // We are the offerer (ring creator / smallest leaf).
+                        use rand::RngCore;
+                        let mut token = vec![0u8; 32];
+                        rand::thread_rng().fill_bytes(&mut token);
+                        self.debug_log.log(&format!(
+                            "sync: we are offerer (leaf {our_leaf}), sending SyncOffer"
+                        ));
+                        // Publish SyncOffer on the ring group so the new device finds it.
+                        let epoch = self.mls.get_group_epoch(&ring_id).ok().flatten().unwrap_or(0);
+                        let offer_event = Event::coord(
+                            ring_id.clone(),
+                            epoch,
+                            encode_coord_msg(&CoordMsg::SyncOffer { token: token.clone() }),
+                        );
+                        if let Ok(enc) = self.mls.encrypt_event(&ring_id, &key_bundle, &offer_event) {
+                            let _ = self.save_mls_state();
+                            if client.publish_event(&enc.tag, &enc.ciphertext, None).await.is_ok() {
+                                self.own_published_tags.insert(enc.tag);
+                            }
+                        }
+                        // Send pair_offer on the main Drawbridge WS.
+                        self.pending_pair_token = Some(token.clone());
+                        let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairOffer { token });
+                    }
+                }
+            }
+        }
+
         // Persist ring state
         let state = self.ring_driver.to_ring_state();
         if let Err(e) = self.keys.save_ring_state(&state) {
@@ -4839,6 +4995,15 @@ impl App {
                     }
                 }
             }
+            CoordMsg::SyncOffer { token } => {
+                // We are the joiner. Store the token and send pair_join.
+                self.debug_log.log(&format!(
+                    "sync: received SyncOffer token ({}B) — sending pair_join",
+                    token.len()
+                ));
+                self.pending_pair_token = Some(token.clone());
+                let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairJoin { token });
+            }
         }
 
         let state = self.ring_driver.to_ring_state();
@@ -4889,6 +5054,175 @@ impl App {
     pub fn dismiss_device_alert(&mut self) {
         if !self.device_alerts.is_empty() {
             self.device_alerts.remove(0);
+        }
+    }
+
+    // ── History sync ───────────────────────────────────────────────────────────
+
+    /// Build and start a `SyncSession` once the pair WS reports `PairConnected`.
+    fn start_sync_session(&mut self) {
+        use crate::sync::{ConvState, AnchorDto};
+
+        let ring_id = match self.ring_driver.ring_group_id.clone() {
+            Some(id) => id,
+            None => return,
+        };
+        let key_bundle = match self.keys.load_identity_key() {
+            Ok(k) => k,
+            Err(_) => return,
+        };
+        let ring_epoch = self.mls.get_group_epoch(&ring_id).ok().flatten().unwrap_or(0);
+
+        // Collect all user conversations with their digest state.
+        let conv_ids: Vec<String> = self.conversations.iter().map(|c| c.id.clone()).collect();
+        let mut session = crate::sync::SyncSession::new();
+
+        for conv_id in &conv_ids {
+            let group_id = match hex::decode(conv_id) {
+                Ok(id) => id,
+                Err(_) => continue,
+            };
+            let our_messages = self.keys.load_messages(conv_id)
+                .map(|cm| cm.messages)
+                .unwrap_or_default();
+            let our_messages: Vec<_> = our_messages.into_iter()
+                .filter(|m| m.rkey != "pending")
+                .collect();
+            let has_history = !our_messages.is_empty();
+            session.add_conv_plan(group_id.clone(), conv_id.clone(), our_messages, !has_history);
+        }
+
+        // Build our ConvState list for the Hello.
+        let our_convs: Vec<ConvState> = conv_ids.iter().filter_map(|conv_id| {
+            let group_id = hex::decode(conv_id).ok()?;
+            let tip = self.mls.digest_tip(&group_id).unwrap_or([0u8; 32]);
+            let anchors = self.mls.digest_anchors(&group_id);
+            let range = self.mls.range(&group_id);
+            let (oldest, newest) = match range {
+                Some((o, n)) => (Some(o), Some(n)),
+                None => (None, None),
+            };
+            Some(ConvState {
+                group_id,
+                oldest_rkey: oldest,
+                newest_rkey: newest,
+                tip_digest: tip.to_vec(),
+                anchors: anchors.iter().map(AnchorDto::from).collect(),
+            })
+        }).collect();
+
+        let outputs = session.on_paired(our_convs, ring_epoch);
+        self.sync_session = Some(session);
+        self.process_sync_outputs(outputs, &ring_id, &key_bundle);
+    }
+
+    /// Process `SyncOutput` actions from the state machine.
+    fn process_sync_outputs(
+        &mut self,
+        outputs: Vec<crate::sync::SyncOutput>,
+        ring_id: &[u8],
+        key_bundle: &[u8],
+    ) {
+        use crate::sync::SyncOutput;
+
+        for output in outputs {
+            match output {
+                SyncOutput::Send(msg) => {
+                    let payload = crate::sync::encode_sync_msg(&msg);
+                    let epoch = self.mls.get_group_epoch(ring_id).ok().flatten().unwrap_or(0);
+                    let event = Event::sync_app(ring_id.to_vec(), epoch, payload);
+                    if let Ok(enc) = self.mls.encrypt_event(ring_id, key_bundle, &event) {
+                        let _ = self.save_mls_state();
+                        let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairBinary { data: enc.ciphertext });
+                    }
+                }
+                SyncOutput::Store { conv_id, messages } => {
+                    let my_did = self.client.as_ref().map(|c| c.did().to_string());
+                    for mut msg in messages {
+                        // Mark is_own based on sender_did vs our DID.
+                        if let (Some(ref did), Some(ref sender)) = (&my_did, &msg.sender_did) {
+                            msg.is_own = sender == did;
+                        }
+                        let _ = self.keys.append_message(&conv_id, msg);
+                    }
+                    self.debug_log.log(&format!("sync: stored batch for conv {conv_id}"));
+                    // Refresh UI if this is the active conversation.
+                    let active_id = self.active_conversation
+                        .and_then(|i| self.conversations.get(i))
+                        .map(|c| c.id.clone());
+                    if active_id.as_deref() == Some(&conv_id) {
+                        let _ = self.load_messages();
+                    }
+                }
+                SyncOutput::Complete => {
+                    self.debug_log.log("sync: session complete — closing pair WS");
+                    self.sync_session = None;
+                    self.pending_pair_token = None;
+                    self.drawbridge.clear_pair();
+                }
+            }
+        }
+    }
+
+    /// Decrypt and dispatch an incoming binary frame from the pair WS.
+    fn process_sync_frame(&mut self, data: Vec<u8>) {
+        use moat_core::EventKind;
+
+        let ring_id = match self.ring_driver.ring_group_id.clone() {
+            Some(id) => id,
+            None => return,
+        };
+        let key_bundle = match self.keys.load_identity_key() {
+            Ok(k) => k,
+            Err(_) => return,
+        };
+        let my_did = match self.client.as_ref() {
+            Some(c) => c.did().to_string(),
+            None => return,
+        };
+
+        let outcome = match self.mls.decrypt_event(&ring_id, &data) {
+            Ok(o) => o,
+            Err(e) => {
+                self.debug_log.log(&format!("sync: decrypt_event failed: {e}"));
+                return;
+            }
+        };
+        let _ = self.save_mls_state();
+
+        let decrypted = outcome.into_result();
+        if !matches!(decrypted.event.kind, EventKind::SyncApp) {
+            self.debug_log.log("sync: unexpected event kind on pair WS");
+            return;
+        }
+
+        let msg = match crate::sync::decode_sync_msg(&decrypted.event.payload) {
+            Ok(m) => m,
+            Err(e) => {
+                self.debug_log.log(&format!("sync: decode_sync_msg failed: {e}"));
+                return;
+            }
+        };
+
+        let session = match self.sync_session.as_mut() {
+            Some(s) => s,
+            None => {
+                self.debug_log.log("sync: frame received but no active session");
+                return;
+            }
+        };
+
+        let outputs = session.on_message(msg, &my_did);
+        // Borrow checker: take the session out temporarily to call process_sync_outputs.
+        let ring_id_clone = ring_id.clone();
+        self.process_sync_outputs(outputs, &ring_id_clone, &key_bundle);
+    }
+
+    /// Return the current sync status for the HTTP API.
+    pub fn sync_status(&self) -> serde_json::Value {
+        match &self.sync_session {
+            Some(_) => serde_json::json!({ "active": true }),
+            None => serde_json::json!({ "active": false }),
         }
     }
 }

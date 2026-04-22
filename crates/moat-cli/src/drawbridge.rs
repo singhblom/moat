@@ -21,6 +21,9 @@ use tokio_tungstenite::tungstenite::Message;
 type WsWriter =
     futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, Message>;
 
+type PairWsWriter =
+    futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, Message>;
+
 /// Manages the connection to the user's own Drawbridge relay.
 ///
 /// Architecture:
@@ -37,6 +40,9 @@ pub struct DrawbridgeManager {
 
     /// Number of consecutive reconnect attempts (reset on successful connect)
     reconnect_attempt: u32,
+
+    /// Write half of the active pair WebSocket, if one is open.
+    pair_writer: Option<PairWsWriter>,
 }
 
 struct OwnDrawbridge {
@@ -79,6 +85,7 @@ impl DrawbridgeManager {
             own: None,
             bg_tx,
             reconnect_attempt: 0,
+            pair_writer: None,
         }
     }
 
@@ -283,6 +290,106 @@ impl DrawbridgeManager {
         Ok(())
     }
 
+    /// Send `pair_offer{token}` on the main WS.
+    pub async fn send_pair_offer(&mut self, token: &[u8]) -> Result<(), String> {
+        let own = self.own.as_mut().ok_or("not connected to own Drawbridge")?;
+        let msg = serde_json::json!({
+            "type": "pair_offer",
+            "token": base64_encode(token),
+        });
+        own.writer
+            .send(Message::Text(msg.to_string()))
+            .await
+            .map_err(|e| format!("send pair_offer: {e}"))
+    }
+
+    /// Send `pair_join{token}` on the main WS.
+    pub async fn send_pair_join(&mut self, token: &[u8]) -> Result<(), String> {
+        let own = self.own.as_mut().ok_or("not connected to own Drawbridge")?;
+        let msg = serde_json::json!({
+            "type": "pair_join",
+            "token": base64_encode(token),
+        });
+        own.writer
+            .send(Message::Text(msg.to_string()))
+            .await
+            .map_err(|e| format!("send pair_join: {e}"))
+    }
+
+    /// Connect to the `/pair` WebSocket, send `pair_attach{token}`, and wait for `paired`.
+    ///
+    /// Once `paired` is received the read loop emits `BgEvent::PairFrameReceived` for
+    /// every subsequent binary frame, and `BgEvent::PairClosed` on disconnect.
+    pub async fn connect_pair(&mut self, url: &str, token: &[u8]) -> Result<(), String> {
+        let (ws_stream, _) = tokio_tungstenite::connect_async(url)
+            .await
+            .map_err(|e| format!("pair WS connect failed: {e}"))?;
+
+        let (mut writer, mut reader) = ws_stream.split();
+
+        // Send pair_attach as the first (only JSON) frame
+        let attach = serde_json::json!({
+            "type": "pair_attach",
+            "token": base64_encode(token),
+        });
+        writer
+            .send(Message::Text(attach.to_string()))
+            .await
+            .map_err(|e| format!("send pair_attach: {e}"))?;
+
+        // Wait for `paired`
+        loop {
+            match reader.next().await {
+                Some(Ok(Message::Text(text))) => {
+                    if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&text) {
+                        match msg.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+                            "paired" => break,
+                            "error" => {
+                                let err = msg.get("message").and_then(|v| v.as_str()).unwrap_or("unknown");
+                                return Err(format!("pair_attach rejected: {err}"));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Some(Ok(Message::Close(_))) | None => {
+                    return Err("pair WS closed before paired".to_string());
+                }
+                Some(Err(e)) => return Err(format!("pair WS read error: {e}")),
+                _ => {}
+            }
+        }
+
+        // Spawn binary read loop
+        let bg_tx = self.bg_tx.clone();
+        tokio::spawn(async move {
+            pair_read_loop(reader, bg_tx).await;
+        });
+
+        self.pair_writer = Some(writer);
+        let _ = self.bg_tx.send(BgEvent::PairConnected);
+        Ok(())
+    }
+
+    /// Send a binary frame on the pair WS (ring-MLS ciphertext).
+    pub async fn send_pair_binary(&mut self, data: Vec<u8>) -> Result<(), String> {
+        let writer = self.pair_writer.as_mut().ok_or("no pair WS connected")?;
+        writer
+            .send(Message::Binary(data.into()))
+            .await
+            .map_err(|e| format!("send pair binary: {e}"))
+    }
+
+    /// Drop the pair WS write half (used after session ends).
+    pub fn clear_pair(&mut self) {
+        self.pair_writer = None;
+    }
+
+    /// Whether a pair WS is currently open.
+    pub fn has_pair_connection(&self) -> bool {
+        self.pair_writer.is_some()
+    }
+
     /// Get the number of active connections (for status bar).
     pub fn active_connection_count(&self) -> usize {
         if self.own.is_some() { 1 } else { 0 }
@@ -330,6 +437,7 @@ async fn read_json_msg(
 ///
 /// Handles:
 /// - `new_event` with inline payload (from relay-to-relay or local multi-device)
+/// - `pair_pending`, `pair_ready`, `pair_closed` pairing control messages
 /// - Connection lifecycle (errors, disconnects)
 async fn own_read_loop(
     mut reader: futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>,
@@ -353,7 +461,6 @@ async fn own_read_loop(
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
                                 .to_string();
-                            // Payload is the base64-encoded ciphertext
                             let payload = msg
                                 .get("payload")
                                 .and_then(|v| v.as_str())
@@ -370,6 +477,30 @@ async fn own_read_loop(
                                     });
                                 }
                             }
+                        }
+                        "pair_pending" => {
+                            let _ = bg_tx.send(BgEvent::PairPending);
+                        }
+                        "pair_ready" => {
+                            if let (Some(pair_url), Some(token_b64)) = (
+                                msg.get("pair_url").and_then(|v| v.as_str()),
+                                msg.get("token").and_then(|v| v.as_str()),
+                            ) {
+                                if let Some(token) = base64_decode(token_b64) {
+                                    let _ = bg_tx.send(BgEvent::PairReady {
+                                        pair_url: pair_url.to_string(),
+                                        token,
+                                    });
+                                }
+                            }
+                        }
+                        "pair_closed" => {
+                            let reason = msg
+                                .get("reason")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            let _ = bg_tx.send(BgEvent::PairClosed { reason });
                         }
                         "error" => {
                             let err = msg
@@ -396,6 +527,35 @@ async fn own_read_loop(
             Some(Err(e)) => {
                 let _ = bg_tx.send(BgEvent::DrawbridgeDisconnected {
                     url: url.clone(),
+                    reason: format!("read error: {e}"),
+                });
+                return;
+            }
+            _ => continue,
+        }
+    }
+}
+
+/// Read loop for the pair WebSocket. Forwards binary frames as `PairFrameReceived`
+/// and signals `PairClosed` on disconnect.
+async fn pair_read_loop(
+    mut reader: futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>,
+    bg_tx: mpsc::UnboundedSender<BgEvent>,
+) {
+    loop {
+        match reader.next().await {
+            Some(Ok(Message::Binary(data))) => {
+                let _ = bg_tx.send(BgEvent::PairFrameReceived { data: data.into() });
+            }
+            Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => continue,
+            Some(Ok(Message::Close(_))) | None => {
+                let _ = bg_tx.send(BgEvent::PairClosed {
+                    reason: "connection closed".to_string(),
+                });
+                return;
+            }
+            Some(Err(e)) => {
+                let _ = bg_tx.send(BgEvent::PairClosed {
                     reason: format!("read error: {e}"),
                 });
                 return;

@@ -402,6 +402,17 @@ async fn get_ring_status(State(state): State<Arc<ServerState>>) -> Json<Value> {
     }))
 }
 
+async fn get_sync_status(State(state): State<Arc<ServerState>>) -> Json<Value> {
+    let app = state.app.lock().await;
+    Json(app.sync_status())
+}
+
+async fn post_sync_start(State(state): State<Arc<ServerState>>) -> Json<Value> {
+    let mut app = state.app.lock().await;
+    app.do_ring_tick().await;
+    Json(json!({ "ok": true }))
+}
+
 async fn get_events(
     State(state): State<Arc<ServerState>>,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<SseEvent, std::convert::Infallible>>> {
@@ -503,6 +514,8 @@ pub async fn run_http(
         .route("/poll/:seconds", post(post_poll_interval))
         .route("/ring-tick", post(post_ring_tick))
         .route("/ring-status", get(get_ring_status))
+        .route("/sync/start", post(post_sync_start))
+        .route("/sync/status", get(get_sync_status))
         .route("/events", get(get_events))
         // TODO: .route("/debug-log/:lines", get(get_debug_log))
         .with_state(state);

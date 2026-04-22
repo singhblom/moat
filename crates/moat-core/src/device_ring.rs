@@ -69,6 +69,14 @@ pub enum CoordMsg {
         welcome: Vec<u8>,
         created_at: i64,
     },
+    /// Carries the Drawbridge pairing token from the ring offerer to the new member.
+    ///
+    /// Sent as a ring MLS application message after the new device is added to the ring.
+    /// The recipient uses the token to call `pair_join` on Drawbridge and open the pair WS.
+    SyncOffer {
+        #[serde_as(as = "Base64")]
+        token: Vec<u8>,
+    },
 }
 
 /// Encode a [`CoordMsg`] to bytes suitable for use as `Event.payload`.
@@ -233,6 +241,13 @@ mod tests {
     }
 
     #[test]
+    fn coord_msg_roundtrip_sync_offer() {
+        let msg = CoordMsg::SyncOffer { token: vec![0xFFu8; 32] };
+        let decoded = decode_coord_msg(&encode_coord_msg(&msg)).unwrap();
+        assert!(matches!(decoded, CoordMsg::SyncOffer { token } if token == vec![0xFFu8; 32]));
+    }
+
+    #[test]
     fn coord_msg_fits_in_small_bucket() {
         let msgs = [
             CoordMsg::Hello {
@@ -244,6 +259,9 @@ mod tests {
             },
             CoordMsg::Supersede {
                 old_ring_id: vec![0u8; 32],
+            },
+            CoordMsg::SyncOffer {
+                token: vec![0u8; 32],
             },
         ];
         for msg in &msgs {

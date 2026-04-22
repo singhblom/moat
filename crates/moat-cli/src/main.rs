@@ -8,6 +8,7 @@ mod http_server;
 mod image_processing;
 mod keystore;
 mod message_helpers;
+mod sync;
 mod ui;
 
 use app::App;

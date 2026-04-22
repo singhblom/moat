@@ -332,6 +332,37 @@ impl MoatCliClient {
             .context("parse ring-status response")
     }
 
+    /// `GET /sync/status` — return whether a sync session is active.
+    pub async fn sync_status(&self) -> Result<bool> {
+        let val: serde_json::Value = self
+            .http
+            .get(format!("{}/sync/status", self.base_url))
+            .send()
+            .await
+            .context("GET /sync/status")?
+            .json()
+            .await
+            .context("parse sync/status response")?;
+        Ok(val.get("active").and_then(|v| v.as_bool()).unwrap_or(false))
+    }
+
+    /// `POST /sync/start` — trigger a ring-tick which initiates history sync if
+    /// the caller is the offerer device (leaf index 0).
+    pub async fn sync_start(&self) -> Result<()> {
+        let resp = self
+            .http
+            .post(format!("{}/sync/start", self.base_url))
+            .send()
+            .await
+            .context("POST /sync/start")?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body: serde_json::Value = resp.json().await.unwrap_or_default();
+            anyhow::bail!("sync_start failed ({status}): {body}");
+        }
+        Ok(())
+    }
+
     /// `POST /watch`
     pub async fn watch_handle(&self, handle: &str) -> Result<()> {
         let resp = self

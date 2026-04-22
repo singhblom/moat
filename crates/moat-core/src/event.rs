@@ -17,9 +17,12 @@ pub enum EventKind {
     Control(ControlKind),
     Message(MessageKind),
     Modifier(ModifierKind),
-    /// Device-coordination message sent over a `DeviceCoord` group.
+    /// Device-coordination message sent over a `DeviceCoord` or `Ring` group.
     /// The full [`crate::CoordMsg`] is JSON-encoded in `Event.payload`.
     Coord,
+    /// Sync protocol message sent over the device ring, transmitted as binary
+    /// frames on the pair WebSocket. The payload is a padded JSON `SyncMsg`.
+    SyncApp,
     /// Legacy or unknown domain.
     Unknown(String),
 }
@@ -59,6 +62,7 @@ impl EventKind {
             EventKind::Message(kind) => kind.as_str_with_domain("message"),
             EventKind::Modifier(kind) => kind.as_str_with_domain("modifier"),
             EventKind::Coord => "coord".to_string(),
+            EventKind::SyncApp => "sync.app".to_string(),
             EventKind::Unknown(s) => s.clone(),
         }
     }
@@ -262,6 +266,20 @@ impl Event {
             group_id,
             epoch,
             payload: state_bytes,
+            message_id: None,
+            prev_event_hash: None,
+            epoch_fingerprint: None,
+            sender_device_id: None,
+        }
+    }
+
+    /// Create a sync-app message event for the device ring, transmitted on the pair WS.
+    pub fn sync_app(group_id: Vec<u8>, epoch: u64, payload: Vec<u8>) -> Self {
+        Self {
+            kind: EventKind::SyncApp,
+            group_id,
+            epoch,
+            payload,
             message_id: None,
             prev_event_hash: None,
             epoch_fingerprint: None,
@@ -593,6 +611,7 @@ impl<'de> Deserialize<'de> for EventKind {
                 "control" => EventKind::Control(ControlKind::from_variant(variant)),
                 "message" => EventKind::Message(MessageKind::from_variant(variant)),
                 "modifier" => EventKind::Modifier(ModifierKind::from_variant(variant)),
+                "sync" => EventKind::SyncApp,
                 _ => EventKind::Unknown(raw),
             };
             Ok(kind)
