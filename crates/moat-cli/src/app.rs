@@ -1363,6 +1363,16 @@ impl App {
                             "send_message: failed to fixup pending rkey: {e}"
                         ));
                     }
+                    // Update conversation digest for the sent message.
+                    if let Some(mid) = &message_id {
+                        if mid.len() == 16 {
+                            if let Ok(group_id) = hex::decode(&conv_id) {
+                                let mut arr = [0u8; 16];
+                                arr.copy_from_slice(mid);
+                                let _ = self.mls.append_to_digest(&group_id, &rkey, &arr);
+                            }
+                        }
+                    }
                     // Also fix up in-memory display messages
                     if let Some(dm) = self.messages.iter_mut().rev().find(|m| {
                         m.rkey == "pending" && (message_id.is_none() || m.message_id.as_ref() == message_id.as_ref())
@@ -2796,6 +2806,18 @@ impl App {
                             }
                             Ok(true) => {
                                 msg_stored = true;
+                                // Update conversation digest for sync comparison.
+                                if let Some(mid) = &decrypted.event.message_id {
+                                    if mid.len() == 16 {
+                                        let mut arr = [0u8; 16];
+                                        arr.copy_from_slice(mid);
+                                        let _ = self.mls.append_to_digest(
+                                            &group_id,
+                                            &event_record.rkey,
+                                            &arr,
+                                        );
+                                    }
+                                }
                             }
                         }
 
@@ -2948,6 +2970,9 @@ impl App {
 
                         // Update watched tags on own Drawbridge for the new epoch
                         self.schedule_watch_tags_update();
+
+                        // Signal that the next message in this conversation should anchor.
+                        self.mls.mark_digest_epoch_boundary(&group_id);
                     }
                     EventKind::Coord => {
                         // Route coord messages to the ring driver (pure state only;

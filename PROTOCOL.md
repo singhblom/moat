@@ -520,17 +520,21 @@ When two devices create commits concurrently at the same epoch, only one commit 
 
 ### State Format
 
-Session state uses a versioned binary format (currently version 3):
+Session state uses a versioned binary format (currently version 5):
 
 ```
 [4 bytes: "MOAT" magic]
-[2 bytes: version (currently 3)]
+[2 bytes: version (LE u16, currently 5)]
 [16 bytes: device_id]
 [8 bytes: mls_state_length]
 [variable: MLS provider state]
-[variable: hash chain state]
-[variable: tag counter state]
-[variable: seen counter state]
+[variable: hash chain state]         — v3+
+[variable: tag counter state]        — v3+
+[variable: seen counter state]       — v3+
+[variable: prior export secrets]     — v4+
+[variable: conversation digest state] — v5+
+[variable: watermark state]          — v5+
+[variable: inbox range state]        — v5+
 ```
 
 Hash chain state:
@@ -565,7 +569,67 @@ For each entry:
   [8 bytes: counter (LE u64)]
 ```
 
-Versions 1 and 2 are rejected with a `StateVersionMismatch` error.
+Conversation digest state (v5):
+```
+[8 bytes: entry_count]
+For each entry:
+  [4 bytes: group_id_length]
+  [variable: group_id]
+  [32 bytes: tip_digest]
+  [8 bytes: append_count (LE u64)]
+  [4 bytes: anchor_count (LE u32)]
+  For each anchor:
+    [2 bytes: rkey_len (LE u16)]
+    [rkey_len bytes: rkey (UTF-8)]
+    [32 bytes: anchor_digest]
+```
+
+Watermark state (v5) — oldest synced rkey per conversation:
+```
+[8 bytes: entry_count]
+For each entry:
+  [4 bytes: group_id_length]
+  [variable: group_id]
+  [2 bytes: rkey_len (LE u16)]
+  [rkey_len bytes: rkey (UTF-8)]
+```
+
+Inbox range state (v5) — local (oldest, newest) rkey range per conversation:
+```
+[8 bytes: entry_count]
+For each entry:
+  [4 bytes: group_id_length]
+  [variable: group_id]
+  [2 bytes: oldest_len (LE u16)]
+  [oldest_len bytes: oldest_rkey (UTF-8)]
+  [2 bytes: newest_len (LE u16)]
+  [newest_len bytes: newest_rkey (UTF-8)]
+```
+
+Versions 1 and 2 are rejected with a `StateVersionMismatch` error. Older v3/v4 states load with empty v5 tables.
+
+### Conversation Digest
+
+Each device maintains a running SHA-256 digest chain per user conversation for efficient sync comparison with sibling devices.
+
+**Chain formula:**
+```
+digest_0 = 0x00...00  (32 zero bytes)
+digest_n = SHA256(digest_{n-1} || rkey_n || message_id_n)
+```
+
+Only events whose kind starts with `message.` (user-visible content) contribute to the digest. Control events (commits, welcomes) and reaction modifiers are excluded.
+
+**Anchors:** A `DigestAnchor { rkey, digest }` is saved every `DIGEST_ANCHOR_STRIDE = 64` appended messages and immediately after the first append in a new MLS epoch. Per-group anchor lists are capped at 256 entries (oldest dropped on overflow). Anchors allow fast bisection when comparing two devices' histories without a full message scan.
+
+**`diff_anchors(ours, theirs) -> DiffRange`:** Compares two anchor lists pairwise from the start and returns:
+- `common_prefix_rkey` — `rkey` of the last matching anchor (`None` if no common prefix)
+- `our_tail` — anchors we hold beyond the common prefix
+- `their_tail` — anchors they hold beyond the common prefix
+
+**Watermark:** A per-conversation `watermark` is the `rkey` of the oldest message successfully received from a sync peer. On reconnect, the peer resumes transfer from the watermark rather than restarting.
+
+**Inbox range:** `(oldest_rkey, newest_rkey)` tracks the local history span per conversation. Updated on every `append_to_digest` call.
 
 ## Local Storage
 

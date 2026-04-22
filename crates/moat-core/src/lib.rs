@@ -25,6 +25,7 @@
 pub mod blob;
 pub(crate) mod credential;
 pub(crate) mod device_ring;
+pub mod digest;
 pub(crate) mod error;
 pub(crate) mod event;
 pub mod message;
@@ -43,7 +44,7 @@ use openmls_traits::OpenMlsProvider;
 use serde::{Deserialize as SerdeDeserialize, Serialize as SerdeSerialize};
 use serde_with::{base64::Base64, serde_as};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::RwLock;
 
 // Disambiguate from openmls::prelude::* and make accessible as moat_core::X
@@ -69,6 +70,7 @@ pub use crate::tag::{
     derive_event_tag, generate_candidate_tags, prior_epoch_gap_limit, MAX_PRIOR_EPOCHS,
     TAG_EXPORT_SECRET_LABEL, TAG_EXPORT_SECRET_LEN, TAG_GAP_LIMIT,
 };
+pub use crate::digest::{diff_anchors, DigestAnchor, DiffRange};
 
 /// The ciphersuite used by Moat
 pub const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
@@ -130,7 +132,7 @@ pub struct RemoveResult {
 const STATE_MAGIC: &[u8; 4] = b"MOAT";
 
 /// Current state format version.
-const STATE_VERSION: u16 = 4;
+const STATE_VERSION: u16 = 5;
 
 /// Size of the state header: 4 (magic) + 2 (version) + 16 (device_id) = 22 bytes.
 const STATE_HEADER_SIZE: usize = 4 + 2 + 16;
@@ -197,11 +199,11 @@ pub enum PendingOperation {
 /// Read-only methods (`export_state`, `get_group_epoch`, `has_pending_changes`,
 /// `device_id`) are safe to call concurrently.
 ///
-/// # State format (v3)
+/// # State format (v5)
 ///
 /// The exported state has the following layout:
 /// - `b"MOAT"` (4 bytes) — magic identifier
-/// - Version (2 bytes, little-endian u16) — currently `3`
+/// - Version (2 bytes, little-endian u16) — currently `5`
 /// - Device ID (16 bytes) — random, generated once per device
 /// - MLS state length (8 bytes, little-endian u64)
 /// - MLS state (variable) — raw storage data
@@ -268,6 +270,15 @@ pub struct MoatSession {
     /// Used by `populate_candidate_tags` to generate candidate tags with decaying
     /// gap limits for prior epochs, catching messages stranded across epoch boundaries.
     prior_export_secrets: RwLock<HashMap<Vec<u8>, VecDeque<Vec<u8>>>>,
+    /// Running SHA-256 digest chain per conversation (keyed by group_id).
+    conversation_digests: RwLock<HashMap<Vec<u8>, crate::digest::DigestState>>,
+    /// Oldest synced rkey per conversation.  Persisted as the sync watermark.
+    watermarks: RwLock<HashMap<Vec<u8>, String>>,
+    /// (oldest_rkey, newest_rkey) held locally per conversation.
+    inbox_ranges: RwLock<HashMap<Vec<u8>, (String, String)>>,
+    /// Groups whose next `append_to_digest` call should force an anchor (epoch boundary).
+    /// Transient — not persisted.
+    digest_epoch_boundaries: RwLock<HashSet<Vec<u8>>>,
 }
 
 impl MoatSession {
@@ -285,6 +296,10 @@ impl MoatSession {
             tag_metadata: RwLock::new(HashMap::new()),
             pending_ops: RwLock::new(HashMap::new()),
             prior_export_secrets: RwLock::new(HashMap::new()),
+            conversation_digests: RwLock::new(HashMap::new()),
+            watermarks: RwLock::new(HashMap::new()),
+            inbox_ranges: RwLock::new(HashMap::new()),
+            digest_epoch_boundaries: RwLock::new(HashSet::new()),
         }
     }
 
@@ -307,7 +322,7 @@ impl MoatSession {
                     "v{version} state not supported; re-initialize session"
                 )))
             }
-            3 | 4 => {}
+            3 | 4 | 5 => {}
             _ => {
                 return Err(Error::Deserialization(format!(
                     "unsupported state version: {version}"
@@ -346,8 +361,26 @@ impl MoatSession {
         let (seen_counters, rest) = Self::deserialize_seen_counters_rest(rest)?;
 
         // v4: Parse prior export secrets (absent in v3)
-        let prior_export_secrets = if version >= 4 && !rest.is_empty() {
-            Self::deserialize_prior_export_secrets(rest)?
+        let (prior_export_secrets, rest) = if version >= 4 && !rest.is_empty() {
+            let (secrets, remaining) = Self::deserialize_prior_export_secrets_rest(rest)?;
+            (secrets, remaining)
+        } else {
+            (HashMap::new(), rest)
+        };
+
+        // v5: Parse digest / watermark / inbox_range tables (absent in v3/v4)
+        let (conversation_digests, rest) = if version >= 5 && !rest.is_empty() {
+            Self::deserialize_conversation_digests(rest)?
+        } else {
+            (HashMap::new(), rest)
+        };
+        let (watermarks, rest) = if version >= 5 && !rest.is_empty() {
+            Self::deserialize_watermarks(rest)?
+        } else {
+            (HashMap::new(), rest)
+        };
+        let inbox_ranges = if version >= 5 && !rest.is_empty() {
+            Self::deserialize_inbox_ranges(rest)?
         } else {
             HashMap::new()
         };
@@ -361,6 +394,10 @@ impl MoatSession {
             tag_metadata: RwLock::new(HashMap::new()),
             pending_ops: RwLock::new(HashMap::new()),
             prior_export_secrets: RwLock::new(prior_export_secrets),
+            conversation_digests: RwLock::new(conversation_digests),
+            watermarks: RwLock::new(watermarks),
+            inbox_ranges: RwLock::new(inbox_ranges),
+            digest_epoch_boundaries: RwLock::new(HashSet::new()),
         })
     }
 
@@ -380,6 +417,9 @@ impl MoatSession {
         let tag_counter_bytes = self.serialize_tag_counters();
         let seen_counter_bytes = self.serialize_seen_counters();
         let prior_secrets_bytes = self.serialize_prior_export_secrets();
+        let digest_bytes = self.serialize_conversation_digests();
+        let watermark_bytes = self.serialize_watermarks();
+        let inbox_range_bytes = self.serialize_inbox_ranges();
 
         let mut buf = Vec::with_capacity(
             STATE_HEADER_SIZE
@@ -388,7 +428,10 @@ impl MoatSession {
                 + hash_chain_bytes.len()
                 + tag_counter_bytes.len()
                 + seen_counter_bytes.len()
-                + prior_secrets_bytes.len(),
+                + prior_secrets_bytes.len()
+                + digest_bytes.len()
+                + watermark_bytes.len()
+                + inbox_range_bytes.len(),
         );
         buf.extend_from_slice(STATE_MAGIC);
         buf.extend_from_slice(&STATE_VERSION.to_le_bytes());
@@ -404,6 +447,10 @@ impl MoatSession {
         buf.extend_from_slice(&seen_counter_bytes);
         // v4: Prior export secrets for multi-epoch tag retention
         buf.extend_from_slice(&prior_secrets_bytes);
+        // v5: Conversation digests, watermarks, inbox ranges
+        buf.extend_from_slice(&digest_bytes);
+        buf.extend_from_slice(&watermark_bytes);
+        buf.extend_from_slice(&inbox_range_bytes);
         Ok(buf)
     }
 
@@ -1382,12 +1429,12 @@ impl MoatSession {
         buf
     }
 
-    /// Deserialize prior export secrets from bytes.
-    fn deserialize_prior_export_secrets(
+    /// Deserialize prior export secrets from bytes, returning the remaining slice.
+    fn deserialize_prior_export_secrets_rest(
         data: &[u8],
-    ) -> Result<HashMap<Vec<u8>, VecDeque<Vec<u8>>>> {
+    ) -> Result<(HashMap<Vec<u8>, VecDeque<Vec<u8>>>, &[u8])> {
         if data.len() < 8 {
-            return Ok(HashMap::new());
+            return Ok((HashMap::new(), data));
         }
         let num_groups = u64::from_le_bytes(data[..8].try_into().unwrap()) as usize;
         let mut offset = 8;
@@ -1428,7 +1475,259 @@ impl MoatSession {
             }
             map.insert(group_id, deque);
         }
+        Ok((map, &data[offset..]))
+    }
+
+    // ── v5 digest / watermark / inbox_range serialization ──────────────────
+
+    fn serialize_conversation_digests(&self) -> Vec<u8> {
+        let digests = self.conversation_digests.read().unwrap();
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&(digests.len() as u64).to_le_bytes());
+        for (group_id, state) in digests.iter() {
+            buf.extend_from_slice(&(group_id.len() as u32).to_le_bytes());
+            buf.extend_from_slice(group_id);
+            buf.extend_from_slice(&state.tip);
+            buf.extend_from_slice(&state.append_count.to_le_bytes());
+            buf.extend_from_slice(&(state.anchors.len() as u32).to_le_bytes());
+            for anchor in &state.anchors {
+                let rkey_bytes = anchor.rkey.as_bytes();
+                buf.extend_from_slice(&(rkey_bytes.len() as u16).to_le_bytes());
+                buf.extend_from_slice(rkey_bytes);
+                buf.extend_from_slice(&anchor.digest);
+            }
+        }
+        buf
+    }
+
+    fn deserialize_conversation_digests(
+        data: &[u8],
+    ) -> Result<(HashMap<Vec<u8>, crate::digest::DigestState>, &[u8])> {
+        if data.len() < 8 {
+            return Ok((HashMap::new(), data));
+        }
+        let count = u64::from_le_bytes(data[..8].try_into().unwrap()) as usize;
+        let mut offset = 8;
+        let mut map = HashMap::with_capacity(count);
+        for _ in 0..count {
+            if offset + 4 > data.len() {
+                return Err(Error::Deserialization("digest table truncated".into()));
+            }
+            let gid_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+            offset += 4;
+            if offset + gid_len + 32 + 8 + 4 > data.len() {
+                return Err(Error::Deserialization("digest table truncated".into()));
+            }
+            let group_id = data[offset..offset + gid_len].to_vec();
+            offset += gid_len;
+            let mut tip = [0u8; 32];
+            tip.copy_from_slice(&data[offset..offset + 32]);
+            offset += 32;
+            let append_count = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap());
+            offset += 8;
+            let anchor_count = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+            offset += 4;
+            let mut anchors = Vec::with_capacity(anchor_count);
+            for _ in 0..anchor_count {
+                if offset + 2 > data.len() {
+                    return Err(Error::Deserialization("digest anchor truncated".into()));
+                }
+                let rkey_len = u16::from_le_bytes(data[offset..offset + 2].try_into().unwrap()) as usize;
+                offset += 2;
+                if offset + rkey_len + 32 > data.len() {
+                    return Err(Error::Deserialization("digest anchor truncated".into()));
+                }
+                let rkey = String::from_utf8(data[offset..offset + rkey_len].to_vec())
+                    .map_err(|_| Error::Deserialization("invalid UTF-8 in digest anchor rkey".into()))?;
+                offset += rkey_len;
+                let mut digest = [0u8; 32];
+                digest.copy_from_slice(&data[offset..offset + 32]);
+                offset += 32;
+                anchors.push(crate::digest::DigestAnchor { rkey, digest });
+            }
+            map.insert(group_id, crate::digest::DigestState {
+                tip,
+                anchors,
+                append_count,
+                epoch_boundary_pending: false,
+            });
+        }
+        Ok((map, &data[offset..]))
+    }
+
+    fn serialize_watermarks(&self) -> Vec<u8> {
+        let watermarks = self.watermarks.read().unwrap();
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&(watermarks.len() as u64).to_le_bytes());
+        for (group_id, rkey) in watermarks.iter() {
+            buf.extend_from_slice(&(group_id.len() as u32).to_le_bytes());
+            buf.extend_from_slice(group_id);
+            let rkey_bytes = rkey.as_bytes();
+            buf.extend_from_slice(&(rkey_bytes.len() as u16).to_le_bytes());
+            buf.extend_from_slice(rkey_bytes);
+        }
+        buf
+    }
+
+    fn deserialize_watermarks(data: &[u8]) -> Result<(HashMap<Vec<u8>, String>, &[u8])> {
+        if data.len() < 8 {
+            return Ok((HashMap::new(), data));
+        }
+        let count = u64::from_le_bytes(data[..8].try_into().unwrap()) as usize;
+        let mut offset = 8;
+        let mut map = HashMap::with_capacity(count);
+        for _ in 0..count {
+            if offset + 4 > data.len() {
+                return Err(Error::Deserialization("watermark table truncated".into()));
+            }
+            let gid_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+            offset += 4;
+            if offset + gid_len + 2 > data.len() {
+                return Err(Error::Deserialization("watermark table truncated".into()));
+            }
+            let group_id = data[offset..offset + gid_len].to_vec();
+            offset += gid_len;
+            let rkey_len = u16::from_le_bytes(data[offset..offset + 2].try_into().unwrap()) as usize;
+            offset += 2;
+            if offset + rkey_len > data.len() {
+                return Err(Error::Deserialization("watermark rkey truncated".into()));
+            }
+            let rkey = String::from_utf8(data[offset..offset + rkey_len].to_vec())
+                .map_err(|_| Error::Deserialization("invalid UTF-8 in watermark rkey".into()))?;
+            offset += rkey_len;
+            map.insert(group_id, rkey);
+        }
+        Ok((map, &data[offset..]))
+    }
+
+    fn serialize_inbox_ranges(&self) -> Vec<u8> {
+        let ranges = self.inbox_ranges.read().unwrap();
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&(ranges.len() as u64).to_le_bytes());
+        for (group_id, (oldest, newest)) in ranges.iter() {
+            buf.extend_from_slice(&(group_id.len() as u32).to_le_bytes());
+            buf.extend_from_slice(group_id);
+            let oldest_bytes = oldest.as_bytes();
+            buf.extend_from_slice(&(oldest_bytes.len() as u16).to_le_bytes());
+            buf.extend_from_slice(oldest_bytes);
+            let newest_bytes = newest.as_bytes();
+            buf.extend_from_slice(&(newest_bytes.len() as u16).to_le_bytes());
+            buf.extend_from_slice(newest_bytes);
+        }
+        buf
+    }
+
+    fn deserialize_inbox_ranges(data: &[u8]) -> Result<HashMap<Vec<u8>, (String, String)>> {
+        if data.len() < 8 {
+            return Ok(HashMap::new());
+        }
+        let count = u64::from_le_bytes(data[..8].try_into().unwrap()) as usize;
+        let mut offset = 8;
+        let mut map = HashMap::with_capacity(count);
+        for _ in 0..count {
+            if offset + 4 > data.len() {
+                return Err(Error::Deserialization("inbox_range table truncated".into()));
+            }
+            let gid_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+            offset += 4;
+            if offset + gid_len + 2 > data.len() {
+                return Err(Error::Deserialization("inbox_range table truncated".into()));
+            }
+            let group_id = data[offset..offset + gid_len].to_vec();
+            offset += gid_len;
+
+            let oldest_len = u16::from_le_bytes(data[offset..offset + 2].try_into().unwrap()) as usize;
+            offset += 2;
+            if offset + oldest_len + 2 > data.len() {
+                return Err(Error::Deserialization("inbox_range oldest_rkey truncated".into()));
+            }
+            let oldest = String::from_utf8(data[offset..offset + oldest_len].to_vec())
+                .map_err(|_| Error::Deserialization("invalid UTF-8 in inbox_range".into()))?;
+            offset += oldest_len;
+
+            let newest_len = u16::from_le_bytes(data[offset..offset + 2].try_into().unwrap()) as usize;
+            offset += 2;
+            if offset + newest_len > data.len() {
+                return Err(Error::Deserialization("inbox_range newest_rkey truncated".into()));
+            }
+            let newest = String::from_utf8(data[offset..offset + newest_len].to_vec())
+                .map_err(|_| Error::Deserialization("invalid UTF-8 in inbox_range".into()))?;
+            offset += newest_len;
+
+            map.insert(group_id, (oldest, newest));
+        }
         Ok(map)
+    }
+
+    // ── v5 public API ────────────────────────────────────────────────────────
+
+    /// Append a user-visible message to the running digest for a conversation.
+    ///
+    /// Only call for events whose kind starts with `message.` (user-visible content).
+    /// Control and modifier events are excluded from the digest.
+    ///
+    /// `digest_n = SHA256(digest_{n-1} || rkey || message_id)`
+    pub fn append_to_digest(&self, group_id: &[u8], rkey: &str, message_id: &[u8; 16]) -> Result<()> {
+        let should_anchor = {
+            let mut digests = self.conversation_digests.write().unwrap();
+            let state = digests.entry(group_id.to_vec()).or_default();
+            // Transfer any pending epoch boundary flag.
+            if self.digest_epoch_boundaries.read().unwrap().contains(group_id) {
+                state.epoch_boundary_pending = true;
+                self.digest_epoch_boundaries.write().unwrap().remove(group_id);
+            }
+            state.append(rkey, message_id)
+        };
+        // Update inbox range.
+        {
+            let mut ranges = self.inbox_ranges.write().unwrap();
+            let entry = ranges.entry(group_id.to_vec()).or_insert_with(|| (rkey.to_string(), rkey.to_string()));
+            if rkey < entry.0.as_str() {
+                entry.0 = rkey.to_string();
+            }
+            if rkey > entry.1.as_str() {
+                entry.1 = rkey.to_string();
+            }
+        }
+        let _ = should_anchor; // anchor is stored inside DigestState
+        Ok(())
+    }
+
+    /// Return the current digest tip for a conversation, or `None` if no messages yet.
+    pub fn digest_tip(&self, group_id: &[u8]) -> Option<[u8; 32]> {
+        self.conversation_digests.read().unwrap().get(group_id).map(|s| s.tip)
+    }
+
+    /// Return all stored digest anchors for a conversation.
+    pub fn digest_anchors(&self, group_id: &[u8]) -> Vec<DigestAnchor> {
+        self.conversation_digests.read().unwrap()
+            .get(group_id)
+            .map(|s| s.anchors.clone())
+            .unwrap_or_default()
+    }
+
+    /// Return the (oldest_rkey, newest_rkey) range held locally for a conversation.
+    pub fn range(&self, group_id: &[u8]) -> Option<(String, String)> {
+        self.inbox_ranges.read().unwrap().get(group_id).cloned()
+    }
+
+    /// Return the oldest synced rkey (watermark) for a conversation.
+    pub fn watermark(&self, group_id: &[u8]) -> Option<String> {
+        self.watermarks.read().unwrap().get(group_id).cloned()
+    }
+
+    /// Set the sync watermark (oldest synced rkey) for a conversation.
+    pub fn set_watermark(&self, group_id: &[u8], rkey: &str) -> Result<()> {
+        self.watermarks.write().unwrap().insert(group_id.to_vec(), rkey.to_string());
+        Ok(())
+    }
+
+    /// Signal that an epoch boundary has occurred for `group_id`.
+    ///
+    /// The next call to `append_to_digest` for this group will unconditionally
+    /// save a digest anchor, regardless of whether the stride threshold is met.
+    pub fn mark_digest_epoch_boundary(&self, group_id: &[u8]) {
+        self.digest_epoch_boundaries.write().unwrap().insert(group_id.to_vec());
     }
 
     /// Save the current epoch's export secret to the prior secrets ring buffer.

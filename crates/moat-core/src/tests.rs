@@ -432,12 +432,37 @@ fn test_state_version_header() {
     // Check magic bytes
     assert_eq!(&state[0..4], b"MOAT");
 
-    // Check version (little-endian u16 = 4)
-    assert_eq!(state[4], 4);
+    // Check version (little-endian u16 = 5)
+    assert_eq!(state[4], 5);
     assert_eq!(state[5], 0);
 
     // Header is at least 22 bytes (4 magic + 2 version + 16 device_id)
     assert!(state.len() >= 22);
+}
+
+#[test]
+fn test_v5_state_roundtrip_digest_watermark_range() {
+    let session = MoatSession::new();
+    let credential = MoatCredential::new("did:plc:alice", "Laptop", [1u8; 16]);
+    let (_, key_bundle) = session.generate_key_package(&credential).unwrap();
+    let group_id = session.create_group(&credential, &key_bundle).unwrap();
+
+    // Append a few messages.
+    let m1 = [0xAAu8; 16];
+    let m2 = [0xBBu8; 16];
+    session.append_to_digest(&group_id, "rkey001", &m1).unwrap();
+    session.append_to_digest(&group_id, "rkey002", &m2).unwrap();
+    session.set_watermark(&group_id, "rkey001").unwrap();
+
+    let state = session.export_state().unwrap();
+    let restored = MoatSession::from_state(&state).unwrap();
+
+    assert_eq!(restored.digest_tip(&group_id), session.digest_tip(&group_id));
+    assert_eq!(restored.watermark(&group_id), Some("rkey001".to_string()));
+    assert_eq!(
+        restored.range(&group_id),
+        Some(("rkey001".to_string(), "rkey002".to_string()))
+    );
 }
 
 #[test]
