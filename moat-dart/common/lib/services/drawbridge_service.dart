@@ -26,6 +26,14 @@ class DrawbridgeNewEvent {
   });
 }
 
+/// Server-side notification that a pair token's matched its peer and the
+/// /pair WS is ready to accept attachers.
+class DrawbridgePairReady {
+  final String pairUrl;
+  final Uint8List token;
+  DrawbridgePairReady({required this.pairUrl, required this.token});
+}
+
 /// Manages a single WebSocket connection to the user's own Drawbridge relay.
 ///
 /// After the ticket/partner architecture was removed, the client only connects
@@ -42,6 +50,25 @@ class DrawbridgeService {
 
   /// Called when own Drawbridge sends a new_event notification.
   void Function(DrawbridgeNewEvent)? onNewEvent;
+
+  /// Called when the relay accepts a `pair_offer` and is waiting for a joiner.
+  void Function()? onPairPending;
+
+  /// Called when the relay matches a pair token and emits `pair_ready`.
+  void Function(DrawbridgePairReady)? onPairReady;
+
+  /// Called once the /pair WS reports `paired`.
+  void Function()? onPairConnected;
+
+  /// Called for every binary frame received on /pair after `paired`.
+  void Function(Uint8List)? onPairFrame;
+
+  /// Called when the /pair WS disconnects (cleanly or with an error).
+  void Function(String reason)? onPairClosed;
+
+  WebSocketChannel? _pairChannel;
+  StreamSubscription? _pairSubscription;
+  bool _pairAttached = false;
 
   Uint8List? _keyBundle;
   String? _did;
@@ -127,6 +154,11 @@ class DrawbridgeService {
           _sendPushRegistration();
         case 'new_event':
           _handleNewEvent(msg);
+        case 'pair_pending':
+          moatLog('DrawbridgeService: pair_pending');
+          onPairPending?.call();
+        case 'pair_ready':
+          _handlePairReady(msg);
         case 'error':
           moatLog('DrawbridgeService: Own relay error: ${msg['message']}');
         default:
@@ -198,6 +230,155 @@ class DrawbridgeService {
       rkey: rkey,
       payload: payload,
     ));
+  }
+
+  void _handlePairReady(Map<String, dynamic> msg) {
+    final pairUrl = msg['pair_url'] as String?;
+    final tokenB64 = msg['token'] as String?;
+    if (pairUrl == null || tokenB64 == null) {
+      moatLog('DrawbridgeService: pair_ready missing fields');
+      return;
+    }
+    final Uint8List token;
+    try {
+      token = base64Decode(tokenB64);
+    } catch (e) {
+      moatLog('DrawbridgeService: pair_ready bad token base64: $e');
+      return;
+    }
+    moatLog('DrawbridgeService: pair_ready url=$pairUrl');
+    onPairReady?.call(DrawbridgePairReady(pairUrl: pairUrl, token: token));
+  }
+
+  // -- Pair WS (sync-session transport) --------------------------------------
+
+  /// Send `pair_offer{token}` on the own WS. Caller is the offerer.
+  void sendPairOffer(Uint8List token) {
+    if (!_ownAuthenticated || _ownChannel == null) {
+      moatLog('DrawbridgeService: sendPairOffer dropped — own WS not ready');
+      return;
+    }
+    _ownChannel!.sink.add(jsonEncode({
+      'type': 'pair_offer',
+      'token': base64Encode(token),
+    }));
+  }
+
+  /// Send `pair_join{token}` on the own WS. Caller is the joiner.
+  void sendPairJoin(Uint8List token) {
+    if (!_ownAuthenticated || _ownChannel == null) {
+      moatLog('DrawbridgeService: sendPairJoin dropped — own WS not ready');
+      return;
+    }
+    _ownChannel!.sink.add(jsonEncode({
+      'type': 'pair_join',
+      'token': base64Encode(token),
+    }));
+  }
+
+  /// Open the `/pair` WebSocket, send `pair_attach{token}`, and wait for `paired`.
+  /// Subsequent binary frames are surfaced via [onPairFrame]; close via [onPairClosed].
+  Future<void> connectPair(String url, Uint8List token) async {
+    await _disconnectPair();
+    moatLog('DrawbridgeService: connecting pair WS at $url');
+
+    final WebSocketChannel channel;
+    try {
+      channel = WebSocketChannel.connect(Uri.parse(url));
+      await channel.ready;
+    } catch (e) {
+      onPairClosed?.call('connect failed: $e');
+      return;
+    }
+
+    _pairChannel = channel;
+    _pairAttached = false;
+
+    channel.sink.add(jsonEncode({
+      'type': 'pair_attach',
+      'token': base64Encode(token),
+    }));
+
+    _pairSubscription = channel.stream.listen(
+      (data) => _handlePairMessage(data),
+      onError: (error) {
+        moatLog('DrawbridgeService: pair WS error: $error');
+        _pairAttached = false;
+        _pairChannel = null;
+        onPairClosed?.call('error: $error');
+      },
+      onDone: () {
+        moatLog('DrawbridgeService: pair WS closed');
+        final wasAttached = _pairAttached;
+        _pairAttached = false;
+        _pairChannel = null;
+        onPairClosed?.call(wasAttached ? 'remote closed' : 'closed before paired');
+      },
+    );
+  }
+
+  void _handlePairMessage(dynamic data) {
+    if (data is String) {
+      try {
+        final msg = jsonDecode(data) as Map<String, dynamic>;
+        final type = msg['type'] as String?;
+        switch (type) {
+          case 'paired':
+            _pairAttached = true;
+            moatLog('DrawbridgeService: pair WS paired');
+            onPairConnected?.call();
+          case 'error':
+            final m = msg['message'];
+            moatLog('DrawbridgeService: pair_attach error: $m');
+            // Server will close shortly; let onDone surface it.
+          default:
+            moatLog('DrawbridgeService: unknown pair text type: $type');
+        }
+      } catch (e) {
+        moatLog('DrawbridgeService: pair msg parse error: $e');
+      }
+      return;
+    }
+    if (!_pairAttached) {
+      moatLog('DrawbridgeService: pair binary frame received before paired — dropping');
+      return;
+    }
+    final Uint8List bytes;
+    if (data is Uint8List) {
+      bytes = data;
+    } else if (data is List<int>) {
+      bytes = Uint8List.fromList(data);
+    } else {
+      moatLog('DrawbridgeService: pair frame unexpected type ${data.runtimeType}');
+      return;
+    }
+    onPairFrame?.call(bytes);
+  }
+
+  /// Send a binary frame on the pair WS (encrypted ring-MLS ciphertext).
+  void sendPairBinary(Uint8List data) {
+    final channel = _pairChannel;
+    if (channel == null || !_pairAttached) {
+      moatLog('DrawbridgeService: sendPairBinary dropped — pair WS not paired');
+      return;
+    }
+    channel.sink.add(data);
+  }
+
+  /// True iff the /pair WS is connected and has reached `paired`.
+  bool get hasPairConnection => _pairAttached;
+
+  /// Drop the pair WS write half (used after session ends or abort).
+  Future<void> clearPair() async {
+    await _disconnectPair();
+  }
+
+  Future<void> _disconnectPair() async {
+    _pairAttached = false;
+    await _pairSubscription?.cancel();
+    _pairSubscription = null;
+    await _pairChannel?.sink.close();
+    _pairChannel = null;
   }
 
   // -- Tag watching ----------------------------------------------------------
@@ -368,6 +549,7 @@ class DrawbridgeService {
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     _disconnectOwn();
+    _disconnectPair();
   }
 
   Future<void> _disconnectOwn() async {

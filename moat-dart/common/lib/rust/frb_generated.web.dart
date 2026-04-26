@@ -93,6 +93,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ReactionPayloadDto dco_decode_box_autoadd_reaction_payload_dto(dynamic raw);
 
   @protected
+  (String, String) dco_decode_box_autoadd_record_string_string(dynamic raw);
+
+  @protected
   SenderInfoDto dco_decode_box_autoadd_sender_info_dto(dynamic raw);
 
   @protected
@@ -179,6 +182,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       dynamic raw);
 
   @protected
+  (String, String)? dco_decode_opt_box_autoadd_record_string_string(
+      dynamic raw);
+
+  @protected
   SenderInfoDto? dco_decode_opt_box_autoadd_sender_info_dto(dynamic raw);
 
   @protected
@@ -195,6 +202,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ReactionPayloadDto dco_decode_reaction_payload_dto(dynamic raw);
+
+  @protected
+  (String, String) dco_decode_record_string_string(dynamic raw);
 
   @protected
   RingCommandDto dco_decode_ring_command_dto(dynamic raw);
@@ -301,6 +311,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
+  (String, String) sse_decode_box_autoadd_record_string_string(
+      SseDeserializer deserializer);
+
+  @protected
   SenderInfoDto sse_decode_box_autoadd_sender_info_dto(
       SseDeserializer deserializer);
 
@@ -397,6 +411,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
+  (String, String)? sse_decode_opt_box_autoadd_record_string_string(
+      SseDeserializer deserializer);
+
+  @protected
   SenderInfoDto? sse_decode_opt_box_autoadd_sender_info_dto(
       SseDeserializer deserializer);
 
@@ -414,6 +432,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ReactionPayloadDto sse_decode_reaction_payload_dto(
+      SseDeserializer deserializer);
+
+  @protected
+  (String, String) sse_decode_record_string_string(
       SseDeserializer deserializer);
 
   @protected
@@ -522,6 +544,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       ReactionPayloadDto self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_record_string_string(
+      (String, String) self, SseSerializer serializer);
+
+  @protected
   void sse_encode_box_autoadd_sender_info_dto(
       SenderInfoDto self, SseSerializer serializer);
 
@@ -622,6 +648,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       ReactionPayloadDto? self, SseSerializer serializer);
 
   @protected
+  void sse_encode_opt_box_autoadd_record_string_string(
+      (String, String)? self, SseSerializer serializer);
+
+  @protected
   void sse_encode_opt_box_autoadd_sender_info_dto(
       SenderInfoDto? self, SseSerializer serializer);
 
@@ -642,6 +672,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_reaction_payload_dto(
       ReactionPayloadDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_record_string_string(
+      (String, String) self, SseSerializer serializer);
 
   @protected
   void sse_encode_ring_command_dto(

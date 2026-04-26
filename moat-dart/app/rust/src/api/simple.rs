@@ -122,6 +122,31 @@ impl MoatSessionHandle {
             .map_err(|e| e.to_string())
     }
 
+    /// Tip digest for a group. None if the group doesn't exist or has no transcript yet.
+    pub fn digest_tip(&self, group_id: Vec<u8>) -> Option<Vec<u8>> {
+        self.inner
+            .lock()
+            .unwrap()
+            .digest_tip(&group_id)
+            .map(|t| t.to_vec())
+    }
+
+    /// Sparse digest anchors for a group, oldest-first.
+    pub fn digest_anchors(&self, group_id: Vec<u8>) -> Vec<SyncAnchorDto> {
+        self.inner
+            .lock()
+            .unwrap()
+            .digest_anchors(&group_id)
+            .into_iter()
+            .map(|a| SyncAnchorDto { rkey: a.rkey, digest: a.digest.to_vec() })
+            .collect()
+    }
+
+    /// Oldest and newest known rkeys for a group, or None if the transcript is empty.
+    pub fn digest_range(&self, group_id: Vec<u8>) -> Option<(String, String)> {
+        self.inner.lock().unwrap().range(&group_id)
+    }
+
     /// Get the DIDs of all members in a group (deduplicated).
     pub fn get_group_dids(&self, group_id: Vec<u8>) -> Result<Vec<String>, String> {
         self.inner
@@ -206,6 +231,51 @@ impl MoatSessionHandle {
             .encrypt_event(&group_id, &key_bundle, &core_event)
             .map(EncryptResultDto::from)
             .map_err(|e| e.to_string())
+    }
+
+    /// Encrypt a `SyncApp` payload into the ring group, ready to be sent on the
+    /// `/pair` WebSocket. Returns just the ciphertext bytes; the Dart caller
+    /// never needs to construct an `EventDto` of an unsupported kind.
+    pub fn encrypt_sync_app(
+        &self,
+        ring_group_id: Vec<u8>,
+        key_bundle: Vec<u8>,
+        payload: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        let session = self.inner.lock().unwrap();
+        let epoch = session
+            .get_group_epoch(&ring_group_id)
+            .map_err(|e| e.to_string())?
+            .unwrap_or(0);
+        let event = moat_core::Event::sync_app(ring_group_id.clone(), epoch, payload);
+        session
+            .encrypt_event(&ring_group_id, &key_bundle, &event)
+            .map(|r| r.ciphertext)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Decrypt an incoming `/pair` WS binary frame as a `SyncApp` event in the
+    /// ring group. Returns the inner payload bytes (`SyncMsg` JSON) on success,
+    /// or an error if decrypt failed or the event was not a `SyncApp`.
+    pub fn decrypt_sync_frame(
+        &self,
+        ring_group_id: Vec<u8>,
+        ciphertext: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        let outcome = self
+            .inner
+            .lock()
+            .unwrap()
+            .decrypt_event(&ring_group_id, &ciphertext)
+            .map_err(|e| e.to_string())?;
+        let result = outcome.into_result();
+        if !matches!(result.event.kind, moat_core::EventKind::SyncApp) {
+            return Err(format!(
+                "expected SyncApp event on pair WS, got {:?}",
+                result.event.kind
+            ));
+        }
+        Ok(result.event.payload)
     }
 
     /// Decrypt a ciphertext for a group. Returns decrypt result with any warnings.

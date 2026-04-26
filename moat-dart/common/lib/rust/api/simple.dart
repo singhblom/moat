@@ -145,14 +145,37 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
   Future<DecryptResultDto> decryptEvent(
       {required List<int> groupId, required List<int> ciphertext});
 
+  /// Decrypt an incoming `/pair` WS binary frame as a `SyncApp` event in the
+  /// ring group. Returns the inner payload bytes (`SyncMsg` JSON) on success,
+  /// or an error if decrypt failed or the event was not a `SyncApp`.
+  Future<Uint8List> decryptSyncFrame(
+      {required List<int> ringGroupId, required List<int> ciphertext});
+
   /// Get the 16-byte device ID.
   Uint8List deviceId();
+
+  /// Sparse digest anchors for a group, oldest-first.
+  Future<List<SyncAnchorDto>> digestAnchors({required List<int> groupId});
+
+  /// Oldest and newest known rkeys for a group, or None if the transcript is empty.
+  Future<(String, String)?> digestRange({required List<int> groupId});
+
+  /// Tip digest for a group. None if the group doesn't exist or has no transcript yet.
+  Future<Uint8List?> digestTip({required List<int> groupId});
 
   /// Encrypt an event for a group. Returns encrypt result.
   Future<EncryptResultDto> encryptEvent(
       {required List<int> groupId,
       required List<int> keyBundle,
       required EventDto event});
+
+  /// Encrypt a `SyncApp` payload into the ring group, ready to be sent on the
+  /// `/pair` WebSocket. Returns just the ciphertext bytes; the Dart caller
+  /// never needs to construct an `EventDto` of an unsupported kind.
+  Future<Uint8List> encryptSyncApp(
+      {required List<int> ringGroupId,
+      required List<int> keyBundle,
+      required List<int> payload});
 
   /// Export the full session state as bytes for persistence.
   Future<Uint8List> exportState();
