@@ -2,7 +2,6 @@
 
 mod app;
 mod blob_cache;
-mod device_ring;
 mod drawbridge;
 mod http_server;
 mod image_processing;

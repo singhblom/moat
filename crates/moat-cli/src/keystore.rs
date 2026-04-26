@@ -3,8 +3,8 @@
 //! Keys are stored in ~/.moat/keys/ with appropriate file permissions.
 
 use moat_core::GroupKind;
+pub use moat_core::RingState;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -43,26 +43,6 @@ pub struct GroupMetadata {
     /// for backwards compatibility with groups stored before Phase 2.
     #[serde(default)]
     pub kind: GroupKind,
-}
-
-/// Persisted state for the device ring driver.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct RingState {
-    /// Hex-encoded ring group ID, or None if no ring exists yet.
-    #[serde(default)]
-    pub ring_group_id: Option<String>,
-    /// Unix timestamp (ms) when the ring was created.
-    #[serde(default)]
-    pub ring_created_at: Option<i64>,
-    /// Map from sibling device_id (hex) → coord group_id (hex).
-    #[serde(default)]
-    pub coord_groups: HashMap<String, String>,
-    /// device_ids (hex) of siblings from whom we've received a Hello.
-    #[serde(default)]
-    pub sibling_sent_hello: HashSet<String>,
-    /// Cursor (rkey) for incremental own-PDS stealth scan.
-    #[serde(default)]
-    pub own_events_cursor: Option<String>,
 }
 
 /// Deserialize a field that may be a single string (old format) or a Vec<String> (new format).

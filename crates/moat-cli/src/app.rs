@@ -2,7 +2,6 @@
 
 use crate::{
     blob_cache::BlobCache,
-    device_ring::DeviceRingDriver,
     drawbridge,
     drawbridge::DrawbridgeManager,
     image_processing,
@@ -12,11 +11,10 @@ use crate::{
 use crossterm::event::{KeyCode, KeyEvent};
 use moat_atproto::{BlobRef, MoatAtprotoClient};
 use moat_core::{
-    blob_decrypt, blob_encrypt, classify_group_kind, decode_coord_msg, encode_coord_msg,
-    encrypt_for_stealth, generate_stealth_keypair, reconcile_rings, try_decrypt_stealth,
-    ControlKind, CoordGroupResult, CoordMsg, Event, EventKind, ExternalBlob, GroupKind,
-    LongTextMessage, MediaMessage, MessagePayload, MoatCredential, MoatSession, ModifierKind,
-    ParsedMessagePayload, ReconcileDecision, CIPHERSUITE,
+    blob_decrypt, blob_encrypt, decode_coord_msg, encrypt_for_stealth, generate_stealth_keypair,
+    reconcile_rings, try_decrypt_stealth, ControlKind, CoordMsg, DeviceRingDriver, Event, EventKind,
+    ExternalBlob, GroupKind, LongTextMessage, MediaMessage, MessagePayload, MoatCredential,
+    MoatSession, ModifierKind, ParsedMessagePayload, ReconcileDecision, CIPHERSUITE,
 };
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::collections::{HashMap, HashSet};
@@ -803,13 +801,40 @@ impl App {
                 Ok(())
             }
             Some(id) => {
-                let idx = self
-                    .conversations
-                    .iter()
-                    .position(|c| c.id == id)
-                    .ok_or_else(|| AppError::Other(format!("conversation not found: {id}")))?;
-                self.active_conversation = Some(idx);
-                self.load_messages()
+                match self.conversations.iter().position(|c| c.id == id) {
+                    Some(idx) => {
+                        self.active_conversation = Some(idx);
+                        self.load_messages()
+                    }
+                    None => {
+                        // Conv not in local MLS state yet (e.g. synced history before joining).
+                        // Load from keystore directly so get_messages still works.
+                        self.active_conversation = None;
+                        self.messages.clear();
+                        let local = self.keys.load_messages(id).unwrap_or_default();
+                        for stored in &local.messages {
+                            let from = if stored.is_own {
+                                "You".to_string()
+                            } else {
+                                stored.sender_did.clone().unwrap_or_else(|| "Peer".to_string())
+                            };
+                            self.messages.push(DisplayMessage {
+                                from,
+                                content: stored.content.clone(),
+                                timestamp: stored.timestamp,
+                                is_own: stored.is_own,
+                                sender_did: stored.sender_did.clone(),
+                                sender_device: stored.sender_device.clone(),
+                                message_id: stored.message_id.clone(),
+                                reactions: vec![],
+                                image_proto: None,
+                                image_loading: false,
+                                rkey: stored.rkey.clone(),
+                            });
+                        }
+                        Ok(())
+                    }
+                }
             }
         }
     }
@@ -4490,6 +4515,8 @@ impl App {
     }
 
     async fn ring_tick_inner(&mut self) -> Result<()> {
+        use moat_core::{KeyPackageInput, OwnEventInput, RingCommand, TickInputs};
+
         let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?.clone();
         let my_did = client.did().to_string();
 
@@ -4503,23 +4530,15 @@ impl App {
             AppError::Other(format!("ring: failed to get device name: {e}"))
         })?;
         let credential = MoatCredential::new(&my_did, &device_name, *self.mls.device_id());
-        let my_device_id = *self.mls.device_id();
 
-        // ── 1. Fetch own key packages ────────────────────────────────────────
-        let key_packages = client.fetch_key_packages(&my_did).await.unwrap_or_default();
-        let siblings: Vec<_> = key_packages
-            .iter()
-            .filter(|kp| {
-                self.mls
-                    .extract_credential_from_key_package(&kp.key_package)
-                    .ok()
-                    .flatten()
-                    .map(|c| *c.device_id() != my_device_id)
-                    .unwrap_or(false)
-            })
+        // ── Gather inputs (host I/O) ─────────────────────────────────────────
+        let key_package_records =
+            client.fetch_key_packages(&my_did).await.unwrap_or_default();
+        let key_packages: Vec<KeyPackageInput> = key_package_records
+            .into_iter()
+            .map(|kp| KeyPackageInput { key_package: kp.key_package })
             .collect();
 
-        // ── 2. Fetch own stealth addresses ───────────────────────────────────
         let stealth_records = client
             .fetch_stealth_addresses(&my_did)
             .await
@@ -4527,370 +4546,93 @@ impl App {
         let stealth_pubkeys: Vec<[u8; 32]> =
             stealth_records.iter().map(|r| r.scan_pubkey).collect();
 
-        // ── 3. Create coord groups for new siblings ──────────────────────────
-        for kp_record in &siblings {
-            let sibling_cred = match self
-                .mls
-                .extract_credential_from_key_package(&kp_record.key_package)
-            {
-                Ok(Some(c)) => c,
-                _ => continue,
-            };
-            let sibling_device_id: [u8; 16] = *sibling_cred.device_id();
-
-            if self.ring_driver.coord_groups.contains_key(&sibling_device_id) {
-                continue;
-            }
-
-            let CoordGroupResult { group_id, commit, welcome } = match self
-                .mls
-                .create_device_coord_group(&credential, &key_bundle, &kp_record.key_package)
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    self.debug_log
-                        .log(&format!("ring: create_device_coord_group failed: {e}"));
-                    continue;
-                }
-            };
-
-            let _ = self.save_mls_state();
-            let group_id_hex = hex::encode(&group_id);
-
-            // Register in keystore
-            let _ = self.keys.store_group_metadata(
-                &group_id_hex,
-                &GroupMetadata {
-                    participant_dids: vec![my_did.clone()],
-                    participant_handles: vec![],
-                    kind: GroupKind::DeviceCoord,
-                },
-            );
-
-            // Populate candidate tags
-            self.populate_candidate_tags(&group_id_hex, &group_id);
-
-            // Publish the coord commit
-            let commit_tag = self
-                .mls
-                .derive_next_tag(&group_id, &key_bundle)
-                .unwrap_or_else(|_| rand::random());
-            if let Err(e) = client.publish_event(&commit_tag, &commit, None).await {
-                self.debug_log
-                    .log(&format!("ring: failed to publish coord commit: {e}"));
-            } else {
-                self.own_published_tags.insert(commit_tag);
-            }
-
-            // Publish Hello into the coord group
-            let epoch = self
-                .mls
-                .get_group_epoch(&group_id)
-                .ok()
-                .flatten()
-                .unwrap_or(0);
-            let hello_event = Event::coord(
-                group_id.clone(),
-                epoch,
-                encode_coord_msg(&CoordMsg::Hello {
-                    sender_device_id: my_device_id.to_vec(),
-                }),
-            );
-            if let Ok(enc) = self.mls.encrypt_event(&group_id, &key_bundle, &hello_event) {
-                let _ = self.save_mls_state();
-                if let Err(e) = client.publish_event(&enc.tag, &enc.ciphertext, None).await {
-                    self.debug_log
-                        .log(&format!("ring: failed to publish coord Hello: {e}"));
-                } else {
-                    self.own_published_tags.insert(enc.tag);
-                }
-            }
-
-            // Stealth-encrypt the Welcome for the sibling
-            if !stealth_pubkeys.is_empty() {
-                let envelope = encode_welcome_envelope(&welcome, &[]);
-                if let Ok(ct) = encrypt_for_stealth(&stealth_pubkeys, &envelope) {
-                    let random_tag: [u8; 16] = rand::random();
-                    if let Err(e) = client.publish_event(&random_tag, &ct, None).await {
-                        self.debug_log
-                            .log(&format!("ring: failed to publish coord welcome: {e}"));
-                    }
-                }
-            }
-
-            self.ring_driver
-                .coord_groups
-                .insert(sibling_device_id, group_id);
-        }
-
-        // ── 4. Stealth-scan own PDS for incoming Welcomes ────────────────────
-        let events = client
-            .fetch_events_from_did(
-                &my_did,
-                self.ring_driver.own_events_cursor.as_deref(),
-            )
+        let event_records = client
+            .fetch_events_from_did(&my_did, self.ring_driver.own_events_cursor.as_deref())
             .await
             .unwrap_or_default();
+        let own_events: Vec<OwnEventInput> = event_records
+            .into_iter()
+            .map(|e| OwnEventInput { rkey: e.rkey, ciphertext: e.ciphertext })
+            .collect();
 
-        // Coord groups joined via Welcome that need a Hello sent back.
-        let mut coord_groups_to_greet: Vec<Vec<u8>> = Vec::new();
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let drawbridge_has_own_connection = self.drawbridge.has_own_connection();
+        let sync_session_active = self.sync_session.is_some();
 
-        for event in &events {
-            if let Some(plaintext) = try_decrypt_stealth(&stealth_privkey, &event.ciphertext) {
-                let (welcome_bytes, _hints) = match decode_welcome_envelope(&plaintext) {
-                    Ok(r) => r,
-                    Err(_) => continue,
-                };
-                match self.mls.process_welcome(&welcome_bytes) {
-                    Ok(group_id) => {
-                        let _ = self.save_mls_state();
-                        let group_id_hex = hex::encode(&group_id);
+        // ── Drive the ring state machine ─────────────────────────────────────
+        let cmds = self.ring_driver.tick(
+            &self.mls,
+            TickInputs {
+                key_packages: &key_packages,
+                stealth_pubkeys: &stealth_pubkeys,
+                own_events: &own_events,
+                stealth_privkey: &stealth_privkey,
+                credential: &credential,
+                key_bundle: &key_bundle,
+                now_ms,
+                drawbridge_has_own_connection,
+                sync_session_active,
+                my_did: &my_did,
+            },
+        );
 
-                        // Classify: is this the ring or a coord group?
-                        let kind =
-                            if self.ring_driver.ring_group_id.as_deref() == Some(&group_id) {
-                                GroupKind::Ring
-                            } else {
-                                let members =
-                                    self.mls.get_group_members(&group_id).unwrap_or_default();
-                                let k = classify_group_kind(&members, &my_did);
-                                if k == GroupKind::DeviceCoord {
-                                    // Record from the recipient side
-                                    if let Some(sibling_id) = members.iter().find_map(|(_, c)| {
-                                        c.as_ref().and_then(|c| {
-                                            if c.did() == my_did
-                                                && *c.device_id() != my_device_id
-                                            {
-                                                Some(*c.device_id())
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                    }) {
-                                        self.ring_driver
-                                            .coord_groups
-                                            .entry(sibling_id)
-                                            .or_insert_with(|| group_id.clone());
-                                    }
-                                    // Send Hello so the creator knows we joined.
-                                    coord_groups_to_greet.push(group_id.clone());
-                                }
-                                k
-                            };
+        let _ = self.save_mls_state();
 
-                        let _ = self.keys.store_group_metadata(
-                            &group_id_hex,
-                            &GroupMetadata {
-                                participant_dids: vec![my_did.clone()],
-                                participant_handles: vec![],
-                                kind,
-                            },
-                        );
-                        self.populate_candidate_tags(&group_id_hex, &group_id);
+        // ── Interpret commands ───────────────────────────────────────────────
+        let mut needs_poll_for_new_devices = false;
+        for cmd in cmds {
+            match cmd {
+                RingCommand::PublishEvent { tag, ciphertext, mark_own } => {
+                    if let Err(e) = client.publish_event(&tag, &ciphertext, None).await {
+                        self.debug_log
+                            .log(&format!("ring: failed to publish event: {e}"));
+                    } else if mark_own {
+                        self.own_published_tags.insert(tag);
                     }
-                    Err(_) => {} // already joined or not for us
+                }
+                RingCommand::StealthPublishWelcome { tag, ciphertext } => {
+                    if let Err(e) = client.publish_event(&tag, &ciphertext, None).await {
+                        self.debug_log
+                            .log(&format!("ring: failed to publish stealth welcome: {e}"));
+                    }
+                }
+                RingCommand::RegisterGroup { group_id, kind } => {
+                    let group_id_hex = hex::encode(&group_id);
+                    let _ = self.keys.store_group_metadata(
+                        &group_id_hex,
+                        &GroupMetadata {
+                            participant_dids: vec![my_did.clone()],
+                            participant_handles: vec![],
+                            kind,
+                        },
+                    );
+                    self.populate_candidate_tags(&group_id_hex, &group_id);
+                }
+                RingCommand::ReplenishKeyPackage => {
+                    self.replenish_key_package();
+                }
+                RingCommand::SendDrawbridgePairOffer { token } => {
+                    self.pending_pair_token = Some(token.clone());
+                    let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairOffer { token });
+                }
+                RingCommand::SendDrawbridgePairJoin { token } => {
+                    let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairJoin { token });
+                }
+                RingCommand::PollForNewDevices => {
+                    needs_poll_for_new_devices = true;
                 }
             }
         }
 
-        // Send Hello in every coord group we just joined via Welcome, and
-        // replenish the consumed key package so siblings can add us to the ring.
-        if !coord_groups_to_greet.is_empty() {
-            self.replenish_key_package();
-        }
-        for coord_id in coord_groups_to_greet {
-            let epoch = self
-                .mls
-                .get_group_epoch(&coord_id)
-                .ok()
-                .flatten()
-                .unwrap_or(0);
-            let hello_event = Event::coord(
-                coord_id.clone(),
-                epoch,
-                encode_coord_msg(&CoordMsg::Hello {
-                    sender_device_id: my_device_id.to_vec(),
-                }),
-            );
-            if let Ok(enc) = self.mls.encrypt_event(&coord_id, &key_bundle, &hello_event) {
-                let _ = self.save_mls_state();
-                if let Err(e) = client.publish_event(&enc.tag, &enc.ciphertext, None).await {
-                    self.debug_log
-                        .log(&format!("ring: failed to publish coord Hello (invitee): {e}"));
-                } else {
-                    self.own_published_tags.insert(enc.tag);
-                }
-            }
-        }
-
-        // Advance cursor past scanned events
-        if let Some(last) = events.last() {
-            if !last.rkey.is_empty() {
-                self.ring_driver.own_events_cursor = Some(last.rkey.clone());
-            }
-        }
-
-        // ── 5. Bootstrap ring when Hello-exchanged siblings are known ─────────
-        let hello_exchanged = self.ring_driver.hello_exchanged_siblings();
-        if !hello_exchanged.is_empty() {
-            if let Some(ring_id) = self.ring_driver.ring_group_id.clone() {
-                // Already have a ring — add new siblings
-                for sibling_id in &hello_exchanged {
-                    if let Ok(members) = self.mls.get_group_members(&ring_id) {
-                        if members.iter().any(|(_, c)| {
-                            c.as_ref()
-                                .map(|c| *c.device_id() == *sibling_id)
-                                .unwrap_or(false)
-                        }) {
-                            continue;
-                        }
-                    }
-                    // Use the newest key package (last by rkey) — earlier ones
-                    // may have been consumed by coord-group Welcomes.
-                    let sibling_kp = siblings.iter().rev().find(|kp| {
-                        self.mls
-                            .extract_credential_from_key_package(&kp.key_package)
-                            .ok()
-                            .flatten()
-                            .map(|c| *c.device_id() == *sibling_id)
-                            .unwrap_or(false)
-                    });
-                    if let Some(kp_record) = sibling_kp {
-                        if let Ok(wr) =
-                            self.mls.add_device(&ring_id, &key_bundle, &kp_record.key_package)
-                        {
-                            let _ = self.save_mls_state();
-                            self.ring_driver.ring_has_new_sibling = true;
-                            let commit_tag = self
-                                .mls
-                                .derive_next_tag(&ring_id, &key_bundle)
-                                .unwrap_or_else(|_| rand::random());
-                            if client.publish_event(&commit_tag, &wr.commit, None).await.is_ok() {
-                                self.own_published_tags.insert(commit_tag);
-                            }
-                            let ring_id_slice: &[u8] = &ring_id;
-                            self.send_ring_welcome_to_coord(
-                                &key_bundle,
-                                *sibling_id,
-                                ring_id_slice,
-                                &wr.welcome,
-                            )
-                            .await;
-                        }
-                    }
-                }
-            } else {
-                // No ring yet — smallest device_id creates it
-                let mut all_ids: Vec<[u8; 16]> = hello_exchanged.clone();
-                all_ids.push(my_device_id);
-                all_ids.sort();
-                if all_ids[0] == my_device_id {
-                    let now_ms = chrono::Utc::now().timestamp_millis();
-                    match self.mls.create_device_ring(&credential, &key_bundle) {
-                        Ok(ring_id) => {
-                            let _ = self.save_mls_state();
-                            let ring_id_hex = hex::encode(&ring_id);
-                            self.ring_driver.ring_group_id = Some(ring_id.clone());
-                            self.ring_driver.ring_created_at = Some(now_ms);
-                            self.ring_driver.ring_has_new_sibling = true;
-
-                            let _ = self.keys.store_group_metadata(
-                                &ring_id_hex,
-                                &GroupMetadata {
-                                    participant_dids: vec![my_did.clone()],
-                                    participant_handles: vec![],
-                                    kind: GroupKind::Ring,
-                                },
-                            );
-                            self.populate_candidate_tags(&ring_id_hex, &ring_id);
-
-                            for sibling_id in &hello_exchanged {
-                                // Use the newest key package — earlier ones may be consumed.
-                                let sibling_kp = siblings.iter().rev().find(|kp| {
-                                    self.mls
-                                        .extract_credential_from_key_package(&kp.key_package)
-                                        .ok()
-                                        .flatten()
-                                        .map(|c| *c.device_id() == *sibling_id)
-                                        .unwrap_or(false)
-                                });
-                                if let Some(kp_record) = sibling_kp {
-                                    if let Ok(wr) = self.mls.add_device(
-                                        &ring_id,
-                                        &key_bundle,
-                                        &kp_record.key_package,
-                                    ) {
-                                        let _ = self.save_mls_state();
-                                        let commit_tag = self
-                                            .mls
-                                            .derive_next_tag(&ring_id, &key_bundle)
-                                            .unwrap_or_else(|_| rand::random());
-                                        if client.publish_event(&commit_tag, &wr.commit, None).await.is_ok() {
-                                            self.own_published_tags.insert(commit_tag);
-                                        }
-                                        let ring_id_slice: &[u8] = &ring_id;
-                                        self.send_ring_welcome_to_coord(
-                                            &key_bundle,
-                                            *sibling_id,
-                                            ring_id_slice,
-                                            &wr.welcome,
-                                        )
-                                        .await;
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            self.debug_log
-                                .log(&format!("ring: create_device_ring failed: {e}"));
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── 6. Trigger history sync if we are the offerer ─────────────────────
-        if self.ring_driver.ring_has_new_sibling {
-            self.ring_driver.ring_has_new_sibling = false;
-            if self.drawbridge.has_own_connection() && self.sync_session.is_none() {
-                if let Some(ring_id) = self.ring_driver.ring_group_id.clone() {
-                    let our_leaf = self.mls.get_own_leaf_index(&ring_id, &key_bundle)
-                        .ok()
-                        .flatten()
-                        .unwrap_or(u32::MAX);
-                    if our_leaf == 0 {
-                        // We are the offerer (ring creator / smallest leaf).
-                        use rand::RngCore;
-                        let mut token = vec![0u8; 32];
-                        rand::thread_rng().fill_bytes(&mut token);
-                        self.debug_log.log(&format!(
-                            "sync: we are offerer (leaf {our_leaf}), sending SyncOffer"
-                        ));
-                        // Publish SyncOffer on the ring group so the new device finds it.
-                        let epoch = self.mls.get_group_epoch(&ring_id).ok().flatten().unwrap_or(0);
-                        let offer_event = Event::coord(
-                            ring_id.clone(),
-                            epoch,
-                            encode_coord_msg(&CoordMsg::SyncOffer { token: token.clone() }),
-                        );
-                        if let Ok(enc) = self.mls.encrypt_event(&ring_id, &key_bundle, &offer_event) {
-                            let _ = self.save_mls_state();
-                            if client.publish_event(&enc.tag, &enc.ciphertext, None).await.is_ok() {
-                                self.own_published_tags.insert(enc.tag);
-                            }
-                        }
-                        // Send pair_offer on the main Drawbridge WS.
-                        self.pending_pair_token = Some(token.clone());
-                        let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairOffer { token });
-                    }
-                }
-            }
+        if needs_poll_for_new_devices {
+            let _ = self.poll_for_new_devices().await;
         }
 
         // Persist ring state
         let state = self.ring_driver.to_ring_state();
         if let Err(e) = self.keys.save_ring_state(&state) {
-            self.debug_log.log(&format!("ring: failed to save ring state: {e}"));
+            self.debug_log
+                .log(&format!("ring: failed to save ring state: {e}"));
         }
 
         Ok(())
@@ -5013,43 +4755,6 @@ impl App {
         }
     }
 
-    /// Encrypt and publish a RingWelcome message into the coord group for a sibling.
-    ///
-    /// Delivers the ring MLS Welcome via the coord channel so the recipient can
-    /// classify it as `Ring` without a separate RingInfo round-trip.
-    async fn send_ring_welcome_to_coord(
-        &self,
-        key_bundle: &[u8],
-        sibling_id: [u8; 16],
-        ring_id: &[u8],
-        welcome: &[u8],
-    ) {
-        let coord_id = match self.ring_driver.coord_groups.get(&sibling_id) {
-            Some(id) => id.clone(),
-            None => return,
-        };
-        let msg = CoordMsg::RingWelcome {
-            ring_id: ring_id.to_vec(),
-            welcome: welcome.to_vec(),
-            created_at: self.ring_driver.ring_created_at.unwrap_or(0),
-        };
-        let epoch = self
-            .mls
-            .get_group_epoch(&coord_id)
-            .ok()
-            .flatten()
-            .unwrap_or(0);
-        let ev = Event::coord(coord_id.clone(), epoch, encode_coord_msg(&msg));
-        if let Ok(enc) = self.mls.encrypt_event(&coord_id, key_bundle, &ev) {
-            if let Some(client) = &self.client {
-                if let Err(e) = client.publish_event(&enc.tag, &enc.ciphertext, None).await {
-                    self.debug_log
-                        .log(&format!("ring: failed to send RingWelcome: {e}"));
-                }
-            }
-        }
-    }
-
     /// Dismiss the oldest device alert
     pub fn dismiss_device_alert(&mut self) {
         if !self.device_alerts.is_empty() {
@@ -5085,8 +4790,9 @@ impl App {
             let our_messages = self.keys.load_messages(conv_id)
                 .map(|cm| cm.messages)
                 .unwrap_or_default();
-            let our_messages: Vec<_> = our_messages.into_iter()
+            let our_messages: Vec<crate::sync::SyncMessage> = our_messages.into_iter()
                 .filter(|m| m.rkey != "pending")
+                .map(|m| crate::sync::sync_message_from_stored(&m))
                 .collect();
             let has_history = !our_messages.is_empty();
             session.add_conv_plan(group_id.clone(), conv_id.clone(), our_messages, !has_history);
@@ -5138,12 +4844,13 @@ impl App {
                 }
                 SyncOutput::Store { conv_id, messages } => {
                     let my_did = self.client.as_ref().map(|c| c.did().to_string());
-                    for mut msg in messages {
+                    for sync_msg in messages {
+                        let mut stored = crate::sync::stored_from_sync_message(&sync_msg);
                         // Mark is_own based on sender_did vs our DID.
-                        if let (Some(ref did), Some(ref sender)) = (&my_did, &msg.sender_did) {
-                            msg.is_own = sender == did;
+                        if let (Some(ref did), Some(ref sender)) = (&my_did, &stored.sender_did) {
+                            stored.is_own = sender == did;
                         }
-                        let _ = self.keys.append_message(&conv_id, msg);
+                        let _ = self.keys.append_message(&conv_id, stored);
                     }
                     self.debug_log.log(&format!("sync: stored batch for conv {conv_id}"));
                     // Refresh UI if this is the active conversation.

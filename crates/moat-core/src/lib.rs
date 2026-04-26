@@ -32,6 +32,7 @@ pub mod message;
 pub(crate) mod padding;
 pub(crate) mod stealth;
 pub(crate) mod storage;
+pub mod sync;
 pub(crate) mod tag;
 
 pub mod api;
@@ -52,7 +53,8 @@ pub use crate::credential::MoatCredential;
 pub use crate::error::{Error, ErrorCode, Result};
 pub use crate::device_ring::{
     classify_group_kind, decode_coord_msg, encode_coord_msg, reconcile_rings, CoordGroupResult,
-    CoordMsg, GroupKind, ReconcileDecision,
+    CoordMsg, DeviceRingDriver, GroupKind, KeyPackageInput, OwnEventInput, ReconcileDecision,
+    RingCommand, RingState, TickInputs,
 };
 pub use crate::event::{
     ControlKind, DecryptOutcome, Event, EventKind, MessageKind, ModifierKind, ReactionPayload,
@@ -71,6 +73,10 @@ pub use crate::tag::{
     TAG_EXPORT_SECRET_LABEL, TAG_EXPORT_SECRET_LEN, TAG_GAP_LIMIT,
 };
 pub use crate::digest::{diff_anchors, DigestAnchor, DiffRange};
+pub use crate::sync::{
+    decode_sync_msg, encode_sync_msg, AnchorDto, ConvState, SyncDirection, SyncMessage, SyncMsg,
+    SyncOutput, SyncSession,
+};
 
 /// The ciphersuite used by Moat
 pub const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
