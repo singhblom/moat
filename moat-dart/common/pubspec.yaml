@@ -8,3 +8,10 @@ dependencies:
   http: ^1.2.2
   web_socket_channel: ^3.0.3
   web: ^1.1.0
+  freezed_annotation: ^2.4.4
+
+dev_dependencies:
+  # Required by flutter_rust_bridge codegen for tagged-union DTOs (RingCommand, SyncOutput).
+  freezed: ^2.5.7
+  build_runner: ^2.4.13
+  json_serializable: ^6.8.0

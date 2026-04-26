@@ -32,8 +32,9 @@ pub async fn run(verbose: bool) {
     vlog!("=== Scenario: two-device-history-sync ===");
 
     // ── Prologue: spin up Alice + Bob ─────────────────────────────────────────
-    vlog!("[setup] starting TestWorld with alice and bob...");
-    let mut world = TestWorld::new(&["alice", "bob"], ".postern.test")
+    // Drawbridge is required: the SyncOffer/pair-join handshake uses the pair WS.
+    vlog!("[setup] starting TestWorld with alice and bob (Drawbridge)...");
+    let mut world = TestWorld::new_with_drawbridge(&[("alice", "alice"), ("bob", "bob")], ".postern.test")
         .await
         .expect("world setup");
 

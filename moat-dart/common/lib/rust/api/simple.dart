@@ -5,10 +5,12 @@
 
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
+import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
+part 'simple.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `from_core`, `into_core`, `push_media_label`, `push_plaintext_preview`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `MoatError`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `fmt`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 /// Generate a stealth keypair. Returns (private_key, public_key) each 32 bytes.
 StealthKeypair generateStealthKeypair() =>
@@ -196,6 +198,63 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
   Future<Uint8List> processWelcome({required List<int> welcomeBytes});
 }
 
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<RingDriverHandle>>
+abstract class RingDriverHandle implements RustOpaqueInterface {
+  /// Restore a ring driver from its persisted JSON state.
+  static Future<RingDriverHandle> fromStateJson({required String json}) =>
+      RustLib.instance.api
+          .crateApiSimpleRingDriverHandleFromStateJson(json: json);
+
+  /// Handle an incoming coord-group message (decrypted JSON payload).
+  Future<List<RingCommandDto>> handleCoordMsg(
+      {required MoatSessionHandle session,
+      required String myDid,
+      required List<int> groupId,
+      required List<int> payload});
+
+  /// Create a new ring driver with empty state.
+  static RingDriverHandle newEmpty() =>
+      RustLib.instance.api.crateApiSimpleRingDriverHandleNewEmpty();
+
+  /// Cursor (rkey) for incremental own-PDS stealth scan.
+  String? ownEventsCursor();
+
+  /// Raw ring group ID, if a ring exists.
+  Uint8List? ringGroupId();
+
+  /// Drive one ring coordination tick. Returns commands for the host to interpret.
+  Future<List<RingCommandDto>> tick(
+      {required MoatSessionHandle session, required TickInputsDto inputs});
+
+  /// Serialise the current ring driver state as JSON.
+  Future<String> toStateJson();
+}
+
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SyncSessionHandle>>
+abstract class SyncSessionHandle implements RustOpaqueInterface {
+  /// Populate the plan for one conversation before calling `on_paired`.
+  Future<void> addConvPlan(
+      {required List<int> groupId,
+      required String convId,
+      required List<SyncMessageDto> ourMessages,
+      required bool expectingBatch});
+
+  /// `true` once the session has reached the `Done` phase.
+  bool isDone();
+
+  /// Create a new session in the `SendingHello` phase.
+  static SyncSessionHandle newSession() =>
+      RustLib.instance.api.crateApiSimpleSyncSessionHandleNewSession();
+
+  /// Feed a received and decrypted `SyncMsg` (JSON bytes) into the state machine.
+  Future<List<SyncOutputDto>> onMessage(
+      {required List<int> msgBytes, required String ourDid});
+
+  /// Called when the pair WS reaches the `paired` state.
+  Future<List<SyncOutputDto>> onPaired(
+      {required List<ConvStateDto> ourConvs, required BigInt ringEpoch});
+}
+
 class BlobEncryptResult {
   /// Encrypted bytes: nonce (24 bytes) || ciphertext.
   final Uint8List blob;
@@ -232,6 +291,41 @@ class BlobEncryptResult {
           key == other.key &&
           ciphertextHash == other.ciphertextHash &&
           contentHash == other.contentHash;
+}
+
+class ConvStateDto {
+  final Uint8List groupId;
+  final String? oldestRkey;
+  final String? newestRkey;
+  final Uint8List tipDigest;
+  final List<SyncAnchorDto> anchors;
+
+  const ConvStateDto({
+    required this.groupId,
+    this.oldestRkey,
+    this.newestRkey,
+    required this.tipDigest,
+    required this.anchors,
+  });
+
+  @override
+  int get hashCode =>
+      groupId.hashCode ^
+      oldestRkey.hashCode ^
+      newestRkey.hashCode ^
+      tipDigest.hashCode ^
+      anchors.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ConvStateDto &&
+          runtimeType == other.runtimeType &&
+          groupId == other.groupId &&
+          oldestRkey == other.oldestRkey &&
+          newestRkey == other.newestRkey &&
+          tipDigest == other.tipDigest &&
+          anchors == other.anchors;
 }
 
 class DecryptResultDto {
@@ -420,6 +514,13 @@ enum EventKindDto {
   ;
 }
 
+enum GroupKindDto {
+  user,
+  ring,
+  deviceCoord,
+  ;
+}
+
 class ImageProcessResult {
   /// Processed image bytes (JPEG or PNG, resized if >2048px).
   final Uint8List imageBytes;
@@ -481,6 +582,27 @@ class KeyPackageResult {
           keyBundle == other.keyBundle;
 }
 
+class OwnEventInputDto {
+  final String rkey;
+  final Uint8List ciphertext;
+
+  const OwnEventInputDto({
+    required this.rkey,
+    required this.ciphertext,
+  });
+
+  @override
+  int get hashCode => rkey.hashCode ^ ciphertext.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is OwnEventInputDto &&
+          runtimeType == other.runtimeType &&
+          rkey == other.rkey &&
+          ciphertext == other.ciphertext;
+}
+
 /// Reaction payload extracted from a Reaction event.
 class ReactionPayloadDto {
   final String emoji;
@@ -501,6 +623,35 @@ class ReactionPayloadDto {
           runtimeType == other.runtimeType &&
           emoji == other.emoji &&
           targetMessageId == other.targetMessageId;
+}
+
+@freezed
+sealed class RingCommandDto with _$RingCommandDto {
+  const RingCommandDto._();
+
+  const factory RingCommandDto.publishEvent({
+    required Uint8List tag,
+    required Uint8List ciphertext,
+    required bool markOwn,
+  }) = RingCommandDto_PublishEvent;
+  const factory RingCommandDto.stealthPublishWelcome({
+    required Uint8List tag,
+    required Uint8List ciphertext,
+  }) = RingCommandDto_StealthPublishWelcome;
+  const factory RingCommandDto.replenishKeyPackage() =
+      RingCommandDto_ReplenishKeyPackage;
+  const factory RingCommandDto.registerGroup({
+    required Uint8List groupId,
+    required GroupKindDto kind,
+  }) = RingCommandDto_RegisterGroup;
+  const factory RingCommandDto.sendDrawbridgePairOffer({
+    required Uint8List token,
+  }) = RingCommandDto_SendDrawbridgePairOffer;
+  const factory RingCommandDto.sendDrawbridgePairJoin({
+    required Uint8List token,
+  }) = RingCommandDto_SendDrawbridgePairJoin;
+  const factory RingCommandDto.pollForNewDevices() =
+      RingCommandDto_PollForNewDevices;
 }
 
 /// Information about the sender of a message, extracted from MLS credentials.
@@ -549,6 +700,121 @@ class StealthKeypair {
           publicKey == other.publicKey;
 }
 
+class SyncAnchorDto {
+  final String rkey;
+  final Uint8List digest;
+
+  const SyncAnchorDto({
+    required this.rkey,
+    required this.digest,
+  });
+
+  @override
+  int get hashCode => rkey.hashCode ^ digest.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SyncAnchorDto &&
+          runtimeType == other.runtimeType &&
+          rkey == other.rkey &&
+          digest == other.digest;
+}
+
+class SyncMessageDto {
+  final String rkey;
+  final Uint8List? messageId;
+  final String senderDid;
+  final String senderDeviceName;
+  final PlatformInt64 timestampMs;
+  final String content;
+  final bool isOwn;
+  final String? blobUri;
+  final Uint8List? blobKey;
+  final Uint8List? blobCiphertextHash;
+  final BigInt? blobCiphertextSize;
+  final Uint8List? blobContentHash;
+  final String? blobMime;
+  final int? blobWidth;
+  final int? blobHeight;
+
+  const SyncMessageDto({
+    required this.rkey,
+    this.messageId,
+    required this.senderDid,
+    required this.senderDeviceName,
+    required this.timestampMs,
+    required this.content,
+    required this.isOwn,
+    this.blobUri,
+    this.blobKey,
+    this.blobCiphertextHash,
+    this.blobCiphertextSize,
+    this.blobContentHash,
+    this.blobMime,
+    this.blobWidth,
+    this.blobHeight,
+  });
+
+  @override
+  int get hashCode =>
+      rkey.hashCode ^
+      messageId.hashCode ^
+      senderDid.hashCode ^
+      senderDeviceName.hashCode ^
+      timestampMs.hashCode ^
+      content.hashCode ^
+      isOwn.hashCode ^
+      blobUri.hashCode ^
+      blobKey.hashCode ^
+      blobCiphertextHash.hashCode ^
+      blobCiphertextSize.hashCode ^
+      blobContentHash.hashCode ^
+      blobMime.hashCode ^
+      blobWidth.hashCode ^
+      blobHeight.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SyncMessageDto &&
+          runtimeType == other.runtimeType &&
+          rkey == other.rkey &&
+          messageId == other.messageId &&
+          senderDid == other.senderDid &&
+          senderDeviceName == other.senderDeviceName &&
+          timestampMs == other.timestampMs &&
+          content == other.content &&
+          isOwn == other.isOwn &&
+          blobUri == other.blobUri &&
+          blobKey == other.blobKey &&
+          blobCiphertextHash == other.blobCiphertextHash &&
+          blobCiphertextSize == other.blobCiphertextSize &&
+          blobContentHash == other.blobContentHash &&
+          blobMime == other.blobMime &&
+          blobWidth == other.blobWidth &&
+          blobHeight == other.blobHeight;
+}
+
+@freezed
+sealed class SyncOutputDto with _$SyncOutputDto {
+  const SyncOutputDto._();
+
+  /// JSON-encoded `SyncMsg` ready to be encrypted via ring MLS and sent on the pair WS.
+  const factory SyncOutputDto.send({
+    required Uint8List bytes,
+  }) = SyncOutputDto_Send;
+
+  /// Persist these messages for the conversation `conv_id` (hex group ID).
+  const factory SyncOutputDto.store({
+    required String convId,
+    required List<SyncMessageDto> messages,
+  }) = SyncOutputDto_Store;
+
+  /// Sync is complete; close the pair WS and tear down.
+  const factory SyncOutputDto.complete() = SyncOutputDto_Complete;
+}
+
 class ThumbHashResult {
   /// Raw RGBA pixel data (width * height * 4 bytes).
   final Uint8List rgba;
@@ -572,6 +838,80 @@ class ThumbHashResult {
           rgba == other.rgba &&
           width == other.width &&
           height == other.height;
+}
+
+class TickInputsDto {
+  /// Sibling key packages fetched from our own PDS (driver filters out our own).
+  final List<Uint8List> keyPackages;
+
+  /// Stealth scan-pubkeys (32 bytes each) for all of our devices.
+  final List<Uint8List> stealthPubkeys;
+
+  /// Own-PDS events since `own_events_cursor`.
+  final List<OwnEventInputDto> ownEvents;
+
+  /// Our stealth scan private key (32 bytes).
+  final Uint8List stealthPrivkey;
+
+  /// Our DID.
+  final String did;
+
+  /// Our device name.
+  final String deviceName;
+
+  /// Identity key bundle.
+  final Uint8List keyBundle;
+
+  /// Wall-clock time (ms since epoch); used as `ring_created_at` for new rings.
+  final PlatformInt64 nowMs;
+
+  /// Whether the host's main Drawbridge WS is connected.
+  final bool drawbridgeHasOwnConnection;
+
+  /// Whether a sync session is already running.
+  final bool syncSessionActive;
+
+  const TickInputsDto({
+    required this.keyPackages,
+    required this.stealthPubkeys,
+    required this.ownEvents,
+    required this.stealthPrivkey,
+    required this.did,
+    required this.deviceName,
+    required this.keyBundle,
+    required this.nowMs,
+    required this.drawbridgeHasOwnConnection,
+    required this.syncSessionActive,
+  });
+
+  @override
+  int get hashCode =>
+      keyPackages.hashCode ^
+      stealthPubkeys.hashCode ^
+      ownEvents.hashCode ^
+      stealthPrivkey.hashCode ^
+      did.hashCode ^
+      deviceName.hashCode ^
+      keyBundle.hashCode ^
+      nowMs.hashCode ^
+      drawbridgeHasOwnConnection.hashCode ^
+      syncSessionActive.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is TickInputsDto &&
+          runtimeType == other.runtimeType &&
+          keyPackages == other.keyPackages &&
+          stealthPubkeys == other.stealthPubkeys &&
+          ownEvents == other.ownEvents &&
+          stealthPrivkey == other.stealthPrivkey &&
+          did == other.did &&
+          deviceName == other.deviceName &&
+          keyBundle == other.keyBundle &&
+          nowMs == other.nowMs &&
+          drawbridgeHasOwnConnection == other.drawbridgeHasOwnConnection &&
+          syncSessionActive == other.syncSessionActive;
 }
 
 class WelcomeResultDto {

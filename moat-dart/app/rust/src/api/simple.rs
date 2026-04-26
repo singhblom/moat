@@ -1,8 +1,16 @@
 use flutter_rust_bridge::frb;
 use moat_core::{
-    self, ControlKind, EncryptResult, Event, EventKind, MoatCredential, MoatSession, ModifierKind,
-    ReactionPayload as CoreReactionPayload, SenderInfo, WelcomeResult,
+    self,
+    sync::{
+        decode_sync_msg, encode_sync_msg, AnchorDto as CoreAnchorDto, ConvState, SyncMessage,
+        SyncOutput, SyncSession,
+    },
+    ControlKind, EncryptResult, Event, EventKind, GroupKind, KeyPackageInput, MoatCredential,
+    MoatSession, ModifierKind, OwnEventInput, ReactionPayload as CoreReactionPayload, RingCommand,
+    RingState, SenderInfo, TickInputs, WelcomeResult,
 };
+use moat_core::DeviceRingDriver;
+use moat_core::decode_coord_msg;
 use std::sync::Mutex;
 
 // --- Error handling ---
@@ -353,9 +361,11 @@ impl EventDto {
                 EventKind::Control(ControlKind::Welcome) => EventKindDto::Welcome,
                 EventKind::Control(ControlKind::Checkpoint) => EventKindDto::Checkpoint,
                 EventKind::Modifier(ModifierKind::Reaction) => EventKindDto::Reaction,
-                EventKind::Modifier(_) | EventKind::Control(_) | EventKind::Unknown(_) => {
-                    EventKindDto::Unknown
-                }
+                EventKind::Modifier(_)
+                | EventKind::Control(_)
+                | EventKind::Coord
+                | EventKind::SyncApp
+                | EventKind::Unknown(_) => EventKindDto::Unknown,
             },
             message_id: e.message_id,
             group_id: e.group_id,
@@ -777,6 +787,396 @@ fn push_media_label(mime: Option<&str>) -> &'static str {
         Some(m) if m == "image/gif" => "🎞️ GIF",
         Some(m) if m.starts_with("video/") => "🎬 Video",
         _ => "📷 Photo",
+    }
+}
+
+// On wasm32 the push-decrypt code path is unavailable (uses std::fs). Provide
+// stubs so the FRB-generated bindings still compile; the function returns an
+// error if called.
+#[cfg(target_arch = "wasm32")]
+pub struct DecryptedPush {
+    pub sender_did: Option<String>,
+    pub plaintext_preview: Option<String>,
+    pub group_id: Vec<u8>,
+    pub message_id: Option<Vec<u8>>,
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn decrypt_push_payload(
+    _state_path: String,
+    _group_ids: Vec<Vec<u8>>,
+    _tag: Vec<u8>,
+    _ciphertext: Vec<u8>,
+) -> Result<DecryptedPush, String> {
+    Err("decrypt_push_payload is not available on web".to_string())
+}
+
+// --- Device ring driver ---
+
+/// Opaque handle to a `DeviceRingDriver`, thread-safe via Mutex.
+pub struct RingDriverHandle {
+    inner: Mutex<DeviceRingDriver>,
+}
+
+impl RingDriverHandle {
+    /// Create a new ring driver with empty state.
+    #[frb(sync)]
+    pub fn new_empty() -> RingDriverHandle {
+        RingDriverHandle {
+            inner: Mutex::new(DeviceRingDriver::from_state(&RingState::default())),
+        }
+    }
+
+    /// Restore a ring driver from its persisted JSON state.
+    pub fn from_state_json(json: String) -> Result<RingDriverHandle, String> {
+        let state: RingState = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+        Ok(RingDriverHandle {
+            inner: Mutex::new(DeviceRingDriver::from_state(&state)),
+        })
+    }
+
+    /// Serialise the current ring driver state as JSON.
+    pub fn to_state_json(&self) -> Result<String, String> {
+        let state = self.inner.lock().unwrap().to_ring_state();
+        serde_json::to_string(&state).map_err(|e| e.to_string())
+    }
+
+    /// Raw ring group ID, if a ring exists.
+    #[frb(sync)]
+    pub fn ring_group_id(&self) -> Option<Vec<u8>> {
+        self.inner.lock().unwrap().ring_group_id.clone()
+    }
+
+    /// Cursor (rkey) for incremental own-PDS stealth scan.
+    #[frb(sync)]
+    pub fn own_events_cursor(&self) -> Option<String> {
+        self.inner.lock().unwrap().own_events_cursor.clone()
+    }
+
+    /// Drive one ring coordination tick. Returns commands for the host to interpret.
+    pub fn tick(
+        &self,
+        session: &MoatSessionHandle,
+        inputs: TickInputsDto,
+    ) -> Result<Vec<RingCommandDto>, String> {
+        let key_packages: Vec<KeyPackageInput> = inputs
+            .key_packages
+            .into_iter()
+            .map(|key_package| KeyPackageInput { key_package })
+            .collect();
+        let stealth_pubkeys: Vec<[u8; 32]> = inputs
+            .stealth_pubkeys
+            .into_iter()
+            .map(|pk| pk.try_into().map_err(|_| "stealth_pubkey must be 32 bytes".to_string()))
+            .collect::<Result<_, _>>()?;
+        let own_events: Vec<OwnEventInput> = inputs
+            .own_events
+            .into_iter()
+            .map(|e| OwnEventInput { rkey: e.rkey, ciphertext: e.ciphertext })
+            .collect();
+        let stealth_privkey: [u8; 32] = inputs
+            .stealth_privkey
+            .try_into()
+            .map_err(|_| "stealth_privkey must be 32 bytes".to_string())?;
+
+        let session_lock = session.inner.lock().unwrap();
+        let device_id = *session_lock.device_id();
+        let credential = MoatCredential::new(&inputs.did, &inputs.device_name, device_id);
+
+        let core_inputs = TickInputs {
+            key_packages: &key_packages,
+            stealth_pubkeys: &stealth_pubkeys,
+            own_events: &own_events,
+            stealth_privkey: &stealth_privkey,
+            credential: &credential,
+            key_bundle: &inputs.key_bundle,
+            now_ms: inputs.now_ms,
+            drawbridge_has_own_connection: inputs.drawbridge_has_own_connection,
+            sync_session_active: inputs.sync_session_active,
+            my_did: &inputs.did,
+        };
+
+        let cmds = self.inner.lock().unwrap().tick(&session_lock, core_inputs);
+        Ok(cmds.into_iter().map(RingCommandDto::from).collect())
+    }
+
+    /// Handle an incoming coord-group message (decrypted JSON payload).
+    pub fn handle_coord_msg(
+        &self,
+        session: &MoatSessionHandle,
+        my_did: String,
+        group_id: Vec<u8>,
+        payload: Vec<u8>,
+    ) -> Result<Vec<RingCommandDto>, String> {
+        let msg = decode_coord_msg(&payload).map_err(|e| e.to_string())?;
+        let session_lock = session.inner.lock().unwrap();
+        let cmds =
+            self.inner
+                .lock()
+                .unwrap()
+                .handle_coord_msg(&session_lock, &my_did, &group_id, msg);
+        Ok(cmds.into_iter().map(RingCommandDto::from).collect())
+    }
+}
+
+pub struct TickInputsDto {
+    /// Sibling key packages fetched from our own PDS (driver filters out our own).
+    pub key_packages: Vec<Vec<u8>>,
+    /// Stealth scan-pubkeys (32 bytes each) for all of our devices.
+    pub stealth_pubkeys: Vec<Vec<u8>>,
+    /// Own-PDS events since `own_events_cursor`.
+    pub own_events: Vec<OwnEventInputDto>,
+    /// Our stealth scan private key (32 bytes).
+    pub stealth_privkey: Vec<u8>,
+    /// Our DID.
+    pub did: String,
+    /// Our device name.
+    pub device_name: String,
+    /// Identity key bundle.
+    pub key_bundle: Vec<u8>,
+    /// Wall-clock time (ms since epoch); used as `ring_created_at` for new rings.
+    pub now_ms: i64,
+    /// Whether the host's main Drawbridge WS is connected.
+    pub drawbridge_has_own_connection: bool,
+    /// Whether a sync session is already running.
+    pub sync_session_active: bool,
+}
+
+pub struct OwnEventInputDto {
+    pub rkey: String,
+    pub ciphertext: Vec<u8>,
+}
+
+#[derive(Debug)]
+pub enum GroupKindDto {
+    User,
+    Ring,
+    DeviceCoord,
+}
+
+impl From<GroupKind> for GroupKindDto {
+    fn from(k: GroupKind) -> Self {
+        match k {
+            GroupKind::User => GroupKindDto::User,
+            GroupKind::Ring => GroupKindDto::Ring,
+            GroupKind::DeviceCoord => GroupKindDto::DeviceCoord,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum RingCommandDto {
+    PublishEvent { tag: Vec<u8>, ciphertext: Vec<u8>, mark_own: bool },
+    StealthPublishWelcome { tag: Vec<u8>, ciphertext: Vec<u8> },
+    ReplenishKeyPackage,
+    RegisterGroup { group_id: Vec<u8>, kind: GroupKindDto },
+    SendDrawbridgePairOffer { token: Vec<u8> },
+    SendDrawbridgePairJoin { token: Vec<u8> },
+    PollForNewDevices,
+}
+
+impl From<RingCommand> for RingCommandDto {
+    fn from(c: RingCommand) -> Self {
+        match c {
+            RingCommand::PublishEvent { tag, ciphertext, mark_own } => {
+                RingCommandDto::PublishEvent { tag: tag.to_vec(), ciphertext, mark_own }
+            }
+            RingCommand::StealthPublishWelcome { tag, ciphertext } => {
+                RingCommandDto::StealthPublishWelcome { tag: tag.to_vec(), ciphertext }
+            }
+            RingCommand::ReplenishKeyPackage => RingCommandDto::ReplenishKeyPackage,
+            RingCommand::RegisterGroup { group_id, kind } => {
+                RingCommandDto::RegisterGroup { group_id, kind: kind.into() }
+            }
+            RingCommand::SendDrawbridgePairOffer { token } => {
+                RingCommandDto::SendDrawbridgePairOffer { token }
+            }
+            RingCommand::SendDrawbridgePairJoin { token } => {
+                RingCommandDto::SendDrawbridgePairJoin { token }
+            }
+            RingCommand::PollForNewDevices => RingCommandDto::PollForNewDevices,
+        }
+    }
+}
+
+// --- History sync session ---
+
+/// Opaque handle to a `SyncSession`, thread-safe via Mutex.
+pub struct SyncSessionHandle {
+    inner: Mutex<SyncSession>,
+}
+
+impl SyncSessionHandle {
+    /// Create a new session in the `SendingHello` phase.
+    #[frb(sync)]
+    pub fn new_session() -> SyncSessionHandle {
+        SyncSessionHandle { inner: Mutex::new(SyncSession::new()) }
+    }
+
+    /// Populate the plan for one conversation before calling `on_paired`.
+    pub fn add_conv_plan(
+        &self,
+        group_id: Vec<u8>,
+        conv_id: String,
+        our_messages: Vec<SyncMessageDto>,
+        expecting_batch: bool,
+    ) {
+        let messages: Vec<SyncMessage> = our_messages.into_iter().map(SyncMessage::from).collect();
+        self.inner.lock().unwrap().add_conv_plan(group_id, conv_id, messages, expecting_batch);
+    }
+
+    /// Called when the pair WS reaches the `paired` state.
+    pub fn on_paired(
+        &self,
+        our_convs: Vec<ConvStateDto>,
+        ring_epoch: u64,
+    ) -> Vec<SyncOutputDto> {
+        let convs: Vec<ConvState> = our_convs.into_iter().map(ConvState::from).collect();
+        self.inner
+            .lock()
+            .unwrap()
+            .on_paired(convs, ring_epoch)
+            .into_iter()
+            .map(SyncOutputDto::from)
+            .collect()
+    }
+
+    /// Feed a received and decrypted `SyncMsg` (JSON bytes) into the state machine.
+    pub fn on_message(
+        &self,
+        msg_bytes: Vec<u8>,
+        our_did: String,
+    ) -> Result<Vec<SyncOutputDto>, String> {
+        let msg = decode_sync_msg(&msg_bytes)?;
+        Ok(self
+            .inner
+            .lock()
+            .unwrap()
+            .on_message(msg, &our_did)
+            .into_iter()
+            .map(SyncOutputDto::from)
+            .collect())
+    }
+
+    /// `true` once the session has reached the `Done` phase.
+    #[frb(sync)]
+    pub fn is_done(&self) -> bool {
+        self.inner.lock().unwrap().is_done()
+    }
+}
+
+pub struct SyncMessageDto {
+    pub rkey: String,
+    pub message_id: Option<Vec<u8>>,
+    pub sender_did: String,
+    pub sender_device_name: String,
+    pub timestamp_ms: i64,
+    pub content: String,
+    pub is_own: bool,
+    pub blob_uri: Option<String>,
+    pub blob_key: Option<Vec<u8>>,
+    pub blob_ciphertext_hash: Option<Vec<u8>>,
+    pub blob_ciphertext_size: Option<u64>,
+    pub blob_content_hash: Option<Vec<u8>>,
+    pub blob_mime: Option<String>,
+    pub blob_width: Option<u32>,
+    pub blob_height: Option<u32>,
+}
+
+impl From<SyncMessage> for SyncMessageDto {
+    fn from(m: SyncMessage) -> Self {
+        SyncMessageDto {
+            rkey: m.rkey,
+            message_id: m.message_id,
+            sender_did: m.sender_did,
+            sender_device_name: m.sender_device_name,
+            timestamp_ms: m.timestamp_ms,
+            content: m.content,
+            is_own: m.is_own,
+            blob_uri: m.blob_uri,
+            blob_key: m.blob_key,
+            blob_ciphertext_hash: m.blob_ciphertext_hash,
+            blob_ciphertext_size: m.blob_ciphertext_size,
+            blob_content_hash: m.blob_content_hash,
+            blob_mime: m.blob_mime,
+            blob_width: m.blob_width,
+            blob_height: m.blob_height,
+        }
+    }
+}
+
+impl From<SyncMessageDto> for SyncMessage {
+    fn from(m: SyncMessageDto) -> Self {
+        SyncMessage {
+            rkey: m.rkey,
+            message_id: m.message_id,
+            sender_did: m.sender_did,
+            sender_device_name: m.sender_device_name,
+            timestamp_ms: m.timestamp_ms,
+            content: m.content,
+            is_own: m.is_own,
+            blob_uri: m.blob_uri,
+            blob_key: m.blob_key,
+            blob_ciphertext_hash: m.blob_ciphertext_hash,
+            blob_ciphertext_size: m.blob_ciphertext_size,
+            blob_content_hash: m.blob_content_hash,
+            blob_mime: m.blob_mime,
+            blob_width: m.blob_width,
+            blob_height: m.blob_height,
+        }
+    }
+}
+
+pub struct SyncAnchorDto {
+    pub rkey: String,
+    pub digest: Vec<u8>,
+}
+
+impl From<SyncAnchorDto> for CoreAnchorDto {
+    fn from(a: SyncAnchorDto) -> Self {
+        CoreAnchorDto { rkey: a.rkey, digest: a.digest }
+    }
+}
+
+pub struct ConvStateDto {
+    pub group_id: Vec<u8>,
+    pub oldest_rkey: Option<String>,
+    pub newest_rkey: Option<String>,
+    pub tip_digest: Vec<u8>,
+    pub anchors: Vec<SyncAnchorDto>,
+}
+
+impl From<ConvStateDto> for ConvState {
+    fn from(c: ConvStateDto) -> Self {
+        ConvState {
+            group_id: c.group_id,
+            oldest_rkey: c.oldest_rkey,
+            newest_rkey: c.newest_rkey,
+            tip_digest: c.tip_digest,
+            anchors: c.anchors.into_iter().map(CoreAnchorDto::from).collect(),
+        }
+    }
+}
+
+pub enum SyncOutputDto {
+    /// JSON-encoded `SyncMsg` ready to be encrypted via ring MLS and sent on the pair WS.
+    Send { bytes: Vec<u8> },
+    /// Persist these messages for the conversation `conv_id` (hex group ID).
+    Store { conv_id: String, messages: Vec<SyncMessageDto> },
+    /// Sync is complete; close the pair WS and tear down.
+    Complete,
+}
+
+impl From<SyncOutput> for SyncOutputDto {
+    fn from(o: SyncOutput) -> Self {
+        match o {
+            SyncOutput::Send(msg) => SyncOutputDto::Send { bytes: encode_sync_msg(&msg) },
+            SyncOutput::Store { conv_id, messages } => SyncOutputDto::Store {
+                conv_id,
+                messages: messages.into_iter().map(SyncMessageDto::from).collect(),
+            },
+            SyncOutput::Complete => SyncOutputDto::Complete,
+        }
     }
 }
 
@@ -1222,6 +1622,106 @@ mod tests {
         assert!(matches!(dto.kind, EventKindDto::Unknown));
         assert_eq!(dto.group_id, vec![1, 2, 3]);
         assert_eq!(dto.payload, b"opaque");
+    }
+}
+
+#[cfg(test)]
+mod ring_sync_ffi_tests {
+    use super::*;
+
+    #[test]
+    fn ring_driver_state_json_roundtrip() {
+        let h = RingDriverHandle::new_empty();
+        let json = h.to_state_json().unwrap();
+        let restored = RingDriverHandle::from_state_json(json).unwrap();
+        assert!(restored.ring_group_id().is_none());
+        assert!(restored.own_events_cursor().is_none());
+    }
+
+    #[test]
+    fn ring_driver_tick_no_inputs_returns_no_commands() {
+        let session = MoatSessionHandle::new_session();
+        let kp = session
+            .generate_key_package("did:plc:alice".into(), "Phone".into())
+            .unwrap();
+        let driver = RingDriverHandle::new_empty();
+        let inputs = TickInputsDto {
+            key_packages: vec![],
+            stealth_pubkeys: vec![],
+            own_events: vec![],
+            stealth_privkey: vec![0u8; 32],
+            did: "did:plc:alice".into(),
+            device_name: "Phone".into(),
+            key_bundle: kp.key_bundle,
+            now_ms: 1_000_000,
+            drawbridge_has_own_connection: false,
+            sync_session_active: false,
+        };
+        let cmds = driver.tick(&session, inputs).unwrap();
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn ring_driver_tick_rejects_bad_stealth_privkey_len() {
+        let session = MoatSessionHandle::new_session();
+        let kp = session
+            .generate_key_package("did:plc:alice".into(), "Phone".into())
+            .unwrap();
+        let driver = RingDriverHandle::new_empty();
+        let inputs = TickInputsDto {
+            key_packages: vec![],
+            stealth_pubkeys: vec![],
+            own_events: vec![],
+            stealth_privkey: vec![0u8; 31],
+            did: "did:plc:alice".into(),
+            device_name: "Phone".into(),
+            key_bundle: kp.key_bundle,
+            now_ms: 0,
+            drawbridge_has_own_connection: false,
+            sync_session_active: false,
+        };
+        let err = driver.tick(&session, inputs).unwrap_err();
+        assert!(err.contains("32 bytes"));
+    }
+
+    #[test]
+    fn sync_session_on_paired_emits_send() {
+        let s = SyncSessionHandle::new_session();
+        let outs = s.on_paired(vec![], 7);
+        assert_eq!(outs.len(), 1);
+        match &outs[0] {
+            SyncOutputDto::Send { bytes } => {
+                // Decode round-trip: must be a valid SyncMsg::Hello.
+                let msg = decode_sync_msg(bytes).unwrap();
+                assert!(matches!(msg, moat_core::sync::SyncMsg::Hello { ring_epoch: 7, .. }));
+            }
+            _ => panic!("expected Send"),
+        }
+        assert!(!s.is_done());
+    }
+
+    #[test]
+    fn sync_message_dto_roundtrip() {
+        let core = SyncMessage {
+            rkey: "rk1".into(),
+            message_id: Some(vec![1u8; 16]),
+            sender_did: "did:plc:bob".into(),
+            sender_device_name: "phone".into(),
+            timestamp_ms: 1234,
+            content: "hi".into(),
+            is_own: true,
+            blob_uri: Some("at://x".into()),
+            blob_key: Some(vec![2u8; 32]),
+            blob_ciphertext_hash: Some(vec![3u8; 32]),
+            blob_ciphertext_size: Some(99),
+            blob_content_hash: Some(vec![4u8; 32]),
+            blob_mime: Some("image/png".into()),
+            blob_width: Some(100),
+            blob_height: Some(200),
+        };
+        let dto: SyncMessageDto = core.clone().into();
+        let back: SyncMessage = dto.into();
+        assert_eq!(back, core);
     }
 }
 
