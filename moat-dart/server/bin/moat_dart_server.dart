@@ -56,17 +56,35 @@ Future<void> main(List<String> args) async {
     atprotoClient: atprotoClient,
     secureStorage: secureStorage,
   );
+  // Device ring + sync (multi-device coordination).
+  final ringService = DeviceRingService(
+    auth: authService,
+    drawbridge: DrawbridgeService.instance,
+    backend: docBackend,
+  );
+  await ringService.init();
+  final syncService = SyncService(
+    auth: authService,
+    drawbridge: DrawbridgeService.instance,
+    ring: ringService,
+    conversationStorage: convStorage,
+    messageStorage: msgStorage,
+  );
+
   final pollingService = PollingService(
     authService: authService,
     conversationsService: convsService,
     watchListService: watchListService,
     secureStorage: secureStorage,
+    ringService: ringService,
   );
 
   // Wire ConversationManager.
   ConversationManager.instance.init(
     authService: authService,
     storage: msgStorage,
+    ringService: ringService,
+    syncService: syncService,
   );
 
   // Wire Drawbridge push notifications to trigger polling.

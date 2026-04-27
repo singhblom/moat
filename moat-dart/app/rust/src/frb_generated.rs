@@ -2486,7 +2486,9 @@ impl SseDecode for crate::api::simple::EventKindDto {
             2 => crate::api::simple::EventKindDto::Welcome,
             3 => crate::api::simple::EventKindDto::Checkpoint,
             4 => crate::api::simple::EventKindDto::Reaction,
-            5 => crate::api::simple::EventKindDto::Unknown,
+            5 => crate::api::simple::EventKindDto::Coord,
+            6 => crate::api::simple::EventKindDto::SyncApp,
+            7 => crate::api::simple::EventKindDto::Unknown,
             _ => unreachable!("Invalid variant for EventKindDto: {}", inner),
         };
     }
@@ -3472,7 +3474,9 @@ impl flutter_rust_bridge::IntoDart for crate::api::simple::EventKindDto {
             Self::Welcome => 2.into_dart(),
             Self::Checkpoint => 3.into_dart(),
             Self::Reaction => 4.into_dart(),
-            Self::Unknown => 5.into_dart(),
+            Self::Coord => 5.into_dart(),
+            Self::SyncApp => 6.into_dart(),
+            Self::Unknown => 7.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -4002,7 +4006,9 @@ impl SseEncode for crate::api::simple::EventKindDto {
                 crate::api::simple::EventKindDto::Welcome => 2,
                 crate::api::simple::EventKindDto::Checkpoint => 3,
                 crate::api::simple::EventKindDto::Reaction => 4,
-                crate::api::simple::EventKindDto::Unknown => 5,
+                crate::api::simple::EventKindDto::Coord => 5,
+                crate::api::simple::EventKindDto::SyncApp => 6,
+                crate::api::simple::EventKindDto::Unknown => 7,
                 _ => {
                     unimplemented!("");
                 }

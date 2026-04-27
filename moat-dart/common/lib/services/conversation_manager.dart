@@ -1,10 +1,15 @@
+import 'dart:async';
+
 import '../models/conversation.dart';
 import '../models/message.dart';
 import 'auth_service.dart';
 import 'conversation_repository.dart';
+import 'debug_log.dart';
+import 'device_ring_service.dart';
 import 'message_storage.dart';
 import 'send_queue.dart';
 import 'send_service.dart';
+import 'sync_service.dart';
 
 /// Global singleton managing [ConversationRepository] lifecycle.
 ///
@@ -18,14 +23,35 @@ class ConversationManager {
 
   MessageStorage? _storage;
   AuthService? _authService;
+  DeviceRingService? _ringService;
+  SyncService? _syncService;
+  Timer? _ringTickTimer;
+
+  DeviceRingService get ringService => _ringService!;
+  SyncService get syncService => _syncService!;
 
   /// Must be called once after authentication, before any repos are created.
   void init({
     required AuthService authService,
     required MessageStorage storage,
+    required DeviceRingService ringService,
+    required SyncService syncService,
+    Duration ringTickInterval = const Duration(seconds: 30),
   }) {
     _authService = authService;
     _storage = storage;
+    _ringService = ringService;
+    _syncService = syncService;
+    _ringTickTimer?.cancel();
+    _ringTickTimer = Timer.periodic(ringTickInterval, (_) {
+      ringService.tick().catchError((e) {
+        moatLog('ConversationManager: ring tick failed: $e');
+      });
+    });
+    // Fire one tick immediately so first-time ring setup doesn't wait.
+    ringService.tick().catchError((e) {
+      moatLog('ConversationManager: initial ring tick failed: $e');
+    });
   }
 
   /// Get or lazily create a repository for a conversation.
@@ -64,6 +90,8 @@ class ConversationManager {
 
   /// Dispose all repositories (e.g., on logout).
   void clear() {
+    _ringTickTimer?.cancel();
+    _ringTickTimer = null;
     for (final repo in _repos.values) {
       repo.dispose();
     }

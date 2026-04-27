@@ -9,6 +9,7 @@ import '../rust/api/simple.dart';
 import '../utils/message_payload.dart';
 import 'atproto_client.dart';
 import 'conversation_manager.dart';
+import 'device_ring_service.dart';
 import 'drawbridge_service.dart';
 import 'secure_storage.dart';
 import 'debug_log.dart';
@@ -29,6 +30,7 @@ class PollingService {
   final ConversationsService _conversationsService;
   final WatchListService _watchListService;
   final SecureStorageService _secureStorage;
+  final DeviceRingService _ringService;
 
   Timer? _pollTimer;
   bool _isPolling = false;
@@ -49,10 +51,12 @@ class PollingService {
     required ConversationsService conversationsService,
     required WatchListService watchListService,
     required SecureStorageService secureStorage,
+    required DeviceRingService ringService,
   })  : _authService = authService,
         _conversationsService = conversationsService,
         _watchListService = watchListService,
-        _secureStorage = secureStorage;
+        _secureStorage = secureStorage,
+        _ringService = ringService;
 
   /// Start polling periodically.
   void startPolling({Duration interval = const Duration(seconds: 5)}) {
@@ -226,6 +230,11 @@ class PollingService {
     final tagMap = await _secureStorage.loadTagMap();
     var newMsgs = 0;
 
+    final ringGroupId = await _ringService.ringGroupId();
+    final ringGroupIdHex = ringGroupId != null
+        ? ringGroupId.map((b) => b.toRadixString(16).padLeft(2, '0')).join()
+        : null;
+
     for (final did in allParticipantDids) {
       try {
         final messageRkeyKey = 'msg_$did';
@@ -249,6 +258,11 @@ class PollingService {
           if (groupIdHex == null) continue;
 
           session.markTagSeen(tag: Uint8List.fromList(event.tag));
+
+          if (ringGroupIdHex != null && groupIdHex == ringGroupIdHex) {
+            await _processRingEvent(event, ringGroupId!, session);
+            continue;
+          }
 
           final conversation = conversations
               .where((c) => c.groupIdHex == groupIdHex)
@@ -389,12 +403,41 @@ class PollingService {
 
         case EventKindDto.welcome:
         case EventKindDto.checkpoint:
+        case EventKindDto.coord:
+        case EventKindDto.syncApp:
         case EventKindDto.unknown:
           return false;
       }
     } catch (e) {
       moatLog('PollingService: Failed to decrypt event ${event.rkey} for ${conversation.groupIdHex}: $e');
       return false;
+    }
+  }
+
+  /// Decrypt a ring-group event and dispatch coord messages to [DeviceRingService].
+  Future<void> _processRingEvent(
+    EventRecord event,
+    Uint8List ringGroupId,
+    MoatSessionHandle session,
+  ) async {
+    try {
+      final result = await session.decryptEvent(
+        groupId: ringGroupId,
+        ciphertext: event.ciphertext,
+      );
+      await _authService.saveMlsState();
+
+      if (result.event.kind == EventKindDto.coord) {
+        await _ringService.handleCoordMsg(
+          groupId: ringGroupId,
+          payload: Uint8List.fromList(result.event.payload),
+        );
+      } else if (result.event.kind == EventKindDto.commit) {
+        // Ring epoch advanced — refresh tag map for the new epoch.
+        await _authService.populateConversationTags(ringGroupId);
+      }
+    } catch (e) {
+      moatLog('PollingService: Failed to decrypt ring event ${event.rkey}: $e');
     }
   }
 

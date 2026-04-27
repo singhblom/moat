@@ -378,6 +378,8 @@ pub enum EventKindDto {
     Welcome,
     Checkpoint,
     Reaction,
+    Coord,
+    SyncApp,
     Unknown,
 }
 
@@ -417,6 +419,8 @@ impl EventDto {
                 event.message_id = self.message_id;
                 event
             }
+            EventKindDto::Coord => Event::coord(self.group_id, self.epoch, self.payload),
+            EventKindDto::SyncApp => Event::sync_app(self.group_id, self.epoch, self.payload),
             EventKindDto::Unknown => {
                 panic!("cannot convert Unknown event to core Event")
             }
@@ -431,10 +435,10 @@ impl EventDto {
                 EventKind::Control(ControlKind::Welcome) => EventKindDto::Welcome,
                 EventKind::Control(ControlKind::Checkpoint) => EventKindDto::Checkpoint,
                 EventKind::Modifier(ModifierKind::Reaction) => EventKindDto::Reaction,
+                EventKind::Coord => EventKindDto::Coord,
+                EventKind::SyncApp => EventKindDto::SyncApp,
                 EventKind::Modifier(_)
                 | EventKind::Control(_)
-                | EventKind::Coord
-                | EventKind::SyncApp
                 | EventKind::Unknown(_) => EventKindDto::Unknown,
             },
             message_id: e.message_id,

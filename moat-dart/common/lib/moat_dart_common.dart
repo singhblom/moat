@@ -35,6 +35,8 @@ export 'services/conversation_manager.dart';
 export 'services/conversation_starter.dart';
 export 'services/member_adder.dart';
 export 'services/drawbridge_service.dart';
+export 'services/device_ring_service.dart';
+export 'services/sync_service.dart';
 export 'services/profile_cache_service.dart';
 
 // FRB bindings

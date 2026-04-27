@@ -533,6 +533,8 @@ enum EventKindDto {
   welcome,
   checkpoint,
   reaction,
+  coord,
+  syncApp,
   unknown,
   ;
 }

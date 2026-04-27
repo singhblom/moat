@@ -292,6 +292,8 @@ class MoatApp extends StatelessWidget {
             ),
             home: AuthGate(
               msgStorage: msgStorage,
+              convStorage: convStorage,
+              docBackend: docBackend,
               secureStorage: secureStorage,
             ),
           );
@@ -303,11 +305,15 @@ class MoatApp extends StatelessWidget {
 
 class AuthGate extends StatefulWidget {
   final MessageStorage msgStorage;
+  final ConversationStorage convStorage;
+  final DocumentBackend docBackend;
   final SecureStorageService secureStorage;
 
   const AuthGate({
     super.key,
     required this.msgStorage,
+    required this.convStorage,
+    required this.docBackend,
     required this.secureStorage,
   });
 
@@ -372,15 +378,33 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   void _startPollingIfNeeded(AuthProvider auth) {
     if (auth.isAuthenticated && !_pollingStarted) {
       _pollingStarted = true;
+      final ringService = DeviceRingService(
+        auth: auth.service,
+        drawbridge: DrawbridgeService.instance,
+        backend: widget.docBackend,
+      );
+      // Best-effort load of persisted ring state before polling starts.
+      // ignore: discarded_futures
+      ringService.init();
+      final syncService = SyncService(
+        auth: auth.service,
+        drawbridge: DrawbridgeService.instance,
+        ring: ringService,
+        conversationStorage: widget.convStorage,
+        messageStorage: widget.msgStorage,
+      );
       _pollingService = PollingService(
         authService: auth.service,
         conversationsService: context.read<ConversationsProvider>().service,
         watchListService: context.read<WatchListProvider>().service,
         secureStorage: widget.secureStorage,
+        ringService: ringService,
       );
       ConversationManager.instance.init(
         authService: auth.service,
         storage: widget.msgStorage,
+        ringService: ringService,
+        syncService: syncService,
       );
       app_cm.ConversationManager.instance.init(
         authService: auth.service,
