@@ -220,6 +220,29 @@ impl TestWorld {
             .expect("reset_push_log failed");
     }
 
+    /// Poll the first Drawbridge relay's `/health` endpoint until the live
+    /// connection count equals `n`, then return. Useful for waiting until a
+    /// killed participant's socket has been detected as closed before starting
+    /// a grace-window timer. Times out after `timeout` and panics.
+    pub async fn wait_for_drawbridge_connections(&self, n: usize, timeout: std::time::Duration) {
+        let db = self.drawbridges.first().expect("no drawbridge in this TestWorld");
+        let url = format!("{}/health", db.http_url);
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if let Ok(resp) = reqwest::get(&url).await {
+                if let Ok(body) = resp.json::<serde_json::Value>().await {
+                    if body["connections"].as_u64().map(|c| c as usize) == Some(n) {
+                        return;
+                    }
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!("Drawbridge connection count did not reach {n} within {timeout:?}");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+
     async fn build(
         participants: &[(&str, Option<&str>)],
         kinds: &[ParticipantKind],

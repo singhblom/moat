@@ -1878,6 +1878,15 @@ impl App {
                     self.debug_log
                         .log(&format!("drawbridge: watch_tags failed: {}", e));
                 }
+                // Keep the push registration in sync with the live tag set so
+                // FCM is fired for newly-joined conversations even when the
+                // device is offline at the time of delivery.
+                let device_id_hex = hex::encode(self.mls.device_id());
+                let token = format!("moat-cli-{device_id_hex}");
+                if let Err(e) = self.drawbridge.register_push(&device_id_hex, &token, &tags).await {
+                    self.debug_log
+                        .log(&format!("drawbridge: register_push (tag-sync) failed: {e}"));
+                }
             }
             BgEvent::DrawbridgeSendPairOffer { token } => {
                 if let Err(e) = self.drawbridge.send_pair_offer(&token).await {
@@ -3445,6 +3454,9 @@ impl App {
             };
 
             if let Some(url) = url {
+                // Persist the resolved URL so auto-login on restart can connect
+                // without repeating the describeServer discovery.
+                self.drawbridge_url = Some(url.clone());
                 if let Ok(sig_key) = self.keys.load_identity_key() {
                     let _ = self.bg_tx.send(BgEvent::DrawbridgeConnectOwn {
                         url,

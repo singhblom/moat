@@ -89,8 +89,11 @@ pub async fn run(verbose: bool) {
     vlog!(verbose, "[test 1] killing Bob...");
     world.kill_participant("bob").expect("kill bob");
 
-    // Wait past the 10 s grace window so the relay considers Bob truly offline.
-    vlog!(verbose, "[test 1] waiting 11 s past grace window...");
+    // Wait until Drawbridge detects the disconnect (connection count drops to 1),
+    // then sleep past the 10 s grace window from that point.
+    vlog!(verbose, "[test 1] waiting for Drawbridge to detect disconnect...");
+    world.wait_for_drawbridge_connections(1, Duration::from_secs(5)).await;
+    vlog!(verbose, "[test 1] disconnect detected; waiting 11 s past grace window...");
     tokio::time::sleep(Duration::from_secs(11)).await;
 
     world.reset_push_log().await;
@@ -148,7 +151,9 @@ pub async fn run(verbose: bool) {
     vlog!(verbose, "[test 3] Bob disconnects (grace window test)...");
     world.kill_participant("bob").expect("kill bob for race test");
 
-    // Sleep only 5 s — well within the 10 s grace window.
+    // Wait for Drawbridge to detect the disconnect, then sleep only 5 s —
+    // well within the 10 s grace window.
+    world.wait_for_drawbridge_connections(1, Duration::from_secs(5)).await;
     tokio::time::sleep(Duration::from_secs(5)).await;
 
     world.reset_push_log().await;
