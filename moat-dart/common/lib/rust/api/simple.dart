@@ -219,6 +219,19 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
 
   /// Process a welcome message to join a group. Returns the group ID.
   Future<Uint8List> processWelcome({required List<int> welcomeBytes});
+
+  /// Generate a fresh key package reusing the **existing** signing key from `key_bundle`.
+  ///
+  /// Unlike `generate_key_package`, this preserves the leaf-node public key so that
+  /// all MLS groups the caller already belongs to remain usable after the call.
+  /// Use this to replenish the PDS key package after a Welcome has consumed the
+  /// previous one (e.g. after joining a coord group).
+  ///
+  /// Returns only the new key package bytes; the key bundle is unchanged.
+  Future<Uint8List> replenishKeyPackage(
+      {required String did,
+      required String deviceName,
+      required List<int> keyBundle});
 }
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<RingDriverHandle>>

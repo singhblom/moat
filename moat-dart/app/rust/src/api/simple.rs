@@ -97,6 +97,29 @@ impl MoatSessionHandle {
         })
     }
 
+    /// Generate a fresh key package reusing the **existing** signing key from `key_bundle`.
+    ///
+    /// Unlike `generate_key_package`, this preserves the leaf-node public key so that
+    /// all MLS groups the caller already belongs to remain usable after the call.
+    /// Use this to replenish the PDS key package after a Welcome has consumed the
+    /// previous one (e.g. after joining a coord group).
+    ///
+    /// Returns only the new key package bytes; the key bundle is unchanged.
+    pub fn replenish_key_package(
+        &self,
+        did: String,
+        device_name: String,
+        key_bundle: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        let device_id = *self.inner.lock().unwrap().device_id();
+        let credential = MoatCredential::new(&did, &device_name, device_id);
+        self.inner
+            .lock()
+            .unwrap()
+            .replenish_key_package(&credential, &key_bundle)
+            .map_err(|e| e.to_string())
+    }
+
     /// Create a new MLS group with DID and device name. Returns the group ID.
     pub fn create_group(
         &self,
