@@ -105,6 +105,9 @@ Future<void> main(List<String> args) async {
     watchListService: watchListService,
     pollingService: pollingService,
     blobService: blobService,
+    ringService: ringService,
+    syncService: syncService,
+    messageStorage: msgStorage,
   );
 
   // Parse address.

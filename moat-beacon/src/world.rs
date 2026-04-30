@@ -97,6 +97,9 @@ pub struct TestWorld {
     moat_cli_bin: PathBuf,
     /// Path to the compiled Dart server binary; reused when restarting participants.
     dart_server_bin: Option<PathBuf>,
+    /// Path to the Rust FFI dylib (`librust_lib_moat_flutter.dylib`); injected
+    /// as `--lib-path` when spawning Dart participants.
+    rust_lib_path: Option<PathBuf>,
 }
 
 impl TestWorld {
@@ -157,6 +160,24 @@ impl TestWorld {
     ) -> Result<Self> {
         let participants: Vec<_> = handles.iter().map(|h| (*h, None)).collect();
         Self::build(&participants, kinds, handle_suffix, false).await
+    }
+
+    /// Like [`new_with_drawbridge`] but each participant can be a different
+    /// implementation.
+    ///
+    /// Each tuple is `(handle, relay_label)`.  `kinds` must have the same
+    /// length.  Use [`ParticipantKind::DartServer`] to run the Dart headless
+    /// server for a given participant.
+    pub async fn new_with_kinds_and_drawbridge(
+        participants: &[(&str, &str)],
+        kinds: &[ParticipantKind],
+        handle_suffix: &str,
+    ) -> Result<Self> {
+        let with_labels: Vec<_> = participants
+            .iter()
+            .map(|(h, label)| (*h, Some(*label)))
+            .collect();
+        Self::build(&with_labels, kinds, handle_suffix, false).await
     }
 
     /// Like [`new_with_drawbridge`] but spawns Drawbridge relay(s) in FCM
@@ -316,7 +337,7 @@ impl TestWorld {
         let moat_cli_bin = moat_cli_binary()?;
 
         // If any participant is a Dart server, build the Dart binary + FFI lib.
-        let (dart_server_bin, rust_lib_path) =
+        let (dart_server_bin, dart_lib_path) =
             if kinds.iter().any(|k| *k == ParticipantKind::DartServer) {
                 let (dart_bin, lib) = dart_server_binary()?;
                 (Some(dart_bin), Some(lib))
@@ -354,7 +375,7 @@ impl TestWorld {
             ];
             let _ = drawbridge_ws; // URL is discovered via describeServer; no CLI flag needed
             if *kind == ParticipantKind::DartServer {
-                if let Some(ref lib) = rust_lib_path {
+                if let Some(ref lib) = dart_lib_path {
                     args.push("--lib-path".to_string());
                     args.push(lib.to_str().unwrap().to_string());
                 }
@@ -417,6 +438,7 @@ impl TestWorld {
             participants: HashMap::new(),
             moat_cli_bin,
             dart_server_bin,
+            rust_lib_path: dart_lib_path,
         };
 
         for p in pending {
@@ -500,20 +522,28 @@ impl TestWorld {
         Ok(())
     }
 
-    /// Spawn a second moat-cli process for the same Postern account.
+    /// Spawn a second process for the same Postern account.
     ///
     /// Use this to simulate a second device for an existing user.  The new
     /// process connects to the same PDS proxy but uses a fresh storage directory,
     /// giving it a distinct `device_id`.  The caller must log in using the same
     /// handle/password as the first device.
     ///
+    /// Pass `kind` to choose between [`ParticipantKind::RustCli`] and
+    /// [`ParticipantKind::DartServer`].  If `kind` is `DartServer` and the Dart
+    /// binary has not been built yet, it is compiled on demand.
+    ///
     /// The new participant is registered under `label` in this world.
-    pub async fn spawn_second_device(&mut self, label: &str) -> Result<MoatCliClient> {
+    pub async fn spawn_second_device(
+        &mut self,
+        label: &str,
+        kind: ParticipantKind,
+    ) -> Result<MoatCliClient> {
         let http_port = free_port()?;
         let http_addr = format!("127.0.0.1:{http_port}");
         let storage = TempDir::new().context("create temp storage dir for second device")?;
 
-        let args = vec![
+        let mut args = vec![
             "--storage-dir".to_string(),
             storage.path().to_str().unwrap().to_string(),
             "--pds-url".to_string(),
@@ -522,8 +552,31 @@ impl TestWorld {
             http_addr.clone(),
         ];
 
+        let bin = match kind {
+            ParticipantKind::RustCli => self.moat_cli_bin.clone(),
+            ParticipantKind::DartServer => {
+                // Build Dart binary + FFI lib on demand if not already available.
+                if self.dart_server_bin.is_none() {
+                    let (dart_bin, lib) = dart_server_binary()?;
+                    self.dart_server_bin = Some(dart_bin);
+                    self.rust_lib_path = Some(lib);
+                }
+                let dart_bin = self
+                    .dart_server_bin
+                    .clone()
+                    .expect("dart_server_bin not set after build");
+                let lib_path = self
+                    .rust_lib_path
+                    .as_ref()
+                    .expect("rust_lib_path not set after build");
+                args.push("--lib-path".to_string());
+                args.push(lib_path.to_str().unwrap().to_string());
+                dart_bin
+            }
+        };
+
         let pgid = self.process_group.pgid();
-        let mut cmd = Command::new(&self.moat_cli_bin);
+        let mut cmd = Command::new(&bin);
         cmd.args(&args)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::inherit());
@@ -531,7 +584,7 @@ impl TestWorld {
         cmd.process_group(pgid as i32);
         let child = cmd
             .spawn()
-            .with_context(|| format!("spawn second device for {label}"))?;
+            .with_context(|| format!("spawn second device ({kind:?}) for {label}"))?;
 
         let client = MoatCliClient::new(&format!("http://{http_addr}"));
         wait_for_http(&client, std::time::Duration::from_secs(10))
@@ -544,7 +597,7 @@ impl TestWorld {
                 child: Some(child),
                 storage,
                 spawn_args: args,
-                kind: ParticipantKind::RustCli,
+                kind,
                 client: client.clone(),
             },
         );

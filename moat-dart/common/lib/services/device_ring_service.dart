@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import '../rust/api/simple.dart' as ffi;
@@ -27,6 +28,11 @@ class DeviceRingService {
   ffi.RingDriverHandle? _driver;
   bool _tickInFlight = false;
   Uint8List? _pendingPairToken;
+  int _coordGroupCount = 0;
+
+  /// Injected by the owner (e.g. ConversationManager) so the ring tick can
+  /// suppress a new SyncOffer while a sync session is already in progress.
+  bool Function() isSyncActive = () => false;
 
   /// True once a pair WS is in-flight (offer sent or join sent + ready received).
   bool get hasPendingPairToken => _pendingPairToken != null;
@@ -69,6 +75,22 @@ class DeviceRingService {
     return d.ringGroupId();
   }
 
+  /// Number of active coord groups (one per discovered sibling device).
+  ///
+  /// Updated after every [tick] from the persisted state JSON.
+  int coordGroupCount() => _coordGroupCount;
+
+  /// The rkey cursor up to which the ring driver has consumed own-DID events.
+  ///
+  /// The polling service uses this to skip events already processed by the ring
+  /// driver (coord-group Welcomes) so they are not misrouted as conversation
+  /// Welcomes.
+  String? ownEventsCursor() {
+    final d = _driver;
+    if (d == null) return null;
+    return d.ownEventsCursor();
+  }
+
   /// Drive one ring tick.
   Future<void> tick() async {
     if (_tickInFlight) return;
@@ -109,11 +131,12 @@ class DeviceRingService {
         (await _safe(() => client.fetchKeyPackages(did))) ?? [];
     final stealthRecords =
         (await _safe(() => client.fetchStealthAddresses(did))) ?? [];
+    final cursorBefore = driver.ownEventsCursor();
     final ownEvents = (await _safe(() async {
-          final cursor = driver.ownEventsCursor();
-          return client.fetchEvents(did, afterRkey: cursor);
+          return client.fetchEvents(did, afterRkey: cursorBefore);
         })) ??
         [];
+    moatLog('DeviceRingService: tick cursor=$cursorBefore ownEvents=${ownEvents.map((e) => e.rkey).toList()} keyPackages=${keyPackages.length}');
 
     final inputs = ffi.TickInputsDto(
       keyPackages: keyPackages.map((kp) => kp.keyPackage).toList(),
@@ -130,10 +153,11 @@ class DeviceRingService {
       keyBundle: keyBundle,
       nowMs: DateTime.now().millisecondsSinceEpoch,
       drawbridgeHasOwnConnection: _drawbridge.isOwnConnected,
-      syncSessionActive: false, // SyncService updates this in its own tick path
+      syncSessionActive: isSyncActive(),
     );
 
     final cmds = await driver.tick(session: session, inputs: inputs);
+    moatLog('DeviceRingService: tick done cursor=${driver.ownEventsCursor()} cmds=${cmds.map((c) => c.runtimeType).toList()}');
     await _persist();
     await _interpret(cmds, did);
   }
@@ -180,15 +204,16 @@ class DeviceRingService {
             await _replenishKeyPackage();
           },
           registerGroup: (groupId, kind) async {
-            // No-op for now: candidate tags are populated lazily via the
-            // session when the polling service watches them. Future work:
-            // notify ConversationManager to surface coord-group rings.
+            // Register the coord-group tags so the polling service can route
+            // incoming coord messages (Hello, RingInfo, etc.) to handleCoordMsg.
+            await _auth.populateConversationTags(Uint8List.fromList(groupId));
           },
           sendDrawbridgePairOffer: (token) async {
             _pendingPairToken = token;
             _drawbridge.sendPairOffer(token);
           },
           sendDrawbridgePairJoin: (token) async {
+            moatLog('DeviceRingService: SendDrawbridgePairJoin received, forwarding to Drawbridge');
             _pendingPairToken = token;
             _drawbridge.sendPairJoin(token);
           },
@@ -204,13 +229,18 @@ class DeviceRingService {
   }
 
   Future<void> _replenishKeyPackage() async {
-    // moat-core's `MoatSession::replenish_key_package` is not yet exposed via
-    // FFI. Until it is, log the request so the gap is visible in tests; the
-    // Rust-side ring already replenishes on its own ticks.
-    moatLog('DeviceRingService: replenish requested (FFI not yet wired)');
+    // After joining a coord group, the key package init key is consumed. A
+    // fresh key package is needed so the ring creator can add this device.
+    try {
+      await _auth.replenishKeyPackage();
+      moatLog('DeviceRingService: key package replenished');
+    } catch (e) {
+      moatLog('DeviceRingService: replenish failed: $e');
+    }
   }
 
   void _handlePairReady(DrawbridgePairReady ready) {
+    moatLog('DeviceRingService: pair_ready received, connecting pair WS at ${ready.pairUrl}');
     // The /pair WS handshake itself is owned by SyncService, which subscribes
     // to onPairConnected / onPairFrame. We only need to forward the connect.
     _drawbridge.connectPair(ready.pairUrl, ready.token);
@@ -220,8 +250,17 @@ class DeviceRingService {
     final driver = _driver;
     if (driver == null) return;
     try {
-      final json = await driver.toStateJson();
-      await _backend.write(_statePath, json);
+      final jsonStr = await driver.toStateJson();
+      await _backend.write(_statePath, jsonStr);
+      // Cache the coord_group count from the state JSON so coordGroupCount()
+      // can be synchronous (avoids re-serialising on every /ring-status call).
+      try {
+        final state = jsonDecode(jsonStr) as Map<String, dynamic>;
+        final cg = state['coord_groups'];
+        if (cg is Map) _coordGroupCount = cg.length;
+      } catch (_) {
+        // Non-fatal: count stays at previous value.
+      }
     } catch (e) {
       moatLog('DeviceRingService: persist failed: $e');
     }

@@ -24,6 +24,9 @@ Handler buildRouter({
   required WatchListService watchListService,
   required PollingService pollingService,
   required BlobService blobService,
+  required DeviceRingService ringService,
+  required SyncService syncService,
+  MessageStorage? messageStorage,
 }) {
   final router = Router();
 
@@ -148,24 +151,42 @@ Handler buildRouter({
   router.get('/conversations/<groupId>/messages', (Request request, String groupId) async {
     final groupIdBytes = _hexToBytes(groupId);
     final conv = convsService.findByGroupId(groupIdBytes);
-    if (conv == null) {
+
+    List<Map<String, dynamic>> messages;
+    if (conv != null) {
+      final repo = ConversationManager.instance.getRepository(conv);
+      await repo.loadMessages();
+      messages = repo.messages.map((m) => {
+            'from': m.senderDeviceId ?? m.senderDid,
+            'content': m.content,
+            'timestamp': m.timestamp.toIso8601String(),
+            'is_own': m.isOwn,
+            'sender_did': m.senderDid,
+            'message_id': m.messageIdHex,
+            'attachment': m.attachment?.toJson(),
+          }).toList();
+    } else if (messageStorage != null) {
+      // Conversation not yet registered locally (e.g. synced history before
+      // polling fetched the Welcome). Load directly from MessageStorage so
+      // get_messages works even before the MLS Welcome is processed.
+
+      // This is too much logic for the server and should probably go in a service.
+      final stored = await messageStorage.loadMessages(groupId);
+      messages = stored.map((m) => {
+            'from': m.senderDeviceId ?? m.senderDid,
+            'content': m.content,
+            'timestamp': m.timestamp.toIso8601String(),
+            'is_own': m.isOwn,
+            'sender_did': m.senderDid,
+            'message_id': m.messageIdHex,
+            'attachment': m.attachment?.toJson(),
+          }).toList();
+      // Return [] when empty (mirrors Rust's api_set_active_conversation fallback).
+    } else {
       return Response.notFound(
           jsonEncode({'error': 'conversation not found'}),
           headers: _jsonHeaders);
     }
-
-    final repo = ConversationManager.instance.getRepository(conv);
-    await repo.loadMessages();
-
-    final messages = repo.messages.map((m) => {
-          'from': m.senderDeviceId ?? m.senderDid,
-          'content': m.content,
-          'timestamp': m.timestamp.toIso8601String(),
-          'is_own': m.isOwn,
-          'sender_did': m.senderDid,
-          'message_id': m.messageIdHex,
-          'attachment': m.attachment?.toJson(),
-        }).toList();
 
     return Response.ok(jsonEncode(messages), headers: _jsonHeaders);
   });
@@ -385,6 +406,53 @@ Handler buildRouter({
       return Response(500,
           body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
     }
+  });
+
+  // POST /ring-tick — drive one ring coordination tick
+  router.post('/ring-tick', (Request request) async {
+    try {
+      await ringService.tick();
+      return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
+    } catch (e) {
+      moatLog('Server: ring-tick error: $e');
+      return Response(500,
+          body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
+    }
+  });
+
+  // GET /ring-status — current ring group id and coord group count
+  router.get('/ring-status', (Request request) async {
+    final ringId = await ringService.ringGroupId();
+    final ringIdHex = ringId == null
+        ? null
+        : ringId.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    return Response.ok(
+      jsonEncode({
+        'ring_group_id': ringIdHex,
+        'coord_group_count': ringService.coordGroupCount(),
+      }),
+      headers: _jsonHeaders,
+    );
+  });
+
+  // POST /sync/start — trigger a ring tick (offerer fires sync offer internally)
+  router.post('/sync/start', (Request request) async {
+    try {
+      await ringService.tick();
+      return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
+    } catch (e) {
+      moatLog('Server: sync/start error: $e');
+      return Response(500,
+          body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
+    }
+  });
+
+  // GET /sync/status — whether a sync session is active
+  router.get('/sync/status', (Request request) {
+    return Response.ok(
+      jsonEncode({'active': syncService.isActive}),
+      headers: _jsonHeaders,
+    );
   });
 
   // 404 fallback

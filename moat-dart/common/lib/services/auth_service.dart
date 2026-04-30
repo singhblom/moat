@@ -254,6 +254,27 @@ class AuthService {
     }
   }
 
+  /// Replenish the PDS key package after a Welcome has consumed the previous one.
+  ///
+  /// Reuses the existing signing key so all joined MLS groups remain usable.
+  /// Does NOT replace the stored key bundle.
+  Future<void> replenishKeyPackage() async {
+    if (_moatSession == null || _did == null || _deviceName == null) {
+      throw StateError('MLS session or device name not initialized');
+    }
+    final keyBundle = await _secureStorage.loadKeyBundle();
+    if (keyBundle == null) {
+      throw StateError('No key bundle available for replenishment');
+    }
+    final newKeyPackage = await _moatSession!.replenishKeyPackage(
+      did: _did!,
+      deviceName: _deviceName!,
+      keyBundle: keyBundle,
+    );
+    await _atprotoClient.publishKeyPackage(newKeyPackage);
+    await _saveMlsState();
+  }
+
   Future<void> _generateAndPublishKeyPackage() async {
     if (_moatSession == null || _did == null || _deviceName == null) {
       throw StateError('MLS session or device name not initialized');

@@ -42,6 +42,7 @@ class ConversationManager {
     _storage = storage;
     _ringService = ringService;
     _syncService = syncService;
+    ringService.isSyncActive = () => syncService.isActive;
     _ringTickTimer?.cancel();
     _ringTickTimer = Timer.periodic(ringTickInterval, (_) {
       ringService.tick().catchError((e) {

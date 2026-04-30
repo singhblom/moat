@@ -111,6 +111,11 @@ class PollingService {
     final client = _authService.atprotoClient;
     var newConvs = 0;
 
+    // Events up to this rkey have already been processed by the ring driver's
+    // tick() (e.g. coord-group Welcomes).  Skip welcome processing for those
+    // but still advance the polling cursor past them.
+    final ringCursor = _ringService.ownEventsCursor();
+
     try {
       final lastRkey = await _secureStorage.getLastRkey(myDid);
       moatLog('PollingService: Polling own DID $myDid (afterRkey: $lastRkey)');
@@ -129,14 +134,25 @@ class PollingService {
           maxRkey = event.rkey;
         }
 
+        // Skip events the ring driver already consumed (coord-group Welcomes).
+        if (ringCursor != null && event.rkey.compareTo(ringCursor) <= 0) {
+          moatLog('PollingService: Skipping own DID event (ring cursor=$ringCursor)');
+          continue;
+        }
+
         final welcomeBytes =
             await _authService.tryDecryptStealthPayload(event.ciphertext);
 
         if (welcomeBytes != null) {
           moatLog('PollingService: Decrypted welcome from own DID');
-          await _processWelcome(welcomeBytes, myDid);
-          onNewConversation?.call();
-          newConvs++;
+          try {
+            await _processWelcome(welcomeBytes, myDid);
+            onNewConversation?.call();
+            newConvs++;
+          } catch (e, stack) {
+            moatLog('PollingService: _processWelcome failed for own DID event rkey=${event.rkey}: $e');
+            moatLog('PollingService: Stack trace: $stack');
+          }
         }
       }
 
@@ -210,7 +226,6 @@ class PollingService {
   /// Poll for messages from all conversation participants.
   Future<int> _pollConversationMessages() async {
     final conversations = _conversationsService.conversations;
-    if (conversations.isEmpty) return 0;
 
     moatLog('PollingService: Polling messages for ${conversations.length} conversations');
     final client = _authService.atprotoClient;
@@ -223,16 +238,18 @@ class PollingService {
     for (final conv in conversations) {
       allParticipantDids.addAll(conv.participants);
     }
+    // Always include own DID so coord-group events on our own PDS records are
+    // routed to handleCoordMsg even when there are no user conversations yet.
     allParticipantDids.add(myDid);
 
     moatLog('PollingService: Polling ${allParticipantDids.length} unique DIDs for messages');
 
-    final tagMap = await _secureStorage.loadTagMap();
+    var tagMap = await _secureStorage.loadTagMap();
     var newMsgs = 0;
 
-    final ringGroupId = await _ringService.ringGroupId();
-    final ringGroupIdHex = ringGroupId != null
-        ? ringGroupId.map((b) => b.toRadixString(16).padLeft(2, '0')).join()
+    var ringGroupId = await _ringService.ringGroupId();
+    var ringGroupIdHex = ringGroupId != null
+        ? ringGroupId!.map((b) => b.toRadixString(16).padLeft(2, '0')).join()
         : null;
 
     for (final did in allParticipantDids) {
@@ -255,11 +272,15 @@ class PollingService {
           final tagHex = event.tag.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
           final groupIdHex = tagMap[tagHex];
 
-          if (groupIdHex == null) continue;
+          if (groupIdHex == null) {
+            moatLog('PollingService: event ${event.rkey} tag=$tagHex not in tagMap (map size=${tagMap.length})');
+            continue;
+          }
 
           session.markTagSeen(tag: Uint8List.fromList(event.tag));
 
           if (ringGroupIdHex != null && groupIdHex == ringGroupIdHex) {
+            moatLog('PollingService: dispatching ring event rkey=${event.rkey} to _processRingEvent');
             await _processRingEvent(event, ringGroupId!, session);
             continue;
           }
@@ -268,7 +289,20 @@ class PollingService {
               .where((c) => c.groupIdHex == groupIdHex)
               .firstOrNull;
           if (conversation == null) {
-            moatLog('PollingService: Found tag for unknown conversation $groupIdHex');
+            // Not a user conversation and not the ring group — try as a
+            // coord-group event (Hello, RingInfo, RingWelcome from the ring
+            // driver's DeviceCoord MLS group).
+            final coordGroupId = _hexToBytes(groupIdHex);
+            await _processCoordEvent(event, coordGroupId, session);
+            // Refresh tagMap: processing a coord event (e.g. RingWelcome)
+            // may have registered new group tags (ring group). Remaining
+            // events in this batch may match those tags.
+            tagMap = await _secureStorage.loadTagMap();
+            ringGroupId = await _ringService.ringGroupId();
+            ringGroupIdHex = ringGroupId != null
+                ? ringGroupId!.map((b) => b.toRadixString(16).padLeft(2, '0')).join()
+                : null;
+            moatLog('PollingService: tagMap refreshed after coord event: size=${tagMap.length} ringGroupId=${ringGroupIdHex ?? "none"}');
             continue;
           }
 
@@ -441,6 +475,43 @@ class PollingService {
     }
   }
 
+  /// Decrypt a coord-group event and dispatch it to [DeviceRingService.handleCoordMsg].
+  ///
+  /// Called for events whose tag maps to a group that is neither a user
+  /// conversation nor the ring group — i.e. a DeviceCoord MLS group.
+  Future<void> _processCoordEvent(
+    EventRecord event,
+    Uint8List coordGroupId,
+    MoatSessionHandle session,
+  ) async {
+    try {
+      final result = await session.decryptEvent(
+        groupId: coordGroupId,
+        ciphertext: event.ciphertext,
+      );
+      await _authService.saveMlsState();
+
+      if (result.event.kind == EventKindDto.coord) {
+        await _ringService.handleCoordMsg(
+          groupId: coordGroupId,
+          payload: Uint8List.fromList(result.event.payload),
+        );
+      }
+    } catch (e) {
+      moatLog('PollingService: Failed to decrypt coord event ${event.rkey}: $e');
+    }
+  }
+
+  /// Decode a hex string into bytes.
+  static Uint8List _hexToBytes(String hex) {
+    final len = hex.length;
+    final result = Uint8List(len ~/ 2);
+    for (var i = 0; i < len; i += 2) {
+      result[i ~/ 2] = int.parse(hex.substring(i, i + 2), radix: 16);
+    }
+    return result;
+  }
+
   /// Process a decrypted Welcome message.
   ///
   /// Handles both raw MLS Welcome bytes and the envelope format used by the
@@ -464,6 +535,20 @@ class PollingService {
     final otherDids = groupDids.where((did) => did != myDid).toList();
 
     moatLog('PollingService: Joined group with participants: $groupDids');
+
+    // If all members share our DID this is a device-coordination group, not a
+    // user conversation — skip conversation creation.  Processing the Welcome
+    // consumed this device's key-package init key, so replenish immediately so
+    // the ring creator can add us using a fresh key package.
+    if (otherDids.isEmpty) {
+      moatLog('PollingService: Joined group is a coord group (all same DID), replenishing key package');
+      try {
+        await _authService.replenishKeyPackage();
+      } catch (e) {
+        moatLog('PollingService: replenishKeyPackage failed after coord Welcome: $e');
+      }
+      return;
+    }
 
     final groupIdHex =
         groupId.map((b) => b.toRadixString(16).padLeft(2, '0')).join();

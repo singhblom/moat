@@ -1,8 +1,9 @@
-//! Two-device bootstrap scenario.
+//! Two-device bootstrap scenario — mixed runtime variant.
 //!
-//! One user (Alice) runs two moat-cli processes — simulating a phone and a
-//! laptop.  Both login with the same credentials, then exchange ring-tick
-//! cycles until they form a shared device ring.
+//! Device 1 runs Rust CLI, device 2 runs the Dart headless server (or vice
+//! versa when `dart_first` is true).  Verifies that cross-runtime ring
+//! bootstrap works: the two implementations exchange coord-group Welcome /
+//! RingInfo messages via PDS and converge on the same ring group ID.
 //!
 //! Invariants verified:
 //! - Both devices end up with the same non-null `ring_group_id`.
@@ -13,37 +14,53 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use crate::scenarios::Action;
-use crate::world::TestWorld;
+use crate::world::{ParticipantKind, TestWorld};
 
+/// Rust D1, Dart D2.
 pub(crate) fn run_boxed(
     _actions: Vec<Action>,
     verbose: bool,
 ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
-    Box::pin(run(verbose))
+    Box::pin(run(false, verbose))
 }
 
-pub async fn run(verbose: bool) {
+/// Dart D1, Rust D2.
+pub(crate) fn run_dart_first_boxed(
+    _actions: Vec<Action>,
+    verbose: bool,
+) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    Box::pin(run(true, verbose))
+}
+
+pub async fn run(dart_first: bool, verbose: bool) {
     macro_rules! vlog {
         ($($t:tt)*) => { if verbose { eprintln!($($t)*); } }
     }
 
-    vlog!("=== Scenario: two-device-bootstrap ===");
+    let (d1_kind, d2_kind) = if dart_first {
+        (ParticipantKind::DartServer, ParticipantKind::RustCli)
+    } else {
+        (ParticipantKind::RustCli, ParticipantKind::DartServer)
+    };
 
-    // ── Prologue ──────────────────────────────────────────────────────────────
-    vlog!("[setup] starting TestWorld with one account (alice)...");
-    let mut world = TestWorld::new(&["alice"], ".postern.test")
-        .await
-        .expect("world setup");
+    vlog!(
+        "=== Scenario: mixed-two-device-bootstrap (dart_first={dart_first}) ==="
+    );
+
+    vlog!("[setup] starting TestWorld with alice ({d1_kind:?})...");
+    let mut world =
+        TestWorld::new_with_kinds(&["alice"], &[d1_kind], ".postern.test")
+            .await
+            .expect("world setup");
 
     let d1 = world.client("alice").clone();
 
-    vlog!("[setup] spawning second device...");
+    vlog!("[setup] spawning second device ({d2_kind:?})...");
     let d2 = world
-        .spawn_second_device("alice-d2", crate::world::ParticipantKind::RustCli)
+        .spawn_second_device("alice-d2", d2_kind)
         .await
         .expect("spawn second device");
 
-    // Login both devices with the same credentials.
     d1.login("alice.postern.test", "any-password")
         .await
         .expect("d1 login");
@@ -54,17 +71,8 @@ pub async fn run(verbose: bool) {
         .expect("d2 login");
     vlog!("[setup] d2 logged in");
 
-    // Allow both devices to publish their key packages and stealth addresses.
     tokio::time::sleep(Duration::from_millis(800)).await;
 
-    // ── Ring bootstrap cycles ─────────────────────────────────────────────────
-    //
-    // Sequence per cycle:
-    //   ring_tick   — discovers siblings, creates/joins coord groups, bootstraps ring
-    //   poll        — routes coord MLS events (Hello, RingInfo) via tag_map
-    //
-    // We run several cycles to ensure convergence regardless of which device
-    // has the smaller device_id (and therefore creates the ring).
     for i in 0..6 {
         vlog!("[cycle {i}] d1.ring_tick…");
         d1.ring_tick().await.expect("d1 ring_tick");
@@ -77,7 +85,6 @@ pub async fn run(verbose: bool) {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    // ── Invariants ────────────────────────────────────────────────────────────
     let s1 = d1.ring_status().await.expect("d1 ring_status");
     let s2 = d2.ring_status().await.expect("d2 ring_status");
 
@@ -96,22 +103,21 @@ pub async fn run(verbose: bool) {
     );
     assert_eq!(
         s1.ring_group_id, s2.ring_group_id,
-        "both devices must be in the same ring"
+        "both devices must be in the same ring (dart_first={dart_first})"
     );
 
-    // Ring and coord groups must not appear in the conversation list.
     let convs1 = d1.list_conversations().await.expect("d1 list_conversations");
     let convs2 = d2.list_conversations().await.expect("d2 list_conversations");
     assert!(
         convs1.is_empty(),
-        "d1 conversation list should be empty (no user conversations); got {convs1:?}"
+        "d1 conversation list should be empty; got {convs1:?}"
     );
     assert!(
         convs2.is_empty(),
-        "d2 conversation list should be empty (no user conversations); got {convs2:?}"
+        "d2 conversation list should be empty; got {convs2:?}"
     );
 
-    vlog!("[check] ring bootstrap... ok");
+    vlog!("[check] mixed ring bootstrap (dart_first={dart_first})... ok");
     if verbose {
         eprintln!("\n=== PASSED ===");
     }

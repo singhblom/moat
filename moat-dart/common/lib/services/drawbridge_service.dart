@@ -267,9 +267,10 @@ class DrawbridgeService {
   /// Send `pair_join{token}` on the own WS. Caller is the joiner.
   void sendPairJoin(Uint8List token) {
     if (!_ownAuthenticated || _ownChannel == null) {
-      moatLog('DrawbridgeService: sendPairJoin dropped — own WS not ready');
+      moatLog('DrawbridgeService: sendPairJoin dropped — own WS not ready (authenticated=$_ownAuthenticated channel=${_ownChannel != null})');
       return;
     }
+    moatLog('DrawbridgeService: sendPairJoin sending token=${base64Encode(token).substring(0, 8)}...');
     _ownChannel!.sink.add(jsonEncode({
       'type': 'pair_join',
       'token': base64Encode(token),

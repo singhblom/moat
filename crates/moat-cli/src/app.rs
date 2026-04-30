@@ -3206,6 +3206,23 @@ impl App {
             .filter(|d| d != &my_did)
             .collect();
 
+        // A group where all members share our DID is a device-coordination group,
+        // not a user conversation.  Register its tags for routing but don't surface it.
+        if participant_dids.is_empty() {
+            let _ = self.keys.store_group_metadata(
+                &conv_id,
+                &GroupMetadata {
+                    participant_dids: vec![],
+                    participant_handles: vec![],
+                    kind: GroupKind::DeviceCoord,
+                },
+            );
+            self.populate_candidate_tags(&conv_id, &group_id);
+            self.replenish_key_package();
+            self.debug_log.log("process_welcome: joined coord group (same-DID), skipping conversation");
+            return true;
+        }
+
         // Use DIDs as placeholder handles; will be resolved in background
         let participant_handles: Vec<String> = participant_dids.clone();
 

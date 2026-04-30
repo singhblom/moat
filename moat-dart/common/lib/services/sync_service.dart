@@ -58,11 +58,13 @@ class SyncService {
   // ── Pair WS event handlers ────────────────────────────────────────────────
 
   void _handlePairConnected() {
+    moatLog('SyncService: _handlePairConnected called');
     // Run the async start in the background; errors are logged inside.
     unawaited(_startSession());
   }
 
   void _handlePairFrame(Uint8List ciphertext) {
+    moatLog('SyncService: pair frame received ${ciphertext.length}B');
     unawaited(_processFrame(ciphertext));
   }
 
@@ -74,6 +76,7 @@ class SyncService {
   // ── Session lifecycle ─────────────────────────────────────────────────────
 
   Future<void> _startSession() async {
+    moatLog('SyncService: _startSession called active=$_active');
     if (_active) {
       moatLog('SyncService: pair_connected received but session already active');
       return;
@@ -111,15 +114,17 @@ class SyncService {
         ourMessages: ourMessages,
         expectingBatch: ourMessages.isEmpty,
       );
-      final state = await _convStateFor(session, conv);
+      final state = await _convStateFor(session, conv, ourMessages);
       if (state != null) convStates.add(state);
     }
 
     _session = syncSession;
     _active = true;
+    moatLog('SyncService: calling onPaired with ${convStates.length} convs, ringEpoch=$ringEpoch');
 
     final outputs =
         await syncSession.onPaired(ourConvs: convStates, ringEpoch: ringEpoch);
+    moatLog('SyncService: onPaired returned ${outputs.length} outputs');
     await _processOutputs(outputs, ringId, keyBundle, did);
   }
 
@@ -144,6 +149,7 @@ class SyncService {
         ringGroupId: ringId,
         ciphertext: ciphertext,
       );
+      moatLog('SyncService: decryptSyncFrame ok payload=${payload.length}B');
     } catch (e) {
       moatLog('SyncService: decryptSyncFrame failed: $e');
       return;
@@ -152,6 +158,7 @@ class SyncService {
     try {
       final outputs =
           await syncSession.onMessage(msgBytes: payload, ourDid: did);
+      moatLog('SyncService: onMessage returned ${outputs.length} outputs');
       await _processOutputs(outputs, ringId, keyBundle, did);
     } catch (e) {
       moatLog('SyncService: onMessage failed: $e');
@@ -170,6 +177,7 @@ class SyncService {
     for (final output in outputs) {
       await output.when(
         send: (bytes) async {
+          moatLog('SyncService: sending ${bytes.length}B to peer via pair WS');
           try {
             final ciphertext = await session.encryptSyncApp(
               ringGroupId: ringId,
@@ -230,15 +238,24 @@ class SyncService {
   Future<ffi.ConvStateDto?> _convStateFor(
     ffi.MoatSessionHandle session,
     Conversation conv,
+    List<ffi.SyncMessageDto> ourMessages,
   ) async {
     try {
       final tip = await session.digestTip(groupId: conv.groupId);
       final anchors = await session.digestAnchors(groupId: conv.groupId);
-      final range = await session.digestRange(groupId: conv.groupId);
+      // digestRange relies on append_to_digest which is not called in the Dart
+      // path. Derive oldest/newest directly from the messages we loaded.
+      String? oldestRkey;
+      String? newestRkey;
+      if (ourMessages.isNotEmpty) {
+        final rkeys = ourMessages.map((m) => m.rkey).toList()..sort();
+        oldestRkey = rkeys.first;
+        newestRkey = rkeys.last;
+      }
       return ffi.ConvStateDto(
         groupId: conv.groupId,
-        oldestRkey: range?.$1,
-        newestRkey: range?.$2,
+        oldestRkey: oldestRkey,
+        newestRkey: newestRkey,
         tipDigest: tip ?? Uint8List(32),
         anchors: anchors,
       );
