@@ -559,6 +559,94 @@ fn update_combined_state(state: &CombinedFoldState, action: &Action) -> Combined
     s
 }
 
+// ── Multi-device actions ─────────────────────────────────────────────────────
+
+/// Actions for two-device topology tests.
+///
+/// Targets one of Alice's two devices (0 = D1, 1 = D2). Bob is a fixed
+/// participant present in the prologue; he is not targeted by random actions.
+#[derive(Debug, Clone)]
+pub enum MultiDeviceAction {
+    /// Send a message in the user conversation from one of Alice's devices.
+    SendUserMessage { device: usize, text_idx: usize },
+    /// Poll for new events on one of Alice's devices.
+    Poll { device: usize },
+    /// Run a ring_tick on one of Alice's devices.
+    RingTick { device: usize },
+    /// Take one of Alice's devices offline.
+    GoOffline { device: usize },
+    /// Bring one of Alice's devices back online.
+    ComeOnline { device: usize },
+    /// Wait for a small duration (coarse-grained timing perturbation).
+    WaitMs { ms: u64 },
+}
+
+#[derive(Clone, Debug)]
+struct MdFoldState {
+    num_messages: usize,
+    online: [bool; 2],
+}
+
+fn arb_md_action(state: &MdFoldState) -> BoxedStrategy<MultiDeviceAction> {
+    let mut choices: Vec<BoxedStrategy<MultiDeviceAction>> = vec![];
+
+    // WaitMs is always available.
+    choices.push((50u64..=400).prop_map(|ms| MultiDeviceAction::WaitMs { ms }).boxed());
+
+    for d in 0..2usize {
+        if state.online[d] {
+            choices.push(
+                (0..TEXT_VOCAB.len())
+                    .prop_map(move |text_idx| MultiDeviceAction::SendUserMessage { device: d, text_idx })
+                    .boxed(),
+            );
+            choices.push(Just(MultiDeviceAction::Poll { device: d }).boxed());
+            choices.push(Just(MultiDeviceAction::RingTick { device: d }).boxed());
+            choices.push(Just(MultiDeviceAction::GoOffline { device: d }).boxed());
+        } else {
+            choices.push(Just(MultiDeviceAction::ComeOnline { device: d }).boxed());
+        }
+    }
+
+    Union::new(choices).boxed()
+}
+
+fn update_md_state(state: &MdFoldState, action: &MultiDeviceAction) -> MdFoldState {
+    let mut s = state.clone();
+    match action {
+        MultiDeviceAction::SendUserMessage { .. } => s.num_messages += 1,
+        MultiDeviceAction::GoOffline { device } => s.online[*device] = false,
+        MultiDeviceAction::ComeOnline { device } => s.online[*device] = true,
+        _ => {}
+    }
+    s
+}
+
+/// Strategy producing a valid multi-device action sequence of length 4–16.
+///
+/// Actions target device 0 (D1) or device 1 (D2) of a single user account.
+/// The fold tracks online/offline status so offline devices can only come
+/// online and online devices can go offline, send, poll, or ring-tick.
+pub fn multi_device_action_sequence() -> impl Strategy<Value = Vec<MultiDeviceAction>> {
+    let init = MdFoldState { num_messages: 0, online: [true, true] };
+    (4usize..=16).prop_flat_map(move |len| {
+        let init = init.clone();
+        (0..len)
+            .fold(Just((vec![], init)).boxed(), |acc, _| {
+                acc.prop_flat_map(|(actions, state): (Vec<MultiDeviceAction>, MdFoldState)| {
+                    arb_md_action(&state).prop_map(move |a| {
+                        let new_state = update_md_state(&state, &a);
+                        let mut v = actions.clone();
+                        v.push(a);
+                        (v, new_state)
+                    })
+                })
+                .boxed()
+            })
+            .prop_map(|(actions, _)| actions)
+    })
+}
+
 /// Strategy that produces a valid action sequence combining membership changes
 /// (`AddMember`, `RemoveMember`) and online/offline transitions
 /// (`GoOffline`, `ComeOnline`).

@@ -22,6 +22,8 @@ pub mod dart_two_device_bootstrap;
 pub mod dart_two_device_history_sync;
 pub mod fcm_dispatch;
 pub mod mixed_two_device_bootstrap;
+pub mod mixed_two_device_history_sync;
+pub mod multi_device_chat;
 pub mod dart_three_party_chat;
 pub mod dart_two_party_chat;
 pub mod mixed_push_latency;
@@ -749,6 +751,20 @@ pub static SCENARIOS: &[Scenario] = &[
         name: "mixed-two-device-bootstrap-dart-first",
         description: "Mixed: Dart D1 + Rust D2 ring bootstrap cross-runtime parity",
         run_fn: mixed_two_device_bootstrap::run_dart_first_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "mixed-two-device-history-sync-rd",
+        description: "Mixed: Rust D1 + Dart D2 ring bootstrap then history sync",
+        run_fn: mixed_two_device_history_sync::run_rd_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "mixed-two-device-history-sync-dr",
+        description: "Mixed: Dart D1 + Rust D2 ring bootstrap then history sync",
+        run_fn: mixed_two_device_history_sync::run_dr_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
