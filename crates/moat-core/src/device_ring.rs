@@ -304,6 +304,52 @@ impl DeviceRingDriver {
         let mut cmds = Vec::new();
         let my_device_id = *mls.device_id();
 
+        // ── 0. Deferred new-sibling actions (set in a previous tick) ─────
+        //
+        // ring_has_new_sibling is set either in step 4 (ring creator adds a
+        // device) or in handle_coord_msg when the ring joiner processes a
+        // RingWelcome.  We consume it at the START of the NEXT tick so that
+        // the new device has had a full poll-cycle to process its ring Welcome
+        // and replenish its key package before poll_for_new_devices fetches it.
+        if self.ring_has_new_sibling {
+            self.ring_has_new_sibling = false;
+            if inputs.drawbridge_has_own_connection && !inputs.sync_session_active {
+                if let Some(ring_id) = self.ring_group_id.clone() {
+                    let our_leaf = mls
+                        .get_own_leaf_index(&ring_id, inputs.key_bundle)
+                        .ok()
+                        .flatten()
+                        .unwrap_or(u32::MAX);
+                    if our_leaf == 0 {
+                        use rand::RngCore;
+                        let mut token = vec![0u8; 32];
+                        rand::thread_rng().fill_bytes(&mut token);
+                        let epoch = mls
+                            .get_group_epoch(&ring_id)
+                            .ok()
+                            .flatten()
+                            .unwrap_or(0);
+                        let offer_event = Event::coord(
+                            ring_id.clone(),
+                            epoch,
+                            encode_coord_msg(&CoordMsg::SyncOffer { token: token.clone() }),
+                        );
+                        if let Ok(enc) =
+                            mls.encrypt_event(&ring_id, inputs.key_bundle, &offer_event)
+                        {
+                            cmds.push(RingCommand::PublishEvent {
+                                tag: enc.tag,
+                                ciphertext: enc.ciphertext,
+                                mark_own: true,
+                            });
+                        }
+                        cmds.push(RingCommand::SendDrawbridgePairOffer { token });
+                    }
+                }
+            }
+            cmds.push(RingCommand::PollForNewDevices);
+        }
+
         // ── 1. Filter sibling key packages ──────────────────────────────
         let siblings: Vec<&KeyPackageInput> = inputs
             .key_packages
@@ -556,46 +602,6 @@ impl DeviceRingDriver {
             }
         }
 
-        // ── 5. Trigger history sync if we are the offerer ──────────────
-        if self.ring_has_new_sibling {
-            self.ring_has_new_sibling = false;
-            if inputs.drawbridge_has_own_connection && !inputs.sync_session_active {
-                if let Some(ring_id) = self.ring_group_id.clone() {
-                    let our_leaf = mls
-                        .get_own_leaf_index(&ring_id, inputs.key_bundle)
-                        .ok()
-                        .flatten()
-                        .unwrap_or(u32::MAX);
-                    if our_leaf == 0 {
-                        use rand::RngCore;
-                        let mut token = vec![0u8; 32];
-                        rand::thread_rng().fill_bytes(&mut token);
-                        let epoch = mls
-                            .get_group_epoch(&ring_id)
-                            .ok()
-                            .flatten()
-                            .unwrap_or(0);
-                        let offer_event = Event::coord(
-                            ring_id.clone(),
-                            epoch,
-                            encode_coord_msg(&CoordMsg::SyncOffer { token: token.clone() }),
-                        );
-                        if let Ok(enc) =
-                            mls.encrypt_event(&ring_id, inputs.key_bundle, &offer_event)
-                        {
-                            cmds.push(RingCommand::PublishEvent {
-                                tag: enc.tag,
-                                ciphertext: enc.ciphertext,
-                                mark_own: true,
-                            });
-                        }
-                        cmds.push(RingCommand::SendDrawbridgePairOffer { token });
-                    }
-                }
-            }
-            cmds.push(RingCommand::PollForNewDevices);
-        }
-
         cmds
     }
 
@@ -664,6 +670,13 @@ impl DeviceRingDriver {
                                 group_id: ring_id,
                                 kind: GroupKind::Ring,
                             });
+                            // Signal that we (the joiner) have a new sibling.
+                            // The next ring_tick will emit PollForNewDevices.
+                            self.ring_has_new_sibling = true;
+                            // The Welcome consumed our init key package — replenish
+                            // so the ring creator's poll_for_new_devices finds a
+                            // fresh, usable key package.
+                            cmds.push(RingCommand::ReplenishKeyPackage);
                         }
                     }
                 }
@@ -1197,10 +1210,30 @@ mod tests {
             .iter()
             .any(|c| matches!(c, RingCommand::RegisterGroup { kind: GroupKind::Ring, .. }));
         assert!(ring_register, "expected RegisterGroup(Ring)");
-        let poll_cmd = cmds
-            .iter()
-            .any(|c| matches!(c, RingCommand::PollForNewDevices));
-        assert!(poll_cmd, "expected PollForNewDevices after sibling joined");
+
+        // PollForNewDevices is deferred to the NEXT tick so D2 has time to
+        // process its ring Welcome and replenish its key package first.
+        let poll_cmd_tick1 = cmds.iter().any(|c| matches!(c, RingCommand::PollForNewDevices));
+        assert!(!poll_cmd_tick1, "PollForNewDevices must NOT appear in the same tick as ring creation");
+
+        // Drive a second tick — ring_has_new_sibling was set above and must
+        // now fire.
+        let (bob_kp3, _) = bob.generate_key_package(&bob_cred).unwrap();
+        let inputs2 = TickInputs {
+            key_packages: &[KeyPackageInput { key_package: bob_kp3 }],
+            stealth_pubkeys: &[],
+            own_events: &[],
+            stealth_privkey: &[0u8; 32],
+            credential: &alice_cred,
+            key_bundle: &alice_kb,
+            now_ms: 2_000_200,
+            drawbridge_has_own_connection: false,
+            sync_session_active: false,
+            my_did: "did:plc:alice",
+        };
+        let cmds2 = driver.tick(&alice, inputs2);
+        let poll_cmd = cmds2.iter().any(|c| matches!(c, RingCommand::PollForNewDevices));
+        assert!(poll_cmd, "expected PollForNewDevices in the tick after sibling joined");
     }
 
     /// `handle_coord_msg(SyncOffer)` must emit a SendDrawbridgePairJoin command

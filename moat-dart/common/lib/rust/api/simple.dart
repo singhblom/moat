@@ -180,6 +180,11 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
   /// Export the full session state as bytes for persistence.
   Future<Uint8List> exportState();
 
+  /// Extract the credential (DID, device_id, device_name) from a raw key package bytes.
+  /// Returns None if the key package has no credential embedded.
+  Future<CredentialDto?> extractCredentialFromKeyPackage(
+      {required List<int> keyPackage});
+
   /// Restore a session from previously exported state bytes.
   static Future<MoatSessionHandle> fromState({required List<int> state}) =>
       RustLib.instance.api
@@ -195,6 +200,10 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
 
   /// Get the current epoch of a group. Returns null if group doesn't exist.
   Future<BigInt?> getGroupEpoch({required List<int> groupId});
+
+  /// Return the (DID, device_id, device_name) credential for every member of a group.
+  Future<List<CredentialDto>> getGroupMemberCredentials(
+      {required List<int> groupId});
 
   /// Check if there are unsaved changes.
   bool hasPendingChanges();
@@ -362,6 +371,31 @@ class ConvStateDto {
           newestRkey == other.newestRkey &&
           tipDigest == other.tipDigest &&
           anchors == other.anchors;
+}
+
+/// Credential fields for a group member or key package.
+class CredentialDto {
+  final String did;
+  final Uint8List deviceId;
+  final String deviceName;
+
+  const CredentialDto({
+    required this.did,
+    required this.deviceId,
+    required this.deviceName,
+  });
+
+  @override
+  int get hashCode => did.hashCode ^ deviceId.hashCode ^ deviceName.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CredentialDto &&
+          runtimeType == other.runtimeType &&
+          did == other.did &&
+          deviceId == other.deviceId &&
+          deviceName == other.deviceName;
 }
 
 class DecryptResultDto {

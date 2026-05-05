@@ -216,6 +216,49 @@ impl MoatSessionHandle {
             .map_err(|e| e.to_string())
     }
 
+    /// Extract the credential (DID, device_id, device_name) from a raw key package bytes.
+    /// Returns None if the key package has no credential embedded.
+    pub fn extract_credential_from_key_package(
+        &self,
+        key_package: Vec<u8>,
+    ) -> Result<Option<CredentialDto>, String> {
+        self.inner
+            .lock()
+            .unwrap()
+            .extract_credential_from_key_package(&key_package)
+            .map(|opt| {
+                opt.map(|c| CredentialDto {
+                    did: c.did().to_string(),
+                    device_id: c.device_id().to_vec(),
+                    device_name: c.device_name().to_string(),
+                })
+            })
+            .map_err(|e| e.to_string())
+    }
+
+    /// Return the (DID, device_id, device_name) credential for every member of a group.
+    pub fn get_group_member_credentials(
+        &self,
+        group_id: Vec<u8>,
+    ) -> Result<Vec<CredentialDto>, String> {
+        let members = self
+            .inner
+            .lock()
+            .unwrap()
+            .get_group_members(&group_id)
+            .map_err(|e| e.to_string())?;
+        Ok(members
+            .into_iter()
+            .filter_map(|(_, cred_opt)| {
+                cred_opt.map(|c| CredentialDto {
+                    did: c.did().to_string(),
+                    device_id: c.device_id().to_vec(),
+                    device_name: c.device_name().to_string(),
+                })
+            })
+            .collect())
+    }
+
     /// Add a member to a group. Returns welcome result.
     pub fn add_member(
         &self,
@@ -715,6 +758,13 @@ pub fn decode_thumbhash(hash: Vec<u8>) -> Result<ThumbHashResult, String> {
         width: w as u32,
         height: h as u32,
     })
+}
+
+/// Credential fields for a group member or key package.
+pub struct CredentialDto {
+    pub did: String,
+    pub device_id: Vec<u8>,
+    pub device_name: String,
 }
 
 pub struct BlobEncryptResult {

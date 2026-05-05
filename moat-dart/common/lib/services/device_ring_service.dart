@@ -1,9 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
+import '../models/conversation.dart';
 import '../rust/api/simple.dart' as ffi;
+import '../utils/welcome_envelope.dart';
 import 'auth_service.dart';
+import 'conversations_service.dart';
 import 'debug_log.dart';
 import 'document_backend.dart';
 import 'drawbridge_service.dart';
@@ -29,6 +33,10 @@ class DeviceRingService {
   bool _tickInFlight = false;
   Uint8List? _pendingPairToken;
   int _coordGroupCount = 0;
+
+  /// Injected by the server/app setup so pollForNewDevices and registerGroup
+  /// for User groups can surface conversations.
+  ConversationsService? convsService;
 
   /// Injected by the owner (e.g. ConversationManager) so the ring tick can
   /// suppress a new SyncOffer while a sync session is already in progress.
@@ -204,9 +212,14 @@ class DeviceRingService {
             await _replenishKeyPackage();
           },
           registerGroup: (groupId, kind) async {
-            // Register the coord-group tags so the polling service can route
-            // incoming coord messages (Hello, RingInfo, etc.) to handleCoordMsg.
+            // Always register tags for routing coord messages.
             await _auth.populateConversationTags(Uint8List.fromList(groupId));
+            // For User conversations found via ring_tick step-3 stealth Welcome
+            // scan, surface them in ConversationsService (the normal poll path
+            // would fail because the Welcome was already consumed above).
+            if (kind == ffi.GroupKindDto.user) {
+              await _registerUserGroup(Uint8List.fromList(groupId), did);
+            }
           },
           sendDrawbridgePairOffer: (token) async {
             _pendingPairToken = token;
@@ -218,8 +231,7 @@ class DeviceRingService {
             _drawbridge.sendPairJoin(token);
           },
           pollForNewDevices: () async {
-            // Triggered when the ring grew; the polling service will pick up
-            // new sibling stealth records on its next pass.
+            await _pollForNewDevices(did);
           },
         );
       } catch (e, st) {
@@ -236,6 +248,151 @@ class DeviceRingService {
       moatLog('DeviceRingService: key package replenished');
     } catch (e) {
       moatLog('DeviceRingService: replenish failed: $e');
+    }
+  }
+
+  /// Add a User conversation discovered via ring_tick step-3 Welcome scan to
+  /// ConversationsService so it appears in list_conversations.
+  Future<void> _registerUserGroup(Uint8List groupId, String myDid) async {
+    final cs = convsService;
+    if (cs == null) return;
+    final groupIdHex =
+        groupId.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    if (cs.findByGroupId(groupId.toList()) != null) return;
+    final session = _auth.moatSession;
+    if (session == null) return;
+    try {
+      final allDids =
+          await session.getGroupDids(groupId: groupId.toList());
+      final participants =
+          allDids.where((d) => d != myDid).toList();
+      final conv = Conversation(
+        groupId: groupId,
+        participants: participants,
+        epoch: 1,
+        keyBundleRef: 'key_bundle_$groupIdHex',
+        createdAt: DateTime.now(),
+      );
+      await cs.saveConversation(conv);
+      moatLog(
+          'DeviceRingService: registered user group $groupIdHex from ring_tick');
+      // Replenish init key consumed by this Welcome.
+      await _replenishKeyPackage();
+    } catch (e) {
+      moatLog('DeviceRingService: _registerUserGroup failed: $e');
+    }
+  }
+
+  /// Add sibling devices (same DID, different device_id) to all user
+  /// conversations.  Dart equivalent of Rust's poll_for_new_devices.
+  Future<void> _pollForNewDevices(String myDid) async {
+    final cs = convsService;
+    if (cs == null) {
+      moatLog('DeviceRingService: pollForNewDevices — no convsService');
+      return;
+    }
+    final session = _auth.moatSession;
+    if (session == null) return;
+    final client = _auth.atprotoClient;
+    final keyBundle = await _auth.getKeyBundle();
+    if (keyBundle == null) return;
+
+    // Fetch all key packages for our own DID (all our devices).
+    final keyPackageRecords = await client.fetchKeyPackages(myDid);
+    if (keyPackageRecords.isEmpty) return;
+
+    // Sort newest-first so we prefer replenished packages over consumed ones.
+    final sorted = List.of(keyPackageRecords)
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+    final stealthRecords = await client.fetchStealthAddresses(myDid);
+    final stealthPubkeys = stealthRecords.map((r) => r.scanPubkey).toList();
+    if (stealthPubkeys.isEmpty) {
+      moatLog('DeviceRingService: pollForNewDevices — no stealth addresses');
+      return;
+    }
+
+    for (final conv in cs.conversations) {
+      final groupId = conv.groupId;
+      final groupIdHex = conv.groupIdHex;
+
+      // Collect existing (did, deviceId) pairs for this group.
+      final List<ffi.CredentialDto> existingCreds;
+      try {
+        existingCreds = await session.getGroupMemberCredentials(
+            groupId: groupId.toList());
+      } catch (e) {
+        moatLog(
+            'DeviceRingService: pollForNewDevices getGroupMemberCredentials failed: $e');
+        continue;
+      }
+
+      final existingDeviceIds =
+          existingCreds.map((c) => c.deviceId.join(',')).toSet();
+
+      for (final kpRecord in sorted) {
+        final rawKp = kpRecord.keyPackage;
+        ffi.CredentialDto? cred;
+        try {
+          cred = await session
+              .extractCredentialFromKeyPackage(keyPackage: rawKp);
+        } catch (_) {}
+        if (cred == null) continue;
+        if (cred.did != myDid) continue;
+        final deviceIdKey = cred.deviceId.join(',');
+        if (existingDeviceIds.contains(deviceIdKey)) continue;
+
+        // Compute pre-epoch commit tag.
+        final commitTag = ffi.deriveNextTag(
+          handle: session,
+          groupId: groupId.toList(),
+          keyBundle: keyBundle,
+        );
+
+        // Add device to group.
+        ffi.WelcomeResultDto welcomeResult;
+        try {
+          welcomeResult = await session.addMember(
+            groupId: groupId.toList(),
+            keyBundle: keyBundle,
+            newMemberKeyPackage: rawKp,
+          );
+        } catch (e) {
+          moatLog(
+              'DeviceRingService: pollForNewDevices addMember failed: $e');
+          continue;
+        }
+
+        existingDeviceIds.add(deviceIdKey);
+        await _auth.saveMlsState();
+        await _auth.populateConversationTags(Uint8List.fromList(groupId));
+
+        // Publish commit.
+        try {
+          await client.publishEvent(commitTag, welcomeResult.commit);
+        } catch (e) {
+          moatLog(
+              'DeviceRingService: pollForNewDevices publish commit failed: $e');
+        }
+
+        // Publish stealth-encrypted Welcome.
+        final envelope = encodeWelcomeEnvelope(welcomeResult.welcome);
+        try {
+          final ct = await ffi.encryptForStealth(
+            recipientScanPubkeys: stealthPubkeys,
+            welcomeBytes: envelope,
+          );
+          final rng = Random.secure();
+          final randomTag =
+              Uint8List.fromList(List.generate(16, (_) => rng.nextInt(256)));
+          await client.publishEvent(randomTag, ct);
+          moatLog(
+              'DeviceRingService: pollForNewDevices added device ${cred.deviceName} to $groupIdHex');
+        } catch (e) {
+          moatLog(
+              'DeviceRingService: pollForNewDevices publish welcome failed: $e');
+        }
+      }
     }
   }
 

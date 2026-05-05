@@ -85,6 +85,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool dco_decode_bool(dynamic raw);
 
   @protected
+  CredentialDto dco_decode_box_autoadd_credential_dto(dynamic raw);
+
+  @protected
   EventDto dco_decode_box_autoadd_event_dto(dynamic raw);
 
   @protected
@@ -107,6 +110,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ConvStateDto dco_decode_conv_state_dto(dynamic raw);
+
+  @protected
+  CredentialDto dco_decode_credential_dto(dynamic raw);
 
   @protected
   DecryptResultDto dco_decode_decrypt_result_dto(dynamic raw);
@@ -149,6 +155,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<ConvStateDto> dco_decode_list_conv_state_dto(dynamic raw);
 
   @protected
+  List<CredentialDto> dco_decode_list_credential_dto(dynamic raw);
+
+  @protected
   List<Uint8List> dco_decode_list_list_prim_u_8_strict(dynamic raw);
 
   @protected
@@ -174,6 +183,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   String? dco_decode_opt_String(dynamic raw);
+
+  @protected
+  CredentialDto? dco_decode_opt_box_autoadd_credential_dto(dynamic raw);
 
   @protected
   ReactionPayloadDto? dco_decode_opt_box_autoadd_reaction_payload_dto(
@@ -302,6 +314,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
+  CredentialDto sse_decode_box_autoadd_credential_dto(
+      SseDeserializer deserializer);
+
+  @protected
   EventDto sse_decode_box_autoadd_event_dto(SseDeserializer deserializer);
 
   @protected
@@ -328,6 +344,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ConvStateDto sse_decode_conv_state_dto(SseDeserializer deserializer);
+
+  @protected
+  CredentialDto sse_decode_credential_dto(SseDeserializer deserializer);
 
   @protected
   DecryptResultDto sse_decode_decrypt_result_dto(SseDeserializer deserializer);
@@ -372,6 +391,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
+  List<CredentialDto> sse_decode_list_credential_dto(
+      SseDeserializer deserializer);
+
+  @protected
   List<Uint8List> sse_decode_list_list_prim_u_8_strict(
       SseDeserializer deserializer);
 
@@ -403,6 +426,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
+
+  @protected
+  CredentialDto? sse_decode_opt_box_autoadd_credential_dto(
+      SseDeserializer deserializer);
 
   @protected
   ReactionPayloadDto? sse_decode_opt_box_autoadd_reaction_payload_dto(
@@ -534,6 +561,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_credential_dto(
+      CredentialDto self, SseSerializer serializer);
+
+  @protected
   void sse_encode_box_autoadd_event_dto(
       EventDto self, SseSerializer serializer);
 
@@ -561,6 +592,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_conv_state_dto(ConvStateDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_credential_dto(CredentialDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_decrypt_result_dto(
@@ -608,6 +642,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       List<ConvStateDto> self, SseSerializer serializer);
 
   @protected
+  void sse_encode_list_credential_dto(
+      List<CredentialDto> self, SseSerializer serializer);
+
+  @protected
   void sse_encode_list_list_prim_u_8_strict(
       List<Uint8List> self, SseSerializer serializer);
 
@@ -640,6 +678,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_credential_dto(
+      CredentialDto? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_box_autoadd_reaction_payload_dto(

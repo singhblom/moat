@@ -4325,6 +4325,13 @@ impl App {
             }
         }
 
+        // Sort newest-first so we prefer the replenished key package over an older
+        // consumed one. Key packages are single-use: the init key is deleted from
+        // the local KeyStore once a Welcome is processed, so a stale key package on
+        // the PDS produces a Welcome the new device cannot decrypt.
+        let mut key_packages = key_packages;
+        key_packages.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
         // For each conversation, check if any of our key packages represent new devices
         for (group_id, conv_id) in groups_to_check {
             // Get current members with their device names
@@ -4343,13 +4350,17 @@ impl App {
             // Build a set of (DID, device_id) pairs for existing members.
             // Keyed by device_id (not device_name) so two devices sharing a name but
             // different device_ids are both added.
-            let existing_devices: std::collections::HashSet<(String, [u8; 16])> = current_members
-                .iter()
-                .filter_map(|(_, cred)| {
-                    cred.as_ref()
-                        .map(|c| (c.did().to_string(), *c.device_id()))
-                })
-                .collect();
+            // Declared mut so we can update it after each successful add, preventing
+            // a second (older) key package for the same device from triggering a
+            // duplicate add.
+            let mut existing_devices: std::collections::HashSet<(String, [u8; 16])> =
+                current_members
+                    .iter()
+                    .filter_map(|(_, cred)| {
+                        cred.as_ref()
+                            .map(|c| (c.did().to_string(), *c.device_id()))
+                    })
+                    .collect();
 
             self.debug_log.log(&format!(
                 "poll_devices: group {} has {} devices",
@@ -4426,6 +4437,10 @@ impl App {
                             credential.device_name()
                         ));
 
+                        // Mark device as seen so a second (older) key package for the
+                        // same device doesn't trigger a redundant add in this loop.
+                        existing_devices.insert(device_key);
+
                         // Save MLS state
                         if let Err(e) = self.save_mls_state() {
                             self.debug_log
@@ -4455,9 +4470,11 @@ impl App {
                             Ok(stealth_records) if !stealth_records.is_empty() => {
                                 let stealth_pubkeys: Vec<[u8; 32]> =
                                     stealth_records.iter().map(|r| r.scan_pubkey).collect();
+                                let welcome_envelope =
+                                    encode_welcome_envelope(&welcome_result.welcome, &[]);
                                 match moat_core::encrypt_for_stealth(
                                     &stealth_pubkeys,
-                                    &welcome_result.welcome,
+                                    &welcome_envelope,
                                 ) {
                                     Ok(stealth_ciphertext) => {
                                         let random_tag: [u8; 16] = rand::random();
@@ -4627,6 +4644,7 @@ impl App {
                 }
                 RingCommand::RegisterGroup { group_id, kind } => {
                     let group_id_hex = hex::encode(&group_id);
+                    let is_user_group = kind == GroupKind::User;
                     let _ = self.keys.store_group_metadata(
                         &group_id_hex,
                         &GroupMetadata {
@@ -4636,6 +4654,33 @@ impl App {
                         },
                     );
                     self.populate_candidate_tags(&group_id_hex, &group_id);
+
+                    // User conversations discovered via ring_tick step-3 stealth
+                    // Welcome scan need to be surfaced in self.conversations.  The
+                    // normal poll path (try_process_welcome_sync) would fail here
+                    // because the Welcome was already consumed above.
+                    if is_user_group
+                        && !self.conversations.iter().any(|c| c.id == group_id_hex)
+                    {
+                        let participant_dids = self
+                            .mls
+                            .get_group_dids(&group_id)
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter(|d| d != &my_did)
+                            .collect::<Vec<_>>();
+                        let participant_handles = participant_dids.clone();
+                        self.conversations.push(Conversation {
+                            id: group_id_hex.clone(),
+                            name: None,
+                            participant_dids: participant_dids.clone(),
+                            participant_handles,
+                            current_epoch: 1,
+                            unread: 1,
+                        });
+                        // Replenish init key consumed by this Welcome.
+                        self.replenish_key_package();
+                    }
                 }
                 RingCommand::ReplenishKeyPackage => {
                     self.replenish_key_package();
@@ -4756,6 +4801,12 @@ impl App {
                                 },
                             );
                             self.populate_candidate_tags(&ring_id_hex, &group_id);
+                            // Signal that we (the ring joiner) have a new sibling so
+                            // the next ring_tick emits PollForNewDevices.
+                            self.ring_driver.ring_has_new_sibling = true;
+                            // Replenish init key consumed by this Welcome so the ring
+                            // creator's deferred poll_for_new_devices finds a fresh key.
+                            self.replenish_key_package();
                             self.debug_log.log(&format!(
                                 "ring: joined ring {} via RingWelcome",
                                 ring_id_hex

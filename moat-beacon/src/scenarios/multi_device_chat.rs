@@ -103,6 +103,34 @@ pub async fn run(
         );
     }
 
+    // After ring bootstrap D1 runs poll_for_new_devices and adds D2 to the
+    // Alice-Bob MLS group (publishing a stealth Welcome on alice's PDS).  D2
+    // finds that Welcome via its own-DID poll.  Give it up to 12 extra cycles
+    // to complete before starting random actions; once D2 is in the group it
+    // can receive messages from D1 via normal polling — no sync_start needed.
+    for _ in 0..12 {
+        let _ = d1.ring_tick().await;
+        let _ = d2.ring_tick().await;
+        let _ = d1.poll().await;
+        let _ = d2.poll().await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let convs2 = d2.list_conversations().await.unwrap_or_default();
+        if convs2.iter().any(|c| c.id == group_id) {
+            vlog!("[setup] d2 joined Alice-Bob group");
+            break;
+        }
+    }
+    {
+        let convs2 = d2
+            .list_conversations()
+            .await
+            .expect("d2 list_conversations pre-actions");
+        assert!(
+            convs2.iter().any(|c| c.id == group_id),
+            "d2 must have joined the Alice-Bob conversation before random actions start"
+        );
+    }
+
     // ── Random actions ────────────────────────────────────────────────────────
     let mut online = [true, true]; // [D1, D2]
     let mut sent: Vec<SentMsg> = vec![];
@@ -192,30 +220,32 @@ pub async fn run(
         }
     }
 
-    // Ring drain + add-device propagation.
-    for i in 0..8 {
+    // Ring drain — ring_tick re-runs poll_for_new_devices when needed so D2
+    // stays in all user conversations, even if a restart happened during the
+    // random phase.
+    for i in 0..10 {
         vlog!("[drain {i}]");
         let _ = d1.ring_tick().await;
         let _ = d2.ring_tick().await;
         let _ = d1.poll().await;
         let _ = d2.poll().await;
         let _ = bob.poll().await;
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
-    // Trigger history sync and allow the batch exchange to complete.
-    let _ = d1.sync_start().await;
-    let _ = d2.sync_start().await;
-
+    // Poll drain — D2 is now in the Alice-Bob MLS group, so normal polls on
+    // alice's own DID deliver any messages D1 published while D2 was offline.
+    // (sync_start is a no-op here because ring_has_new_sibling is false after
+    // bootstrap; message catch-up works through the regular poll path instead.)
     let confirmed: Vec<String> = sent
         .iter()
         .filter_map(|s| s.message_id.clone())
         .collect();
 
-    for cycle in 0..12 {
+    for cycle in 0..20 {
         let _ = d1.poll().await;
         let _ = d2.poll().await;
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
 
         if confirmed.is_empty() {
             break;
@@ -225,10 +255,10 @@ pub async fn run(
             d2_msgs.iter().any(|m| m.message_id.as_deref() == Some(mid.as_str()))
         });
         if all_present {
-            vlog!("[sync cycle {cycle}] d2 has all messages");
+            vlog!("[drain cycle {cycle}] d2 has all messages");
             break;
         }
-        vlog!("[sync cycle {cycle}] d2 has {}/{}", d2_msgs.len(), confirmed.len());
+        vlog!("[drain cycle {cycle}] d2 has {}/{}", d2_msgs.len(), confirmed.len());
     }
 
     // ── Invariants ────────────────────────────────────────────────────────────

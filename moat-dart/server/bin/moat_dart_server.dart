@@ -63,6 +63,7 @@ Future<void> main(List<String> args) async {
     backend: docBackend,
   );
   await ringService.init();
+  ringService.convsService = convsService;
   final syncService = SyncService(
     auth: authService,
     drawbridge: DrawbridgeService.instance,
