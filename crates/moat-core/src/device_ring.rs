@@ -265,9 +265,10 @@ pub enum PeerState {
 }
 
 /// Device-level ring membership.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum RingMembership {
     /// No peers known; nothing to do.
+    #[default]
     Solo,
 
     /// At least one peer is in `Discovered` / `AwaitingTheirHello` / `CoordReady`,
@@ -298,12 +299,6 @@ pub struct DeviceRingState {
     /// Cursor (rkey) for incremental own-PDS stealth scan.
     #[serde(default)]
     own_events_cursor: Option<String>,
-}
-
-impl Default for RingMembership {
-    fn default() -> Self {
-        RingMembership::Solo
-    }
 }
 
 // SyncStatus / AddedBy / RingLink / PeerState / RingMembership: we want
@@ -1180,14 +1175,14 @@ impl DeviceRingState {
             }
         }
 
-        let mut cmds = Vec::new();
-        cmds.push(RingCommand::RegisterGroup { group_id: ring_id, kind: GroupKind::Ring });
-        // Welcome consumed our init key — replenish so a future Add can target us.
-        cmds.push(RingCommand::ReplenishKeyPackage);
-        // The next tick will trigger PollForNewDevices so we add the existing
-        // ring members to all known user conversations.
-        cmds.push(RingCommand::PollForNewDevices);
-        cmds
+        vec![
+            RingCommand::RegisterGroup { group_id: ring_id, kind: GroupKind::Ring },
+            // Welcome consumed our init key — replenish so a future Add can target us.
+            RingCommand::ReplenishKeyPackage,
+            // The next tick will trigger PollForNewDevices so we add the existing
+            // ring members to all known user conversations.
+            RingCommand::PollForNewDevices,
+        ]
     }
 
     fn on_sync_session_ended(&mut self) -> Vec<RingCommand> {
