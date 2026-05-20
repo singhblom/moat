@@ -29,7 +29,8 @@ use std::{
     collections::HashMap,
     net::TcpListener,
     path::PathBuf,
-    process::{Child, Command},
+    process::{Child, Command, Stdio},
+    fs::File,
 };
 #[cfg(unix)]
 use std::os::unix::process::CommandExt as _;
@@ -58,6 +59,8 @@ struct ParticipantProcess {
     /// Which binary to use when restarting.
     kind: ParticipantKind,
     pub client: MoatCliClient,
+    /// Path to the stderr log file for this participant (under /tmp).
+    pub log_path: PathBuf,
 }
 
 impl Drop for ParticipantProcess {
@@ -376,6 +379,7 @@ impl TestWorld {
             storage: TempDir,
             spawn_args: Vec<String>,
             kind: ParticipantKind,
+            log_path: PathBuf,
         }
 
         // Phase 1: spawn all participant processes (fast — no waiting).
@@ -411,10 +415,12 @@ impl TestWorld {
                 }
             };
 
+            let (log_file, log_path) = open_participant_log(handle)?;
+
             let mut cmd = Command::new(&bin);
             cmd.args(&args)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::inherit());
+                .stdout(Stdio::null())
+                .stderr(Stdio::from(log_file));
             #[cfg(unix)]
             cmd.process_group(pgid as i32);
             let child = cmd
@@ -430,6 +436,7 @@ impl TestWorld {
                 storage,
                 spawn_args: args,
                 kind: kind.clone(),
+                log_path,
             });
         }
 
@@ -473,6 +480,7 @@ impl TestWorld {
                     spawn_args: p.spawn_args,
                     kind: p.kind,
                     client: p.client,
+                    log_path: p.log_path,
                 },
             );
         }
@@ -528,16 +536,18 @@ impl TestWorld {
         };
 
         let pgid = self.process_group.pgid();
+        let (log_file, log_path) = open_participant_log(&format!("{handle}-restart"))?;
         let mut cmd = Command::new(&bin);
         cmd.args(&proc.spawn_args)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::inherit());
+            .stdout(Stdio::null())
+            .stderr(Stdio::from(log_file));
         #[cfg(unix)]
         cmd.process_group(pgid as i32);
         let child = cmd
             .spawn()
             .with_context(|| format!("restart participant for {handle}"))?;
         proc.child = Some(child);
+        proc.log_path = log_path;
 
         wait_for_http(&proc.client, std::time::Duration::from_secs(10))
             .await
@@ -545,19 +555,19 @@ impl TestWorld {
         Ok(())
     }
 
-    /// Spawn a second process for the same Postern account.
+    /// Spawn an additional process for an existing Postern account.
     ///
-    /// Use this to simulate a second device for an existing user.  The new
-    /// process connects to the same PDS proxy but uses a fresh storage directory,
-    /// giving it a distinct `device_id`.  The caller must log in using the same
-    /// handle/password as the first device.
+    /// Use this to simulate any additional device (second, third, …) for an
+    /// existing user.  The new process connects to the same PDS proxy but uses a
+    /// fresh storage directory, giving it a distinct `device_id`.  The caller
+    /// must log in using the same handle/password as the first device.
     ///
     /// Pass `kind` to choose between [`ParticipantKind::RustCli`] and
     /// [`ParticipantKind::DartServer`].  If `kind` is `DartServer` and the Dart
     /// binary has not been built yet, it is compiled on demand.
     ///
     /// The new participant is registered under `label` in this world.
-    pub async fn spawn_second_device(
+    pub async fn spawn_nth_device(
         &mut self,
         label: &str,
         kind: ParticipantKind,
@@ -599,10 +609,11 @@ impl TestWorld {
         };
 
         let pgid = self.process_group.pgid();
+        let (log_file, log_path) = open_participant_log(label)?;
         let mut cmd = Command::new(&bin);
         cmd.args(&args)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::inherit());
+            .stdout(Stdio::null())
+            .stderr(Stdio::from(log_file));
         #[cfg(unix)]
         cmd.process_group(pgid as i32);
         let child = cmd
@@ -622,6 +633,7 @@ impl TestWorld {
                 spawn_args: args,
                 kind,
                 client: client.clone(),
+                log_path,
             },
         );
 
@@ -639,6 +651,25 @@ impl TestWorld {
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
+
+/// Open a stderr log file for a participant under `/tmp/moat-beacon/`.
+///
+/// Path: `/tmp/moat-beacon/<label>-<timestamp_ms>.log`
+///
+/// Prints the path to stderr so test output shows where to find it.
+fn open_participant_log(label: &str) -> Result<(File, PathBuf)> {
+    let dir = PathBuf::from("/tmp/moat-beacon");
+    std::fs::create_dir_all(&dir).context("create /tmp/moat-beacon")?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let path = dir.join(format!("{label}-{ts}.log"));
+    let file = File::create(&path)
+        .with_context(|| format!("create log file {}", path.display()))?;
+    eprintln!("[beacon] log: {}", path.display());
+    Ok((file, path))
+}
 
 /// Find a free TCP port by binding to `127.0.0.1:0`.
 fn free_port() -> Result<u16> {

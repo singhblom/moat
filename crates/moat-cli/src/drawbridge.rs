@@ -43,6 +43,11 @@ pub struct DrawbridgeManager {
 
     /// Write half of the active pair WebSocket, if one is open.
     pair_writer: Option<PairWsWriter>,
+
+    /// Abort handle for the pair_read_loop task.  Aborting it drops the read
+    /// half of the pair WS, so the TCP connection is fully closed and Drawbridge
+    /// detects the peer disconnect (sends `pair_closed` on the main WS).
+    pair_read_task: Option<tokio::task::AbortHandle>,
 }
 
 struct OwnDrawbridge {
@@ -86,6 +91,7 @@ impl DrawbridgeManager {
             bg_tx,
             reconnect_attempt: 0,
             pair_writer: None,
+            pair_read_task: None,
         }
     }
 
@@ -360,11 +366,12 @@ impl DrawbridgeManager {
             }
         }
 
-        // Spawn binary read loop
+        // Spawn binary read loop; store abort handle so clear_pair can stop it.
         let bg_tx = self.bg_tx.clone();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             pair_read_loop(reader, bg_tx).await;
         });
+        self.pair_read_task = Some(task.abort_handle());
 
         self.pair_writer = Some(writer);
         let _ = self.bg_tx.send(BgEvent::PairConnected);
@@ -380,8 +387,15 @@ impl DrawbridgeManager {
             .map_err(|e| format!("send pair binary: {e}"))
     }
 
-    /// Drop the pair WS write half (used after session ends).
+    /// Close the pair WS: abort the read-loop task and drop the write half.
+    ///
+    /// Aborting the read task drops the `SplitStream`, releasing the underlying
+    /// TCP socket (combined with dropping the writer).  This causes Drawbridge
+    /// to detect the disconnection and send `pair_closed` on the main WS.
     pub fn clear_pair(&mut self) {
+        if let Some(handle) = self.pair_read_task.take() {
+            handle.abort();
+        }
         self.pair_writer = None;
     }
 

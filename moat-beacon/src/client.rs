@@ -62,7 +62,7 @@ pub struct ImageAttachmentInfo {
     pub mime: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct RingStatus {
     pub ring_group_id: Option<String>,
     pub coord_group_count: usize,

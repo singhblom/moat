@@ -34,6 +34,10 @@ class DeviceRingService {
   Uint8List? _pendingPairToken;
   int _coordGroupCount = 0;
 
+  /// Tags published by this device (mark_own=true) that the polling service
+  /// must skip to avoid self-processing ring-group coord events (e.g. SyncOffer).
+  final Set<String> _ownPublishedTagHexes = {};
+
   /// Injected by the server/app setup so pollForNewDevices and registerGroup
   /// for User groups can surface conversations.
   ConversationsService? convsService;
@@ -172,6 +176,30 @@ class DeviceRingService {
 
   /// Handle an incoming coord-group message (already decrypted; payload is
   /// the JSON from `CoordMsg`).
+  /// Called when a coord-group Welcome was consumed by `_pollOwnDid` before
+  /// ring_tick had a chance to process it.  Registers the coord group in the
+  /// ring driver and publishes Hello so the sibling can exchange hellos.
+  Future<void> notifyCoordGroupJoined(Uint8List groupId) async {
+    final session = _auth.moatSession;
+    final did = _auth.did;
+    final driver = _driver;
+    if (session == null || did == null || driver == null) return;
+    final keyBundle = await _auth.secureStorage.loadKeyBundle();
+    if (keyBundle == null) return;
+    try {
+      final cmds = await driver.notifyCoordGroupJoined(
+        session: session,
+        groupId: groupId,
+        keyBundle: keyBundle,
+        myDid: did,
+      );
+      await _persist();
+      await _interpret(cmds, did);
+    } catch (e) {
+      moatLog('DeviceRingService: notifyCoordGroupJoined failed: $e');
+    }
+  }
+
   Future<void> handleCoordMsg({
     required Uint8List groupId,
     required Uint8List payload,
@@ -204,6 +232,11 @@ class DeviceRingService {
         await cmd.when(
           publishEvent: (tag, ciphertext, markOwn) async {
             await client.publishEvent(tag, ciphertext);
+            if (markOwn) {
+              final tagHex =
+                  tag.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+              _ownPublishedTagHexes.add(tagHex);
+            }
           },
           stealthPublishWelcome: (tag, ciphertext) async {
             await client.publishEvent(tag, ciphertext);
@@ -421,6 +454,13 @@ class DeviceRingService {
     } catch (e) {
       moatLog('DeviceRingService: persist failed: $e');
     }
+  }
+
+  /// Returns true if [tag] was published by this device (mark_own=true) and
+  /// should be skipped during message polling to avoid self-processing.
+  bool isOwnPublishedTag(List<int> tag) {
+    final hex = tag.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    return _ownPublishedTagHexes.contains(hex);
   }
 
   /// Drop any pending pair-WS state — used when sync ends or aborts.

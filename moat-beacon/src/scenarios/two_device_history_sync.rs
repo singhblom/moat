@@ -91,7 +91,7 @@ pub async fn run(verbose: bool) {
     // ── Spawn second device and bootstrap ring ────────────────────────────────
     vlog!("[setup] spawning alice device 2...");
     let d2 = world
-        .spawn_second_device("alice-d2", crate::world::ParticipantKind::RustCli)
+        .spawn_nth_device("alice-d2", crate::world::ParticipantKind::RustCli)
         .await
         .expect("spawn second device");
 

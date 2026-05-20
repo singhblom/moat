@@ -261,6 +261,15 @@ abstract class RingDriverHandle implements RustOpaqueInterface {
   static RingDriverHandle newEmpty() =>
       RustLib.instance.api.crateApiSimpleRingDriverHandleNewEmpty();
 
+  /// Called when a coord-group Welcome was consumed outside `tick()` (e.g. by
+  /// `_pollOwnDid`).  Registers the coord group and returns a Hello
+  /// `PublishEvent` command for the caller to execute.
+  Future<List<RingCommandDto>> notifyCoordGroupJoined(
+      {required MoatSessionHandle session,
+      required List<int> groupId,
+      required List<int> keyBundle,
+      required String myDid});
+
   /// Cursor (rkey) for incremental own-PDS stealth scan.
   String? ownEventsCursor();
 

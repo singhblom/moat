@@ -28,6 +28,9 @@ class SyncService {
 
   ffi.SyncSessionHandle? _session;
   bool _active = false;
+  // Frames that arrive during the async setup window (before onPaired is called)
+  // are buffered here and replayed after onPaired completes.
+  List<Uint8List>? _pendingFrames;
 
   /// True iff a sync session is currently in progress.
   bool get isActive => _active;
@@ -81,28 +84,34 @@ class SyncService {
       moatLog('SyncService: pair_connected received but session already active');
       return;
     }
+    _active = true;
+    _pendingFrames = [];
 
     final session = _auth.moatSession;
     final did = _auth.did;
     if (session == null || did == null) {
       moatLog('SyncService: cannot start — auth not ready');
+      await _reset();
       return;
     }
 
     final ringId = await _ring.ringGroupId();
     if (ringId == null) {
       moatLog('SyncService: cannot start — no ring group');
+      await _reset();
       return;
     }
     final keyBundle = await _auth.secureStorage.loadKeyBundle();
     if (keyBundle == null) {
       moatLog('SyncService: cannot start — missing key bundle');
+      await _reset();
       return;
     }
     final ringEpoch = (await session.getGroupEpoch(groupId: ringId)) ?? BigInt.zero;
 
     final conversations = await _convStorage.loadAll();
     final syncSession = ffi.SyncSessionHandle.newSession();
+    _session = syncSession;
 
     final convStates = <ffi.ConvStateDto>[];
     for (final conv in conversations) {
@@ -118,17 +127,35 @@ class SyncService {
       if (state != null) convStates.add(state);
     }
 
-    _session = syncSession;
-    _active = true;
     moatLog('SyncService: calling onPaired with ${convStates.length} convs, ringEpoch=$ringEpoch');
 
     final outputs =
         await syncSession.onPaired(ourConvs: convStates, ringEpoch: ringEpoch);
     moatLog('SyncService: onPaired returned ${outputs.length} outputs');
     await _processOutputs(outputs, ringId, keyBundle, did);
+
+    // Replay any frames that arrived during the async setup window (before
+    // onPaired was called).  Now that the state machine has processed onPaired,
+    // it is in WaitingHello phase and can correctly handle them.
+    final pending = _pendingFrames;
+    _pendingFrames = null;
+    if (pending != null && pending.isNotEmpty) {
+      moatLog('SyncService: replaying ${pending.length} buffered frame(s)');
+      for (final frame in pending) {
+        await _processFrame(frame);
+      }
+    }
   }
 
   Future<void> _processFrame(Uint8List ciphertext) async {
+    // If the session object doesn't exist yet, _active guards whether we should
+    // buffer. If _active is true but _session is still null, we're in the
+    // async setup window; buffer the frame and replay after onPaired.
+    if (_active && _pendingFrames != null) {
+      moatLog('SyncService: buffering frame (${ciphertext.length}B) until onPaired');
+      _pendingFrames!.add(ciphertext);
+      return;
+    }
     final syncSession = _session;
     if (syncSession == null) {
       moatLog('SyncService: pair frame received but no active session');
@@ -299,6 +326,7 @@ class SyncService {
   Future<void> _reset() async {
     _active = false;
     _session = null;
+    _pendingFrames = null;
     _ring.clearPendingPair();
   }
 }

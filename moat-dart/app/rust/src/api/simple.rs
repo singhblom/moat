@@ -7,9 +7,9 @@ use moat_core::{
     },
     ControlKind, EncryptResult, Event, EventKind, GroupKind, KeyPackageInput, MoatCredential,
     MoatSession, ModifierKind, OwnEventInput, ReactionPayload as CoreReactionPayload, RingCommand,
-    RingState, SenderInfo, TickInputs, WelcomeResult,
+    RingEvent, SenderInfo, StepEnv, TickInputs, WelcomeResult,
 };
-use moat_core::DeviceRingDriver;
+use moat_core::DeviceRingState;
 use moat_core::decode_coord_msg;
 use std::sync::Mutex;
 
@@ -960,44 +960,39 @@ pub fn decrypt_push_payload(
 
 // --- Device ring driver ---
 
-/// Opaque handle to a `DeviceRingDriver`, thread-safe via Mutex.
+/// Opaque handle to a `DeviceRingState`, thread-safe via Mutex.
 pub struct RingDriverHandle {
-    inner: Mutex<DeviceRingDriver>,
+    inner: Mutex<DeviceRingState>,
 }
 
 impl RingDriverHandle {
-    /// Create a new ring driver with empty state.
+    /// Create a new ring state with empty state.
     #[frb(sync)]
     pub fn new_empty() -> RingDriverHandle {
-        RingDriverHandle {
-            inner: Mutex::new(DeviceRingDriver::from_state(&RingState::default())),
-        }
+        RingDriverHandle { inner: Mutex::new(DeviceRingState::default()) }
     }
 
-    /// Restore a ring driver from its persisted JSON state.
+    /// Restore a ring state from its persisted JSON.
     pub fn from_state_json(json: String) -> Result<RingDriverHandle, String> {
-        let state: RingState = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-        Ok(RingDriverHandle {
-            inner: Mutex::new(DeviceRingDriver::from_state(&state)),
-        })
+        let state: DeviceRingState = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+        Ok(RingDriverHandle { inner: Mutex::new(state) })
     }
 
-    /// Serialise the current ring driver state as JSON.
+    /// Serialise the current ring state as JSON.
     pub fn to_state_json(&self) -> Result<String, String> {
-        let state = self.inner.lock().unwrap().to_ring_state();
-        serde_json::to_string(&state).map_err(|e| e.to_string())
+        serde_json::to_string(&*self.inner.lock().unwrap()).map_err(|e| e.to_string())
     }
 
     /// Raw ring group ID, if a ring exists.
     #[frb(sync)]
     pub fn ring_group_id(&self) -> Option<Vec<u8>> {
-        self.inner.lock().unwrap().ring_group_id.clone()
+        self.inner.lock().unwrap().ring_id().map(<[u8]>::to_vec)
     }
 
     /// Cursor (rkey) for incremental own-PDS stealth scan.
     #[frb(sync)]
     pub fn own_events_cursor(&self) -> Option<String> {
-        self.inner.lock().unwrap().own_events_cursor.clone()
+        self.inner.lock().unwrap().own_events_cursor().map(str::to_string)
     }
 
     /// Drive one ring coordination tick. Returns commands for the host to interpret.
@@ -1047,6 +1042,36 @@ impl RingDriverHandle {
         Ok(cmds.into_iter().map(RingCommandDto::from).collect())
     }
 
+    /// Called when a coord-group Welcome was consumed outside `tick()` (e.g. by
+    /// `_pollOwnDid`).  The state machine records the coord group and emits
+    /// a Hello publish command for the caller to execute.
+    pub fn notify_coord_group_joined(
+        &self,
+        session: &MoatSessionHandle,
+        group_id: Vec<u8>,
+        key_bundle: Vec<u8>,
+        my_did: String,
+    ) -> Result<Vec<RingCommandDto>, String> {
+        let session_lock = session.inner.lock().unwrap();
+        let device_id = *session_lock.device_id();
+        let credential = MoatCredential::new(&my_did, "", device_id);
+        let env = StepEnv {
+            my_did: &my_did,
+            credential: &credential,
+            key_bundle: &key_bundle,
+            now_ms: 0,
+            drawbridge_connected: false,
+            sync_session_active: false,
+            stealth_pubkeys: &[],
+        };
+        let cmds = self.inner.lock().unwrap().step(
+            &session_lock,
+            &env,
+            RingEvent::CoordGroupJoined { group_id },
+        );
+        Ok(cmds.into_iter().map(RingCommandDto::from).collect())
+    }
+
     /// Handle an incoming coord-group message (decrypted JSON payload).
     pub fn handle_coord_msg(
         &self,
@@ -1057,11 +1082,26 @@ impl RingDriverHandle {
     ) -> Result<Vec<RingCommandDto>, String> {
         let msg = decode_coord_msg(&payload).map_err(|e| e.to_string())?;
         let session_lock = session.inner.lock().unwrap();
-        let cmds =
-            self.inner
-                .lock()
-                .unwrap()
-                .handle_coord_msg(&session_lock, &my_did, &group_id, msg);
+        let device_id = *session_lock.device_id();
+        let credential = MoatCredential::new(&my_did, "", device_id);
+        // key_bundle isn't used by coord-msg handlers (they don't emit
+        // PublishEvents needing encryption directly), but step requires it.
+        // Callers that need encrypted outputs should run a follow-up tick.
+        let key_bundle: Vec<u8> = Vec::new();
+        let env = StepEnv {
+            my_did: &my_did,
+            credential: &credential,
+            key_bundle: &key_bundle,
+            now_ms: 0,
+            drawbridge_connected: false,
+            sync_session_active: false,
+            stealth_pubkeys: &[],
+        };
+        let cmds = self.inner.lock().unwrap().step(
+            &session_lock,
+            &env,
+            RingEvent::CoordMsgReceived { source_group_id: group_id, msg },
+        );
         Ok(cmds.into_iter().map(RingCommandDto::from).collect())
     }
 }

@@ -37,7 +37,7 @@ pub async fn run(verbose: bool) {
 
     vlog!("[setup] spawning second Dart device...");
     let d2 = world
-        .spawn_second_device("alice-d2", ParticipantKind::DartServer)
+        .spawn_nth_device("alice-d2", ParticipantKind::DartServer)
         .await
         .expect("spawn second device");
 

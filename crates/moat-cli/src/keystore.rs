@@ -3,7 +3,7 @@
 //! Keys are stored in ~/.moat/keys/ with appropriate file permissions.
 
 use moat_core::GroupKind;
-pub use moat_core::RingState;
+pub use moat_core::DeviceRingState;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -243,20 +243,20 @@ impl KeyStore {
         Ok(groups)
     }
 
-    /// Load the device ring driver state from `ring.json`.
+    /// Load the device ring state from `ring.json`.
     /// Returns a default (empty) state if the file does not exist yet.
-    pub fn load_ring_state(&self) -> Result<RingState> {
+    pub fn load_ring_state(&self) -> Result<DeviceRingState> {
         let path = self.base_path.join("ring.json");
         if !path.exists() {
-            return Ok(RingState::default());
+            return Ok(DeviceRingState::default());
         }
         let data = fs::read(&path)?;
-        let state: RingState = serde_json::from_slice(&data)?;
+        let state: DeviceRingState = serde_json::from_slice(&data)?;
         Ok(state)
     }
 
-    /// Persist the device ring driver state to `ring.json`.
-    pub fn save_ring_state(&self, state: &RingState) -> Result<()> {
+    /// Persist the device ring state to `ring.json`.
+    pub fn save_ring_state(&self, state: &DeviceRingState) -> Result<()> {
         let path = self.base_path.join("ring.json");
         let json = serde_json::to_vec_pretty(state)?;
         fs::write(&path, json)?;

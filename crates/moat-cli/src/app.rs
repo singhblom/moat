@@ -12,9 +12,9 @@ use crossterm::event::{KeyCode, KeyEvent};
 use moat_atproto::{BlobRef, MoatAtprotoClient};
 use moat_core::{
     blob_decrypt, blob_encrypt, decode_coord_msg, encrypt_for_stealth, generate_stealth_keypair,
-    reconcile_rings, try_decrypt_stealth, ControlKind, CoordMsg, DeviceRingDriver, Event, EventKind,
-    ExternalBlob, GroupKind, LongTextMessage, MediaMessage, MessagePayload, MoatCredential,
-    MoatSession, ModifierKind, ParsedMessagePayload, ReconcileDecision, CIPHERSUITE,
+    try_decrypt_stealth, ControlKind, DeviceRingState, Event, EventKind, ExternalBlob, GroupKind,
+    LongTextMessage, MediaMessage, MessagePayload, MoatCredential, MoatSession, ModifierKind,
+    ParsedMessagePayload, RingCommand, RingEvent, StepEnv, CIPHERSUITE,
 };
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::collections::{HashMap, HashSet};
@@ -536,7 +536,7 @@ pub struct App {
     pub(crate) poll_interval_override: Option<u64>,
 
     /// Device ring state machine — persisted to `ring.json` in the keys dir.
-    ring_driver: DeviceRingDriver,
+    ring_driver: DeviceRingState,
 
     /// When was the last ring tick run?
     last_ring_tick: Option<Instant>,
@@ -623,10 +623,7 @@ impl App {
 
         let drawbridge = DrawbridgeManager::new(bg_tx.clone());
 
-        let ring_driver = {
-            let state = keys.load_ring_state().unwrap_or_default();
-            DeviceRingDriver::from_state(&state)
-        };
+        let ring_driver = keys.load_ring_state().unwrap_or_default();
 
         Ok(Self {
             keys,
@@ -1070,8 +1067,8 @@ impl App {
     ///
     /// Returns `(ring_group_id_hex, coord_group_count)`.
     pub fn api_ring_status(&self) -> (Option<String>, usize) {
-        let ring_group_id = self.ring_driver.ring_group_id.as_ref().map(|id| hex::encode(id));
-        let coord_count = self.ring_driver.coord_groups.len();
+        let ring_group_id = self.ring_driver.ring_id().map(hex::encode);
+        let coord_count = self.ring_driver.coord_group_count();
         (ring_group_id, coord_count)
     }
 
@@ -3125,6 +3122,7 @@ impl App {
 
                         // Signal that the next message in this conversation should anchor.
                         self.mls.mark_digest_epoch_boundary(&group_id);
+
                     }
                     EventKind::Coord => {
                         // Route coord messages to the ring driver (pure state only;
@@ -4561,7 +4559,7 @@ impl App {
     }
 
     async fn ring_tick_inner(&mut self) -> Result<()> {
-        use moat_core::{KeyPackageInput, OwnEventInput, RingCommand, TickInputs};
+        use moat_core::{KeyPackageInput, OwnEventInput, TickInputs};
 
         let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?.clone();
         let my_did = client.did().to_string();
@@ -4593,7 +4591,7 @@ impl App {
             stealth_records.iter().map(|r| r.scan_pubkey).collect();
 
         let event_records = client
-            .fetch_events_from_did(&my_did, self.ring_driver.own_events_cursor.as_deref())
+            .fetch_events_from_did(&my_did, self.ring_driver.own_events_cursor())
             .await
             .unwrap_or_default();
         let own_events: Vec<OwnEventInput> = event_records
@@ -4687,7 +4685,7 @@ impl App {
                 }
                 RingCommand::SendDrawbridgePairOffer { token } => {
                     self.pending_pair_token = Some(token.clone());
-                    let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairOffer { token });
+                    let _ = self.drawbridge.send_pair_offer(&token).await;
                 }
                 RingCommand::SendDrawbridgePairJoin { token } => {
                     let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairJoin { token });
@@ -4703,8 +4701,7 @@ impl App {
         }
 
         // Persist ring state
-        let state = self.ring_driver.to_ring_state();
-        if let Err(e) = self.keys.save_ring_state(&state) {
+        if let Err(e) = self.keys.save_ring_state(&self.ring_driver) {
             self.debug_log
                 .log(&format!("ring: failed to save ring state: {e}"));
         }
@@ -4731,107 +4728,90 @@ impl App {
             Some(c) => c.did().to_string(),
             None => return,
         };
-        let my_device_id = *self.mls.device_id();
 
-        let from_device_id: [u8; 16] = {
-            let members = self.mls.get_group_members(group_id).unwrap_or_default();
-            members
-                .iter()
-                .find_map(|(_, c)| {
-                    c.as_ref().and_then(|c| {
-                        if c.did() == my_did && *c.device_id() != my_device_id {
-                            Some(*c.device_id())
-                        } else {
-                            None
-                        }
-                    })
-                })
-                .unwrap_or([0u8; 16])
+        let key_bundle = match self.keys.load_identity_key() {
+            Ok(k) => k,
+            Err(e) => {
+                self.debug_log
+                    .log(&format!("ring: failed to load identity key: {e}"));
+                return;
+            }
+        };
+        let device_name = match self.keys.get_or_create_device_name() {
+            Ok(n) => n,
+            Err(_) => return,
+        };
+        let credential = MoatCredential::new(&my_did, &device_name, *self.mls.device_id());
+
+        let env = StepEnv {
+            my_did: &my_did,
+            credential: &credential,
+            key_bundle: &key_bundle,
+            now_ms: chrono::Utc::now().timestamp_millis(),
+            drawbridge_connected: self.drawbridge.has_own_connection(),
+            sync_session_active: self.sync_session.is_some(),
+            stealth_pubkeys: &[],
         };
 
-        match msg {
-            CoordMsg::Hello { sender_device_id } => {
-                let id: [u8; 16] = sender_device_id.try_into().unwrap_or(from_device_id);
-                self.ring_driver.process_hello(id);
-                self.debug_log
-                    .log(&format!("ring: Hello from {}", hex::encode(&id)));
-            }
-            CoordMsg::RingInfo { ring_id, created_at } => {
-                // Pure reconciliation decision — network response deferred to next ring_tick.
-                if let Some(mine_id) = self.ring_driver.ring_group_id.clone() {
-                    match reconcile_rings(
-                        &mine_id,
-                        self.ring_driver.ring_created_at.unwrap_or(0),
-                        &ring_id,
-                        created_at,
-                    ) {
-                        ReconcileDecision::AlreadyInTheirs | ReconcileDecision::KeepMine => {}
-                        ReconcileDecision::SwitchToTheirs => {
-                            self.debug_log.log(&format!(
-                                "ring: reconcile — switching to peer ring {}",
-                                hex::encode(&ring_id)
-                            ));
-                            self.ring_driver.ring_group_id = None;
-                            self.ring_driver.ring_created_at = None;
-                        }
-                    }
-                }
-            }
-            CoordMsg::Supersede { old_ring_id } => {
-                self.ring_driver.process_supersede(&old_ring_id);
-                self.debug_log.log(&format!(
-                    "ring: Supersede for {}",
-                    hex::encode(&old_ring_id)
-                ));
-            }
-            CoordMsg::RingWelcome { ring_id, welcome, created_at } => {
-                if self.ring_driver.ring_group_id.is_none() {
-                    match self.mls.process_welcome(&welcome) {
-                        Ok(group_id) if group_id == ring_id => {
-                            let _ = self.save_mls_state();
-                            let ring_id_hex = hex::encode(&ring_id);
-                            self.ring_driver.ring_group_id = Some(ring_id.clone());
-                            self.ring_driver.ring_created_at = Some(created_at);
-                            let _ = self.keys.store_group_metadata(
-                                &ring_id_hex,
-                                &GroupMetadata {
-                                    participant_dids: vec![my_did.clone()],
-                                    participant_handles: vec![],
-                                    kind: GroupKind::Ring,
-                                },
-                            );
-                            self.populate_candidate_tags(&ring_id_hex, &group_id);
-                            // Signal that we (the ring joiner) have a new sibling so
-                            // the next ring_tick emits PollForNewDevices.
-                            self.ring_driver.ring_has_new_sibling = true;
-                            // Replenish init key consumed by this Welcome so the ring
-                            // creator's deferred poll_for_new_devices finds a fresh key.
-                            self.replenish_key_package();
-                            self.debug_log.log(&format!(
-                                "ring: joined ring {} via RingWelcome",
-                                ring_id_hex
-                            ));
-                        }
-                        Ok(_) => {} // group_id mismatch — ignore
-                        Err(_) => {} // already joined or not for us
-                    }
-                }
-            }
-            CoordMsg::SyncOffer { token } => {
-                // We are the joiner. Store the token and send pair_join.
-                self.debug_log.log(&format!(
-                    "sync: received SyncOffer token ({}B) — sending pair_join",
-                    token.len()
-                ));
-                self.pending_pair_token = Some(token.clone());
-                let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairJoin { token });
-            }
-        }
+        let cmds = self.ring_driver.step(
+            &self.mls,
+            &env,
+            RingEvent::CoordMsgReceived {
+                source_group_id: group_id.to_vec(),
+                msg,
+            },
+        );
 
-        let state = self.ring_driver.to_ring_state();
-        if let Err(e) = self.keys.save_ring_state(&state) {
+        // step() may have called process_welcome internally — persist MLS state.
+        let _ = self.save_mls_state();
+
+        // Interpret the (small set of) commands this sync path can produce.
+        // Async-only commands (PublishEvent, StealthPublishWelcome,
+        // SendDrawbridgePairOffer) are not expected here; they fire from
+        // ring_tick_inner and are logged if seen.
+        self.interpret_sync_commands(cmds, &my_did);
+
+        if let Err(e) = self.keys.save_ring_state(&self.ring_driver) {
             self.debug_log
                 .log(&format!("ring: failed to save ring state: {e}"));
+        }
+    }
+
+    /// Interpret the subset of [`RingCommand`]s that a synchronous coord-message
+    /// handler can emit.  Async-only commands are logged and dropped — they
+    /// will be re-emitted by the next `ring_tick_inner` invocation if needed.
+    fn interpret_sync_commands(&mut self, cmds: Vec<RingCommand>, my_did: &str) {
+        for cmd in cmds {
+            match cmd {
+                RingCommand::RegisterGroup { group_id, kind } => {
+                    let group_id_hex = hex::encode(&group_id);
+                    let _ = self.keys.store_group_metadata(
+                        &group_id_hex,
+                        &GroupMetadata {
+                            participant_dids: vec![my_did.to_string()],
+                            participant_handles: vec![],
+                            kind,
+                        },
+                    );
+                    self.populate_candidate_tags(&group_id_hex, &group_id);
+                }
+                RingCommand::ReplenishKeyPackage => {
+                    self.replenish_key_package();
+                }
+                RingCommand::PollForNewDevices => {
+                    // Defer to next ring_tick (which calls poll_for_new_devices async).
+                }
+                RingCommand::SendDrawbridgePairJoin { token } => {
+                    self.pending_pair_token = Some(token.clone());
+                    let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairJoin { token });
+                }
+                RingCommand::PublishEvent { .. }
+                | RingCommand::StealthPublishWelcome { .. }
+                | RingCommand::SendDrawbridgePairOffer { .. } => {
+                    self.debug_log
+                        .log("ring: async-only command emitted from sync path — dropped (will retry on next tick)");
+                }
+            }
         }
     }
 
@@ -4848,7 +4828,7 @@ impl App {
     fn start_sync_session(&mut self) {
         use crate::sync::{ConvState, AnchorDto};
 
-        let ring_id = match self.ring_driver.ring_group_id.clone() {
+        let ring_id = match self.ring_driver.ring_id().map(<[u8]>::to_vec) {
             Some(id) => id,
             None => return,
         };
@@ -4886,7 +4866,25 @@ impl App {
             let range = self.mls.range(&group_id);
             let (oldest, newest) = match range {
                 Some((o, n)) => (Some(o), Some(n)),
-                None => (None, None),
+                None => {
+                    // mls.range only tracks events processed via decrypt_event.
+                    // Messages received via sync are stored in keystore only.
+                    // Fall back to keystore so the peer knows we have history.
+                    let msgs = self.keys.load_messages(conv_id)
+                        .map(|cm| cm.messages)
+                        .unwrap_or_default();
+                    let valid: Vec<_> = msgs.iter()
+                        .filter(|m| m.rkey != "pending")
+                        .map(|m| m.rkey.clone())
+                        .collect();
+                    if valid.is_empty() {
+                        (None, None)
+                    } else {
+                        let oldest = valid.iter().min().cloned();
+                        let newest = valid.iter().max().cloned();
+                        (oldest, newest)
+                    }
+                }
             };
             Some(ConvState {
                 group_id,
@@ -4955,7 +4953,7 @@ impl App {
     fn process_sync_frame(&mut self, data: Vec<u8>) {
         use moat_core::EventKind;
 
-        let ring_id = match self.ring_driver.ring_group_id.clone() {
+        let ring_id = match self.ring_driver.ring_id().map(<[u8]>::to_vec) {
             Some(id) => id,
             None => return,
         };

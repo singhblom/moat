@@ -73,7 +73,7 @@ pub async fn run(
 
     // Spawn D2 and login.
     let d2 = world
-        .spawn_second_device("alice-d2", d2_kind)
+        .spawn_nth_device("alice-d2", d2_kind)
         .await
         .expect("spawn alice-d2");
     d2.login("alice.postern.test", "any-password").await.expect("d2 login");

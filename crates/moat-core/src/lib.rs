@@ -52,9 +52,11 @@ use std::sync::RwLock;
 pub use crate::credential::MoatCredential;
 pub use crate::error::{Error, ErrorCode, Result};
 pub use crate::device_ring::{
-    classify_group_kind, decode_coord_msg, encode_coord_msg, reconcile_rings, CoordGroupResult,
-    CoordMsg, DeviceRingDriver, GroupKind, KeyPackageInput, OwnEventInput, ReconcileDecision,
-    RingCommand, RingState, TickInputs,
+    classify_group_kind, decode_coord_msg, decode_welcome_envelope, encode_coord_msg,
+    encode_welcome_envelope, reconcile_rings, AddedBy, CoordGroupResult, CoordMsg, DeviceId,
+    DeviceRingState, GroupKind, InvariantViolation, KeyPackageInput, OwnEventInput, PeerState,
+    ReconcileDecision, RingCommand, RingEvent, RingLink, RingMembership, StepEnv, SyncStatus,
+    TickInputs,
 };
 pub use crate::event::{
     ControlKind, DecryptOutcome, Event, EventKind, MessageKind, ModifierKind, ReactionPayload,

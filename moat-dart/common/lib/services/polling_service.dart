@@ -270,6 +270,14 @@ class PollingService {
           }
 
           final tagHex = event.tag.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+          // Skip events this device published (mark_own=true) to avoid
+          // self-processing ring-group coord messages such as SyncOffer.
+          if (_ringService.isOwnPublishedTag(event.tag)) {
+            moatLog('PollingService: skipping own-published event rkey=${event.rkey} tag=$tagHex');
+            continue;
+          }
+
           final groupIdHex = tagMap[tagHex];
 
           if (groupIdHex == null) {
@@ -546,6 +554,15 @@ class PollingService {
         await _authService.replenishKeyPackage();
       } catch (e) {
         moatLog('PollingService: replenishKeyPackage failed after coord Welcome: $e');
+      }
+      // Notify the ring driver so it registers the coord group and publishes
+      // Hello.  This path fires when _pollOwnDid processes the Welcome before
+      // ring_tick step-3 had a chance to — without this the sibling never
+      // receives our Hello and the bootstrap stalls.
+      try {
+        await _ringService.notifyCoordGroupJoined(groupId);
+      } catch (e) {
+        moatLog('PollingService: notifyCoordGroupJoined failed: $e');
       }
       return;
     }

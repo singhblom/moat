@@ -32,6 +32,9 @@ pub mod mixed_two_party_chat;
 pub mod push_latency;
 pub mod push_latency_restart;
 pub mod same_drawbridge_local;
+pub mod three_device_bootstrap;
+pub mod three_device_history_sync;
+pub mod three_device_staggered;
 pub mod three_party_chat;
 pub mod three_party_push;
 pub mod three_party_restart;
@@ -765,6 +768,121 @@ pub static SCENARIOS: &[Scenario] = &[
         name: "mixed-two-device-history-sync-dr",
         description: "Mixed: Dart D1 + Rust D2 ring bootstrap then history sync",
         run_fn: mixed_two_device_history_sync::run_dr_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    // ── Three-device bootstrap (all 8 runtime combos) ─────────────────────────
+    Scenario {
+        name: "three-device-bootstrap-rrr",
+        description: "Three Rust devices — ring bootstrap with late D3 join",
+        run_fn: three_device_bootstrap::run_rrr_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "three-device-bootstrap-rrd",
+        description: "Rust D1+D2, Dart D3 — ring bootstrap with late D3 join",
+        run_fn: three_device_bootstrap::run_rrd_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "three-device-bootstrap-rdr",
+        description: "Rust D1+D3, Dart D2 — ring bootstrap with late D3 join",
+        run_fn: three_device_bootstrap::run_rdr_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "three-device-bootstrap-drr",
+        description: "Dart D1, Rust D2+D3 — ring bootstrap with late D3 join",
+        run_fn: three_device_bootstrap::run_drr_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "three-device-bootstrap-rdd",
+        description: "Rust D1, Dart D2+D3 — ring bootstrap with late D3 join",
+        run_fn: three_device_bootstrap::run_rdd_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "three-device-bootstrap-drd",
+        description: "Dart D1+D3, Rust D2 — ring bootstrap with late D3 join",
+        run_fn: three_device_bootstrap::run_drd_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "three-device-bootstrap-ddr",
+        description: "Dart D1+D2, Rust D3 — ring bootstrap with late D3 join",
+        run_fn: three_device_bootstrap::run_ddr_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "three-device-bootstrap-ddd",
+        description: "Three Dart devices — ring bootstrap with late D3 join",
+        run_fn: three_device_bootstrap::run_ddd_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    // ── Three-device history sync (4 key runtime combos) ─────────────────────
+    Scenario {
+        name: "three-device-history-sync-rrr",
+        description: "Three Rust devices — D1 sends history, D2 syncs, D3 syncs from D1",
+        run_fn: three_device_history_sync::run_rrr_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "three-device-history-sync-ddd",
+        description: "Three Dart devices — D1 sends history, D2 syncs, D3 syncs from D1",
+        run_fn: three_device_history_sync::run_ddd_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "three-device-history-sync-drr",
+        description: "Dart D1 (offerer), Rust D2+D3 — history sync cross-runtime",
+        run_fn: three_device_history_sync::run_drr_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "three-device-history-sync-rrd",
+        description: "Rust D1+D2, Dart D3 (late joiner) — history sync cross-runtime",
+        run_fn: three_device_history_sync::run_rrd_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    // ── Three-device staggered arrival (4 key runtime combos) ────────────────
+    Scenario {
+        name: "three-device-staggered-rrr",
+        description: "Three Rust devices — D2 joins + sends, D3 must sync both messages",
+        run_fn: three_device_staggered::run_rrr_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "three-device-staggered-ddd",
+        description: "Three Dart devices — D2 joins + sends, D3 must sync both messages",
+        run_fn: three_device_staggered::run_ddd_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "three-device-staggered-drr",
+        description: "Dart D1 (offerer), Rust D2+D3 — staggered arrival cross-runtime",
+        run_fn: three_device_staggered::run_drr_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "three-device-staggered-rrd",
+        description: "Rust D1+D2, Dart D3 — staggered arrival cross-runtime",
+        run_fn: three_device_staggered::run_rrd_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
