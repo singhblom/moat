@@ -258,20 +258,32 @@ pub async fn ensure_all_online(world: &mut TestWorld, env: &TwoPartyEnv<'_>) {
 
 // ── N-participant helpers ─────────────────────────────────────────────────────
 
-/// Execute an action using indexed participant slices (N-participant generalization).
+/// Per-scenario configuration for N-participant scenarios — the indexed
+/// generalization of [`TwoPartyEnv`].  Constructed once per scenario run.
 ///
 /// `push_per_participant[i]` is `true` when participant `i` has a Drawbridge
-/// relay and should have polling disabled after a restart.  Pass a slice of
-/// all-`false` for polling-only scenarios.
+/// relay and should have polling disabled after a restart.  Pass an all-`false`
+/// slice for polling-only scenarios.
+pub struct NPartyEnv<'a> {
+    pub clients: &'a [&'a MoatCliClient],
+    pub handles: &'a [&'a str],
+    pub push_per_participant: &'a [bool],
+    pub verbose: bool,
+}
+
+/// Execute an action using indexed participant slices (N-participant generalization).
 pub async fn execute_action_n(
     action: &Action,
-    clients: &[&MoatCliClient],
+    env: &NPartyEnv<'_>,
     world: &mut TestWorld,
-    handles: &[&str],
-    push_per_participant: &[bool],
     state: &mut ScenarioState,
-    verbose: bool,
 ) {
+    let &NPartyEnv {
+        clients,
+        handles,
+        push_per_participant,
+        verbose,
+    } = env;
     match action {
         Action::SendMessage { from, text_idx } => {
             let text = TEXT_VOCAB[text_idx % TEXT_VOCAB.len()];
@@ -530,12 +542,13 @@ pub async fn execute_action_n(
 }
 
 /// Bring all offline participants back online (N-participant version).
-pub async fn ensure_all_online_n(
-    world: &mut TestWorld,
-    clients: &[&MoatCliClient],
-    handles: &[&str],
-    push_per_participant: &[bool],
-) {
+pub async fn ensure_all_online_n(world: &mut TestWorld, env: &NPartyEnv<'_>) {
+    let &NPartyEnv {
+        clients,
+        handles,
+        push_per_participant,
+        ..
+    } = env;
     let names: Vec<String> = handles
         .iter()
         .map(|h| h.split('.').next().unwrap().to_string())

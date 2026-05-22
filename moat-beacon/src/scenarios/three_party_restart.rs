@@ -14,7 +14,7 @@ use crate::invariants::{
 };
 use crate::world::TestWorld;
 
-use super::{ensure_all_online_n, execute_action_n, format_action, vlog};
+use super::{ensure_all_online_n, execute_action_n, format_action, vlog, NPartyEnv};
 
 pub(crate) fn run_boxed(
     actions: Vec<Action>,
@@ -100,6 +100,13 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
         sent_messages: vec![],
         members: None,
     };
+    let push_per_participant = [false; 3];
+    let env = NPartyEnv {
+        clients: &clients,
+        handles: &handles,
+        push_per_participant: &push_per_participant,
+        verbose,
+    };
 
     let total = actions.len();
     for (i, action) in actions.iter().enumerate() {
@@ -110,10 +117,7 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
             total,
             format_action(action)
         );
-        execute_action_n(
-            action, &clients, &mut world, &handles, &[false; 3], &mut state, verbose,
-        )
-        .await;
+        execute_action_n(action, &env, &mut world, &mut state).await;
     }
 
     // ── Drain + invariants ─────────────────────────────────────────────────────
@@ -122,7 +126,7 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
     }
 
     vlog!(verbose, "[drain] ensuring all participants are online...");
-    ensure_all_online_n(&mut world, &clients, &handles, &[false; 3]).await;
+    ensure_all_online_n(&mut world, &env).await;
 
     vlog!(verbose, "[drain] waiting for events to propagate...");
     drain_events_n(&clients).await;

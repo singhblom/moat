@@ -23,7 +23,7 @@ use crate::invariants::{
 };
 use crate::world::TestWorld;
 
-use super::{ensure_all_online_n, execute_action_n, format_action, vlog};
+use super::{ensure_all_online_n, execute_action_n, format_action, vlog, NPartyEnv};
 
 /// Registry-compatible wrapper: uses the default 3-party push topology.
 pub(crate) fn run_boxed(
@@ -208,6 +208,12 @@ pub async fn run(config: WorldConfig, actions: Vec<Action>, verbose: bool) {
         sent_messages: vec![],
         members: initial_members,
     };
+    let env = NPartyEnv {
+        clients: &clients,
+        handles: &handles,
+        push_per_participant: &push_per_participant,
+        verbose,
+    };
 
     let total = actions.len();
     for (i, action) in actions.iter().enumerate() {
@@ -218,16 +224,7 @@ pub async fn run(config: WorldConfig, actions: Vec<Action>, verbose: bool) {
             total,
             format_action(action)
         );
-        execute_action_n(
-            action,
-            &clients,
-            &mut world,
-            &handles,
-            &push_per_participant,
-            &mut state,
-            verbose,
-        )
-        .await;
+        execute_action_n(action, &env, &mut world, &mut state).await;
     }
 
     // ── Drain + invariants ───────────────────────────────────────────────────
@@ -236,7 +233,7 @@ pub async fn run(config: WorldConfig, actions: Vec<Action>, verbose: bool) {
     }
     // Bring any offline participants back online before checking invariants.
     vlog!(verbose, "[drain] ensuring all participants are online...");
-    ensure_all_online_n(&mut world, &clients, &handles, &push_per_participant).await;
+    ensure_all_online_n(&mut world, &env).await;
 
     // Re-enable polling for relay participants so they can catch up on any
     // events missed via Drawbridge (e.g. after membership changes).
