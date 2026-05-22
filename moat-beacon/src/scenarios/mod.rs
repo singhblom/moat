@@ -85,17 +85,34 @@ fn pick_handle<'a>(
     }
 }
 
+/// Per-scenario configuration that stays constant across all calls to
+/// [`execute_action`] / [`ensure_all_online`] within a single scenario run.
+///
+/// Bundling these lets the per-step calls take just the action + mutable state,
+/// keeping scenario loops readable.
+pub struct TwoPartyEnv<'a> {
+    pub alice: &'a MoatCliClient,
+    pub bob: &'a MoatCliClient,
+    pub alice_full_handle: &'a str,
+    pub bob_full_handle: &'a str,
+    pub push_mode: bool,
+    pub verbose: bool,
+}
+
 pub async fn execute_action(
     action: &Action,
-    alice: &MoatCliClient,
-    bob: &MoatCliClient,
+    env: &TwoPartyEnv<'_>,
     world: &mut TestWorld,
-    alice_full_handle: &str,
-    bob_full_handle: &str,
-    push_mode: bool,
     state: &mut ScenarioState,
-    verbose: bool,
 ) {
+    let &TwoPartyEnv {
+        alice,
+        bob,
+        alice_full_handle,
+        bob_full_handle,
+        push_mode,
+        verbose,
+    } = env;
     match action {
         Action::SendMessage { from, text_idx } => {
             let text = TEXT_VOCAB[text_idx % TEXT_VOCAB.len()];
@@ -201,14 +218,15 @@ pub async fn execute_action(
 /// For each participant that is currently offline, restarts the process,
 /// re-logs in, re-watches the other party, runs a catch-up poll, and
 /// (if `push_mode`) disables auto-polling again.
-pub async fn ensure_all_online(
-    world: &mut TestWorld,
-    alice: &MoatCliClient,
-    bob: &MoatCliClient,
-    alice_full_handle: &str,
-    bob_full_handle: &str,
-    push_mode: bool,
-) {
+pub async fn ensure_all_online(world: &mut TestWorld, env: &TwoPartyEnv<'_>) {
+    let &TwoPartyEnv {
+        alice,
+        bob,
+        alice_full_handle,
+        bob_full_handle,
+        push_mode,
+        ..
+    } = env;
     let participants = [
         ("alice", alice_full_handle, alice, bob_full_handle),
         ("bob", bob_full_handle, bob, alice_full_handle),

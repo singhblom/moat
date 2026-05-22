@@ -228,6 +228,25 @@ pub struct DeviceAlert {
     pub timestamp: chrono::DateTime<chrono::Utc>,
 }
 
+/// Metadata for an off-chain blob that has been encrypted and uploaded to the PDS.
+/// Carried by [`BgEvent::BlobUploaded`] and [`BgEvent::ImageUploaded`] so the
+/// foreground task can build an `ExternalBlob` and publish the MLS event.
+pub(crate) struct UploadedBlob {
+    pub cid: String,
+    pub key: Vec<u8>,
+    pub ciphertext_hash: Vec<u8>,
+    pub ciphertext_size: u64,
+    pub content_hash: Vec<u8>,
+}
+
+/// Display/encoding metadata for an image attachment.
+pub(crate) struct ImageMeta {
+    pub width: u32,
+    pub height: u32,
+    pub thumbhash: Vec<u8>,
+    pub mime: String,
+}
+
 /// Events produced by background tasks and consumed by the main loop.
 pub(crate) enum BgEvent {
     /// Network portion of poll_messages completed.
@@ -311,14 +330,7 @@ pub(crate) enum BgEvent {
 
     /// Blob upload completed — MLS-encrypt and publish the long-text event.
     BlobUploaded {
-        cid: String,
-        key: Vec<u8>,
-        ciphertext_hash: Vec<u8>,
-        ciphertext_size: u64,
-        content_hash: Vec<u8>,
-        /// Full original text (kept for future use, e.g. offline retransmit).
-        #[allow(dead_code)]
-        full_text: String,
+        blob: UploadedBlob,
         preview_text: String,
         conv_id: String,
     },
@@ -337,15 +349,8 @@ pub(crate) enum BgEvent {
 
     /// Image processed and blob uploaded — MLS-encrypt and publish the image event.
     ImageUploaded {
-        cid: String,
-        key: Vec<u8>,
-        ciphertext_hash: Vec<u8>,
-        ciphertext_size: u64,
-        content_hash: Vec<u8>,
-        width: u32,
-        height: u32,
-        thumbhash: Vec<u8>,
-        mime: String,
+        blob: UploadedBlob,
+        image: ImageMeta,
         pending_message_id: Vec<u8>,
         conv_id: String,
     },
@@ -1552,25 +1557,8 @@ impl App {
                 }
             }
 
-            BgEvent::BlobUploaded {
-                cid,
-                key,
-                ciphertext_hash,
-                ciphertext_size,
-                content_hash,
-                full_text: _,
-                preview_text,
-                conv_id,
-            } => {
-                self.handle_blob_uploaded(
-                    cid,
-                    key,
-                    ciphertext_hash,
-                    ciphertext_size,
-                    content_hash,
-                    preview_text,
-                    conv_id,
-                );
+            BgEvent::BlobUploaded { blob, preview_text, conv_id } => {
+                self.handle_blob_uploaded(blob, preview_text, conv_id);
             }
 
             BgEvent::BlobFetched { message_id, full_text } => {
@@ -1591,29 +1579,10 @@ impl App {
                 }
             }
 
-            BgEvent::ImageUploaded {
-                cid,
-                key,
-                ciphertext_hash,
-                ciphertext_size,
-                content_hash,
-                width,
-                height,
-                thumbhash,
-                mime,
-                pending_message_id,
-                conv_id,
-            } => {
+            BgEvent::ImageUploaded { blob, image, pending_message_id, conv_id } => {
                 self.handle_image_uploaded(
-                    cid,
-                    key,
-                    ciphertext_hash,
-                    ciphertext_size,
-                    content_hash,
-                    width,
-                    height,
-                    thumbhash,
-                    mime,
+                    blob,
+                    image,
                     pending_message_id,
                     conv_id,
                 );
@@ -1673,11 +1642,7 @@ impl App {
     /// MLS-encrypt a long-text event after blob upload succeeded, then publish.
     fn handle_blob_uploaded(
         &mut self,
-        cid: String,
-        key: Vec<u8>,
-        ciphertext_hash: Vec<u8>,
-        ciphertext_size: u64,
-        content_hash: Vec<u8>,
+        blob: UploadedBlob,
         preview_text: String,
         conv_id: String,
     ) {
@@ -1686,9 +1651,9 @@ impl App {
             return;
         };
 
-        let uri = format!("at://{}/{}", client.did(), cid);
+        let uri = format!("at://{}/{}", client.did(), blob.cid);
 
-        let key_arr: [u8; 32] = match key.try_into() {
+        let key_arr: [u8; 32] = match blob.key.try_into() {
             Ok(k) => k,
             Err(_) => {
                 self.set_error("blob key has wrong length".to_string());
@@ -1696,7 +1661,13 @@ impl App {
             }
         };
 
-        let external = match ExternalBlob::new(uri, key_arr.to_vec(), ciphertext_hash, ciphertext_size, content_hash) {
+        let external = match ExternalBlob::new(
+            uri,
+            key_arr.to_vec(),
+            blob.ciphertext_hash,
+            blob.ciphertext_size,
+            blob.content_hash,
+        ) {
             Ok(e) => e,
             Err(e) => {
                 self.set_error(format!("failed to build ExternalBlob: {e}"));
@@ -2095,15 +2066,14 @@ impl App {
             };
 
             let _ = tx.send(BgEvent::ImageUploaded {
-                cid,
-                key: encrypted.key.to_vec(),
-                ciphertext_hash: encrypted.ciphertext_hash,
-                ciphertext_size,
-                content_hash: encrypted.content_hash,
-                width,
-                height,
-                thumbhash,
-                mime,
+                blob: UploadedBlob {
+                    cid,
+                    key: encrypted.key.to_vec(),
+                    ciphertext_hash: encrypted.ciphertext_hash,
+                    ciphertext_size,
+                    content_hash: encrypted.content_hash,
+                },
+                image: ImageMeta { width, height, thumbhash, mime },
                 pending_message_id,
                 conv_id,
             });
@@ -2123,18 +2093,14 @@ impl App {
     /// MLS-encrypt an image event after blob upload succeeded, then publish.
     fn handle_image_uploaded(
         &mut self,
-        cid: String,
-        key: Vec<u8>,
-        ciphertext_hash: Vec<u8>,
-        ciphertext_size: u64,
-        content_hash: Vec<u8>,
-        width: u32,
-        height: u32,
-        thumbhash: Vec<u8>,
-        mime: String,
+        blob: UploadedBlob,
+        image: ImageMeta,
         pending_message_id: Vec<u8>,
         conv_id: String,
     ) {
+        let UploadedBlob { cid, key, ciphertext_hash, ciphertext_size, content_hash } = blob;
+        let ImageMeta { width, height, thumbhash, mime } = image;
+
         let Some(client) = self.client.as_ref() else {
             self.set_error("image uploaded but client is gone".to_string());
             return;
@@ -4072,12 +4038,13 @@ impl App {
                 match client.upload_blob(&encrypted.blob).await {
                     Ok(cid) => {
                         let _ = tx.send(BgEvent::BlobUploaded {
-                            cid,
-                            key: encrypted.key.to_vec(),
-                            ciphertext_hash: encrypted.ciphertext_hash,
-                            ciphertext_size,
-                            content_hash: encrypted.content_hash,
-                            full_text,
+                            blob: UploadedBlob {
+                                cid,
+                                key: encrypted.key.to_vec(),
+                                ciphertext_hash: encrypted.ciphertext_hash,
+                                ciphertext_size,
+                                content_hash: encrypted.content_hash,
+                            },
                             preview_text,
                             conv_id: conv_id_clone,
                         });

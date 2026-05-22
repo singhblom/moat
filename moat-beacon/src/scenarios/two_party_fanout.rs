@@ -18,7 +18,7 @@ use crate::invariants::{
 use crate::world::TestWorld;
 
 use super::two_party_push::drain_events_push;
-use super::{execute_action, format_action, vlog};
+use super::{execute_action, format_action, vlog, TwoPartyEnv};
 
 pub(crate) fn run_boxed(
     actions: Vec<Action>,
@@ -115,22 +115,19 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
         eprintln!();
     }
     let mut state = ScenarioState { group_id, sent_messages: vec![], members: None };
+    let env = TwoPartyEnv {
+        alice: &alice,
+        bob: &bob,
+        alice_full_handle: "alice.postern.test",
+        bob_full_handle: "bob.postern.test",
+        push_mode: true,
+        verbose,
+    };
 
     let total = actions.len();
     for (i, action) in actions.iter().enumerate() {
         vlog!(verbose, "[action {}/{}] {}", i + 1, total, format_action(action));
-        execute_action(
-            action,
-            &alice,
-            &bob,
-            &mut world,
-            "alice.postern.test",
-            "bob.postern.test",
-            true,
-            &mut state,
-            verbose,
-        )
-        .await;
+        execute_action(action, &env, &mut world, &mut state).await;
     }
 
     // ── Drain + invariants ─────────────────────────────────────────────────────

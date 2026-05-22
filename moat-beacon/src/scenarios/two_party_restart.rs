@@ -16,7 +16,7 @@ use crate::invariants::{
 };
 use crate::world::TestWorld;
 
-use super::{ensure_all_online, execute_action, format_action, vlog};
+use super::{ensure_all_online, execute_action, format_action, vlog, TwoPartyEnv};
 
 pub(crate) fn run_boxed(
     actions: Vec<Action>,
@@ -82,22 +82,19 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
         eprintln!();
     }
     let mut state = ScenarioState { group_id, sent_messages: vec![], members: None };
+    let env = TwoPartyEnv {
+        alice: &alice,
+        bob: &bob,
+        alice_full_handle: "alice.postern.test",
+        bob_full_handle: "bob.postern.test",
+        push_mode: false,
+        verbose,
+    };
 
     let total = actions.len();
     for (i, action) in actions.iter().enumerate() {
         vlog!(verbose, "[action {}/{}] {}", i + 1, total, format_action(action));
-        execute_action(
-            action,
-            &alice,
-            &bob,
-            &mut world,
-            "alice.postern.test",
-            "bob.postern.test",
-            false,
-            &mut state,
-            verbose,
-        )
-        .await;
+        execute_action(action, &env, &mut world, &mut state).await;
     }
 
     // ── Drain + invariants ─────────────────────────────────────────────────────
@@ -107,15 +104,7 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
 
     // Bring any offline participants back online before draining.
     vlog!(verbose, "[drain] ensuring all participants are online...");
-    ensure_all_online(
-        &mut world,
-        &alice,
-        &bob,
-        "alice.postern.test",
-        "bob.postern.test",
-        false,
-    )
-    .await;
+    ensure_all_online(&mut world, &env).await;
 
     vlog!(verbose, "[drain] waiting for events to propagate...");
     drain_events(&alice, &bob).await;
