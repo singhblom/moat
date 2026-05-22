@@ -359,10 +359,6 @@ pub(crate) enum BgEvent {
 
     // ── Drawbridge pairing (main WS control plane) ───────────────────────────
 
-    /// Send `pair_offer{token}` on the main Drawbridge WS.
-    DrawbridgeSendPairOffer {
-        token: Vec<u8>,
-    },
     /// Send `pair_join{token}` on the main Drawbridge WS.
     DrawbridgeSendPairJoin {
         token: Vec<u8>,
@@ -406,7 +402,6 @@ impl BgEvent {
             BgEvent::DrawbridgeConnectOwn { .. }
             | BgEvent::DrawbridgeNotifyEventPosted { .. }
             | BgEvent::DrawbridgeWatchTags { .. }
-            | BgEvent::DrawbridgeSendPairOffer { .. }
             | BgEvent::DrawbridgeSendPairJoin { .. }
             | BgEvent::DrawbridgeConnectPair { .. }
             | BgEvent::DrawbridgeSendPairBinary { .. } => true,
@@ -1166,21 +1161,18 @@ impl App {
                     )
                     .await
                 };
-                match resume_result {
-                    Ok(client) => {
-                        let (aj, rj) = client
-                            .get_session_tokens()
-                            .await
-                            .unwrap_or((session.access_jwt, session.refresh_jwt));
-                        let _ = tx.send(BgEvent::LoggedIn {
-                            did: client.did().to_string(),
-                            client,
-                            access_jwt: aj,
-                            refresh_jwt: rj,
-                        });
-                        return;
-                    }
-                    Err(_) => {} // fall through
+                if let Ok(client) = resume_result {
+                    let (aj, rj) = client
+                        .get_session_tokens()
+                        .await
+                        .unwrap_or((session.access_jwt, session.refresh_jwt));
+                    let _ = tx.send(BgEvent::LoggedIn {
+                        did: client.did().to_string(),
+                        client,
+                        access_jwt: aj,
+                        refresh_jwt: rj,
+                    });
+                    return;
                 }
             }
 
@@ -1264,59 +1256,51 @@ impl App {
             let mut new_rkeys = Vec::new();
 
             for (participant_did, conv_indices, last_rkey) in &dids_with_rkeys {
-                match client
+                if let Ok(events) = client
                     .fetch_events_from_did(participant_did, last_rkey.as_deref())
-                    .await
-                {
-                    Ok(events) => {
-                        let mut max_rkey: Option<String> = last_rkey.clone();
-                        for event in events {
-                            if let Some(ref last) = last_rkey {
-                                if event.rkey <= *last {
-                                    continue;
-                                }
+                    .await {
+                    let mut max_rkey: Option<String> = last_rkey.clone();
+                    for event in events {
+                        if let Some(ref last) = last_rkey {
+                            if event.rkey <= *last {
+                                continue;
                             }
-                            if max_rkey.as_ref().map_or(true, |m| event.rkey > *m) {
-                                max_rkey = Some(event.rkey.clone());
-                            }
-                            participant_events.push((
-                                conv_indices.clone(),
-                                event,
-                                participant_did.clone(),
-                            ));
                         }
-                        if let Some(rkey) = max_rkey {
-                            new_rkeys.push((participant_did.clone(), rkey));
+                        if max_rkey.as_ref().map_or(true, |m| event.rkey > *m) {
+                            max_rkey = Some(event.rkey.clone());
                         }
+                        participant_events.push((
+                            conv_indices.clone(),
+                            event,
+                            participant_did.clone(),
+                        ));
                     }
-                    Err(_) => {}
+                    if let Some(rkey) = max_rkey {
+                        new_rkeys.push((participant_did.clone(), rkey));
+                    }
                 }
             }
 
             let mut watched_events = Vec::new();
             for (did, last_rkey) in &watched {
-                match client
+                if let Ok(events) = client
                     .fetch_events_from_did(did, last_rkey.as_deref())
-                    .await
-                {
-                    Ok(events) => {
-                        let mut max_rkey = last_rkey.clone();
-                        for event in events {
-                            if let Some(ref last) = last_rkey {
-                                if event.rkey <= *last {
-                                    continue;
-                                }
+                    .await {
+                    let mut max_rkey = last_rkey.clone();
+                    for event in events {
+                        if let Some(ref last) = last_rkey {
+                            if event.rkey <= *last {
+                                continue;
                             }
-                            if max_rkey.as_ref().map_or(true, |m| event.rkey > *m) {
-                                max_rkey = Some(event.rkey.clone());
-                            }
-                            watched_events.push((did.clone(), event));
                         }
-                        if let Some(rkey) = max_rkey {
-                            new_rkeys.push((did.clone(), rkey));
+                        if max_rkey.as_ref().map_or(true, |m| event.rkey > *m) {
+                            max_rkey = Some(event.rkey.clone());
                         }
+                        watched_events.push((did.clone(), event));
                     }
-                    Err(_) => {}
+                    if let Some(rkey) = max_rkey {
+                        new_rkeys.push((did.clone(), rkey));
+                    }
                 }
             }
 
@@ -1430,7 +1414,7 @@ impl App {
                     .log(&format!("send_message: published to PDS, uri={}", uri));
                 self.tag_map.insert(tag, conv_id.clone());
 
-                let rkey = uri.split('/').last().unwrap_or("").to_string();
+                let rkey = uri.split('/').next_back().unwrap_or("").to_string();
 
                 // Fix up the "pending" rkey in storage to the real one
                 if !rkey.is_empty() {
@@ -1494,7 +1478,6 @@ impl App {
                             // Process the decrypted event inline — skip PDS fetch
                             self.process_inline_decrypted(&conv_id, &rkey, decrypted);
                             self.save_mls_state().ok();
-                            return;
                         }
                     }
                 }
@@ -1651,8 +1634,7 @@ impl App {
             }
 
             // ── Drawbridge pairing (async side handled by handle_bg_event_async) ──
-            BgEvent::DrawbridgeSendPairOffer { .. }
-            | BgEvent::DrawbridgeSendPairJoin { .. }
+            BgEvent::DrawbridgeSendPairJoin { .. }
             | BgEvent::DrawbridgeConnectPair { .. }
             | BgEvent::DrawbridgeSendPairBinary { .. } => {}
 
@@ -1885,11 +1867,6 @@ impl App {
                         .log(&format!("drawbridge: register_push (tag-sync) failed: {e}"));
                 }
             }
-            BgEvent::DrawbridgeSendPairOffer { token } => {
-                if let Err(e) = self.drawbridge.send_pair_offer(&token).await {
-                    self.debug_log.log(&format!("drawbridge: pair_offer failed: {e}"));
-                }
-            }
             BgEvent::DrawbridgeSendPairJoin { token } => {
                 if let Err(e) = self.drawbridge.send_pair_join(&token).await {
                     self.debug_log.log(&format!("drawbridge: pair_join failed: {e}"));
@@ -2078,7 +2055,7 @@ impl App {
             })
             .await;
 
-            let (image_bytes, width, height, thumbhash, mime) = match result {
+            let processed = match result {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
                     let _ = tx.send(BgEvent::SendFailed(format!("image processing failed: {e}")));
@@ -2089,21 +2066,27 @@ impl App {
                     return;
                 }
             };
+            let (image_bytes, width, height, thumbhash, mime) = (
+                processed.bytes,
+                processed.width,
+                processed.height,
+                processed.thumbhash,
+                processed.mime,
+            );
 
             // Encrypt blob (fast, CPU-only).
-            let (blob_bytes, key, ciphertext_hash, content_hash) =
-                match moat_core::blob_encrypt(&image_bytes) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        let _ =
-                            tx.send(BgEvent::SendFailed(format!("blob encrypt failed: {e}")));
-                        return;
-                    }
-                };
-            let ciphertext_size = blob_bytes.len() as u64;
+            let encrypted = match moat_core::blob_encrypt(&image_bytes) {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ =
+                        tx.send(BgEvent::SendFailed(format!("blob encrypt failed: {e}")));
+                    return;
+                }
+            };
+            let ciphertext_size = encrypted.blob.len() as u64;
 
             // Upload blob to PDS.
-            let cid = match client.upload_blob(&blob_bytes).await {
+            let cid = match client.upload_blob(&encrypted.blob).await {
                 Ok(cid) => cid,
                 Err(e) => {
                     let _ = tx.send(BgEvent::SendFailed(format!("blob upload failed: {e}")));
@@ -2113,10 +2096,10 @@ impl App {
 
             let _ = tx.send(BgEvent::ImageUploaded {
                 cid,
-                key: key.to_vec(),
-                ciphertext_hash,
+                key: encrypted.key.to_vec(),
+                ciphertext_hash: encrypted.ciphertext_hash,
                 ciphertext_size,
-                content_hash,
+                content_hash: encrypted.content_hash,
                 width,
                 height,
                 thumbhash,
@@ -2367,68 +2350,6 @@ impl App {
         });
     }
 
-    fn spawn_targeted_fetch(&mut self, did: &str) {
-        let client = match self.client.as_ref() {
-            Some(c) => c.clone(),
-            None => return,
-        };
-
-        let did = did.to_string();
-        let last_rkey = self.keys.get_last_rkey(&did).ok().flatten();
-
-        // Find conversation indices for this DID
-        let conv_indices: Vec<usize> = self
-            .conversations
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| c.participant_dids.contains(&did))
-            .map(|(i, _)| i)
-            .collect();
-
-        let tx = self.bg_tx.clone();
-
-        tokio::spawn(async move {
-            match client
-                .fetch_events_from_did(&did, last_rkey.as_deref())
-                .await
-            {
-                Ok(events) => {
-                    let mut max_rkey = last_rkey.clone();
-                    let mut participant_events = Vec::new();
-
-                    for event in events {
-                        if let Some(ref last) = last_rkey {
-                            if event.rkey <= *last {
-                                continue;
-                            }
-                        }
-                        if max_rkey.as_ref().map_or(true, |m| event.rkey > *m) {
-                            max_rkey = Some(event.rkey.clone());
-                        }
-                        participant_events.push((conv_indices.clone(), event, did.clone()));
-                    }
-
-                    let mut new_rkeys = Vec::new();
-                    if let Some(rkey) = max_rkey {
-                        new_rkeys.push((did, rkey));
-                    }
-
-                    let _ = tx.send(BgEvent::PollFetched {
-                        participant_events,
-                        watched_events: Vec::new(),
-                        new_rkeys,
-                    });
-                }
-                Err(e) => {
-                    let _ = tx.send(BgEvent::PollError(format!(
-                        "Targeted fetch for {} failed: {}",
-                        did, e
-                    )));
-                }
-            }
-        });
-    }
-
     /// Save Drawbridge state to disk.
     fn save_drawbridge_state(&self) {
         let state = self.drawbridge.export_state(&self.drawbridge_url);
@@ -2518,13 +2439,13 @@ impl App {
                 let parsed = decrypted.event.parse_message_payload();
                 let content = parsed
                     .as_ref()
-                    .map(|p| render_message_preview(p))
+                    .map(render_message_preview)
                     .unwrap_or_else(|| String::from_utf8_lossy(&decrypted.event.payload).to_string());
                 let (sender_did, sender_device) = decrypted
                     .sender
                     .map(|s| (Some(s.did), Some(s.device_name)))
                     .unwrap_or((None, None));
-                let is_own = sender_did.as_ref().map_or(false, |did| did == &my_did);
+                let is_own = sender_did.as_ref() == Some(&my_did);
                 let timestamp = chrono::Utc::now();
 
                 // Persist received message locally
@@ -2821,10 +2742,7 @@ impl App {
             if self.own_published_tags.contains(&event_record.tag) {
                 continue;
             }
-            match self.process_matched_event(&conv_indices, &event_record, &my_did) {
-                Some(true) => { new_messages += 1; }
-                _ => {}
-            }
+            if let Some(true) = self.process_matched_event(&conv_indices, &event_record, &my_did) { new_messages += 1; }
         }
 
         // Save MLS state if modified
@@ -2896,7 +2814,7 @@ impl App {
                         let parsed = decrypted.event.parse_message_payload();
                         let content = parsed
                             .as_ref()
-                            .map(|p| render_message_preview(p))
+                            .map(render_message_preview)
                             .unwrap_or_else(|| "(invalid message payload)".to_string());
                         let (sender_did, sender_device) = decrypted
                             .sender
@@ -2904,7 +2822,7 @@ impl App {
                             .unwrap_or((None, None));
 
                         let is_own =
-                            sender_did.as_ref().map_or(false, |did| did == my_did);
+                            sender_did.as_ref().is_some_and(|did| did == my_did);
 
                         // Extract ExternalBlob metadata for image messages (for HTTP download).
                         let (blob_uri, blob_key, blob_ciphertext_hash, blob_ciphertext_size, blob_content_hash, blob_mime, blob_width, blob_height) =
@@ -4099,9 +4017,9 @@ impl App {
             let preview_text = truncate_to_preview(&full_text);
 
             // Blob-encrypt synchronously (fast — no I/O).
-            let (blob_bytes, key, ciphertext_hash, content_hash) = blob_encrypt(full_text.as_bytes())
+            let encrypted = blob_encrypt(full_text.as_bytes())
                 .map_err(|e| AppError::Other(format!("blob encrypt failed: {e}")))?;
-            let ciphertext_size = blob_bytes.len() as u64;
+            let ciphertext_size = encrypted.blob.len() as u64;
 
             // Optimistic UI: show preview + uploading indicator.
             let timestamp = chrono::Utc::now();
@@ -4151,14 +4069,14 @@ impl App {
             let conv_id_clone = conv_id;
 
             tokio::spawn(async move {
-                match client.upload_blob(&blob_bytes).await {
+                match client.upload_blob(&encrypted.blob).await {
                     Ok(cid) => {
                         let _ = tx.send(BgEvent::BlobUploaded {
                             cid,
-                            key: key.to_vec(),
-                            ciphertext_hash,
+                            key: encrypted.key.to_vec(),
+                            ciphertext_hash: encrypted.ciphertext_hash,
                             ciphertext_size,
-                            content_hash,
+                            content_hash: encrypted.content_hash,
                             full_text,
                             preview_text,
                             conv_id: conv_id_clone,

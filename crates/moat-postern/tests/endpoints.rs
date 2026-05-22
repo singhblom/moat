@@ -170,7 +170,7 @@ async fn create_then_get_record() {
         "unexpected URI: {uri}"
     );
 
-    let rkey = uri.split('/').last().unwrap();
+    let rkey = uri.split('/').next_back().unwrap();
 
     let resp = http
         .get(format!(

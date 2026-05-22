@@ -17,7 +17,7 @@ use reqwest::Client;
 use serde::Deserialize;
 use std::{
     net::TcpListener,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command},
     time::{Duration, Instant},
 };
@@ -211,7 +211,7 @@ fn needs_rebuild(bin: &PathBuf, src_dir: &PathBuf) -> bool {
     false
 }
 
-fn build_drawbridge(src_dir: &PathBuf, bin: &PathBuf) -> Result<()> {
+fn build_drawbridge(src_dir: &Path, bin: &Path) -> Result<()> {
     eprintln!("beacon: building drawbridge…");
 
     // Verify Go is available.

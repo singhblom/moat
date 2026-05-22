@@ -352,8 +352,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Render each message in its own sub-Rect.
     let mut cumulative_y: u16 = 0;
-    for msg_idx in 0..app.messages.len() {
-        let h = heights[msg_idx];
+    for (msg_idx, &h) in heights.iter().enumerate().take(app.messages.len()) {
         let msg_top = cumulative_y;
         cumulative_y += h;
 
@@ -437,7 +436,7 @@ fn compute_msg_text_rows(
         let remaining = content_chars - first_content_len;
         let wrap_width = inner_width.saturating_sub(1); // indicator column
         if wrap_width > 0 {
-            rows += ((remaining + wrap_width - 1) / wrap_width) as u16;
+            rows += remaining.div_ceil(wrap_width) as u16;
         }
     }
 

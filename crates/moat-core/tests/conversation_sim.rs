@@ -4,6 +4,11 @@
 //! per-participant inboxes that can be delivered, reordered, or dropped.
 //! Supports dynamic membership (add/remove) from the start.
 
+// Included as `mod conversation_sim;` by several integration-test binaries,
+// each of which exercises a different subset of the API. The compiler can only
+// see one binary at a time, so otherwise-live items appear dead here.
+#![allow(dead_code)]
+
 use moat_core::{
     ControlKind, DecryptOutcome, Event, EventKind, MoatCredential, MoatSession, TranscriptWarning,
 };
@@ -46,7 +51,7 @@ impl ConversationSim {
         for name in names {
             let session = MoatSession::new();
             let credential = MoatCredential::new(
-                &format!("did:plc:{}", name.to_lowercase()),
+                format!("did:plc:{}", name.to_lowercase()),
                 *name,
                 *session.device_id(),
             );
@@ -89,8 +94,8 @@ impl ConversationSim {
             assert_eq!(joined_group_id, group_id);
 
             // Deliver the commit to all existing members (except creator who already merged)
-            for j in 1..i {
-                let outcome = participants[j]
+            for participant in participants.iter_mut().take(i).skip(1) {
+                let outcome = participant
                     .session
                     .decrypt_event(&group_id, &welcome_result.commit)
                     .unwrap();
@@ -167,15 +172,6 @@ impl ConversationSim {
         true
     }
 
-    /// Deliver all remaining events for a participant.
-    pub fn deliver_all(&mut self, target: usize) -> Vec<DecryptOutcome> {
-        let mut results = Vec::new();
-        while let Some(outcome) = self.deliver_next(target) {
-            results.push(outcome);
-        }
-        results
-    }
-
     /// Get the inbox length for a participant.
     pub fn inbox_len(&self, target: usize) -> usize {
         self.inboxes[target].len()
@@ -221,7 +217,7 @@ impl ConversationSim {
         // Create the new participant
         let session = MoatSession::new();
         let credential = MoatCredential::new(
-            &format!("did:plc:{}", new_name.to_lowercase()),
+            format!("did:plc:{}", new_name.to_lowercase()),
             new_name,
             *session.device_id(),
         );
@@ -255,19 +251,6 @@ impl ConversationSim {
 
         // Return commit bytes for delivery to others
         (welcome_result.commit, welcome_result.welcome, new_index)
-    }
-
-    /// Remove a member by leaf index. Returns commit bytes for delivery.
-    pub fn remove_member_sim(&mut self, remover: usize, leaf_index: u32) -> Vec<u8> {
-        let result = self.participants[remover]
-            .session
-            .remove_member(
-                &self.group_id,
-                &self.participants[remover].key_bundle,
-                leaf_index,
-            )
-            .unwrap();
-        result.commit
     }
 
     /// Deliver a commit to all participants except those in the exclude list.

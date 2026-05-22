@@ -28,19 +28,21 @@ const NONCE_SIZE: usize = 24;
 /// Size of the blob encryption key in bytes.
 const KEY_SIZE: usize = 32;
 
+/// Output of [`blob_encrypt`].
+pub struct EncryptedBlob {
+    /// `nonce (24 bytes) || ciphertext`. This is what gets uploaded to the PDS.
+    pub blob: Vec<u8>,
+    /// 32-byte symmetric key. Embedded (MLS-encrypted) in the event record.
+    pub key: [u8; KEY_SIZE],
+    /// SHA-256 of `blob`. Stored in `ExternalBlob` for pre-decryption integrity check.
+    pub ciphertext_hash: Vec<u8>,
+    /// SHA-256 of `plaintext`. Stored in `ExternalBlob` for post-decryption integrity
+    /// check and as the local cache key.
+    pub content_hash: Vec<u8>,
+}
+
 /// Encrypt `plaintext` as an off-chain blob.
-///
-/// # Returns
-///
-/// A tuple of `(blob, key, ciphertext_hash, content_hash)`:
-///
-/// - `blob` — `nonce (24 bytes) || ciphertext`. This is what gets uploaded to the PDS.
-/// - `key` — 32-byte symmetric key. Embedded (MLS-encrypted) in the event record.
-/// - `ciphertext_hash` — SHA-256 of `blob`. Stored in `ExternalBlob` for pre-decryption integrity check.
-/// - `content_hash` — SHA-256 of `plaintext`. Stored in `ExternalBlob` for post-decryption integrity check and as the local cache key.
-pub fn blob_encrypt(
-    plaintext: &[u8],
-) -> Result<(Vec<u8>, [u8; KEY_SIZE], Vec<u8>, Vec<u8>)> {
+pub fn blob_encrypt(plaintext: &[u8]) -> Result<EncryptedBlob> {
     let mut rng = rand::thread_rng();
 
     // Generate a fresh random key and nonce for each blob.
@@ -67,7 +69,7 @@ pub fn blob_encrypt(
     // Hash the assembled blob.
     let ciphertext_hash = Sha256::digest(&blob).to_vec();
 
-    Ok((blob, key, ciphertext_hash, content_hash))
+    Ok(EncryptedBlob { blob, key, ciphertext_hash, content_hash })
 }
 
 /// Decrypt and verify an off-chain blob.
@@ -133,10 +135,9 @@ mod tests {
     #[test]
     fn roundtrip_nonempty() {
         let plaintext = b"Hello, off-chain blob!";
-        let (blob, key, ciphertext_hash, content_hash) =
-            blob_encrypt(plaintext).expect("encryption should succeed");
+        let r = blob_encrypt(plaintext).expect("encryption should succeed");
 
-        let decrypted = blob_decrypt(&blob, &key, &ciphertext_hash, &content_hash)
+        let decrypted = blob_decrypt(&r.blob, &r.key, &r.ciphertext_hash, &r.content_hash)
             .expect("decryption should succeed");
 
         assert_eq!(decrypted, plaintext);
@@ -145,10 +146,9 @@ mod tests {
     #[test]
     fn roundtrip_empty() {
         let plaintext = b"";
-        let (blob, key, ciphertext_hash, content_hash) =
-            blob_encrypt(plaintext).expect("encryption should succeed");
+        let r = blob_encrypt(plaintext).expect("encryption should succeed");
 
-        let decrypted = blob_decrypt(&blob, &key, &ciphertext_hash, &content_hash)
+        let decrypted = blob_decrypt(&r.blob, &r.key, &r.ciphertext_hash, &r.content_hash)
             .expect("decryption should succeed for empty plaintext");
 
         assert_eq!(decrypted, plaintext);
@@ -157,10 +157,9 @@ mod tests {
     #[test]
     fn roundtrip_large() {
         let plaintext = vec![0xAB_u8; 64 * 1024]; // 64 KB
-        let (blob, key, ciphertext_hash, content_hash) =
-            blob_encrypt(&plaintext).expect("encryption should succeed");
+        let r = blob_encrypt(&plaintext).expect("encryption should succeed");
 
-        let decrypted = blob_decrypt(&blob, &key, &ciphertext_hash, &content_hash)
+        let decrypted = blob_decrypt(&r.blob, &r.key, &r.ciphertext_hash, &r.content_hash)
             .expect("decryption should succeed for large plaintext");
 
         assert_eq!(decrypted, plaintext);
@@ -169,11 +168,10 @@ mod tests {
     #[test]
     fn wrong_ciphertext_hash_rejected() {
         let plaintext = b"test message";
-        let (blob, key, _ciphertext_hash, content_hash) =
-            blob_encrypt(plaintext).expect("encryption should succeed");
+        let r = blob_encrypt(plaintext).expect("encryption should succeed");
 
         let wrong_hash = vec![0u8; 32];
-        let result = blob_decrypt(&blob, &key, &wrong_hash, &content_hash);
+        let result = blob_decrypt(&r.blob, &r.key, &wrong_hash, &r.content_hash);
 
         assert!(matches!(result, Err(Error::CiphertextHashMismatch(_))));
     }
@@ -181,11 +179,10 @@ mod tests {
     #[test]
     fn wrong_content_hash_rejected() {
         let plaintext = b"test message";
-        let (blob, key, ciphertext_hash, _content_hash) =
-            blob_encrypt(plaintext).expect("encryption should succeed");
+        let r = blob_encrypt(plaintext).expect("encryption should succeed");
 
         let wrong_hash = vec![0u8; 32];
-        let result = blob_decrypt(&blob, &key, &ciphertext_hash, &wrong_hash);
+        let result = blob_decrypt(&r.blob, &r.key, &r.ciphertext_hash, &wrong_hash);
 
         assert!(matches!(result, Err(Error::ContentHashMismatch(_))));
     }
@@ -193,28 +190,26 @@ mod tests {
     #[test]
     fn corrupted_blob_rejected() {
         let plaintext = b"test message";
-        let (mut blob, key, _ciphertext_hash, content_hash) =
-            blob_encrypt(plaintext).expect("encryption should succeed");
+        let mut r = blob_encrypt(plaintext).expect("encryption should succeed");
 
         // Flip a byte in the ciphertext (after the nonce).
-        let last = blob.len() - 1;
-        blob[last] ^= 0xFF;
+        let last = r.blob.len() - 1;
+        r.blob[last] ^= 0xFF;
 
         // Re-hash the corrupted blob so the hash check passes, but decryption fails.
-        let corrupted_hash = Sha256::digest(&blob).to_vec();
+        let corrupted_hash = Sha256::digest(&r.blob).to_vec();
 
-        let result = blob_decrypt(&blob, &key, &corrupted_hash, &content_hash);
+        let result = blob_decrypt(&r.blob, &r.key, &corrupted_hash, &r.content_hash);
         assert!(matches!(result, Err(Error::BlobDecryptionFailed(_))));
     }
 
     #[test]
     fn wrong_key_rejected() {
         let plaintext = b"test message";
-        let (blob, _key, ciphertext_hash, content_hash) =
-            blob_encrypt(plaintext).expect("encryption should succeed");
+        let r = blob_encrypt(plaintext).expect("encryption should succeed");
 
         let wrong_key = [0u8; 32];
-        let result = blob_decrypt(&blob, &wrong_key, &ciphertext_hash, &content_hash);
+        let result = blob_decrypt(&r.blob, &wrong_key, &r.ciphertext_hash, &r.content_hash);
 
         // Either ciphertext hash will fail (unlikely — correct blob) or decryption will fail.
         assert!(result.is_err());
@@ -223,18 +218,18 @@ mod tests {
     #[test]
     fn different_encryptions_produce_different_blobs() {
         let plaintext = b"same content";
-        let (blob1, _, _, _) = blob_encrypt(plaintext).expect("ok");
-        let (blob2, _, _, _) = blob_encrypt(plaintext).expect("ok");
+        let r1 = blob_encrypt(plaintext).expect("ok");
+        let r2 = blob_encrypt(plaintext).expect("ok");
         // Different nonces → different ciphertexts.
-        assert_ne!(blob1, blob2);
+        assert_ne!(r1.blob, r2.blob);
     }
 
     #[test]
     fn content_hash_is_deterministic() {
         let plaintext = b"deterministic";
-        let (_, _, _, hash1) = blob_encrypt(plaintext).expect("ok");
-        let (_, _, _, hash2) = blob_encrypt(plaintext).expect("ok");
+        let r1 = blob_encrypt(plaintext).expect("ok");
+        let r2 = blob_encrypt(plaintext).expect("ok");
         // content_hash = SHA-256(plaintext), independent of key/nonce.
-        assert_eq!(hash1, hash2);
+        assert_eq!(r1.content_hash, r2.content_hash);
     }
 }

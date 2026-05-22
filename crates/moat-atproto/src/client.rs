@@ -517,7 +517,7 @@ impl MoatAtprotoClient {
                     record.uri = item.uri.to_string();
                     record.author_did = did.to_string();
                     // Extract rkey from URI: at://did:plc:xxx/social.moat.event/rkey
-                    if let Some(rkey) = item.uri.split('/').last() {
+                    if let Some(rkey) = item.uri.split('/').next_back() {
                         record.rkey = rkey.to_string();
                     }
                     all_records.push(record);
@@ -707,7 +707,7 @@ impl MoatAtprotoClient {
                 // Only accept v2 records (multi-device)
                 if record.v == 2 {
                     // Extract rkey from URI
-                    if let Some(rkey) = item.uri.split('/').last() {
+                    if let Some(rkey) = item.uri.split('/').next_back() {
                         record.rkey = rkey.to_string();
                     }
                     records.push(record);
@@ -869,7 +869,7 @@ impl MoatAtprotoClient {
             // Delete each record
             for item in &output.records {
                 // Extract rkey from URI
-                if let Some(rkey) = item.uri.split('/').last() {
+                if let Some(rkey) = item.uri.split('/').next_back() {
                     let delete_input = delete_record::InputData {
                         collection: Nsid::new(collection.to_string())
                             .map_err(|e| Error::InvalidRecord(e.to_string()))?,

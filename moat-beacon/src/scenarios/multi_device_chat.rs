@@ -203,8 +203,8 @@ pub async fn run(
     }
 
     // ── Epilogue: bring both devices online ───────────────────────────────────
-    for d in 0..2usize {
-        if !online[d] {
+    for (d, is_online) in online.iter().enumerate() {
+        if !*is_online {
             let name = if d == 0 { "alice" } else { "alice-d2" };
             world
                 .restart_participant(name)

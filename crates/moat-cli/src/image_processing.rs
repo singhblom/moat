@@ -14,19 +14,24 @@ const MAX_DIMENSION: u32 = 2048;
 /// Maximum pixel dimension for ThumbHash input.
 const THUMBHASH_MAX_DIM: u32 = 100;
 
+/// Output of [`process_image_from_bytes`].
+pub struct ProcessedImage {
+    /// Encoded image in the original format (JPEG or PNG), resized if needed.
+    pub bytes: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    /// ThumbHash bytes for the preview.
+    pub thumbhash: Vec<u8>,
+    /// `"image/jpeg"` or `"image/png"`.
+    pub mime: String,
+}
+
 /// Validate, optionally resize, and generate a ThumbHash preview from raw image bytes.
-///
-/// # Returns
-/// `(image_bytes, width, height, thumbhash_bytes, mime_type)`.
-/// - `image_bytes` are in the original format (JPEG or PNG), resized if needed.
-/// - `mime_type` is `"image/jpeg"` or `"image/png"`.
 ///
 /// # Errors
 /// Returns a human-readable error string if the format is unsupported or the
 /// image cannot be decoded.
-pub fn process_image_from_bytes(
-    bytes: &[u8],
-) -> Result<(Vec<u8>, u32, u32, Vec<u8>, String), String> {
+pub fn process_image_from_bytes(bytes: &[u8]) -> Result<ProcessedImage, String> {
     // Validate format before full decode (fast, reads only the header).
     let format = image::guess_format(bytes)
         .map_err(|_| "Unsupported format: only JPEG and PNG are accepted".to_string())?;
@@ -58,7 +63,13 @@ pub fn process_image_from_bytes(
         .map_err(|e| format!("Failed to re-decode for ThumbHash: {}", e))?;
     let thumbhash = generate_thumbhash(&for_hash);
 
-    Ok((final_bytes, width, height, thumbhash, mime.to_string()))
+    Ok(ProcessedImage {
+        bytes: final_bytes,
+        width,
+        height,
+        thumbhash,
+        mime: mime.to_string(),
+    })
 }
 
 
@@ -158,45 +169,45 @@ mod tests {
     #[test]
     fn process_image_small_jpeg_unchanged() {
         let jpeg = make_jpeg_bytes(64, 48);
-        let (bytes, w, h, thumbhash, mime) = process_image_from_bytes(&jpeg).unwrap();
+        let p = process_image_from_bytes(&jpeg).unwrap();
 
-        assert_eq!(mime, "image/jpeg");
-        assert_eq!(w, 64);
-        assert_eq!(h, 48);
-        assert!(!thumbhash.is_empty());
-        assert!(!bytes.is_empty());
-        let decoded = image::load_from_memory(&bytes).unwrap();
+        assert_eq!(p.mime, "image/jpeg");
+        assert_eq!(p.width, 64);
+        assert_eq!(p.height, 48);
+        assert!(!p.thumbhash.is_empty());
+        assert!(!p.bytes.is_empty());
+        let decoded = image::load_from_memory(&p.bytes).unwrap();
         assert_eq!(decoded.dimensions(), (64, 48));
     }
 
     #[test]
     fn process_image_large_jpeg_resized() {
         let jpeg = make_jpeg_bytes(4096, 2048);
-        let (bytes, w, h, thumbhash, mime) = process_image_from_bytes(&jpeg).unwrap();
+        let p = process_image_from_bytes(&jpeg).unwrap();
 
-        assert_eq!(mime, "image/jpeg");
-        assert_eq!(w, 2048);
-        assert_eq!(h, 1024);
-        assert!(!thumbhash.is_empty());
-        let decoded = image::load_from_memory(&bytes).unwrap();
+        assert_eq!(p.mime, "image/jpeg");
+        assert_eq!(p.width, 2048);
+        assert_eq!(p.height, 1024);
+        assert!(!p.thumbhash.is_empty());
+        let decoded = image::load_from_memory(&p.bytes).unwrap();
         assert_eq!(decoded.dimensions(), (2048, 1024));
     }
 
     #[test]
     fn process_image_png_accepted() {
         let png = make_png_bytes(32, 32);
-        let (_, w, h, _, mime) = process_image_from_bytes(&png).unwrap();
+        let p = process_image_from_bytes(&png).unwrap();
 
-        assert_eq!(mime, "image/png");
-        assert_eq!(w, 32);
-        assert_eq!(h, 32);
+        assert_eq!(p.mime, "image/png");
+        assert_eq!(p.width, 32);
+        assert_eq!(p.height, 32);
     }
 
     #[test]
     fn process_image_unsupported_format_rejected() {
         // GIF magic header — format detection should reject it before full decode.
         let gif_magic = b"GIF89a\x01\x00\x01\x00\x00\x00\x00\x3b";
-        let err = process_image_from_bytes(gif_magic).unwrap_err();
+        let err = process_image_from_bytes(gif_magic).err().expect("must reject GIF");
         assert!(err.contains("Unsupported format"), "unexpected error: {err}");
     }
 

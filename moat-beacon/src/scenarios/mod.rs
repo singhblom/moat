@@ -595,10 +595,12 @@ pub fn format_action(action: &Action) -> String {
 
 // ── Registry ──────────────────────────────────────────────────────────────────
 
+type ScenarioRunFn = fn(Vec<Action>, bool) -> Pin<Box<dyn Future<Output = ()> + Send>>;
+
 pub struct Scenario {
     pub name: &'static str,
     pub description: &'static str,
-    run_fn: fn(Vec<Action>, bool) -> Pin<Box<dyn Future<Output = ()> + Send>>,
+    run_fn: ScenarioRunFn,
     gen_fn: fn() -> Vec<Action>,
     seed_fn: fn(&str) -> Result<Vec<Action>>,
 }

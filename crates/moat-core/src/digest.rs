@@ -128,8 +128,10 @@ mod tests {
 
     #[test]
     fn epoch_boundary_forces_anchor() {
-        let mut s = DigestState::default();
-        s.epoch_boundary_pending = true;
+        let mut s = DigestState {
+            epoch_boundary_pending: true,
+            ..DigestState::default()
+        };
         // First append (not a stride boundary) should still anchor.
         s.append("rkey001", &mid(1));
         assert_eq!(s.anchors.len(), 1);

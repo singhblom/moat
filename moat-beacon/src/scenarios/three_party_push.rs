@@ -166,8 +166,8 @@ pub async fn run(config: WorldConfig, actions: Vec<Action>, verbose: bool) {
                 "{} should have joined the group",
                 handles[i]
             );
-            for j in 1..i {
-                let _ = clients[j].poll().await;
+            for client in clients.iter().take(i).skip(1) {
+                let _ = client.poll().await;
             }
         }
     }

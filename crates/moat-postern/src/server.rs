@@ -45,7 +45,7 @@ fn compute_cid(data: &[u8]) -> String {
 /// Base32 lowercase (RFC 4648 alphabet `a–z`, `2–7`) without padding.
 fn base32_lower_nopad(data: &[u8]) -> String {
     const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz234567";
-    let mut out = String::with_capacity((data.len() * 8 + 4) / 5);
+    let mut out = String::with_capacity((data.len() * 8).div_ceil(5));
     let mut buf: u64 = 0;
     let mut bits: u32 = 0;
     for &byte in data {

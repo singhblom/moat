@@ -660,11 +660,11 @@ pub fn unpad(padded: Vec<u8>) -> Vec<u8> {
 /// Encrypt a blob. Returns encrypted bytes and metadata for ExternalBlob.
 pub fn blob_encrypt(plaintext: Vec<u8>) -> Result<BlobEncryptResult, String> {
     moat_core::blob_encrypt(&plaintext)
-        .map(|(blob, key, ciphertext_hash, content_hash)| BlobEncryptResult {
-            blob,
-            key: key.to_vec(),
-            ciphertext_hash,
-            content_hash,
+        .map(|r| BlobEncryptResult {
+            blob: r.blob,
+            key: r.key.to_vec(),
+            ciphertext_hash: r.ciphertext_hash,
+            content_hash: r.content_hash,
         })
         .map_err(|e| e.to_string())
 }
@@ -931,7 +931,7 @@ fn push_plaintext_preview(event: &Event) -> Option<String> {
 #[cfg(not(target_arch = "wasm32"))]
 fn push_media_label(mime: Option<&str>) -> &'static str {
     match mime {
-        Some(m) if m == "image/gif" => "🎞️ GIF",
+        Some("image/gif") => "🎞️ GIF",
         Some(m) if m.starts_with("video/") => "🎬 Video",
         _ => "📷 Photo",
     }
@@ -1464,10 +1464,10 @@ mod tests {
     fn test_group_epoch_nonexistent_group() {
         let handle = MoatSessionHandle::new_session();
         let result = handle.get_group_epoch(vec![0xFF; 16]);
-        match result {
-            Ok(epoch) => assert!(epoch.is_none()),
-            Err(_) => {} // also acceptable
+        if let Ok(epoch) = result {
+            assert!(epoch.is_none());
         }
+        // Err is also acceptable.
     }
 
     #[test]

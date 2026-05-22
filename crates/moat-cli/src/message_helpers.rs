@@ -11,7 +11,7 @@ use moat_core::{
 /// - `> MEDIUM_TEXT_MAX_BYTES` → `MediumText` placeholder
 ///   (blob upload and promotion to `LongText` is handled in `App::send_message_nonblocking`)
 pub fn build_text_payload(text: &str) -> MessagePayload {
-    let bytes = text.as_bytes().len();
+    let bytes = text.len();
     if bytes <= SHORT_TEXT_MAX_BYTES {
         MessagePayload::ShortText(TextMessage { text: text.to_string() })
     } else {
@@ -89,7 +89,7 @@ fn format_dimensions(width: Option<u32>, height: Option<u32>) -> Option<String> 
 /// Returns `true` if `bytes` exceeds `MEDIUM_TEXT_MAX_BYTES`, indicating that
 /// the text must be promoted to a `LongText` blob.
 pub fn needs_blob_upload(text: &str) -> bool {
-    text.as_bytes().len() > MEDIUM_TEXT_MAX_BYTES
+    text.len() > MEDIUM_TEXT_MAX_BYTES
 }
 
 #[cfg(test)]

@@ -186,7 +186,7 @@ proptest! {
     /// Any text stored in a MessagePayload survives Event serialize → deserialize.
     #[test]
     fn text_payload_preserves_content(text in "\\PC{0,500}") {
-        let payload = if text.as_bytes().len() <= 240 {
+        let payload = if text.len() <= 240 {
             MessagePayload::ShortText(TextMessage { text: text.clone() })
         } else {
             MessagePayload::MediumText(TextMessage { text: text.clone() })
@@ -202,18 +202,18 @@ proptest! {
     /// Short text (≤240 bytes) classified as ShortText, longer as MediumText.
     #[test]
     fn text_promotion_threshold(text in "\\PC{0,500}") {
-        let payload = if text.as_bytes().len() <= 240 {
+        let payload = if text.len() <= 240 {
             MessagePayload::ShortText(TextMessage { text: text.clone() })
         } else {
             MessagePayload::MediumText(TextMessage { text: text.clone() })
         };
         match &payload {
             MessagePayload::ShortText(tm) => {
-                prop_assert!(tm.text.as_bytes().len() <= 240);
+                prop_assert!(tm.text.len() <= 240);
                 prop_assert_eq!(&tm.text, &text);
             }
             MessagePayload::MediumText(tm) => {
-                prop_assert!(tm.text.as_bytes().len() > 240);
+                prop_assert!(tm.text.len() > 240);
                 prop_assert_eq!(&tm.text, &text);
             }
             _ => prop_assert!(false, "unexpected variant"),

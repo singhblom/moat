@@ -249,7 +249,7 @@ class PollingService {
 
     var ringGroupId = await _ringService.ringGroupId();
     var ringGroupIdHex = ringGroupId != null
-        ? ringGroupId!.map((b) => b.toRadixString(16).padLeft(2, '0')).join()
+        ? ringGroupId.map((b) => b.toRadixString(16).padLeft(2, '0')).join()
         : null;
 
     for (final did in allParticipantDids) {
@@ -308,7 +308,7 @@ class PollingService {
             tagMap = await _secureStorage.loadTagMap();
             ringGroupId = await _ringService.ringGroupId();
             ringGroupIdHex = ringGroupId != null
-                ? ringGroupId!.map((b) => b.toRadixString(16).padLeft(2, '0')).join()
+                ? ringGroupId.map((b) => b.toRadixString(16).padLeft(2, '0')).join()
                 : null;
             moatLog('PollingService: tagMap refreshed after coord event: size=${tagMap.length} ringGroupId=${ringGroupIdHex ?? "none"}');
             continue;

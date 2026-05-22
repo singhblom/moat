@@ -8,9 +8,9 @@ use conversation_sim::ConversationSim;
 use moat_core::MoatSession;
 use proptest::prelude::*;
 
-/// Property 1: Hash chain detects withholding.
-/// For any sequence of N messages from Alice, if we deliver all except one
-/// to Bob, the message after the gap should trigger a HashChainMismatch.
+// Property 1: Hash chain detects withholding.
+// For any sequence of N messages from Alice, if we deliver all except one
+// to Bob, the message after the gap should trigger a HashChainMismatch.
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(32))]
 
@@ -48,8 +48,8 @@ proptest! {
     }
 }
 
-/// Property 2: Hash chain detects reordering.
-/// For any sequence of messages, swapping two adjacent messages should be detected.
+// Property 2: Hash chain detects reordering.
+// For any sequence of messages, swapping two adjacent messages should be detected.
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(32))]
 
@@ -89,9 +89,9 @@ proptest! {
     }
 }
 
-/// Property 3: Epoch fingerprint agreement.
-/// For any number of messages at the same epoch, sender and receiver
-/// should always agree on the epoch fingerprint (no mismatches on clean delivery).
+// Property 3: Epoch fingerprint agreement.
+// For any number of messages at the same epoch, sender and receiver
+// should always agree on the epoch fingerprint (no mismatches on clean delivery).
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(32))]
 
@@ -113,9 +113,9 @@ proptest! {
     }
 }
 
-/// Property 4: Multi-sender hash chains are independent.
-/// Messages from different senders should not interfere with each other's
-/// hash chain validation when delivered in send order.
+// Property 4: Multi-sender hash chains are independent.
+// Messages from different senders should not interfere with each other's
+// hash chain validation when delivered in send order.
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(16))]
 
@@ -149,9 +149,9 @@ proptest! {
     }
 }
 
-/// Property 5: Export/import preserves hash chain state.
-/// After exporting and re-importing state, the hash chain should still
-/// validate correctly (no spurious mismatches).
+// Property 5: Export/import preserves hash chain state.
+// After exporting and re-importing state, the hash chain should still
+// validate correctly (no spurious mismatches).
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(16))]
 
@@ -172,7 +172,7 @@ proptest! {
         sim.participants[1].session = restored;
 
         // Alice sends another message
-        sim.send_message(0, format!("msg-after-restore").as_bytes());
+        sim.send_message(0, "msg-after-restore".to_string().as_bytes());
         let outcome = sim.deliver_next(1).unwrap();
 
         // Hash chain should still validate (no mismatch)
@@ -183,9 +183,9 @@ proptest! {
     }
 }
 
-/// Property 6: Epoch fingerprint changes with epoch advancement.
-/// After a commit advances the epoch, messages at the new epoch should
-/// still have matching fingerprints between sender and receiver.
+// Property 6: Epoch fingerprint changes with epoch advancement.
+// After a commit advances the epoch, messages at the new epoch should
+// still have matching fingerprints between sender and receiver.
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(16))]
 

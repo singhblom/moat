@@ -555,7 +555,7 @@ async fn cmd_send_test(
     let epoch = mls.get_group_epoch(&group_id)?.unwrap_or(1);
 
     // Create and encrypt message
-    let payload = build_text_payload(&message);
+    let payload = build_text_payload(message);
     let event = moat_core::Event::message(group_id.clone(), epoch, &payload);
     let encrypted = mls.encrypt_event(&group_id, &key_bundle, &event)?;
 
@@ -684,7 +684,7 @@ async fn cmd_devices(storage_dir: Option<PathBuf>, conversation: &str) -> anyhow
         &conversation[..16.min(conversation.len())]
     );
     println!();
-    println!("{:<6} {:<20} {}", "Index", "Device Name", "DID");
+    println!("Index  Device Name          DID");
     println!("{}", "-".repeat(70));
 
     for (leaf_index, credential) in members {

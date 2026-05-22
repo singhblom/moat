@@ -382,7 +382,7 @@ impl DrawbridgeManager {
     pub async fn send_pair_binary(&mut self, data: Vec<u8>) -> Result<(), String> {
         let writer = self.pair_writer.as_mut().ok_or("no pair WS connected")?;
         writer
-            .send(Message::Binary(data.into()))
+            .send(Message::Binary(data))
             .await
             .map_err(|e| format!("send pair binary: {e}"))
     }
@@ -397,11 +397,6 @@ impl DrawbridgeManager {
             handle.abort();
         }
         self.pair_writer = None;
-    }
-
-    /// Whether a pair WS is currently open.
-    pub fn has_pair_connection(&self) -> bool {
-        self.pair_writer.is_some()
     }
 
     /// Get the number of active connections (for status bar).
@@ -478,7 +473,7 @@ async fn own_read_loop(
                             let payload = msg
                                 .get("payload")
                                 .and_then(|v| v.as_str())
-                                .and_then(|s| base64_decode(s));
+                                .and_then(base64_decode);
 
                             if let Ok(tag_bytes) = hex::decode(&tag_hex) {
                                 if tag_bytes.len() == 16 {
@@ -559,7 +554,7 @@ async fn pair_read_loop(
     loop {
         match reader.next().await {
             Some(Ok(Message::Binary(data))) => {
-                let _ = bg_tx.send(BgEvent::PairFrameReceived { data: data.into() });
+                let _ = bg_tx.send(BgEvent::PairFrameReceived { data });
             }
             Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => continue,
             Some(Ok(Message::Close(_))) | None => {

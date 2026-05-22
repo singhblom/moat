@@ -635,7 +635,7 @@ fn test_get_group_members() {
     // Find Bob's credential
     let bob_found = members
         .iter()
-        .any(|(_, cred)| cred.as_ref().map_or(false, |c| c.did() == "did:plc:bob456"));
+        .any(|(_, cred)| cred.as_ref().is_some_and(|c| c.did() == "did:plc:bob456"));
     assert!(bob_found, "Bob should be in the group");
 }
 
@@ -837,7 +837,7 @@ fn test_remove_member() {
     // Find Bob's leaf index
     let bob_leaf_idx = members
         .iter()
-        .find(|(_, cred)| cred.as_ref().map_or(false, |c| c.did() == "did:plc:bob456"))
+        .find(|(_, cred)| cred.as_ref().is_some_and(|c| c.did() == "did:plc:bob456"))
         .map(|(idx, _)| *idx)
         .unwrap();
 
@@ -1202,23 +1202,22 @@ fn test_sign_drawbridge_challenge_wrong_message_fails() {
 fn test_blob_encrypt_decrypt_roundtrip_via_external_blob() {
     let plaintext = b"This is a long message that would be stored off-chain as a blob.";
 
-    let (blob_bytes, key, ciphertext_hash, content_hash) =
-        blob_encrypt(plaintext).expect("blob_encrypt must succeed");
+    let r = blob_encrypt(plaintext).expect("blob_encrypt must succeed");
 
     // Store metadata in ExternalBlob as the protocol does.
     let external = ExternalBlob::new(
         "at://did:plc:alice/bafyreiabc123".to_string(),
-        key.to_vec(),
-        ciphertext_hash,
-        blob_bytes.len() as u64,
-        content_hash,
+        r.key.to_vec(),
+        r.ciphertext_hash,
+        r.blob.len() as u64,
+        r.content_hash,
     )
     .expect("ExternalBlob::new must succeed for valid at:// URI");
 
     // Reconstruct the key array and decrypt using the stored hashes.
     let key_arr: [u8; 32] = external.key.as_slice().try_into().expect("key must be 32 bytes");
     let decrypted = blob_decrypt(
-        &blob_bytes,
+        &r.blob,
         &key_arr,
         &external.ciphertext_hash,
         &external.content_hash,
@@ -1226,20 +1225,19 @@ fn test_blob_encrypt_decrypt_roundtrip_via_external_blob() {
     .expect("blob_decrypt must succeed with correct metadata");
 
     assert_eq!(decrypted, plaintext);
-    assert_eq!(external.ciphertext_size, blob_bytes.len() as u64);
+    assert_eq!(external.ciphertext_size, r.blob.len() as u64);
 }
 
 #[test]
 fn test_external_blob_invalid_uri_rejected() {
-    let (_, key, ciphertext_hash, content_hash) =
-        blob_encrypt(b"test").expect("blob_encrypt must succeed");
+    let r = blob_encrypt(b"test").expect("blob_encrypt must succeed");
 
     let result = ExternalBlob::new(
         "https://example.com/not-atproto".to_string(),
-        key.to_vec(),
-        ciphertext_hash,
+        r.key.to_vec(),
+        r.ciphertext_hash,
         0,
-        content_hash,
+        r.content_hash,
     );
 
     assert!(
@@ -1252,15 +1250,14 @@ fn test_external_blob_invalid_uri_rejected() {
 fn test_long_text_message_with_external_blob() {
     let plaintext = "A".repeat(2000);
 
-    let (blob_bytes, key, ciphertext_hash, content_hash) =
-        blob_encrypt(plaintext.as_bytes()).expect("blob_encrypt must succeed");
+    let r = blob_encrypt(plaintext.as_bytes()).expect("blob_encrypt must succeed");
 
     let external = ExternalBlob::new(
         "at://did:plc:bob/bafyxyz".to_string(),
-        key.to_vec(),
-        ciphertext_hash,
-        blob_bytes.len() as u64,
-        content_hash,
+        r.key.to_vec(),
+        r.ciphertext_hash,
+        r.blob.len() as u64,
+        r.content_hash,
     )
     .expect("ExternalBlob::new must succeed");
 
@@ -1280,13 +1277,13 @@ fn test_long_text_message_with_external_blob() {
         assert_eq!(&restored.preview_text, &plaintext[..100]);
         assert_eq!(restored.mime.as_deref(), Some("text/plain"));
         assert_eq!(restored.external.uri, "at://did:plc:bob/bafyxyz");
-        assert_eq!(restored.external.key, key.to_vec());
+        assert_eq!(restored.external.key, r.key.to_vec());
 
         // Decrypt using the round-tripped metadata.
         let key_arr: [u8; 32] =
             restored.external.key.as_slice().try_into().expect("key must be 32 bytes");
         let decrypted = blob_decrypt(
-            &blob_bytes,
+            &r.blob,
             &key_arr,
             &restored.external.ciphertext_hash,
             &restored.external.content_hash,

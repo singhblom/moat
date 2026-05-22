@@ -160,6 +160,20 @@ type TagCounterKey = (Vec<u8>, u64);
 /// Key for the seen counter map: (group_id, sender_did, sender_device_id).
 type SeenCounterKey = (Vec<u8>, String, [u8; 16]);
 
+/// Reverse-lookup value for the `tag_metadata` map: identifies which sender
+/// (in which group) a candidate tag was derived for, and at what counter.
+#[derive(Debug, Clone)]
+struct TagMetadata {
+    group_id: Vec<u8>,
+    sender_did: String,
+    device_id: [u8; 16],
+    counter: u64,
+}
+
+/// Return type for the `deserialize_*_rest` helpers: parsed value plus the
+/// remaining bytes still to be consumed by later deserializers.
+type ParseRest<'a, T> = Result<(T, &'a [u8])>;
+
 /// Maximum number of automatic conflict recovery retries.
 const CONFLICT_RETRY_LIMIT: usize = 2;
 
@@ -267,9 +281,9 @@ pub struct MoatSession {
     /// Recipient-side seen counter: maps (group_id, sender_did, device_id) → highest counter seen.
     /// Used by populate_candidate_tags to scan the right window.
     seen_counters: RwLock<HashMap<SeenCounterKey, u64>>,
-    /// In-memory tag → (group_id, sender_did, device_id, counter) reverse lookup.
+    /// In-memory tag → sender metadata reverse lookup.
     /// Populated by populate_candidate_tags, used by mark_tag_seen. Not persisted.
-    tag_metadata: RwLock<HashMap<[u8; 16], (Vec<u8>, String, [u8; 16], u64)>>,
+    tag_metadata: RwLock<HashMap<[u8; 16], TagMetadata>>,
     /// In-memory pending operations for conflict recovery. Maps group_id → operation.
     /// Not persisted — if the app restarts mid-operation, the user retries manually.
     pending_ops: RwLock<HashMap<Vec<u8>, PendingOperation>>,
@@ -287,6 +301,12 @@ pub struct MoatSession {
     /// Groups whose next `append_to_digest` call should force an anchor (epoch boundary).
     /// Transient — not persisted.
     digest_epoch_boundaries: RwLock<HashSet<Vec<u8>>>,
+}
+
+impl Default for MoatSession {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MoatSession {
@@ -330,7 +350,7 @@ impl MoatSession {
                     "v{version} state not supported; re-initialize session"
                 )))
             }
-            3 | 4 | 5 => {}
+            3..=5 => {}
             _ => {
                 return Err(Error::Deserialization(format!(
                     "unsupported state version: {version}"
@@ -833,7 +853,7 @@ impl MoatSession {
         }
         {
             let mut metadata = self.tag_metadata.write().unwrap();
-            metadata.retain(|_, (gid, _, _, _)| gid != &group_id);
+            metadata.retain(|_, m| m.group_id != group_id);
         }
 
         Ok(group_id)
@@ -1020,7 +1040,7 @@ impl MoatSession {
                 }
                 {
                     let mut metadata = self.tag_metadata.write().unwrap();
-                    metadata.retain(|_, (gid, _, _, _)| gid != group_id);
+                    metadata.retain(|_, m| m.group_id != group_id);
                 }
 
                 // Return a commit event to signal the epoch has advanced
@@ -1260,7 +1280,7 @@ impl MoatSession {
     }
 
     /// Deserialize hash chain state from bytes. Returns (map, remaining_bytes).
-    fn deserialize_hash_chains(data: &[u8]) -> Result<(HashMap<HashChainKey, [u8; 32]>, &[u8])> {
+    fn deserialize_hash_chains(data: &[u8]) -> ParseRest<'_, HashMap<HashChainKey, [u8; 32]>> {
         if data.len() < 8 {
             return Err(Error::Deserialization("hash chain data too short".into()));
         }
@@ -1308,7 +1328,7 @@ impl MoatSession {
 
         // Remove stale entries
         counters.retain(|(group_id, epoch), _| {
-            max_epochs.get(group_id).map_or(false, |&max| *epoch == max)
+            max_epochs.get(group_id).is_some_and(|&max| *epoch == max)
         });
 
         let mut buf = Vec::new();
@@ -1323,7 +1343,7 @@ impl MoatSession {
     }
 
     /// Deserialize tag counter state from bytes. Returns (map, remaining_bytes).
-    fn deserialize_tag_counters(data: &[u8]) -> Result<(HashMap<TagCounterKey, u64>, &[u8])> {
+    fn deserialize_tag_counters(data: &[u8]) -> ParseRest<'_, HashMap<TagCounterKey, u64>> {
         if data.len() < 8 {
             return Err(Error::Deserialization("tag counter data too short".into()));
         }
@@ -1368,7 +1388,7 @@ impl MoatSession {
     }
 
     /// Deserialize seen counter state from bytes, returning remaining bytes.
-    fn deserialize_seen_counters_rest(data: &[u8]) -> Result<(HashMap<SeenCounterKey, u64>, &[u8])> {
+    fn deserialize_seen_counters_rest(data: &[u8]) -> ParseRest<'_, HashMap<SeenCounterKey, u64>> {
         if data.is_empty() {
             return Ok((HashMap::new(), data));
         }
@@ -1440,7 +1460,7 @@ impl MoatSession {
     /// Deserialize prior export secrets from bytes, returning the remaining slice.
     fn deserialize_prior_export_secrets_rest(
         data: &[u8],
-    ) -> Result<(HashMap<Vec<u8>, VecDeque<Vec<u8>>>, &[u8])> {
+    ) -> ParseRest<'_, HashMap<Vec<u8>, VecDeque<Vec<u8>>>> {
         if data.len() < 8 {
             return Ok((HashMap::new(), data));
         }
@@ -1510,7 +1530,7 @@ impl MoatSession {
 
     fn deserialize_conversation_digests(
         data: &[u8],
-    ) -> Result<(HashMap<Vec<u8>, crate::digest::DigestState>, &[u8])> {
+    ) -> ParseRest<'_, HashMap<Vec<u8>, crate::digest::DigestState>> {
         if data.len() < 8 {
             return Ok((HashMap::new(), data));
         }
@@ -1577,7 +1597,7 @@ impl MoatSession {
         buf
     }
 
-    fn deserialize_watermarks(data: &[u8]) -> Result<(HashMap<Vec<u8>, String>, &[u8])> {
+    fn deserialize_watermarks(data: &[u8]) -> ParseRest<'_, HashMap<Vec<u8>, String>> {
         if data.len() < 8 {
             return Ok((HashMap::new(), data));
         }
@@ -1748,7 +1768,7 @@ impl MoatSession {
             let mut secrets = self.prior_export_secrets.write().unwrap();
             let deque = secrets
                 .entry(group_id.to_vec())
-                .or_insert_with(VecDeque::new);
+                .or_default();
             deque.push_front(secret);
             while deque.len() > tag::MAX_PRIOR_EPOCHS {
                 deque.pop_back();
@@ -1889,7 +1909,7 @@ impl MoatSession {
         let members = self.get_group_members(group_id)?;
         Ok(members
             .iter()
-            .any(|(_, cred)| cred.as_ref().map_or(false, |c| c.did() == did)))
+            .any(|(_, cred)| cred.as_ref().is_some_and(|c| c.did() == did)))
     }
 
     /// Derive the next tag for a group event and advance the counter.
@@ -2006,12 +2026,12 @@ impl MoatSession {
             for (t, counter) in tags {
                 metadata.insert(
                     t,
-                    (
-                        group_id.to_vec(),
-                        cred.did().to_string(),
-                        *device_id,
+                    TagMetadata {
+                        group_id: group_id.to_vec(),
+                        sender_did: cred.did().to_string(),
+                        device_id: *device_id,
                         counter,
-                    ),
+                    },
                 );
                 all_tags.push(t);
             }
@@ -2043,12 +2063,12 @@ impl MoatSession {
                     for (t, counter) in tags {
                         metadata.insert(
                             t,
-                            (
-                                group_id.to_vec(),
-                                cred.did().to_string(),
-                                *device_id,
+                            TagMetadata {
+                                group_id: group_id.to_vec(),
+                                sender_did: cred.did().to_string(),
+                                device_id: *device_id,
                                 counter,
-                            ),
+                            },
                         );
                         all_tags.push(t);
                     }
@@ -2072,8 +2092,8 @@ impl MoatSession {
         };
         drop(meta);
 
-        let (group_id, sender_did, device_id, counter) = entry;
-        let key = (group_id, sender_did, device_id);
+        let key = (entry.group_id, entry.sender_did, entry.device_id);
+        let counter = entry.counter;
         let mut seen = self.seen_counters.write().unwrap();
         let current = seen.entry(key).or_insert(0);
         if counter >= *current {
@@ -2124,12 +2144,12 @@ impl MoatSession {
                     let mut metadata = self.tag_metadata.write().unwrap();
                     metadata.insert(
                         t,
-                        (
-                            group_id.to_vec(),
-                            cred.did().to_string(),
-                            *device_id,
+                        TagMetadata {
+                            group_id: group_id.to_vec(),
+                            sender_did: cred.did().to_string(),
+                            device_id: *device_id,
                             counter,
-                        ),
+                        },
                     );
                     drop(metadata);
                     drop(seen);
@@ -2166,12 +2186,12 @@ impl MoatSession {
                             let mut metadata = self.tag_metadata.write().unwrap();
                             metadata.insert(
                                 t,
-                                (
-                                    group_id.to_vec(),
-                                    cred.did().to_string(),
-                                    *device_id,
+                                TagMetadata {
+                                    group_id: group_id.to_vec(),
+                                    sender_did: cred.did().to_string(),
+                                    device_id: *device_id,
                                     counter,
-                                ),
+                                },
                             );
                             drop(metadata);
                             drop(seen);

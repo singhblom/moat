@@ -153,26 +153,27 @@ proptest! {
         }
 
         // Mark only the first k as seen (delivering them to Bob first)
-        for i in 0..k_seen {
+        for tag in tags.iter().take(k_seen) {
             sim.deliver_next(1).unwrap();
-            scanner.mark_and_rebuild(&sim, 1, &tags[i]);
+            scanner.mark_and_rebuild(&sim, 1, tag);
         }
 
         // Rebuild to get the current window
         scanner.rebuild(&sim, 1);
 
         // Tags k_seen .. k_seen+gap_limit should be matchable (within window)
-        for i in k_seen..std::cmp::min(k_seen + gap_limit, total) {
+        let window_end = std::cmp::min(k_seen + gap_limit, total);
+        for (i, tag) in tags.iter().enumerate().take(window_end).skip(k_seen) {
             prop_assert!(
-                scanner.is_candidate(1, &tags[i]),
+                scanner.is_candidate(1, tag),
                 "tag at index {} should be in scan window", i
             );
         }
 
         // Tags beyond k_seen+gap_limit should NOT be matchable
-        for i in (k_seen + gap_limit)..total {
+        for (i, tag) in tags.iter().enumerate().take(total).skip(k_seen + gap_limit) {
             prop_assert!(
-                !scanner.is_candidate(1, &tags[i]),
+                !scanner.is_candidate(1, tag),
                 "tag at index {} should be OUTSIDE scan window", i
             );
         }

@@ -445,6 +445,115 @@ impl DecryptOutcome {
         }
     }
 }
+impl Serialize for EventKind {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for EventKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        if let Some((domain, variant)) = raw.split_once('.') {
+            let kind = match domain {
+                "control" => EventKind::Control(ControlKind::from_variant(variant)),
+                "message" => EventKind::Message(MessageKind::from_variant(variant)),
+                "modifier" => EventKind::Modifier(ModifierKind::from_variant(variant)),
+                "sync" => EventKind::SyncApp,
+                _ => EventKind::Unknown(raw),
+            };
+            Ok(kind)
+        } else {
+            // Legacy single-token kinds.
+            let legacy = match raw.as_str() {
+                "coord" => EventKind::Coord,
+                "message" => EventKind::Message(MessageKind::Legacy),
+                "commit" => EventKind::Control(ControlKind::Commit),
+                "welcome" => EventKind::Control(ControlKind::Welcome),
+                "checkpoint" => EventKind::Control(ControlKind::Checkpoint),
+                "reaction" => EventKind::Modifier(ModifierKind::Reaction),
+                _ => EventKind::Unknown(raw),
+            };
+            Ok(legacy)
+        }
+    }
+}
+
+impl ControlKind {
+    fn as_str_with_domain(&self, domain: &str) -> String {
+        match self {
+            ControlKind::Commit => format!("{domain}.commit"),
+            ControlKind::Welcome => format!("{domain}.welcome"),
+            ControlKind::Checkpoint => format!("{domain}.checkpoint"),
+            ControlKind::Unknown(v) => format!("{domain}.{}", v),
+        }
+    }
+
+    fn from_variant(variant: &str) -> Self {
+        match variant {
+            "commit" => ControlKind::Commit,
+            "welcome" => ControlKind::Welcome,
+            "checkpoint" => ControlKind::Checkpoint,
+            other => ControlKind::Unknown(other.to_string()),
+        }
+    }
+}
+
+impl MessageKind {
+    fn as_str_with_domain(&self, domain: &str) -> String {
+        match self {
+            MessageKind::ShortText => format!("{domain}.short_text"),
+            MessageKind::MediumText => format!("{domain}.medium_text"),
+            MessageKind::LongText => format!("{domain}.long_text"),
+            MessageKind::Image => format!("{domain}.image"),
+            MessageKind::Legacy => "message".to_string(),
+            MessageKind::Unknown(v) => format!("{domain}.{}", v),
+        }
+    }
+
+    fn from_variant(variant: &str) -> Self {
+        match variant {
+            "short_text" => MessageKind::ShortText,
+            "medium_text" => MessageKind::MediumText,
+            "long_text" => MessageKind::LongText,
+            "image" => MessageKind::Image,
+            other => MessageKind::Unknown(other.to_string()),
+        }
+    }
+}
+
+impl ModifierKind {
+    fn as_str_with_domain(&self, domain: &str) -> String {
+        match self {
+            ModifierKind::Reaction => format!("{domain}.reaction"),
+            ModifierKind::Unknown(v) => format!("{domain}.{}", v),
+        }
+    }
+
+    fn from_variant(variant: &str) -> Self {
+        match variant {
+            "reaction" => ModifierKind::Reaction,
+            other => ModifierKind::Unknown(other.to_string()),
+        }
+    }
+}
+
+impl From<MessageBodyKind> for MessageKind {
+    fn from(kind: MessageBodyKind) -> Self {
+        match kind {
+            MessageBodyKind::ShortText => MessageKind::ShortText,
+            MessageBodyKind::MediumText => MessageKind::MediumText,
+            MessageBodyKind::LongText => MessageKind::LongText,
+            MessageBodyKind::Image => MessageKind::Image,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -589,114 +698,5 @@ mod tests {
         assert!(event.prev_event_hash.is_none());
         assert!(event.epoch_fingerprint.is_none());
         assert!(event.sender_device_id.is_none());
-    }
-}
-impl Serialize for EventKind {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for EventKind {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = String::deserialize(deserializer)?;
-        if let Some((domain, variant)) = raw.split_once('.') {
-            let kind = match domain {
-                "control" => EventKind::Control(ControlKind::from_variant(variant)),
-                "message" => EventKind::Message(MessageKind::from_variant(variant)),
-                "modifier" => EventKind::Modifier(ModifierKind::from_variant(variant)),
-                "sync" => EventKind::SyncApp,
-                _ => EventKind::Unknown(raw),
-            };
-            Ok(kind)
-        } else {
-            // Legacy single-token kinds.
-            let legacy = match raw.as_str() {
-                "coord" => EventKind::Coord,
-                "message" => EventKind::Message(MessageKind::Legacy),
-                "commit" => EventKind::Control(ControlKind::Commit),
-                "welcome" => EventKind::Control(ControlKind::Welcome),
-                "checkpoint" => EventKind::Control(ControlKind::Checkpoint),
-                "reaction" => EventKind::Modifier(ModifierKind::Reaction),
-                _ => EventKind::Unknown(raw),
-            };
-            Ok(legacy)
-        }
-    }
-}
-
-impl ControlKind {
-    fn as_str_with_domain(&self, domain: &str) -> String {
-        match self {
-            ControlKind::Commit => format!("{domain}.commit"),
-            ControlKind::Welcome => format!("{domain}.welcome"),
-            ControlKind::Checkpoint => format!("{domain}.checkpoint"),
-            ControlKind::Unknown(v) => format!("{domain}.{}", v),
-        }
-    }
-
-    fn from_variant(variant: &str) -> Self {
-        match variant {
-            "commit" => ControlKind::Commit,
-            "welcome" => ControlKind::Welcome,
-            "checkpoint" => ControlKind::Checkpoint,
-            other => ControlKind::Unknown(other.to_string()),
-        }
-    }
-}
-
-impl MessageKind {
-    fn as_str_with_domain(&self, domain: &str) -> String {
-        match self {
-            MessageKind::ShortText => format!("{domain}.short_text"),
-            MessageKind::MediumText => format!("{domain}.medium_text"),
-            MessageKind::LongText => format!("{domain}.long_text"),
-            MessageKind::Image => format!("{domain}.image"),
-            MessageKind::Legacy => "message".to_string(),
-            MessageKind::Unknown(v) => format!("{domain}.{}", v),
-        }
-    }
-
-    fn from_variant(variant: &str) -> Self {
-        match variant {
-            "short_text" => MessageKind::ShortText,
-            "medium_text" => MessageKind::MediumText,
-            "long_text" => MessageKind::LongText,
-            "image" => MessageKind::Image,
-            other => MessageKind::Unknown(other.to_string()),
-        }
-    }
-}
-
-impl ModifierKind {
-    fn as_str_with_domain(&self, domain: &str) -> String {
-        match self {
-            ModifierKind::Reaction => format!("{domain}.reaction"),
-            ModifierKind::Unknown(v) => format!("{domain}.{}", v),
-        }
-    }
-
-    fn from_variant(variant: &str) -> Self {
-        match variant {
-            "reaction" => ModifierKind::Reaction,
-            other => ModifierKind::Unknown(other.to_string()),
-        }
-    }
-}
-
-impl From<MessageBodyKind> for MessageKind {
-    fn from(kind: MessageBodyKind) -> Self {
-        match kind {
-            MessageBodyKind::ShortText => MessageKind::ShortText,
-            MessageBodyKind::MediumText => MessageKind::MediumText,
-            MessageBodyKind::LongText => MessageKind::LongText,
-            MessageBodyKind::Image => MessageKind::Image,
-        }
     }
 }

@@ -364,7 +364,7 @@ impl TestWorld {
 
         // If any participant is a Dart server, build the Dart binary + FFI lib.
         let (dart_server_bin, dart_lib_path) =
-            if kinds.iter().any(|k| *k == ParticipantKind::DartServer) {
+            if kinds.contains(&ParticipantKind::DartServer) {
                 let (dart_bin, lib) = dart_server_binary()?;
                 (Some(dart_bin), Some(lib))
             } else {
@@ -427,7 +427,7 @@ impl TestWorld {
                 .spawn()
                 .with_context(|| format!("spawn participant ({kind:?}) for {full_handle}"))?;
 
-            let client = MoatCliClient::new(&format!("http://{http_addr}"));
+            let client = MoatCliClient::new(format!("http://{http_addr}"));
 
             pending.push(PendingParticipant {
                 short_handle: handle.to_string(),
@@ -620,7 +620,7 @@ impl TestWorld {
             .spawn()
             .with_context(|| format!("spawn second device ({kind:?}) for {label}"))?;
 
-        let client = MoatCliClient::new(&format!("http://{http_addr}"));
+        let client = MoatCliClient::new(format!("http://{http_addr}"));
         wait_for_http(&client, std::time::Duration::from_secs(10))
             .await
             .with_context(|| format!("waiting for second device ({label}) to start"))?;
@@ -737,7 +737,7 @@ fn dart_source_is_newer(dir: &std::path::Path, since: std::time::SystemTime) -> 
             if dart_source_is_newer(&path, since) {
                 return true;
             }
-        } else if path.extension().map_or(false, |e| e == "dart") {
+        } else if path.extension().is_some_and(|e| e == "dart") {
             let mtime = std::fs::metadata(&path)
                 .and_then(|m| m.modified())
                 .unwrap_or(std::time::SystemTime::UNIX_EPOCH);

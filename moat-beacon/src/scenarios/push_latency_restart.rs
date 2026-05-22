@@ -53,7 +53,7 @@ async fn wait_for_message(
 async fn wait_for_drawbridge(client: &MoatCliClient, label: &str, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     loop {
-        let status = client.status().await.expect(&format!("{label} status"));
+        let status = client.status().await.unwrap_or_else(|_| panic!("{label} status"));
         if status.drawbridge_connected {
             return;
         }
