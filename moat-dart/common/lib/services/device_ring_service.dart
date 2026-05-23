@@ -71,12 +71,34 @@ class DeviceRingService {
     if (json != null && json.isNotEmpty) {
       try {
         _driver = await ffi.RingDriverHandle.fromStateJson(json: json);
+        _coordGroupCount = _countCoordGroupsFromJson(json);
       } catch (e) {
         moatLog('DeviceRingService: ring state corrupt, starting empty: $e');
         _driver = ffi.RingDriverHandle.newEmpty();
       }
     } else {
       _driver = ffi.RingDriverHandle.newEmpty();
+    }
+  }
+
+  /// Count peers that hold a coord group. Mirrors moat-core
+  /// `DeviceRingState::coord_group_count` (peers in `awaiting_their_hello`
+  /// or `coord_ready`).
+  static int _countCoordGroupsFromJson(String jsonStr) {
+    try {
+      final state = jsonDecode(jsonStr) as Map<String, dynamic>;
+      final peers = state['peers'];
+      if (peers is! Map) return 0;
+      var n = 0;
+      for (final entry in peers.values) {
+        if (entry is Map) {
+          final s = entry['state'];
+          if (s == 'awaiting_their_hello' || s == 'coord_ready') n++;
+        }
+      }
+      return n;
+    } catch (_) {
+      return 0;
     }
   }
 
@@ -444,13 +466,7 @@ class DeviceRingService {
       await _backend.write(_statePath, jsonStr);
       // Cache the coord_group count from the state JSON so coordGroupCount()
       // can be synchronous (avoids re-serialising on every /ring-status call).
-      try {
-        final state = jsonDecode(jsonStr) as Map<String, dynamic>;
-        final cg = state['coord_groups'];
-        if (cg is Map) _coordGroupCount = cg.length;
-      } catch (_) {
-        // Non-fatal: count stays at previous value.
-      }
+      _coordGroupCount = _countCoordGroupsFromJson(jsonStr);
     } catch (e) {
       moatLog('DeviceRingService: persist failed: $e');
     }

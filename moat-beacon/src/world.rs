@@ -390,7 +390,7 @@ impl TestWorld {
 
             let http_port = free_port()?;
             let http_addr = format!("127.0.0.1:{http_port}");
-            let storage = TempDir::new().context("create temp storage dir")?;
+            let storage = make_storage_dir(handle)?;
 
             let mut args = vec![
                 "--storage-dir".to_string(),
@@ -416,6 +416,10 @@ impl TestWorld {
             };
 
             let (log_file, log_path) = open_participant_log(handle)?;
+            eprintln!(
+                "[beacon] storage[{handle}]: {}",
+                storage.path().display()
+            );
 
             let mut cmd = Command::new(&bin);
             cmd.args(&args)
@@ -574,7 +578,7 @@ impl TestWorld {
     ) -> Result<MoatCliClient> {
         let http_port = free_port()?;
         let http_addr = format!("127.0.0.1:{http_port}");
-        let storage = TempDir::new().context("create temp storage dir for second device")?;
+        let storage = make_storage_dir(label)?;
 
         let mut args = vec![
             "--storage-dir".to_string(),
@@ -610,6 +614,10 @@ impl TestWorld {
 
         let pgid = self.process_group.pgid();
         let (log_file, log_path) = open_participant_log(label)?;
+        eprintln!(
+            "[beacon] storage[{label}]: {}",
+            storage.path().display()
+        );
         let mut cmd = Command::new(&bin);
         cmd.args(&args)
             .stdout(Stdio::null())
@@ -669,6 +677,28 @@ fn open_participant_log(label: &str) -> Result<(File, PathBuf)> {
         .with_context(|| format!("create log file {}", path.display()))?;
     eprintln!("[beacon] log: {}", path.display());
     Ok((file, path))
+}
+
+/// Create a per-participant storage directory.
+///
+/// By default, returns a `TempDir` that cleans up on drop.  If the
+/// `BEACON_KEEP_DATA=1` env var is set, the directory lives under
+/// `/tmp/moat-beacon-data/` and is *not* cleaned up — useful for inspecting
+/// `debug.log` after a test fails.
+fn make_storage_dir(label: &str) -> Result<TempDir> {
+    let prefix = format!("moat-beacon-{label}-");
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(&prefix);
+    if std::env::var_os("BEACON_KEEP_DATA").is_some() {
+        let base = std::path::Path::new("/tmp/moat-beacon-data");
+        std::fs::create_dir_all(base).context("create /tmp/moat-beacon-data")?;
+        builder.disable_cleanup(true);
+        builder
+            .tempdir_in(base)
+            .context("create persistent storage dir")
+    } else {
+        builder.tempdir().context("create temp storage dir")
+    }
 }
 
 /// Find a free TCP port by binding to `127.0.0.1:0`.
