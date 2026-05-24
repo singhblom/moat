@@ -2,7 +2,7 @@
 //!
 //! Companion to `protocol_model.rs`. That file models the world where every
 //! key-package fetch and every Welcome flows through the PDS. This file
-//! models the redesign sketched in the conversation around 2026-05-23:
+//! models a design where:
 //!
 //! - Cross-user discovery and first-contact bootstrap still use the PDS.
 //! - Once the device ring is established between same-user devices, the
@@ -13,27 +13,23 @@
 //! - The PDS is no longer in the critical path for the user-conversation
 //!   fan-out that happens when a new sibling joins.
 //!
-//! The questions this file asks the model:
+//! The properties checked here:
 //!
-//! 1. Does ring-transport actually eliminate the orphan-within-slot bug,
-//!    or did we just move it onto a different surface?
-//! 2. Pool management: D1 holds a local cache of KPs received from D3.
-//!    What happens when D1 requests a refill twice concurrently, or when
-//!    D3's response and a stale fetch race?
-//! 3. Batched fan-out: D1 wants to add D3 to five conversations in one
-//!    tick. Does the design support this without resurrecting a shared-KP
-//!    race?
-//! 4. Liveness: what happens when D3 is offline? Ring messages must queue.
-//!    The current MLS layer handles this for us (application messages are
-//!    delivered in order when the peer catches up), but the model should
-//!    show the queueing is what we expect.
+//! 1. Single-use is preserved: a key package is consumed at most once and
+//!    every Welcome reaches a receiver that still holds the matching init
+//!    key (`failed_receives == 0`).
+//! 2. Pool management is safe under concurrent refill requests, replayed
+//!    batches, and offline-receiver windows.
+//! 3. Batched fan-out across multiple groups in a single tick draws a
+//!    distinct KP per add and produces deliverable Welcomes for all of
+//!    them.
 //!
 //! The model is deliberately MLS-naive: it doesn't represent epochs or
 //! commits because those are orthogonal to the KP-consumption invariant.
 //! Where MLS would refuse an old commit, the model has the receiver simply
-//! decline to call `process_welcome` on a rejected message (see the
-//! `slot_mls_commit_conflict_does_not_burn_loser_slot` test in
-//! `protocol_model.rs` for the precedent).
+//! decline to call `process_welcome` on a rejected message (see
+//! `slot_mls_commit_conflict_does_not_burn_loser_slot` in
+//! `protocol_model.rs`).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -302,10 +298,10 @@ fn ring_transport_happy_path() {
     assert_eq!(m.failed_receives, 0);
 }
 
-/// **The original bug, retested under ring-transport.**
+/// **Fan-out across multiple groups in a single tick.**
 ///
 /// D3 has just joined the ring. D1 immediately needs to add D3 to four
-/// existing user conversations. Under the old PDS-slot scheme this was
+/// existing user conversations. With a PDS-slot scheme this would be
 /// four sequential round trips, each waiting for D3 to replenish. Under
 /// ring-transport D3 sends a batch up front and D1 fans out without
 /// re-fetching.
@@ -450,10 +446,10 @@ fn ring_transport_d3_offline_does_not_break_invariant() {
 
 /// **No KP is ever used twice by the consumer.**
 ///
-/// The orphan-within-slot bug was: a consumer could fetch the same KP value
-/// twice and use it twice. Under ring-transport, the local pool's `used_kps`
-/// set means a claimed KP is never returned again, even if the same
-/// `OfferedKp` somehow re-entered the pool. Verify by injecting a manual
+/// Consumer-side single-use enforcement: the local pool's `used_kps` set
+/// guarantees a claimed KP is never returned again, even if the same
+/// `OfferedKp` somehow re-enters the pool (buggy refill, malicious
+/// replay, or out-of-order delivery). Verify by injecting a manual
 /// duplicate and checking the second claim skips it.
 #[test]
 fn ring_transport_consumer_never_reuses_a_used_kp() {
@@ -481,7 +477,7 @@ fn ring_transport_consumer_never_reuses_a_used_kp() {
     assert_eq!(m.failed_receives, 0);
 }
 
-/// **Bringing it all together: the original 3-device-history-sync flow.**
+/// **End-to-end new-sibling join under ring-transport.**
 ///
 /// 1. D3 joins the ring (modelled by D3 sending a KP batch to D1 — the ring
 ///    is up).
@@ -491,18 +487,18 @@ fn ring_transport_consumer_never_reuses_a_used_kp() {
 ///
 /// The flow is one round trip plus four parallel commit-publishes (the
 /// PDS writes for bob, charlie, dave, bookclub members — not modelled
-/// because they don't bear on the KP invariant). Compare with the
-/// PDS-slot scheme where this would be four sequential round trips.
+/// because they don't bear on the KP invariant). Compare with a PDS-slot
+/// scheme where this would be four sequential round trips.
 #[test]
-fn ring_transport_three_device_history_sync_no_lag_no_orphan() {
+fn ring_transport_new_sibling_join_end_to_end() {
     let mut m = RingTransportModel::default();
 
     // Ring bootstrap (modelled as D3 publishing initial KP batch via ring).
     m.publish_and_offer(D3, D1, 8);
     m.consumer_drain_inbound(D1, D3);
 
-    // D1 adds D3 to the ring itself first — that's one of the four. We
-    // model the ring add the same way as user conversations.
+    // D1 adds D3 to the ring itself first — that's one of the four
+    // adds. The ring add uses the same shape as a user-conversation add.
     let groups = [ALICE_RING, ALICE_BOB, ALICE_CHARLIE, ALICE_DAVE];
     let mut welcome_init_kps = Vec::new();
     for g in groups {

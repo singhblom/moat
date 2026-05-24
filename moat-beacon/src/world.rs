@@ -679,26 +679,19 @@ fn open_participant_log(label: &str) -> Result<(File, PathBuf)> {
     Ok((file, path))
 }
 
-/// Create a per-participant storage directory.
+/// Create a per-participant storage directory under `/tmp/moat-beacon-data/`.
 ///
-/// By default, returns a `TempDir` that cleans up on drop.  If the
-/// `BEACON_KEEP_DATA=1` env var is set, the directory lives under
-/// `/tmp/moat-beacon-data/` and is *not* cleaned up — useful for inspecting
-/// `debug.log` after a test fails.
+/// Storage is intentionally not cleaned up on drop so that `debug.log` is
+/// available for inspection after a test exits. Clear `/tmp/moat-beacon-data/`
+/// by hand when the accumulation matters; CI runs on fresh machines.
 fn make_storage_dir(label: &str) -> Result<TempDir> {
-    let prefix = format!("moat-beacon-{label}-");
-    let mut builder = tempfile::Builder::new();
-    builder.prefix(&prefix);
-    if std::env::var_os("BEACON_KEEP_DATA").is_some() {
-        let base = std::path::Path::new("/tmp/moat-beacon-data");
-        std::fs::create_dir_all(base).context("create /tmp/moat-beacon-data")?;
-        builder.disable_cleanup(true);
-        builder
-            .tempdir_in(base)
-            .context("create persistent storage dir")
-    } else {
-        builder.tempdir().context("create temp storage dir")
-    }
+    let base = std::path::Path::new("/tmp/moat-beacon-data");
+    std::fs::create_dir_all(base).context("create /tmp/moat-beacon-data")?;
+    tempfile::Builder::new()
+        .prefix(&format!("moat-beacon-{label}-"))
+        .disable_cleanup(true)
+        .tempdir_in(base)
+        .context("create persistent storage dir")
 }
 
 /// Find a free TCP port by binding to `127.0.0.1:0`.

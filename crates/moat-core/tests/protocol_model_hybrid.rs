@@ -1,35 +1,35 @@
 //! Hybrid protocol model: **PDS slot for bootstrap, ring transport
 //! thereafter**.
 //!
-//! Companion to `protocol_model.rs` and `protocol_model_ring_transport.rs`,
-//! and the candidate design we would actually implement.
+//! Composes the two designs modelled in `protocol_model.rs` and
+//! `protocol_model_ring_transport.rs`.
 //!
-//! Why this composition is the right shape:
+//! Why the composition is sound:
 //!
-//! - The orphan-within-slot bug in the PDS-slot scheme only arose under
-//!   *multi-use of a slot* — the same consumer reaching for the same
-//!   mailbox more than once, with a lag between consumption and clear.
-//! - **Bootstrap is single-use by construction.** When D3 logs in, each
-//!   `(D3 → sibling)` slot is consulted at most once: by exactly one
-//!   sibling, who uses the contained KP exactly once to perform the ring
-//!   add. After the ring is established the slot is irrelevant — D3 stops
-//!   maintaining it. No replenish, no lag window, no orphan.
+//! - The orphan-within-slot failure of the PDS-slot scheme only arises
+//!   under *multi-use of a slot* — the same consumer reaching for the
+//!   same mailbox more than once with a lag between consumption and clear.
+//! - **Bootstrap is single-use by construction.** When a new device logs
+//!   in, each `(new device → existing sibling)` slot is consulted at most
+//!   once: by exactly one sibling, who uses the contained KP exactly once
+//!   to perform the ring add. After the ring is established the slot is
+//!   irrelevant; the new device stops maintaining it. No replenish, no
+//!   lag window, no orphan.
 //! - Everything after the ring exists (user-conversation fan-out,
 //!   subsequent device joins of *other* siblings, sync sessions) flows
-//!   over the ring, where the ring-transport model already showed the
-//!   invariant holds without PDS round trips.
+//!   over the ring, where `protocol_model_ring_transport.rs` already
+//!   shows the invariant holds without PDS round trips.
 //!
-//! What the model verifies in this file:
+//! Properties checked here:
 //!
-//! 1. The bootstrap PDS slot is genuinely single-use and races-free, even
-//!    when both an existing ring member and an existing-but-newly-joined
-//!    member attempt the ring add concurrently.
-//! 2. The handover is clean: D3 emits one final PDS-slot ring add per
-//!    sibling, then *every subsequent KP exchange* happens through the
-//!    ring with the consumer-tracking we already validated.
-//! 3. A new device that arrives *after* a ring already exists composes with
-//!    the existing members through the same path: bootstrap via PDS slot
-//!    once, then participate over the ring forever after.
+//! 1. The bootstrap PDS slot is genuinely single-use and race-free, even
+//!    when two existing ring members attempt the ring add concurrently.
+//! 2. The handover is clean: one final PDS-slot add per sibling, then
+//!    every subsequent KP exchange happens through the ring with the
+//!    consumer-side `used_kps` tracking from the ring-transport model.
+//! 3. A new device that arrives *after* a ring already exists composes
+//!    with the existing members through the same path: bootstrap via PDS
+//!    slot once, then participate over the ring.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -465,11 +465,11 @@ fn hybrid_second_new_device_reuses_the_bootstrap_path_independently() {
     );
 }
 
-/// **The model says nothing breaks across a long-running mixed trace.**
+/// **Mixed trace: bootstrap + ring-transport + replay + refill.**
 ///
-/// Mix bootstrap and ring-transport actions, replay, refill, and the
-/// out-of-order delivery that ring messages tolerate. Confirm zero
-/// failures.
+/// Interleaves bootstrap and ring-transport actions, replays a KP batch,
+/// runs the pool to empty, refills via `KpRequest`, and fans out one
+/// more add. Confirms zero failures across the whole sequence.
 #[test]
 fn hybrid_mixed_trace_holds_invariant() {
     let mut m = HybridModel::default();
@@ -517,25 +517,25 @@ fn hybrid_mixed_trace_holds_invariant() {
 ///
 /// When bob wants to start a conversation with alice, bob doesn't share a
 /// ring with alice — there's no ring transport between them. bob fetches
-/// alice's PDS keyPackage record the old way. Since each cross-user
-/// interaction is one-shot from bob's perspective (he adds alice to *his*
-/// conversation), there's no multi-use of alice's KP by bob, and the
-/// orphan-within-slot bug does not apply in this direction either.
+/// alice's PDS keyPackage record through the unchanged cross-user path.
+/// Since each cross-user interaction is one-shot from bob's perspective
+/// (he adds alice to *his* conversation), there's no multi-use of
+/// alice's KP by bob, and the orphan-within-slot failure does not apply
+/// in this direction.
 ///
-/// We model this as alice publishing a generic PDS KP (not a per-consumer
-/// slot, because she doesn't know which non-sibling will fetch it), and
-/// bob claims it once. If two cross-user senders race for the same alice
-/// KP, alice's MLS layer accepts the first commit and the loser retries
-/// with a fresh KP. The model represents this by alice publishing a small
-/// generic pool that bob and other strangers can each claim a unique
-/// entry from.
+/// Modelled by alice publishing a generic PDS KP (not a per-consumer
+/// slot, because the consumer's identity is not known in advance) and
+/// each cross-user sender claiming one. If two cross-user senders race
+/// for the same alice KP, the MLS layer accepts the first commit and
+/// the loser retries with a fresh KP. The scenario uses a small generic
+/// pool with claim semantics to represent this.
 #[test]
 fn hybrid_cross_user_is_unaffected_and_still_safe() {
     let mut m = HybridModel::default();
 
-    // Alice (modeled as D1 here) publishes 4 generic KPs for any
+    // Alice (modelled as D1 here) publishes 4 generic KPs for any
     // cross-user sender to consume. These are NOT per-consumer slots;
-    // they're the legacy KP pool that already exists today.
+    // they're the cross-user KP pool, the unchanged half of the design.
     fn alice_publish_generic(m: &mut HybridModel, count: usize) -> Vec<Rkey> {
         let mut out = Vec::with_capacity(count);
         for _ in 0..count {
@@ -567,9 +567,9 @@ fn hybrid_cross_user_is_unaffected_and_still_safe() {
     }
     assert_eq!(claimed.len(), 4);
 
-    // Each cross-user sender uses its claimed KP for an add. We model the
-    // Welcome enqueuing it on the alice-direct ring queue (cross-user
-    // would actually use stealth-encrypted PDS events, but the per-KP
+    // Each cross-user sender uses its claimed KP for an add. The model
+    // enqueues the Welcome on the alice-direct ring queue (cross-user
+    // would use stealth-encrypted PDS events, but the per-KP
     // consumption is the same).
     for kp in &claimed {
         let id = m.fresh_welcome_id();

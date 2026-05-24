@@ -8,18 +8,17 @@
 //!   has published *until* a Welcome consumes that init key.
 //! - The Welcomes that flow between devices.
 //!
-//! The model exists to answer one question: *given a sequence of high-level
-//! protocol actions, does every Welcome that is ever created get successfully
-//! received by its target?* If the answer is "no" for some interleaving, the
-//! protocol design — not the implementation — is responsible.
+//! The property the model checks:
 //!
-//! The bug that drove this file: with three Alice devices, the inviting
-//! sibling can pick an already-consumed KP for a user-conversation `add_device`
-//! and produce a Welcome the new device cannot decrypt. The hypothesis was
-//! that simulating timing would help debug it. The reality is that the bug is
-//! purely algebraic — a missing single-use invariant on key packages — and
-//! catching it deterministically here is much faster than a subprocess
-//! harness.
+//!   For any sequence of `publish`, `consume`, `receive`, and `delete_kp`
+//!   actions, every Welcome that is ever created can be successfully
+//!   received by its target.
+//!
+//! When the property fails, the failure is at the protocol design layer:
+//! the same sequence of actions would produce an undeliverable Welcome
+//! regardless of what code emits them. The model thus separates "is the
+//! design sound?" from "does the implementation follow the design?" — the
+//! latter is what the integration suite under `moat-beacon` is for.
 //!
 //! The model treats every action as instantaneous and ordered; there is no
 //! wall clock. Concurrency is modelled by interleaving actions in different
@@ -68,7 +67,8 @@ enum ActionError {
         init_kp: Rkey,
     },
     /// `receive` found a Welcome but the target's keystore no longer holds
-    /// the matching init key. THIS is the bug.
+    /// the matching init key — the protocol design has produced an
+    /// undeliverable Welcome. Tests assert on the absence of this variant.
     InitKeyAlreadyConsumed {
         receiver: DeviceId,
         init_kp: Rkey,
@@ -301,10 +301,10 @@ struct SlotModel {
     in_flight: Vec<Welcome>,
     failed_receives: u32,
     /// Welcomes whose underlying MLS commit was rejected (lost the epoch
-    /// race). Tracks them separately because they should *not* be processed
-    /// by the receiver — in production they are filtered out by the MLS
-    /// layer when the rejected commit becomes visible. The model only marks
-    /// them; the test driver decides whether to call `receive` on them.
+    /// race). Tracked separately because in a real system the MLS layer
+    /// filters them out before `process_welcome` would ever be called. The
+    /// model only marks them; the scenario chooses whether to call
+    /// `receive` on a rejected welcome.
     rejected_welcomes: BTreeSet<WelcomeId>,
 }
 
@@ -403,14 +403,14 @@ fn three_device_two_consumers_same_kp_creates_undeliverable_welcome() {
     );
 }
 
-/// Reproduces the timing flavour of the bug: a single consumer picks a stale
-/// (already-consumed) KP because the owner hasn't yet deleted the orphan
-/// record from the PDS.
+/// Single-consumer variant: one ring member picks an already-consumed KP
+/// from the PDS because the owner has not yet deleted the orphan record.
 ///
-/// This is the exact failure I observed in the beacon logs: D1 ring-adds D3
-/// using KP_X, D3 processes the ring Welcome (consuming init_X), then D1's
-/// poll_for_new_devices fetches D3's newest KP. If KP_X is still on the PDS
-/// — and it is, because nobody has deleted it yet — D1 picks it again.
+/// Concretely: D1 performs a ring `add_device` using D3's published KP,
+/// D3 processes the resulting Welcome (consuming the init key) but the
+/// keyPackage record stays on the PDS. A later `add_device` call on D1
+/// (for a different MLS group) re-fetches D3's newest KP, gets the same
+/// orphan, and produces an undeliverable Welcome.
 #[test]
 fn single_consumer_picks_orphan_kp_after_consumption() {
     let mut m = ProtocolModel::new();
@@ -436,9 +436,8 @@ fn single_consumer_picks_orphan_kp_after_consumption() {
 
 // ── Scenarios that EVALUATE candidate fixes ──────────────────────────────────
 
-/// Candidate fix #1: the **consumer** deletes the KP from the PDS immediately
-/// after using it (the half-fix I implemented in moat-cli's
-/// `poll_for_new_devices`).
+/// Candidate fix #1: the **consumer** deletes the KP from the PDS
+/// immediately after using it for an `add_device`.
 ///
 /// Outcome: prevents the *single-consumer orphan* case, but does NOT prevent
 /// the *two-consumer same-KP* case. The second consumer can have fetched
@@ -454,8 +453,8 @@ fn fix_consumer_deletes_after_use_does_not_prevent_double_consumer_race() {
     assert_eq!(d1_choice, kp_a);
     assert_eq!(d2_choice, kp_a);
 
-    // D1 consumes, deletes. (Delete happens BEFORE D2 acts but AFTER D2
-    // fetched, which is exactly the race we observed in the beacon logs.)
+    // D1 consumes and issues the delete. D2 has already fetched, so the
+    // delete arrives too late to prevent D2's add.
     m.consume(D1, D3, kp_a).unwrap();
     m.delete_kp(D3, kp_a);
 
@@ -788,7 +787,10 @@ fn slot_orphan_within_window_when_clear_lags_consumption() {
     m.consume(D1, D3, stale);
     let err = m.process_welcome(D3, stale).expect_err("re-use must fail");
     assert_eq!(err, ());
-    assert_eq!(m.failed_receives, 1, "delayed clear can reintroduce the bug");
+    assert_eq!(
+        m.failed_receives, 1,
+        "without consumer-side dedupe, delayed slot clear permits a re-use"
+    );
 
     // Cleanup: owner observes and clears.
     m.observe_and_clear(D3, D1);
