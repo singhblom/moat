@@ -138,10 +138,15 @@ class KeyPackageRecord {
 class StealthAddressRecord {
   final Uint8List scanPubkey;
   final String deviceName;
+  /// Stable 16-byte device identifier. Pre-v3 records lacked this field;
+  /// it is decoded as all-zero bytes there so callers can still ingest
+  /// the record. New records always carry a real `deviceId`.
+  final Uint8List deviceId;
 
   StealthAddressRecord({
     required this.scanPubkey,
     required this.deviceName,
+    required this.deviceId,
   });
 }
 
@@ -375,18 +380,26 @@ class AtprotoClient {
     return records;
   }
 
-  Future<String> publishStealthAddress(Uint8List scanPubkey, String deviceName) async {
+  Future<String> publishStealthAddress(
+    Uint8List scanPubkey,
+    String deviceName,
+    Uint8List deviceId,
+  ) async {
     _requireSession();
 
     if (scanPubkey.length != 32) {
       throw AtprotoException('Stealth public key must be 32 bytes');
     }
+    if (deviceId.length != 16) {
+      throw AtprotoException('Device id must be 16 bytes');
+    }
 
     final now = DateTime.now().toUtc();
     final record = {
-      'v': 2,
+      'v': 3,
       'scanPubkey': {r'$bytes': base64Encode(scanPubkey)},
       'deviceName': deviceName,
+      'deviceId': {r'$bytes': base64Encode(deviceId)},
       'createdAt': now.toIso8601String(),
     };
 
@@ -475,12 +488,19 @@ class AtprotoClient {
     for (final item in items) {
       final value = item['value'] as Map<String, dynamic>;
       final v = value['v'] as int?;
-      if (v == 2) {
+      if (v == 2 || v == 3) {
         final scanPubkey = _decodeBytesField(value['scanPubkey']);
         final deviceName = value['deviceName'] as String? ?? 'Unknown';
+        // v2 records lack `deviceId`; fall back to all-zero bytes so the
+        // record still loads. New records always carry a real id.
+        final deviceIdField = value['deviceId'];
+        final deviceId = deviceIdField == null
+            ? Uint8List(16)
+            : _decodeBytesField(deviceIdField);
         records.add(StealthAddressRecord(
           scanPubkey: scanPubkey,
           deviceName: deviceName,
+          deviceId: deviceId,
         ));
       }
     }

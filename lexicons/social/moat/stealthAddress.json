@@ -8,13 +8,13 @@
       "description": "Stealth meta-address for receiving private conversation invites. Each device publishes its own stealth address, allowing any device to receive invites.",
       "record": {
         "type": "object",
-        "required": ["v", "scanPubkey", "deviceName", "createdAt"],
+        "required": ["v", "scanPubkey", "deviceName", "deviceId", "createdAt"],
         "properties": {
           "v": {
             "type": "integer",
             "description": "Schema version",
-            "minimum": 2,
-            "maximum": 2
+            "minimum": 3,
+            "maximum": 3
           },
           "scanPubkey": {
             "type": "bytes",
@@ -26,6 +26,12 @@
             "type": "string",
             "description": "Human-readable device name for identification",
             "maxLength": 64
+          },
+          "deviceId": {
+            "type": "bytes",
+            "description": "Stable 16-byte device identifier, matching MoatCredential.device_id. Used by sibling devices to address per-recipient bootstrap key packages.",
+            "maxLength": 16,
+            "minLength": 16
           },
           "createdAt": {
             "type": "string",

@@ -618,11 +618,13 @@ impl MoatAtprotoClient {
         &self,
         scan_pubkey: &[u8; 32],
         device_name: &str,
+        device_id: &[u8; 16],
     ) -> Result<String> {
         let data = StealthAddressData {
-            v: 2,
+            v: 3,
             scan_pubkey: *scan_pubkey,
             device_name: device_name.to_string(),
+            device_id: *device_id,
             created_at: Utc::now(),
         };
 

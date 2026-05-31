@@ -23,6 +23,14 @@ pub enum EventKind {
     /// Sync protocol message sent over the device ring, transmitted as binary
     /// frames on the pair WebSocket. The payload is a padded JSON `SyncMsg`.
     SyncApp,
+    /// Bootstrap key package addressed to a specific sibling device. The
+    /// payload is the bytes of an MLS KeyPackage whose init key is held by
+    /// the publishing (new) device. Delivered as a stealth-encrypted
+    /// `social.moat.event` so it is indistinguishable on the firehose from
+    /// any other Moat event. `group_id` and `epoch` are not meaningful
+    /// (the KP isn't bound to a group yet); use an empty group_id and
+    /// epoch = 0 when constructing.
+    BootstrapKp,
     /// Legacy or unknown domain.
     Unknown(String),
 }
@@ -63,6 +71,7 @@ impl EventKind {
             EventKind::Modifier(kind) => kind.as_str_with_domain("modifier"),
             EventKind::Coord => "coord".to_string(),
             EventKind::SyncApp => "sync.app".to_string(),
+            EventKind::BootstrapKp => "bootstrap.kp".to_string(),
             EventKind::Unknown(s) => s.clone(),
         }
     }
@@ -287,6 +296,23 @@ impl Event {
         }
     }
 
+    /// Create a bootstrap-KP event carrying an MLS KeyPackage destined for a
+    /// specific sibling device. The payload is the serialized KeyPackage
+    /// bytes; `group_id` and `epoch` are unused (the KP is not yet bound to
+    /// a group) and stored as empty / `0` respectively.
+    pub fn bootstrap_kp(key_package: Vec<u8>) -> Self {
+        Self {
+            kind: EventKind::BootstrapKp,
+            group_id: Vec::new(),
+            epoch: 0,
+            payload: key_package,
+            message_id: None,
+            prev_event_hash: None,
+            epoch_fingerprint: None,
+            sender_device_id: None,
+        }
+    }
+
     /// Create a coordination message event for a `DeviceCoord` group.
     pub fn coord(group_id: Vec<u8>, epoch: u64, payload: Vec<u8>) -> Self {
         Self {
@@ -466,6 +492,7 @@ impl<'de> Deserialize<'de> for EventKind {
                 "message" => EventKind::Message(MessageKind::from_variant(variant)),
                 "modifier" => EventKind::Modifier(ModifierKind::from_variant(variant)),
                 "sync" => EventKind::SyncApp,
+                "bootstrap" if variant == "kp" => EventKind::BootstrapKp,
                 _ => EventKind::Unknown(raw),
             };
             Ok(kind)
@@ -620,6 +647,30 @@ mod tests {
             EventKind::Modifier(ModifierKind::Reaction)
         ));
         assert!(reaction.message_id.is_some());
+
+        let bootstrap = Event::bootstrap_kp(vec![10, 20, 30]);
+        assert!(matches!(bootstrap.kind, EventKind::BootstrapKp));
+        assert_eq!(bootstrap.payload, vec![10, 20, 30]);
+        assert!(bootstrap.group_id.is_empty());
+        assert_eq!(bootstrap.epoch, 0);
+    }
+
+    #[test]
+    fn test_bootstrap_kp_roundtrip() {
+        let kp_bytes = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
+        let event = Event::bootstrap_kp(kp_bytes.clone());
+
+        let bytes = event.to_bytes().unwrap();
+        let recovered = Event::from_bytes(&bytes).unwrap();
+
+        assert!(matches!(recovered.kind, EventKind::BootstrapKp));
+        assert_eq!(recovered.payload, kp_bytes);
+        assert!(recovered.group_id.is_empty());
+        assert_eq!(recovered.epoch, 0);
+
+        // Wire tag is `bootstrap.kp`.
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["kind"], serde_json::Value::String("bootstrap.kp".to_string()));
     }
 
     #[test]

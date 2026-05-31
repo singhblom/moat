@@ -9,12 +9,16 @@
 //! - The orphan-within-slot failure of the PDS-slot scheme only arises
 //!   under *multi-use of a slot* — the same consumer reaching for the
 //!   same mailbox more than once with a lag between consumption and clear.
-//! - **Bootstrap is single-use by construction.** When a new device logs
-//!   in, each `(new device → existing sibling)` slot is consulted at most
-//!   once: by exactly one sibling, who uses the contained KP exactly once
-//!   to perform the ring add. After the ring is established the slot is
-//!   irrelevant; the new device stops maintaining it. No replenish, no
-//!   lag window, no orphan.
+//! - **Bootstrap is single-use via a consumer-side flag.** When a new
+//!   device logs in, each `(new device → existing sibling)` slot is
+//!   addressed to exactly one sibling (stealth-encrypted in the real
+//!   protocol). The slot is **not** deleted after use — a `deleteRecord`
+//!   shortly after `putRecord` would be a distinctive firehose pattern
+//!   that re-introduces the metadata leak the stealth-event bootstrap
+//!   is designed to close. Instead, the consumer records the
+//!   consumption locally and refuses to act on the same slot a second
+//!   time. The orphan window is closed regardless of how long the slot
+//!   sits on the PDS.
 //! - Everything after the ring exists (user-conversation fan-out,
 //!   subsequent device joins of *other* siblings, sync sessions) flows
 //!   over the ring, where `protocol_model_ring_transport.rs` already
@@ -91,11 +95,17 @@ struct HybridModel {
     keystore: BTreeMap<DeviceId, BTreeSet<Rkey>>,
 
     // ── Bootstrap-phase PDS slots ─────────────────────────────────────────────
-    /// `(owner, intended_for) → Option<bootstrap KP>`. Single-use: once
-    /// consumed and cleared, the slot is gone. Owners may decline to
-    /// republish — the design is that they stop maintaining the slot
-    /// after the consumer is in the ring.
+    /// `(owner, intended_for) → Option<bootstrap KP>`. The slot is
+    /// **not** cleared after consumption — the bootstrap event stays
+    /// on the PDS to avoid the firehose-visible put/delete pattern.
+    /// Single-use is enforced by the consumer-side
+    /// `consumed_bootstrap_for` flag below.
     pds_slots: BTreeMap<(DeviceId, DeviceId), Option<Rkey>>,
+    /// Consumer-side: `(consumer, owner)` pairs for which the consumer
+    /// has already consumed the bootstrap event. A re-fetch returns
+    /// `None` once this flag is set, even though the PDS still holds
+    /// the slot.
+    consumed_bootstrap_for: BTreeSet<(DeviceId, DeviceId)>,
 
     // ── Ring transport ────────────────────────────────────────────────────────
     /// FIFO message queue on the ring.
@@ -142,9 +152,14 @@ impl HybridModel {
         rkey
     }
 
-    /// Consumer fetches its dedicated bootstrap slot. Returns `None` if the
-    /// slot is empty.
+    /// Consumer fetches its dedicated bootstrap slot. Returns `None` if
+    /// the slot has never been published *or* the consumer has already
+    /// consumed it once (consumer-side flag, since the slot itself is
+    /// never deleted from the PDS).
     fn fetch_bootstrap_slot(&self, owner: DeviceId, consumer: DeviceId) -> Option<Rkey> {
+        if self.consumed_bootstrap_for.contains(&(consumer, owner)) {
+            return None;
+        }
         *self.pds_slots.get(&(owner, consumer))?
     }
 
@@ -169,11 +184,14 @@ impl HybridModel {
             .entry((consumer, owner))
             .or_default()
             .push_back(RingMessage::Welcome(w));
-        // The owner stops maintaining its bootstrap slot the moment the
-        // consumer's add lands. We model "lands" by the consumer enqueuing
-        // the Welcome; in real life the owner observes it and clears the
-        // slot in the same operation that joins the ring.
-        self.pds_slots.insert((owner, consumer), None);
+        // Bootstrap event is NOT deleted from the PDS — a put/delete
+        // pattern on `social.moat.event` would itself be a distinctive
+        // firehose signal that re-introduces the metadata leak the
+        // stealth-event bootstrap is intended to close. Single-use is
+        // enforced by the consumer recording its own consumption; the
+        // slot bytes sit on the PDS indefinitely, encrypted to the
+        // sibling's scan key and useless to any other reader.
+        self.consumed_bootstrap_for.insert((consumer, owner));
     }
 
     // ── Ring transport ────────────────────────────────────────────────────────
@@ -335,8 +353,10 @@ fn hybrid_new_device_end_to_end() {
     let bootstrap_kp = m.fetch_bootstrap_slot(D3, D1).unwrap();
     m.bootstrap_add_to_ring(D1, D3, bootstrap_kp);
 
-    // The slot is gone now; a stale poll on D1's side would see it empty.
+    // The PDS slot still exists, but D1's consumer-side flag now
+    // refuses to act on it — a stale poll returns None.
     assert!(m.fetch_bootstrap_slot(D3, D1).is_none());
+    assert!(m.pds_slots.get(&(D3, D1)).copied().flatten().is_some());
 
     // 3. D3 processes the ring Welcome.
     m.owner_drain_inbound(D3, D1);
@@ -361,12 +381,13 @@ fn hybrid_new_device_end_to_end() {
     assert_eq!(m.ring_pending(D1, D3), 0);
 }
 
-/// **Bootstrap slot is single-use by construction.**
+/// **Bootstrap slot is single-use via the consumer-side flag.**
 ///
 /// Confirm that the orphan-within-slot bug from `protocol_model.rs` cannot
-/// arise here. D1 uses the bootstrap slot; the slot is cleared; a second
-/// fetch returns None. There is no replenish; no lag window; the consumer
-/// physically can't re-use the slot.
+/// arise here even though the PDS slot is never deleted. D1 uses the
+/// bootstrap slot; the consumer-side flag is set; a second fetch returns
+/// None despite the slot still sitting on the PDS. The bootstrap path
+/// never runs twice for this `(consumer, owner)` pair.
 #[test]
 fn hybrid_bootstrap_slot_is_single_use_by_construction() {
     let mut m = HybridModel::default();
@@ -376,7 +397,8 @@ fn hybrid_bootstrap_slot_is_single_use_by_construction() {
     assert_eq!(fetched, kp1);
     m.bootstrap_add_to_ring(D1, D3, fetched);
 
-    // Slot is cleared.
+    // PDS still holds the slot. Consumer-side flag blocks re-use.
+    assert!(m.pds_slots.get(&(D3, D1)).copied().flatten().is_some());
     assert!(m.fetch_bootstrap_slot(D3, D1).is_none());
 
     // Even if a buggy or adversarial caller tries to use the KP a second
@@ -385,6 +407,60 @@ fn hybrid_bootstrap_slot_is_single_use_by_construction() {
     // never runs twice.
     m.owner_drain_inbound(D3, D1);
     assert!(m.ok());
+}
+
+/// **Bootstrap event survives on the PDS; consumer-side flag is the
+/// only defence.**
+///
+/// Models the "don't delete" rule explicitly. D3 publishes a bootstrap
+/// slot for D1. D1 consumes it. D1 then performs several more poll
+/// cycles — each one would re-fetch the slot if the consumer-side flag
+/// didn't intervene. The flag returns `None` from every subsequent
+/// `fetch_bootstrap_slot`, so no second Welcome is built.
+///
+/// The lower half of the test confirms that the flag is genuinely
+/// load-bearing: a buggy caller that bypassed the flag and called
+/// `bootstrap_add_to_ring` a second time with the same KP *would*
+/// produce an undeliverable Welcome (the init key is already gone from
+/// D3's keystore), and the model's `failed_receives` counter would
+/// fire. This is the orphan failure mode the flag closes.
+#[test]
+fn hybrid_bootstrap_event_replay_blocked_by_consumer_flag() {
+    let mut m = HybridModel::default();
+
+    let kp = m.publish_bootstrap_slot(D3, D1);
+
+    // First poll: slot is fresh, consumer fetches, builds Welcome.
+    let fetched = m.fetch_bootstrap_slot(D3, D1).unwrap();
+    assert_eq!(fetched, kp);
+    m.bootstrap_add_to_ring(D1, D3, fetched);
+    m.owner_drain_inbound(D3, D1);
+    assert!(m.ok());
+
+    // Subsequent polls: the slot bytes still sit on the PDS, but
+    // fetch_bootstrap_slot returns None because the consumer flag is
+    // set. We poll several times to make the point that there is no
+    // implicit "first poll after consumption is special" — every poll
+    // is gated by the same flag.
+    for _ in 0..5 {
+        assert!(m.fetch_bootstrap_slot(D3, D1).is_none());
+        // PDS still has the record.
+        assert!(m.pds_slots.get(&(D3, D1)).copied().flatten().is_some());
+    }
+
+    // Now simulate a buggy caller that bypasses the flag. It has cached
+    // the rkey from its first fetch and naively calls
+    // bootstrap_add_to_ring a second time. The owner drains and sees a
+    // Welcome whose init key is no longer in its keystore — the orphan
+    // failure the flag is designed to prevent.
+    m.bootstrap_add_to_ring(D1, D3, kp);
+    m.owner_drain_inbound(D3, D1);
+    assert!(
+        !m.ok(),
+        "bypassing the consumer flag must surface as a failed_receive — \
+         the flag is the only defence against bootstrap replay under \
+         the don't-delete rule",
+    );
 }
 
 /// **Concurrent ring-add attempts during bootstrap.**
@@ -463,6 +539,74 @@ fn hybrid_second_new_device_reuses_the_bootstrap_path_independently() {
         m.fetch_bootstrap_slot(D4, D2),
         m.fetch_bootstrap_slot(D4, D3),
     );
+}
+
+/// **Two new devices joining concurrently.**
+///
+/// D1 and D2 are already in the ring. D3 and D4 both come online and
+/// publish their bootstrap slots at the same time (concurrent puts on
+/// the firehose). D1 serialises the ring adds — MLS only allows one
+/// commit per epoch — so it fetches D3's slot, adds D3 to the ring,
+/// then fetches D4's slot, adds D4. The two new-device flows must be
+/// completely independent: no shared KP, no cross-contamination of
+/// consumer flags, no orphan Welcomes.
+#[test]
+fn hybrid_two_new_devices_join_concurrently_independent_flows() {
+    let mut m = HybridModel::default();
+    m.ring_members_of.insert(RING, [D1, D2].into());
+
+    // D3 and D4 both publish bootstrap slots for each existing sibling.
+    let d3_for_d1 = m.publish_bootstrap_slot(D3, D1);
+    let d3_for_d2 = m.publish_bootstrap_slot(D3, D2);
+    let d4_for_d1 = m.publish_bootstrap_slot(D4, D1);
+    let d4_for_d2 = m.publish_bootstrap_slot(D4, D2);
+
+    // Every bootstrap KP is distinct — the four init keys are four
+    // different entries in their respective keystores.
+    let all_kps: BTreeSet<Rkey> = [d3_for_d1, d3_for_d2, d4_for_d1, d4_for_d2]
+        .into_iter()
+        .collect();
+    assert_eq!(all_kps.len(), 4);
+    assert_eq!(m.keystore.get(&D3).unwrap().len(), 2);
+    assert_eq!(m.keystore.get(&D4).unwrap().len(), 2);
+
+    // D1 adds D3 to the ring (epoch N).
+    let kp = m.fetch_bootstrap_slot(D3, D1).unwrap();
+    assert_eq!(kp, d3_for_d1);
+    m.bootstrap_add_to_ring(D1, D3, kp);
+    m.owner_drain_inbound(D3, D1);
+    assert!(m.ok());
+    m.ring_members_of.get_mut(&RING).unwrap().insert(D3);
+
+    // D1's consumer flag for D3 is now set; its flag for D4 is not.
+    assert!(m.consumed_bootstrap_for.contains(&(D1, D3)));
+    assert!(!m.consumed_bootstrap_for.contains(&(D1, D4)));
+
+    // D1 adds D4 to the ring (epoch N+1). The flow uses D4's own KP,
+    // not D3's, and the two flows have not interfered.
+    let kp = m.fetch_bootstrap_slot(D4, D1).unwrap();
+    assert_eq!(kp, d4_for_d1);
+    m.bootstrap_add_to_ring(D1, D4, kp);
+    m.owner_drain_inbound(D4, D1);
+    assert!(m.ok());
+    m.ring_members_of.get_mut(&RING).unwrap().insert(D4);
+
+    // Final state: ring has all four devices; D3's and D4's keystores
+    // each have one init key consumed (the one D1 used), one remaining
+    // (the one for D2, untouched). The (D3 → D2) and (D4 → D2) slots
+    // are still available on the PDS, ready for D2's tick.
+    assert_eq!(m.ring_members_of.get(&RING).unwrap().len(), 4);
+    assert_eq!(m.keystore.get(&D3).unwrap().len(), 1);
+    assert_eq!(m.keystore.get(&D4).unwrap().len(), 1);
+    assert!(m.fetch_bootstrap_slot(D3, D2).is_some());
+    assert!(m.fetch_bootstrap_slot(D4, D2).is_some());
+
+    // D1's consumer flags are set independently for D3 and D4.
+    assert!(m.consumed_bootstrap_for.contains(&(D1, D3)));
+    assert!(m.consumed_bootstrap_for.contains(&(D1, D4)));
+    // D2 hasn't consumed anything yet.
+    assert!(!m.consumed_bootstrap_for.contains(&(D2, D3)));
+    assert!(!m.consumed_bootstrap_for.contains(&(D2, D4)));
 }
 
 /// **Mixed trace: bootstrap + ring-transport + replay + refill.**

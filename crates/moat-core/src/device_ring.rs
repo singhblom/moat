@@ -145,6 +145,43 @@ pub enum CoordMsg {
         #[serde(default)]
         target_device_id: Option<Vec<u8>>,
     },
+    /// Owner ships a batch of fresh MLS key packages over the ring to a
+    /// specific consumer for use in same-user `add_device` operations.
+    /// Each entry carries its own monotonic `seq` so the consumer can dedupe
+    /// replays and reject out-of-order delivery.
+    KpBatch {
+        /// Device id of the intended recipient (16 bytes). Other ring
+        /// members ignore the batch.
+        #[serde_as(as = "Base64")]
+        recipient_device_id: Vec<u8>,
+        kps: Vec<OfferedKp>,
+    },
+    /// Consumer asks the owner to top up the local pool of the owner's
+    /// key packages. `count` is a hint; the owner caps at `KP_BATCH_CAP`.
+    KpRequest {
+        /// Device id of the owner the consumer wants more KPs from.
+        #[serde_as(as = "Base64")]
+        owner_device_id: Vec<u8>,
+        count: u32,
+    },
+}
+
+/// A single key package entry inside a `CoordMsg::KpBatch`. The `seq` is
+/// owner-issued and strictly monotonic per owner globally — consumers
+/// dedupe by tracking the highest `seq` they've ingested per `(consumer,
+/// owner)` pair and enforce single-use via a separate `used_kps` set.
+#[serde_as]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OfferedKp {
+    /// Owner-allocated 16-byte identifier for this KP (also serves as the
+    /// key the owner's local keystore indexes the init-key material by).
+    #[serde_as(as = "Base64")]
+    pub rkey: Vec<u8>,
+    /// Monotonic owner-global sequence number. Larger = newer.
+    pub seq: u64,
+    /// Serialized MLS KeyPackage bytes.
+    #[serde_as(as = "Base64")]
+    pub key_package: Vec<u8>,
 }
 
 /// Encode a [`CoordMsg`] to bytes suitable for use as `Event.payload`.
@@ -1072,6 +1109,12 @@ impl DeviceRingState {
                     Vec::new()
                 }
             }
+            CoordMsg::KpBatch { .. } | CoordMsg::KpRequest { .. } => {
+                // Phase A scaffolding: variants exist on the wire, but the
+                // state machine ignores them until Phase B/D wires the pool
+                // and refill state.
+                Vec::new()
+            }
         }
     }
 
@@ -1737,6 +1780,80 @@ mod tests {
             let bytes = encode_coord_msg(&c);
             assert!(bytes.len() <= 256, "{:?} is {} bytes", c, bytes.len());
         }
+    }
+
+    #[test]
+    fn coord_msg_roundtrip_kp_batch() {
+        let msg = CoordMsg::KpBatch {
+            recipient_device_id: vec![3u8; 16],
+            kps: vec![
+                OfferedKp {
+                    rkey: vec![1u8; 16],
+                    seq: 1,
+                    key_package: vec![0xAA; 64],
+                },
+                OfferedKp {
+                    rkey: vec![2u8; 16],
+                    seq: 2,
+                    key_package: vec![0xBB; 64],
+                },
+            ],
+        };
+        let bytes = encode_coord_msg(&msg);
+        match decode_coord_msg(&bytes).unwrap() {
+            CoordMsg::KpBatch { recipient_device_id, kps } => {
+                assert_eq!(recipient_device_id, vec![3u8; 16]);
+                assert_eq!(kps.len(), 2);
+                assert_eq!(kps[0].seq, 1);
+                assert_eq!(kps[1].seq, 2);
+                assert_eq!(kps[0].key_package, vec![0xAA; 64]);
+                assert_eq!(kps[1].key_package, vec![0xBB; 64]);
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn coord_msg_roundtrip_kp_request() {
+        let msg = CoordMsg::KpRequest {
+            owner_device_id: vec![9u8; 16],
+            count: 4,
+        };
+        let bytes = encode_coord_msg(&msg);
+        match decode_coord_msg(&bytes).unwrap() {
+            CoordMsg::KpRequest { owner_device_id, count } => {
+                assert_eq!(owner_device_id, vec![9u8; 16]);
+                assert_eq!(count, 4);
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    /// A realistic batch of `KP_BATCH_CAP = 4` real-sized MLS key packages
+    /// fits inside the 4 KB padding bucket. Typical MLS key packages with
+    /// the moat ciphersuite serialize to ~400-500 bytes; we pad to ~700 here
+    /// to give headroom for credential and ciphersuite metadata.
+    #[test]
+    fn coord_msg_kp_batch_fits_in_4k_bucket() {
+        let kp_size = 700; // generous upper bound for an MLS_128_X25519_AES128GCM KP
+        let kps = (0..4)
+            .map(|i| OfferedKp {
+                rkey: vec![i as u8; 16],
+                seq: i as u64 + 1,
+                key_package: vec![0xCC; kp_size],
+            })
+            .collect();
+        let msg = CoordMsg::KpBatch {
+            recipient_device_id: vec![5u8; 16],
+            kps,
+        };
+        let bytes = encode_coord_msg(&msg);
+        // 4 KB bucket - leave room for the outer Event JSON wrapper.
+        assert!(
+            bytes.len() <= 4096,
+            "kp_batch with cap=4 must fit in 4 KB bucket (got {} bytes)",
+            bytes.len()
+        );
     }
 
     fn make_members(dids: &[&str]) -> Vec<(u32, Option<MoatCredential>)> {

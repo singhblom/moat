@@ -505,6 +505,7 @@ impl EventDto {
                 EventKind::SyncApp => EventKindDto::SyncApp,
                 EventKind::Modifier(_)
                 | EventKind::Control(_)
+                | EventKind::BootstrapKp
                 | EventKind::Unknown(_) => EventKindDto::Unknown,
             },
             message_id: e.message_id,

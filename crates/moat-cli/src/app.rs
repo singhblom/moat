@@ -688,7 +688,7 @@ impl App {
     /// Called from the auto-login path where do_login()'s provisioning may have been skipped.
     fn ensure_keys_provisioned(&mut self, client: &MoatAtprotoClient, did: &str) {
         let mut key_package_to_publish: Option<(Vec<u8>, String)> = None;
-        let mut stealth_to_publish: Option<([u8; 32], String)> = None;
+        let mut stealth_to_publish: Option<([u8; 32], String, [u8; 16])> = None;
 
         // Generate identity key if missing
         if !self.keys.has_identity_key() {
@@ -736,7 +736,7 @@ impl App {
                     return;
                 }
             };
-            stealth_to_publish = Some((stealth_pubkey, device_name));
+            stealth_to_publish = Some((stealth_pubkey, device_name, *self.mls.device_id()));
         }
 
         // Publish to PDS in a background task if anything needs publishing
@@ -751,9 +751,9 @@ impl App {
                         )));
                     }
                 }
-                if let Some((stealth_pubkey, device_name)) = stealth_to_publish {
+                if let Some((stealth_pubkey, device_name, device_id)) = stealth_to_publish {
                     if let Err(e) = client
-                        .publish_stealth_address(&stealth_pubkey, &device_name)
+                        .publish_stealth_address(&stealth_pubkey, &device_name, &device_id)
                         .await
                     {
                         let _ = tx.send(BgEvent::PollError(format!(
@@ -3294,11 +3294,12 @@ impl App {
             // Store private key locally
             self.keys.store_stealth_key(&stealth_privkey)?;
 
-            // Publish public key to PDS with device name
+            // Publish public key to PDS with device name and device id
             self.set_status("Publishing stealth address...".to_string());
             let device_name = self.keys.get_or_create_device_name()?;
+            let device_id = *self.mls.device_id();
             client
-                .publish_stealth_address(&stealth_pubkey, &device_name)
+                .publish_stealth_address(&stealth_pubkey, &device_name, &device_id)
                 .await?;
         }
 
