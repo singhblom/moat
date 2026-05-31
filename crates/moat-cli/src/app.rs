@@ -4526,6 +4526,15 @@ impl App {
                             .log(&format!("ring: failed to publish stealth welcome: {e}"));
                     }
                 }
+                RingCommand::PublishBootstrapKp { tag, ciphertext } => {
+                    // Phase B scaffolding: command exists in the type system,
+                    // but no code path emits it yet (that's Phase C).  Same
+                    // wire shape as StealthPublishWelcome — host just publishes.
+                    if let Err(e) = client.publish_event(&tag, &ciphertext, None).await {
+                        self.debug_log
+                            .log(&format!("ring: failed to publish bootstrap kp: {e}"));
+                    }
+                }
                 RingCommand::RegisterGroup { group_id, kind } => {
                     let group_id_hex = hex::encode(&group_id);
                     let is_user_group = kind == GroupKind::User;
@@ -4693,6 +4702,7 @@ impl App {
                 }
                 RingCommand::PublishEvent { .. }
                 | RingCommand::StealthPublishWelcome { .. }
+                | RingCommand::PublishBootstrapKp { .. }
                 | RingCommand::SendDrawbridgePairOffer { .. } => {
                     self.debug_log
                         .log("ring: async-only command emitted from sync path — dropped (will retry on next tick)");

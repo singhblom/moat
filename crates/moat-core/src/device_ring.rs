@@ -12,7 +12,7 @@
 //! transitions are written as `match`es so adding a new event or peer state
 //! is a compile error until every arm is handled.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use serde_with::{base64::Base64, serde_as};
@@ -142,7 +142,6 @@ pub enum CoordMsg {
         #[serde_as(as = "Base64")]
         token: Vec<u8>,
         #[serde_as(as = "Option<Base64>")]
-        #[serde(default)]
         target_device_id: Option<Vec<u8>>,
     },
     /// Owner ships a batch of fresh MLS key packages over the ring to a
@@ -324,18 +323,73 @@ pub enum RingMembership {
     },
 }
 
+/// Target number of an owner's key packages a consumer maintains locally.
+pub const KP_POOL_TARGET: usize = 8;
+
+/// Low-water mark: when the local pool of an owner's KPs drops to this
+/// value, the consumer issues a `CoordMsg::KpRequest` to refill.
+pub const KP_POOL_LOW_WATER: usize = 2;
+
+/// Maximum number of [`OfferedKp`] entries the owner ships in a single
+/// [`CoordMsg::KpBatch`].  Larger refills are split across multiple
+/// messages so each fits inside the 4 KB padding bucket.
+#[allow(dead_code)] // wired in Phase D when owners actually ship batches
+pub const KP_BATCH_CAP: usize = 4;
+
+/// Consumer-side pool of one owner's KPs, plus the dedupe / single-use
+/// state needed to defend against replay, out-of-order delivery, and
+/// adversarial pool reinsertion.
+///
+/// One [`KpPool`] is kept per `(consumer, owner)` pair — i.e. on a
+/// device's `DeviceRingState`, one [`KpPool`] per *owner* device id we
+/// can claim KPs from.  See `protocol_model_ring_transport.rs` for the
+/// invariants this represents.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct KpPool {
+    /// KPs received from this owner that have not yet been claimed.  New
+    /// entries are appended on `ingest_kp_batch`; claims drain in
+    /// monotonic `seq` order.
+    pub local_pool: Vec<OfferedKp>,
+
+    /// Highest `seq` we have *ever* observed from this owner (used or
+    /// not).  Replay defence: a `KpBatch` whose entries are all
+    /// `seq <= highest_seq_observed` is dropped on ingest.
+    pub highest_seq_observed: u64,
+
+    /// `seq`s the consumer has actually claimed.  Single-use enforcement:
+    /// `claim_kp` refuses to return an entry whose `seq` is in this set,
+    /// even if a buggy refill / replay re-inserts it.  Grows monotonically
+    /// — see `same-user-key-distribution.md` for the storage tradeoff.
+    pub used_kps: HashSet<u64>,
+}
+
 /// Top-level state owned by the host.  Serialized as JSON for persistence.
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DeviceRingState {
-    #[serde(default = "RingMembership::default")]
     ring: RingMembership,
     /// Sibling device_id → peer state.  HashMap key is hex-encoded for JSON.
-    #[serde(default)]
     peers: HashMap<String, PeerState>,
     /// Cursor (rkey) for incremental own-PDS stealth scan.
-    #[serde(default)]
     own_events_cursor: Option<String>,
+
+    /// Owner-global monotonic counter for `OfferedKp.seq`.  Incremented
+    /// every time we publish a KP into a `KpBatch` (any recipient).  See
+    /// `same-user-key-distribution.md` — a single per-owner counter is
+    /// simpler than per-(owner, recipient) and consumer dedupe doesn't
+    /// care about gaps caused by other consumers' batches.
+    next_kp_seq: u64,
+
+    /// Per-owner pool we draw KPs from when adding the owner to a user
+    /// conversation.  Key is the owner's hex-encoded `device_id`.
+    kp_pools: HashMap<String, KpPool>,
+
+    /// Hex-encoded sibling `device_id`s whose bootstrap event we have
+    /// already consumed.  Because the bootstrap event is *not* deleted
+    /// from the PDS, this flag is the only thing preventing the
+    /// consumer from acting on a re-fetch of the same event.  See
+    /// `protocol_model_hybrid.rs::hybrid_bootstrap_event_replay_blocked_by_consumer_flag`.
+    consumed_bootstrap_for: HashSet<String>,
 }
 
 // SyncStatus / AddedBy / RingLink / PeerState / RingMembership: we want
@@ -655,6 +709,15 @@ pub enum RingCommand {
         tag: [u8; 16],
         ciphertext: Vec<u8>,
     },
+    /// Publish a stealth-encrypted bootstrap KP event for a specific sibling.
+    /// Same wire shape as [`StealthPublishWelcome`] — the host just publishes
+    /// the ciphertext under the supplied tag.  The payload inside is an
+    /// `EventKind::BootstrapKp` event whose `payload` is the MLS KeyPackage
+    /// bytes; the recipient's own-PDS stealth scan picks it up.
+    PublishBootstrapKp {
+        tag: [u8; 16],
+        ciphertext: Vec<u8>,
+    },
     /// We just joined a coord group via Welcome — replenish our consumed
     /// key package so siblings can still add us to the ring.
     ReplenishKeyPackage,
@@ -735,6 +798,102 @@ impl DeviceRingState {
 
     pub fn set_own_events_cursor(&mut self, rkey: String) {
         self.own_events_cursor = Some(rkey);
+    }
+
+    // ── KP-pool state-machine helpers ──────────────────────────────────────
+    //
+    // These manipulate the per-owner consumer state plus the owner-global
+    // monotonic counter.  They are unwired in Phase B; Phase C / D will call
+    // them from the appropriate `step()` arms.
+
+    /// Allocate `count` fresh monotonic `seq` values for KPs we are about
+    /// to ship to *some* consumer.  Seqs are owner-global; consumers
+    /// dedupe by `highest_seq_observed` per owner, so gaps caused by
+    /// other consumers' batches are harmless.
+    pub fn allocate_kp_seqs(&mut self, count: usize) -> Vec<u64> {
+        let mut out = Vec::with_capacity(count);
+        for _ in 0..count {
+            self.next_kp_seq = self.next_kp_seq.saturating_add(1);
+            out.push(self.next_kp_seq);
+        }
+        out
+    }
+
+    /// Highest `seq` we have issued so far (next allocation will be
+    /// `highest + 1`).  Mostly for tests / debugging.
+    pub fn highest_issued_kp_seq(&self) -> u64 {
+        self.next_kp_seq
+    }
+
+    /// Number of unclaimed KPs we hold for this owner.
+    pub fn kp_pool_size(&self, owner: &DeviceId) -> usize {
+        let key = hex::encode(owner);
+        self.kp_pools.get(&key).map(|p| p.local_pool.len()).unwrap_or(0)
+    }
+
+    /// Ingest a batch of [`OfferedKp`]s received from `owner`.  Drops
+    /// entries with `seq <= highest_seq_observed` (replay defence) and
+    /// any whose `seq` is already in `used_kps` (consumer flag defence).
+    /// Survivors are appended to `local_pool`.
+    pub fn ingest_kp_batch(&mut self, owner: &DeviceId, batch: Vec<OfferedKp>) {
+        let key = hex::encode(owner);
+        let pool = self.kp_pools.entry(key).or_default();
+        let mut highest = pool.highest_seq_observed;
+        for kp in batch {
+            if kp.seq <= highest {
+                continue;
+            }
+            if pool.used_kps.contains(&kp.seq) {
+                // Already consumed under this seq — shouldn't usually happen
+                // since seqs only repeat via adversarial reinsertion, but be
+                // defensive.
+                continue;
+            }
+            highest = kp.seq;
+            pool.local_pool.push(kp);
+        }
+        pool.highest_seq_observed = highest;
+    }
+
+    /// Claim the lowest-`seq` unused KP from the owner's pool, mark it
+    /// used, and return it.  Returns `None` if the pool is empty or every
+    /// entry is somehow already in `used_kps` (the latter would be an
+    /// adversarial / buggy state).
+    pub fn claim_kp(&mut self, owner: &DeviceId) -> Option<OfferedKp> {
+        let key = hex::encode(owner);
+        let pool = self.kp_pools.get_mut(&key)?;
+        // Entries are appended in monotonic seq order by `ingest_kp_batch`,
+        // so the first not-yet-used position is the lowest seq.
+        let idx = pool
+            .local_pool
+            .iter()
+            .position(|kp| !pool.used_kps.contains(&kp.seq))?;
+        let kp = pool.local_pool.remove(idx);
+        pool.used_kps.insert(kp.seq);
+        Some(kp)
+    }
+
+    /// Returns the number of KPs we should request from `owner` if the
+    /// pool is at or below the low-water mark, else `None`.  Refill
+    /// target is `KP_POOL_TARGET`; the count is the gap from current
+    /// pool size up to target.
+    pub fn kp_request_if_low(&self, owner: &DeviceId) -> Option<u32> {
+        let len = self.kp_pool_size(owner);
+        if len <= KP_POOL_LOW_WATER {
+            Some((KP_POOL_TARGET - len) as u32)
+        } else {
+            None
+        }
+    }
+
+    /// Record that we have consumed `peer`'s bootstrap event.  Subsequent
+    /// fetches of the same event are ignored.
+    pub fn mark_bootstrap_consumed(&mut self, peer: &DeviceId) {
+        self.consumed_bootstrap_for.insert(hex::encode(peer));
+    }
+
+    pub fn is_bootstrap_consumed(&self, peer: &DeviceId) -> bool {
+        self.consumed_bootstrap_for.contains(&hex::encode(peer))
     }
 
     /// Verify structural invariants.  Cheap; intended for debug-build asserts
@@ -1829,17 +1988,17 @@ mod tests {
         }
     }
 
-    /// A realistic batch of `KP_BATCH_CAP = 4` real-sized MLS key packages
+    /// A realistic batch of `KP_BATCH_CAP` real-sized MLS key packages
     /// fits inside the 4 KB padding bucket. Typical MLS key packages with
     /// the moat ciphersuite serialize to ~400-500 bytes; we pad to ~700 here
     /// to give headroom for credential and ciphersuite metadata.
     #[test]
     fn coord_msg_kp_batch_fits_in_4k_bucket() {
         let kp_size = 700; // generous upper bound for an MLS_128_X25519_AES128GCM KP
-        let kps = (0..4)
+        let kps = (0..KP_BATCH_CAP as u64)
             .map(|i| OfferedKp {
                 rkey: vec![i as u8; 16],
-                seq: i as u64 + 1,
+                seq: i + 1,
                 key_package: vec![0xCC; kp_size],
             })
             .collect();
@@ -1948,5 +2107,146 @@ mod tests {
         );
         // ring is still Solo — invariant violated.
         assert_eq!(s.check_invariants(), Err(InvariantViolation::CoordReadyPeerButSolo));
+    }
+
+    // ── KP-pool state-machine helpers ──────────────────────────────────────
+
+    fn kp(seq: u64) -> OfferedKp {
+        OfferedKp {
+            rkey: vec![seq as u8; 16],
+            seq,
+            key_package: vec![0xAA; 8],
+        }
+    }
+
+    #[test]
+    fn allocate_kp_seqs_is_strictly_monotonic() {
+        let mut s = DeviceRingState::new();
+        assert_eq!(s.allocate_kp_seqs(3), vec![1, 2, 3]);
+        assert_eq!(s.allocate_kp_seqs(2), vec![4, 5]);
+        assert_eq!(s.highest_issued_kp_seq(), 5);
+        assert!(s.allocate_kp_seqs(0).is_empty());
+        assert_eq!(s.highest_issued_kp_seq(), 5);
+    }
+
+    #[test]
+    fn ingest_kp_batch_appends_and_dedupes_by_seq() {
+        let mut s = DeviceRingState::new();
+        let owner: DeviceId = [9u8; 16];
+
+        s.ingest_kp_batch(&owner, vec![kp(1), kp(2), kp(3)]);
+        assert_eq!(s.kp_pool_size(&owner), 3);
+
+        // Replay of same batch: all dropped.
+        s.ingest_kp_batch(&owner, vec![kp(1), kp(2), kp(3)]);
+        assert_eq!(s.kp_pool_size(&owner), 3);
+
+        // Mixed: 2 is dup, 4/5 are new.
+        s.ingest_kp_batch(&owner, vec![kp(2), kp(4), kp(5)]);
+        assert_eq!(s.kp_pool_size(&owner), 5);
+
+        // A seq lower than highest_seq_observed never makes it back in.
+        s.ingest_kp_batch(&owner, vec![kp(3)]);
+        assert_eq!(s.kp_pool_size(&owner), 5);
+    }
+
+    #[test]
+    fn claim_kp_returns_lowest_seq_and_marks_used() {
+        let mut s = DeviceRingState::new();
+        let owner: DeviceId = [9u8; 16];
+
+        s.ingest_kp_batch(&owner, vec![kp(2), kp(1), kp(3)]);
+        // Despite ingest order, `local_pool` ordering means the first
+        // entry not yet claimed has the lowest seq (because ingest only
+        // accepts strictly-increasing seqs, so order in `local_pool`
+        // matches insertion order which matches monotonic seq).
+        let first = s.claim_kp(&owner).unwrap();
+        assert_eq!(first.seq, 2);
+        let second = s.claim_kp(&owner).unwrap();
+        assert_eq!(second.seq, 3);
+        assert!(s.claim_kp(&owner).is_none());
+
+        // Used set should contain both consumed seqs.
+        let key = hex::encode(owner);
+        let pool = &s.kp_pools[&key];
+        assert!(pool.used_kps.contains(&2));
+        assert!(pool.used_kps.contains(&3));
+    }
+
+    #[test]
+    fn claim_kp_refuses_adversarial_reinsertion() {
+        let mut s = DeviceRingState::new();
+        let owner: DeviceId = [9u8; 16];
+
+        s.ingest_kp_batch(&owner, vec![kp(1), kp(2)]);
+        let claimed = s.claim_kp(&owner).unwrap();
+        assert_eq!(claimed.seq, 1);
+
+        // Adversarially shove seq=1 back into the local_pool.  Because
+        // `claim_kp` consults `used_kps`, it must refuse to return it.
+        let key = hex::encode(owner);
+        s.kp_pools.get_mut(&key).unwrap().local_pool.push(kp(1));
+
+        let next = s.claim_kp(&owner).unwrap();
+        assert_eq!(next.seq, 2);
+        // And nothing left — the reinserted kp(1) is gated by used_kps.
+        assert!(s.claim_kp(&owner).is_none());
+    }
+
+    #[test]
+    fn kp_request_if_low_fires_at_or_below_low_water() {
+        let mut s = DeviceRingState::new();
+        let owner: DeviceId = [9u8; 16];
+
+        // Empty pool → request full target.
+        assert_eq!(s.kp_request_if_low(&owner), Some(KP_POOL_TARGET as u32));
+
+        // Below low-water (1 < 2).
+        s.ingest_kp_batch(&owner, vec![kp(1)]);
+        assert_eq!(
+            s.kp_request_if_low(&owner),
+            Some((KP_POOL_TARGET - 1) as u32)
+        );
+
+        // At low-water exactly (2 == 2).
+        s.ingest_kp_batch(&owner, vec![kp(2)]);
+        assert_eq!(
+            s.kp_request_if_low(&owner),
+            Some((KP_POOL_TARGET - 2) as u32)
+        );
+
+        // Above low-water (3 > 2) — no request.
+        s.ingest_kp_batch(&owner, vec![kp(3)]);
+        assert!(s.kp_request_if_low(&owner).is_none());
+    }
+
+    #[test]
+    fn bootstrap_consumed_flag_roundtrips() {
+        let mut s = DeviceRingState::new();
+        let peer: DeviceId = [7u8; 16];
+
+        assert!(!s.is_bootstrap_consumed(&peer));
+        s.mark_bootstrap_consumed(&peer);
+        assert!(s.is_bootstrap_consumed(&peer));
+
+        // Different peer is independent.
+        let other: DeviceId = [8u8; 16];
+        assert!(!s.is_bootstrap_consumed(&other));
+    }
+
+    #[test]
+    fn kp_pool_state_persists_through_json_roundtrip() {
+        let mut s = DeviceRingState::new();
+        let owner: DeviceId = [9u8; 16];
+        let _ = s.allocate_kp_seqs(3);
+        s.ingest_kp_batch(&owner, vec![kp(10), kp(11)]);
+        let _ = s.claim_kp(&owner);
+        s.mark_bootstrap_consumed(&[7u8; 16]);
+
+        let json = serde_json::to_string(&s).unwrap();
+        let parsed: DeviceRingState = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.highest_issued_kp_seq(), 3);
+        assert_eq!(parsed.kp_pool_size(&owner), 1); // one claimed, one left
+        assert!(parsed.is_bootstrap_consumed(&[7u8; 16]));
     }
 }

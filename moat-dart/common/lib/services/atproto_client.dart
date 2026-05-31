@@ -488,15 +488,10 @@ class AtprotoClient {
     for (final item in items) {
       final value = item['value'] as Map<String, dynamic>;
       final v = value['v'] as int?;
-      if (v == 2 || v == 3) {
+      if (v == 3) {
         final scanPubkey = _decodeBytesField(value['scanPubkey']);
         final deviceName = value['deviceName'] as String? ?? 'Unknown';
-        // v2 records lack `deviceId`; fall back to all-zero bytes so the
-        // record still loads. New records always carry a real id.
-        final deviceIdField = value['deviceId'];
-        final deviceId = deviceIdField == null
-            ? Uint8List(16)
-            : _decodeBytesField(deviceIdField);
+        final deviceId = _decodeBytesField(value['deviceId']);
         records.add(StealthAddressRecord(
           scanPubkey: scanPubkey,
           deviceName: deviceName,

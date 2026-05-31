@@ -137,9 +137,8 @@ pub struct StealthAddressRecord {
     pub device_name: String,
 
     /// Stable 16-byte device identifier (matches MoatCredential.device_id).
-    /// v2 records lacked this field; deserialized as `[0u8; 16]` for safety,
-    /// and producers should refresh those records with v3.
-    #[serde(default, with = "base64_tag")]
+    /// Required field — no pre-v3 records to support.
+    #[serde(with = "base64_tag")]
     pub device_id: [u8; 16],
 
     /// Creation time
@@ -154,7 +153,7 @@ pub struct StealthAddressData {
     #[serde(with = "base64_pubkey")]
     pub scan_pubkey: [u8; 32],
     pub device_name: String,
-    #[serde(default, with = "base64_tag")]
+    #[serde(with = "base64_tag")]
     pub device_id: [u8; 16],
     pub created_at: DateTime<Utc>,
 }
@@ -349,14 +348,17 @@ mod tests {
     }
 
     #[test]
-    fn test_stealth_address_v2_missing_device_id_defaults_to_zero() {
-        // Pre-v3 records lack `deviceId`; serde defaults the field to [0u8; 16]
-        // so we can still load them without crashing. Producers refresh to v3.
+    fn test_stealth_address_v2_without_device_id_rejected() {
+        // v2 was a development-only version; no production data exists.
+        // A record without `deviceId` must fail to parse, since silently
+        // defaulting device_id to zeros would produce colliding ids across
+        // every legacy record — strictly worse than a parse error.
         let json = r#"{"v":2,"scanPubkey":{"$bytes":"FtKnvfUoIJCdfrcKbtFL9JHrUdQbnt0X7euvw0fZUTs"},"deviceName":"Legacy","createdAt":"2026-03-01T21:31:58Z"}"#;
-        let record: StealthAddressData = serde_json::from_str(json)
-            .expect("v2 record without deviceId should still parse");
-        assert_eq!(record.v, 2);
-        assert_eq!(record.device_id, [0u8; 16]);
+        let result: Result<StealthAddressData, _> = serde_json::from_str(json);
+        assert!(
+            result.is_err(),
+            "v2 record without deviceId must fail to parse"
+        );
     }
 
     #[test]
