@@ -4475,6 +4475,16 @@ impl App {
             .unwrap_or_default();
         let stealth_pubkeys: Vec<[u8; 32]> =
             stealth_records.iter().map(|r| r.scan_pubkey).collect();
+        // Per-sibling addressing for BootstrapKp publication: drop our own device
+        let my_device_id = *self.mls.device_id();
+        let sibling_stealth: Vec<moat_core::SiblingStealth> = stealth_records
+            .iter()
+            .filter(|r| r.device_id != [0u8; 16] && r.device_id != my_device_id)
+            .map(|r| moat_core::SiblingStealth {
+                scan_pubkey: r.scan_pubkey,
+                device_id: r.device_id,
+            })
+            .collect();
 
         let event_records = client
             .fetch_events_from_did(&my_did, self.ring_driver.own_events_cursor())
@@ -4495,6 +4505,7 @@ impl App {
             TickInputs {
                 key_packages: &key_packages,
                 stealth_pubkeys: &stealth_pubkeys,
+                sibling_stealth: &sibling_stealth,
                 own_events: &own_events,
                 stealth_privkey: &stealth_privkey,
                 credential: &credential,
@@ -4527,9 +4538,6 @@ impl App {
                     }
                 }
                 RingCommand::PublishBootstrapKp { tag, ciphertext } => {
-                    // Phase B scaffolding: command exists in the type system,
-                    // but no code path emits it yet (that's Phase C).  Same
-                    // wire shape as StealthPublishWelcome — host just publishes.
                     if let Err(e) = client.publish_event(&tag, &ciphertext, None).await {
                         self.debug_log
                             .log(&format!("ring: failed to publish bootstrap kp: {e}"));
@@ -4646,6 +4654,10 @@ impl App {
             drawbridge_connected: self.drawbridge.has_own_connection(),
             sync_session_active: self.sync_session.is_some(),
             stealth_pubkeys: &[],
+            // Synchronous coord-message handler; no on-tick bootstrap
+            // publishing fires from here.  Phase C publishing happens in
+            // the async ring_tick_inner path via TickInputs.sibling_stealth.
+            sibling_stealth: &[],
         };
 
         let cmds = self.ring_driver.step(

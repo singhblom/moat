@@ -1012,6 +1012,11 @@ impl RingDriverHandle {
             .into_iter()
             .map(|pk| pk.try_into().map_err(|_| "stealth_pubkey must be 32 bytes".to_string()))
             .collect::<Result<_, _>>()?;
+        // Phase G will surface sibling_stealth across the FFI so the Dart
+        // ring driver can publish bootstrap KPs.  For now the FFI passes an
+        // empty list — Dart bootstrap publication is a no-op until Phase G
+        // regenerates FRB bindings; Rust CLI hosts continue to publish.
+        let sibling_stealth: Vec<moat_core::SiblingStealth> = Vec::new();
         let own_events: Vec<OwnEventInput> = inputs
             .own_events
             .into_iter()
@@ -1029,6 +1034,7 @@ impl RingDriverHandle {
         let core_inputs = TickInputs {
             key_packages: &key_packages,
             stealth_pubkeys: &stealth_pubkeys,
+            sibling_stealth: &sibling_stealth,
             own_events: &own_events,
             stealth_privkey: &stealth_privkey,
             credential: &credential,
@@ -1064,6 +1070,7 @@ impl RingDriverHandle {
             drawbridge_connected: false,
             sync_session_active: false,
             stealth_pubkeys: &[],
+            sibling_stealth: &[],
         };
         let cmds = self.inner.lock().unwrap().step(
             &session_lock,
@@ -1097,6 +1104,7 @@ impl RingDriverHandle {
             drawbridge_connected: false,
             sync_session_active: false,
             stealth_pubkeys: &[],
+            sibling_stealth: &[],
         };
         let cmds = self.inner.lock().unwrap().step(
             &session_lock,

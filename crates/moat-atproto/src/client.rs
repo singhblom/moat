@@ -706,8 +706,8 @@ impl MoatAtprotoClient {
                 .map_err(|e| Error::Serialization(e.to_string()))?;
 
             if let Ok(mut record) = serde_json::from_value::<StealthAddressRecord>(value) {
-                // Only accept v2 records (multi-device)
-                if record.v == 2 {
+                // Only accept v3 records (multi-device with stable device_id)
+                if record.v == 3 {
                     // Extract rkey from URI
                     if let Some(rkey) = item.uri.split('/').next_back() {
                         record.rkey = rkey.to_string();

@@ -54,9 +54,9 @@ pub use crate::error::{Error, ErrorCode, Result};
 pub use crate::device_ring::{
     classify_group_kind, decode_coord_msg, decode_welcome_envelope, encode_coord_msg,
     encode_welcome_envelope, reconcile_rings, AddedBy, CoordGroupResult, CoordMsg, DeviceId,
-    DeviceRingState, GroupKind, InvariantViolation, KeyPackageInput, OwnEventInput, PeerState,
-    ReconcileDecision, RingCommand, RingEvent, RingLink, RingMembership, StepEnv, SyncStatus,
-    TickInputs,
+    DeviceRingState, GroupKind, InvariantViolation, KeyPackageInput, OfferedKp, OwnEventInput,
+    PeerState, ReconcileDecision, RingCommand, RingEvent, RingLink, RingMembership,
+    SiblingStealth, StepEnv, SyncStatus, TickInputs,
 };
 pub use crate::event::{
     ControlKind, DecryptOutcome, Event, EventKind, MessageKind, ModifierKind, ReactionPayload,
