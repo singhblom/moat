@@ -83,12 +83,22 @@ impl EventKind {
 /// This provides both user identity (DID) and device information for multi-device support.
 ///
 /// Note: This is receiver-side metadata extracted from MLS, not part of the encrypted Event.
+/// `Event.sender_device_id` carries the *same* device id encoded inside the
+/// encrypted payload, used at decrypt time as the per-device hash-chain key;
+/// `decrypt_event` cross-checks the two and surfaces a
+/// `TranscriptWarning::SenderIdentityMismatch` on divergence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SenderInfo {
     /// The sender's decentralized identifier
     pub did: String,
     /// The name of the device that sent the message (format: "did:plc:xxx/Device Name")
     pub device_name: String,
+    /// The sender's stable 16-byte device id, taken from the MLS credential.
+    /// Matches `Event.sender_device_id` (which is the in-plaintext mirror used
+    /// for hash-chain keying); divergence between the two is a transcript
+    /// warning.
+    #[serde(default)]
+    pub device_id: [u8; 16],
     /// The MLS leaf index of the sender (for internal use)
     #[serde(default)]
     pub leaf_index: Option<u32>,
@@ -100,6 +110,7 @@ impl SenderInfo {
         Self {
             did: credential.did().to_string(),
             device_name: credential.device_name().to_string(),
+            device_id: *credential.device_id(),
             leaf_index: None,
         }
     }
@@ -167,8 +178,20 @@ pub struct Event {
     #[serde(default)]
     pub epoch_fingerprint: Option<Vec<u8>>,
 
-    /// The 16-byte device ID of the sender. Used to key the per-device
-    /// hash chain on the recipient side. Set by encrypt_event.
+    /// The 16-byte device ID of the sender, embedded in the encrypted
+    /// payload at encrypt time.  Used at decrypt time as the key into
+    /// the per-device hash chain (`prev_event_hash` indexing) — i.e. it
+    /// is a wire-level transcript-integrity field, *not* the canonical
+    /// receiver-side sender identity.
+    ///
+    /// The same device id is also extracted from the MLS credential at
+    /// decrypt time and exposed on [`crate::DecryptResult::sender`]
+    /// (see [`SenderInfo::device_id`]).  `decrypt_event` cross-checks the
+    /// two; if they disagree the receiver gets a
+    /// [`TranscriptWarning::SenderIdentityMismatch`].  Removing this
+    /// field would conflate the wire/transcript concern with the
+    /// receiver-facing API and would also change `Event` JSON, breaking
+    /// the chain digest.
     #[serde_as(as = "Option<serde_with::base64::Base64>")]
     #[serde(default)]
     pub sender_device_id: Option<Vec<u8>>,
@@ -392,6 +415,18 @@ pub enum TranscriptWarning {
     },
     /// A commit conflict was automatically recovered.
     ConflictRecovered { group_id: Vec<u8> },
+    /// The `device_id` in the encrypted payload (`Event.sender_device_id`)
+    /// disagreed with the MLS credential's `device_id`.  Both should be
+    /// the same byte-string; a mismatch means the sender lied in the
+    /// plaintext or an MLS-layer key substitution slipped past the
+    /// authenticator.  Either case is a security-relevant signal.
+    SenderIdentityMismatch {
+        group_id: Vec<u8>,
+        /// What the encrypted payload claimed.
+        payload_device_id: Vec<u8>,
+        /// What the MLS credential said.
+        credential_device_id: Vec<u8>,
+    },
 }
 
 impl std::fmt::Display for TranscriptWarning {
@@ -420,6 +455,18 @@ impl std::fmt::Display for TranscriptWarning {
             }
             TranscriptWarning::ConflictRecovered { .. } => {
                 write!(f, "commit conflict automatically recovered")
+            }
+            TranscriptWarning::SenderIdentityMismatch {
+                payload_device_id,
+                credential_device_id,
+                ..
+            } => {
+                write!(
+                    f,
+                    "sender identity mismatch: payload={:02x?} credential={:02x?}",
+                    &payload_device_id[..4.min(payload_device_id.len())],
+                    &credential_device_id[..4.min(credential_device_id.len())],
+                )
             }
         }
     }

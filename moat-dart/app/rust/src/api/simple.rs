@@ -1106,10 +1106,18 @@ impl RingDriverHandle {
             stealth_pubkeys: &[],
             sibling_stealth: &[],
         };
+        // Phase D plumbs sender_device_id through; the FFI call site does
+        // not yet pass it (Phase G adds the DTO field + FRB regen).  The
+        // ring driver falls back to coord-group member lookup for the
+        // 2-party arms we exercise from Dart today.
         let cmds = self.inner.lock().unwrap().step(
             &session_lock,
             &env,
-            RingEvent::CoordMsgReceived { source_group_id: group_id, msg },
+            RingEvent::CoordMsgReceived {
+                source_group_id: group_id,
+                sender_device_id: None,
+                msg,
+            },
         );
         Ok(cmds.into_iter().map(RingCommandDto::from).collect())
     }

@@ -1002,6 +1002,7 @@ impl MoatSession {
 
                 // Validate transcript integrity
                 let mut warnings = Vec::new();
+                Self::validate_sender_identity(group_id, &event, sender.as_ref(), &mut warnings);
                 self.validate_hash_chain(group_id, &event, &event_bytes, &mut warnings);
                 self.validate_epoch_fingerprint(group_id, &event, &group, &mut warnings);
 
@@ -1167,6 +1168,36 @@ impl MoatSession {
     }
 
     /// Validate the hash chain for a received event.
+    /// Verify that the device_id embedded in the encrypted payload
+    /// (`Event.sender_device_id`) matches the device_id extracted from
+    /// the MLS credential of the message sender ([`SenderInfo::device_id`]).
+    /// Divergence is a transcript-integrity warning — both sources should
+    /// always agree.  Silently skipped when either side is unavailable
+    /// (legacy events without `sender_device_id`, or a credential that
+    /// failed to parse).
+    fn validate_sender_identity(
+        group_id: &[u8],
+        event: &Event,
+        sender: Option<&SenderInfo>,
+        warnings: &mut Vec<TranscriptWarning>,
+    ) {
+        let payload_id = match &event.sender_device_id {
+            Some(id) if id.len() == 16 => id,
+            _ => return,
+        };
+        let cred_id = match sender {
+            Some(s) => &s.device_id[..],
+            None => return,
+        };
+        if payload_id.as_slice() != cred_id {
+            warnings.push(TranscriptWarning::SenderIdentityMismatch {
+                group_id: group_id.to_vec(),
+                payload_device_id: payload_id.clone(),
+                credential_device_id: cred_id.to_vec(),
+            });
+        }
+    }
+
     fn validate_hash_chain(
         &self,
         group_id: &[u8],

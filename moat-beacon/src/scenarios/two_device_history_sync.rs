@@ -9,6 +9,21 @@
 //! Invariants verified:
 //! - Both devices share the same ring group.
 //! - After sync, device 2 has all messages that device 1 had before sync.
+//!
+//! # Known flake — Phase 6 dependency
+//!
+//! This scenario assumes that the device with prior history (d1) is the ring
+//! offerer, so that sync flows d1 → d2.  But the offerer is whichever device
+//! has MLS leaf index 0, which (via the smallest-device_id-creates-ring rule
+//! in `device_ring.rs`) depends on random `device_id` allocation.  When d2
+//! draws a smaller id, d2 creates the ring and is offerer — the (empty) d2
+//! history streams backwards to d1, and d2 never receives anything.
+//!
+//! Phase 6 introduces bidirectional sync (`MULTI_DEVICE.md` § Phase 6); once
+//! both sides exchange history ranges and pull what they're missing, this
+//! scenario becomes deterministic regardless of who created the ring.  Until
+//! then `tests/smoke_two_device_history.rs` carries `#[ignore]` with a
+//! matching note.
 
 use std::future::Future;
 use std::pin::Pin;

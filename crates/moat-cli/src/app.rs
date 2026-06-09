@@ -3011,7 +3011,13 @@ impl App {
                     EventKind::Coord => {
                         // Route coord messages to the ring driver (pure state only;
                         // any outgoing network responses are sent on the next ring tick).
-                        self.handle_coord_msg_sync(&group_id, &decrypted.event.payload);
+                        // Sender device_id comes from the MLS credential
+                        // via `DecryptResult.sender`; the in-payload
+                        // `Event.sender_device_id` would carry the same
+                        // value but is cross-checked by the
+                        // `SenderIdentityMismatch` transcript warning.
+                        let sender = decrypted.sender.as_ref().map(|s| s.device_id);
+                        self.handle_coord_msg_sync(&group_id, sender, &decrypted.event.payload);
                     }
                     EventKind::Modifier(ModifierKind::Reaction) => {
                         if let Some(rp) = decrypted.event.reaction_payload() {
@@ -4617,7 +4623,12 @@ impl App {
     /// Called from the sync `process_matched_event` path.  Any outgoing
     /// network responses (RingInfo, Supersede) are deferred to the next
     /// `ring_tick_inner` invocation via `ring_driver` state.
-    fn handle_coord_msg_sync(&mut self, group_id: &[u8], payload: &[u8]) {
+    fn handle_coord_msg_sync(
+        &mut self,
+        group_id: &[u8],
+        sender_device_id: Option<[u8; 16]>,
+        payload: &[u8],
+    ) {
         let msg = match decode_coord_msg(payload) {
             Ok(m) => m,
             Err(e) => {
@@ -4665,6 +4676,7 @@ impl App {
             &env,
             RingEvent::CoordMsgReceived {
                 source_group_id: group_id.to_vec(),
+                sender_device_id,
                 msg,
             },
         );

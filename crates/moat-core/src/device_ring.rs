@@ -333,7 +333,6 @@ pub const KP_POOL_LOW_WATER: usize = 2;
 /// Maximum number of [`OfferedKp`] entries the owner ships in a single
 /// [`CoordMsg::KpBatch`].  Larger refills are split across multiple
 /// messages so each fits inside the 4 KB padding bucket.
-#[allow(dead_code)] // wired in Phase D when owners actually ship batches
 pub const KP_BATCH_CAP: usize = 4;
 
 /// Consumer-side pool of one owner's KPs, plus the dedupe / single-use
@@ -670,8 +669,14 @@ pub enum RingEvent<'a> {
     },
 
     /// A coordination message was decrypted and decoded by the host.
+    /// `sender_device_id` is the 16-byte id of the device whose MLS leaf
+    /// produced the application message (extracted by the host from the
+    /// decrypted Event wrapper); for legacy 2-party coord groups the
+    /// driver still falls back to a member lookup if this is `None`,
+    /// but ring messages with N > 2 members rely on it.
     CoordMsgReceived {
         source_group_id: Vec<u8>,
+        sender_device_id: Option<DeviceId>,
         msg: CoordMsg,
     },
 
@@ -1002,8 +1007,8 @@ impl DeviceRingState {
                 self.on_stealth_payload(mls, env, plaintext)
             }
             RingEvent::CoordGroupJoined { group_id } => self.on_coord_group_joined(mls, env, &group_id),
-            RingEvent::CoordMsgReceived { source_group_id, msg } => {
-                self.on_coord_msg(mls, env, &source_group_id, msg)
+            RingEvent::CoordMsgReceived { source_group_id, sender_device_id, msg } => {
+                self.on_coord_msg(mls, env, &source_group_id, sender_device_id, msg)
             }
             RingEvent::SyncSessionEnded => self.on_sync_session_ended(),
             RingEvent::OwnEventsCursorAdvanced { rkey } => {
@@ -1304,13 +1309,17 @@ impl DeviceRingState {
         mls: &MoatSession,
         env: &StepEnv<'_>,
         source_group_id: &[u8],
+        sender_device_id: Option<DeviceId>,
         msg: CoordMsg,
     ) -> Vec<RingCommand> {
         let my_device_id = *mls.device_id();
 
-        // Resolve sender: prefer device_id carried in the message, fall back
-        // to the coord-group members.
-        let from_device_id: DeviceId = {
+        // Resolve sender: prefer the host-supplied hint (from the Event
+        // wrapper at decrypt time), then the device_id carried in the
+        // message itself (Hello only), then a coord-group member lookup.
+        // The member lookup only works for 2-party coord groups; ring
+        // messages (N > 2 members) MUST have the sender hint set.
+        let from_device_id: DeviceId = sender_device_id.unwrap_or_else(|| {
             let members = mls.get_group_members(source_group_id).unwrap_or_default();
             members
                 .iter()
@@ -1324,7 +1333,7 @@ impl DeviceRingState {
                     })
                 })
                 .unwrap_or([0u8; 16])
-        };
+        });
 
         match msg {
             CoordMsg::Hello { sender_device_id } => {
@@ -1364,13 +1373,109 @@ impl DeviceRingState {
                     Vec::new()
                 }
             }
-            CoordMsg::KpBatch { .. } | CoordMsg::KpRequest { .. } => {
-                // Phase A scaffolding: variants exist on the wire, but the
-                // state machine ignores them until Phase B/D wires the pool
-                // and refill state.
-                Vec::new()
+            CoordMsg::KpBatch { recipient_device_id, kps } => {
+                let me: &[u8] = &my_device_id;
+                if recipient_device_id.as_slice() != me {
+                    // Batch addressed to another ring member; ignore.
+                    return Vec::new();
+                }
+                self.ingest_kp_batch(&from_device_id, kps);
+                self.maybe_emit_kp_request(mls, env, &from_device_id)
+            }
+            CoordMsg::KpRequest { owner_device_id, count } => {
+                let me: &[u8] = &my_device_id;
+                if owner_device_id.as_slice() != me {
+                    return Vec::new();
+                }
+                self.fulfil_kp_request(mls, env, from_device_id, count)
             }
         }
+    }
+
+    /// If the consumer's pool of `owner`'s KPs is at or below the
+    /// low-water mark, emit a `CoordMsg::KpRequest` over the ring.
+    /// No-op if not in a ring or if the pool is above the mark.
+    fn maybe_emit_kp_request(
+        &self,
+        mls: &MoatSession,
+        env: &StepEnv<'_>,
+        owner: &DeviceId,
+    ) -> Vec<RingCommand> {
+        let count = match self.kp_request_if_low(owner) {
+            Some(c) => c,
+            None => return Vec::new(),
+        };
+        let ring_id = match &self.ring {
+            RingMembership::InRing { ring_id, .. } => ring_id.clone(),
+            _ => return Vec::new(),
+        };
+        let request = CoordMsg::KpRequest {
+            owner_device_id: owner.to_vec(),
+            count,
+        };
+        encrypt_ring_coord(mls, env, &ring_id, &request)
+            .map(|cmd| vec![cmd])
+            .unwrap_or_default()
+    }
+
+    /// Owner-side response to a `KpRequest` from `consumer`: generate
+    /// `count` fresh KPs (capped at `KP_BATCH_CAP` per batch, splitting
+    /// across multiple emits if more are asked for), allocate monotonic
+    /// seqs, and emit one `CoordMsg::KpBatch` per chunk over the ring.
+    fn fulfil_kp_request(
+        &mut self,
+        mls: &MoatSession,
+        env: &StepEnv<'_>,
+        consumer: DeviceId,
+        count: u32,
+    ) -> Vec<RingCommand> {
+        let ring_id = match &self.ring {
+            RingMembership::InRing { ring_id, .. } => ring_id.clone(),
+            _ => return Vec::new(),
+        };
+        let mut cmds = Vec::new();
+        let mut remaining = count as usize;
+        while remaining > 0 {
+            let take = remaining.min(KP_BATCH_CAP);
+            let batch = match self.build_kp_batch(mls, env, take) {
+                Some(b) => b,
+                None => break,
+            };
+            let msg = CoordMsg::KpBatch {
+                recipient_device_id: consumer.to_vec(),
+                kps: batch,
+            };
+            if let Some(cmd) = encrypt_ring_coord(mls, env, &ring_id, &msg) {
+                cmds.push(cmd);
+            }
+            remaining -= take;
+        }
+        cmds
+    }
+
+    /// Generate `count` fresh KPs and wrap them as `OfferedKp`s with
+    /// monotonic owner-global seqs.  Init keys land in our local keystore
+    /// (via `mls.generate_key_package`) so we can decrypt the Welcomes
+    /// the consumer will eventually send back.
+    fn build_kp_batch(
+        &mut self,
+        mls: &MoatSession,
+        env: &StepEnv<'_>,
+        count: usize,
+    ) -> Option<Vec<OfferedKp>> {
+        let seqs = self.allocate_kp_seqs(count);
+        let mut out = Vec::with_capacity(count);
+        for seq in seqs {
+            let (kp_bytes, _bundle) = mls.generate_key_package(env.credential).ok()?;
+            let mut rkey = [0u8; 16];
+            rand::Rng::fill(&mut rand::thread_rng(), &mut rkey);
+            out.push(OfferedKp {
+                rkey: rkey.to_vec(),
+                seq,
+                key_package: kp_bytes,
+            });
+        }
+        Some(out)
     }
 
     fn record_hello_from(&mut self, sibling_id: DeviceId, source_group_id: &[u8]) {
@@ -1473,14 +1578,29 @@ impl DeviceRingState {
             }
         }
 
-        vec![
-            RingCommand::RegisterGroup { group_id: ring_id, kind: GroupKind::Ring },
+        let mut cmds = vec![
+            RingCommand::RegisterGroup { group_id: ring_id.clone(), kind: GroupKind::Ring },
             // Welcome consumed our init key — replenish so a future Add can target us.
             RingCommand::ReplenishKeyPackage,
             // The next tick will trigger PollForNewDevices so we add the existing
             // ring members to all known user conversations.
             RingCommand::PollForNewDevices,
-        ]
+        ];
+        // Phase D: ship every existing ring member an initial KP batch so
+        // they can add us to their user conversations without a round
+        // trip.  The adder already received their own initial batch when
+        // they Added us (see do_ring_add), so this is the symmetric half
+        // for every OTHER ring member.
+        for (_, cred) in &members {
+            if let Some(c) = cred {
+                let dev_id = *c.device_id();
+                if c.did() != env.my_did || dev_id == my_device_id {
+                    continue;
+                }
+                cmds.extend(self.ship_initial_kp_batches_to(mls, env, &ring_id, &dev_id));
+            }
+        }
+        cmds
     }
 
     fn on_sync_session_ended(&mut self) -> Vec<RingCommand> {
@@ -1496,6 +1616,44 @@ impl DeviceRingState {
             }
         }
         Vec::new()
+    }
+
+    /// For every confirmed ring-member peer, fire a `CoordMsg::KpRequest`
+    /// if our local pool of that peer's KPs is at or below the low-water
+    /// mark.  Duplicate requests are tolerated (owner ships an extra
+    /// batch; consumer dedupes by `highest_seq_observed`).
+    fn emit_low_water_kp_requests(
+        &self,
+        mls: &MoatSession,
+        env: &StepEnv<'_>,
+    ) -> Vec<RingCommand> {
+        if !matches!(self.ring, RingMembership::InRing { .. }) {
+            return Vec::new();
+        }
+        let my_device_id = *mls.device_id();
+        let mut cmds = Vec::new();
+        for (hex_key, ps) in self.peers.iter() {
+            // Only confirmed ring members.
+            if !matches!(
+                ps,
+                PeerState::CoordReady { ring_link: RingLink::Joined { .. }, .. }
+            ) {
+                continue;
+            }
+            let bytes = match hex::decode(hex_key) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            let owner: DeviceId = match bytes.as_slice().try_into() {
+                Ok(arr) => arr,
+                Err(_) => continue,
+            };
+            if owner == my_device_id {
+                continue;
+            }
+            cmds.extend(self.maybe_emit_kp_request(mls, env, &owner));
+        }
+        cmds
     }
 
     /// Publish a bootstrap KP event for each known sibling we have not
@@ -1554,6 +1712,9 @@ impl DeviceRingState {
 
         // ── Pre-A. Publish bootstrap KP for each newly-observed sibling ──
         cmds.extend(self.publish_bootstrap_kps(mls, env));
+
+        // ── Pre-A bis. Top up pools that are at-or-below low-water ───────
+        cmds.extend(self.emit_low_water_kp_requests(mls, env));
 
         // ── A. Detect ring members added by someone else ─────────────────
         if let RingMembership::InRing { ring_id, our_leaf, .. } = &self.ring {
@@ -1858,8 +2019,45 @@ impl DeviceRingState {
             }
         }
 
+        // Phase D: ship the new sibling an initial KP batch so they can
+        // immediately add us to user conversations.  Batches encrypt at
+        // the new (post-add) ring epoch; the joiner advances to that
+        // epoch via the embedded Commit before decrypting.
+        cmds.extend(self.ship_initial_kp_batches_to(mls, env, ring_id, &sibling_id));
+
         self.mark_peer_joined(sibling_id, AddedBy::Us, SyncStatus::OweOffer);
         Some(cmds)
+    }
+
+    /// Emit `KP_POOL_TARGET` fresh KPs to `recipient` over the ring,
+    /// split across `ceil(KP_POOL_TARGET / KP_BATCH_CAP)` batches.
+    /// Called whenever the ring topology changes (we added a sibling,
+    /// or we joined the ring ourselves).
+    fn ship_initial_kp_batches_to(
+        &mut self,
+        mls: &MoatSession,
+        env: &StepEnv<'_>,
+        ring_id: &[u8],
+        recipient: &DeviceId,
+    ) -> Vec<RingCommand> {
+        let mut cmds = Vec::new();
+        let mut remaining = KP_POOL_TARGET;
+        while remaining > 0 {
+            let take = remaining.min(KP_BATCH_CAP);
+            let batch = match self.build_kp_batch(mls, env, take) {
+                Some(b) => b,
+                None => break,
+            };
+            let msg = CoordMsg::KpBatch {
+                recipient_device_id: recipient.to_vec(),
+                kps: batch,
+            };
+            if let Some(cmd) = encrypt_ring_coord(mls, env, ring_id, &msg) {
+                cmds.push(cmd);
+            }
+            remaining -= take;
+        }
+        cmds
     }
 
     fn mark_peer_joined(&mut self, sibling_id: DeviceId, added_by: AddedBy, sync: SyncStatus) {
@@ -1881,6 +2079,25 @@ impl DeviceRingState {
 
 fn my_device_id_or_placeholder(mls: &MoatSession) -> DeviceId {
     *mls.device_id()
+}
+
+/// Encode `msg`, wrap in an `Event::coord` for the ring group, MLS-encrypt
+/// it with the current ring epoch, and return a `PublishEvent` command
+/// ready for the host to publish.  Returns `None` if encryption fails.
+fn encrypt_ring_coord(
+    mls: &MoatSession,
+    env: &StepEnv<'_>,
+    ring_id: &[u8],
+    msg: &CoordMsg,
+) -> Option<RingCommand> {
+    let epoch = mls.get_group_epoch(ring_id).ok().flatten().unwrap_or(0);
+    let event = Event::coord(ring_id.to_vec(), epoch, encode_coord_msg(msg));
+    let enc = mls.encrypt_event(ring_id, env.key_bundle, &event).ok()?;
+    Some(RingCommand::PublishEvent {
+        tag: enc.tag,
+        ciphertext: enc.ciphertext,
+        mark_own: true,
+    })
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -2432,6 +2649,61 @@ mod tests {
 
         let key = hex::encode(sender);
         assert_eq!(s.pending_bootstrap_kps.get(&key), Some(&vec![0x22; 32]));
+    }
+
+    // ── Phase D: low-water + emit gating ──────────────────────────────────
+
+    #[test]
+    fn emit_low_water_kp_requests_is_noop_outside_ring() {
+        // The emitter returns Vec::new() early on the `RingMembership::InRing`
+        // guard, even with Joined peers present.  This makes the call cheap
+        // and safe in every tick regardless of ring state.
+        let mut s = DeviceRingState::new();
+        s.peers.insert(
+            hex::encode([2u8; 16]),
+            PeerState::CoordReady {
+                coord_group_id: vec![0u8; 8],
+                ring_link: RingLink::Joined {
+                    added_by: AddedBy::Us,
+                    sync: SyncStatus::OweOffer,
+                },
+            },
+        );
+
+        let mls = crate::MoatSession::new();
+        let credential = make_credential("did:plc:test", "dev", [1u8; 16]);
+        let env = StepEnv {
+            my_did: "did:plc:test",
+            credential: &credential,
+            key_bundle: &[],
+            now_ms: 0,
+            drawbridge_connected: false,
+            sync_session_active: false,
+            stealth_pubkeys: &[],
+            sibling_stealth: &[],
+        };
+        assert!(s.emit_low_water_kp_requests(&mls, &env).is_empty());
+    }
+
+    #[test]
+    fn maybe_emit_kp_request_gated_by_low_water_predicate() {
+        // The `kp_request_if_low` predicate fires at-or-below LOW_WATER.
+        // Above that threshold, no request would be emitted even if we
+        // were in a ring.  Verifies the gate before exercising the (heavy)
+        // encrypt path in beacon integration tests.
+        let mut s = DeviceRingState::new();
+        let owner: DeviceId = [9u8; 16];
+
+        // Empty pool — should fire.
+        assert!(s.kp_request_if_low(&owner).is_some());
+
+        // Fill to LOW_WATER — still fires (at-or-below).
+        s.ingest_kp_batch(&owner, vec![kp(1), kp(2)]);
+        assert!(s.kp_request_if_low(&owner).is_some());
+
+        // Fill one above — no longer fires.
+        s.ingest_kp_batch(&owner, vec![kp(3)]);
+        assert!(s.kp_request_if_low(&owner).is_none());
     }
 
     #[test]

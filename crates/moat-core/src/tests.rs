@@ -1120,6 +1120,63 @@ fn test_external_blob_uri_validation() {
 
 // --- Unknown event deserialization ---
 
+// --- Sender identity cross-check (Phase D follow-up) ---
+
+#[test]
+fn test_validate_sender_identity_agrees_silent() {
+    use crate::event::{SenderInfo, TranscriptWarning};
+    let mut event = Event::message_from_bytes(b"group".to_vec(), 0, b"hi");
+    event.sender_device_id = Some([7u8; 16].to_vec());
+    let cred = MoatCredential::new("did:plc:alice", "phone", [7u8; 16]);
+    let sender = SenderInfo::from_credential(&cred);
+    let mut warnings: Vec<TranscriptWarning> = Vec::new();
+    MoatSession::validate_sender_identity(b"group", &event, Some(&sender), &mut warnings);
+    assert!(warnings.is_empty(), "matching ids must not warn");
+}
+
+#[test]
+fn test_validate_sender_identity_mismatch_warns() {
+    use crate::event::{SenderInfo, TranscriptWarning};
+    let mut event = Event::message_from_bytes(b"group".to_vec(), 0, b"hi");
+    event.sender_device_id = Some([7u8; 16].to_vec());
+    // Credential claims a different device id.
+    let cred = MoatCredential::new("did:plc:alice", "phone", [9u8; 16]);
+    let sender = SenderInfo::from_credential(&cred);
+    let mut warnings: Vec<TranscriptWarning> = Vec::new();
+    MoatSession::validate_sender_identity(b"group", &event, Some(&sender), &mut warnings);
+    assert_eq!(warnings.len(), 1);
+    match &warnings[0] {
+        TranscriptWarning::SenderIdentityMismatch {
+            payload_device_id,
+            credential_device_id,
+            ..
+        } => {
+            assert_eq!(payload_device_id, &[7u8; 16].to_vec());
+            assert_eq!(credential_device_id, &[9u8; 16].to_vec());
+        }
+        other => panic!("wrong variant: {other:?}"),
+    }
+}
+
+#[test]
+fn test_validate_sender_identity_skips_when_either_side_missing() {
+    use crate::event::{SenderInfo, TranscriptWarning};
+    // Payload has no sender_device_id (legacy event).
+    let event_no_payload_id = Event::message_from_bytes(b"group".to_vec(), 0, b"hi");
+    let cred = MoatCredential::new("did:plc:alice", "phone", [9u8; 16]);
+    let sender = SenderInfo::from_credential(&cred);
+    let mut warnings: Vec<TranscriptWarning> = Vec::new();
+    MoatSession::validate_sender_identity(b"group", &event_no_payload_id, Some(&sender), &mut warnings);
+    assert!(warnings.is_empty());
+
+    // No credential.
+    let mut event = Event::message_from_bytes(b"group".to_vec(), 0, b"hi");
+    event.sender_device_id = Some([7u8; 16].to_vec());
+    let mut warnings: Vec<TranscriptWarning> = Vec::new();
+    MoatSession::validate_sender_identity(b"group", &event, None, &mut warnings);
+    assert!(warnings.is_empty());
+}
+
 #[test]
 fn test_unknown_event_kind_roundtrip() {
     let event = Event {
