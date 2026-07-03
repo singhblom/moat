@@ -12,9 +12,9 @@ use crossterm::event::{KeyCode, KeyEvent};
 use moat_atproto::{BlobRef, MoatAtprotoClient};
 use moat_core::{
     blob_decrypt, blob_encrypt, decode_coord_msg, encrypt_for_stealth, generate_stealth_keypair,
-    try_decrypt_stealth, ControlKind, DeviceRingState, Event, EventKind, ExternalBlob, GroupKind,
-    LongTextMessage, MediaMessage, MessagePayload, MoatCredential, MoatSession, ModifierKind,
-    ParsedMessagePayload, RingCommand, RingEvent, StepEnv, CIPHERSUITE,
+    try_decrypt_stealth, ControlKind, CoordMsg, DeviceRingState, Event, EventKind, ExternalBlob,
+    GroupKind, LongTextMessage, MediaMessage, MessagePayload, MoatCredential, MoatSession,
+    ModifierKind, ParsedMessagePayload, RingCommand, RingEvent, StepEnv, CIPHERSUITE,
 };
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::collections::{HashMap, HashSet};
@@ -4178,266 +4178,241 @@ impl App {
     /// - No race conditions with other users trying to add the same device
     /// - Simple, predictable behavior
     async fn poll_for_new_devices(&mut self) -> Result<()> {
-        let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
+        // Phase E: same-user fan-out runs entirely over the ring.  We
+        // walk every confirmed ring sibling, and for each user
+        // conversation they are not yet in we draw a fresh KP from the
+        // ring-borne pool, MLS-add them, and ship the Welcome as a
+        // `CoordMsg::UserConvWelcome` ring message.  If the local pool
+        // is empty for a sibling, we emit one `CoordMsg::KpRequest`
+        // per poll cycle and defer the add — the next tick retries
+        // once the owner ships a fresh `CoordMsg::KpBatch`.  The init
+        // key consumed comes from the ring pool, not the PDS pool, so
+        // no replenish on the cross-user `social.moat.keyPackage`
+        // pool is required.
+        let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?.clone();
         let my_did = client.did().to_string();
 
-        // Fetch key packages for our own DID
-        let key_packages = match client.fetch_key_packages(&my_did).await {
-            Ok(kps) => kps,
-            Err(e) => {
-                self.debug_log.log(&format!(
-                    "poll_devices: failed to fetch own key packages: {}",
-                    e
-                ));
-                return Ok(());
-            }
-        };
-
-        if key_packages.is_empty() {
+        // No ring → no ring-borne KPs → nothing to fan out.  Bootstrap
+        // and ring formation happen elsewhere; we wait for them.
+        if self.ring_driver.ring_id().is_none() {
             return Ok(());
         }
 
-        // Load key bundle for MLS operations
-        let key_bundle = match self.keys.load_identity_key() {
-            Ok(kb) => kb,
-            Err(e) => {
-                self.debug_log
-                    .log(&format!("poll_devices: failed to load key bundle: {}", e));
-                return Ok(());
-            }
-        };
-
-        // Collect group info for all conversations
-        let mut groups_to_check: Vec<(Vec<u8>, String)> = Vec::new();
-        for conv in &self.conversations {
-            if let Ok(group_id) = hex::decode(&conv.id) {
-                groups_to_check.push((group_id, conv.id.clone()));
-            }
+        let siblings = self.ring_driver.ring_joined_siblings();
+        if siblings.is_empty() {
+            return Ok(());
         }
 
-        // Sort newest-first so we prefer the replenished key package over an older
-        // consumed one. Key packages are single-use: the init key is deleted from
-        // the local KeyStore once a Welcome is processed, so a stale key package on
-        // the PDS produces a Welcome the new device cannot decrypt.
-        let mut key_packages = key_packages;
-        key_packages.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        let key_bundle = self
+            .keys
+            .load_identity_key()
+            .map_err(|e| AppError::Other(format!("poll_devices: load_identity_key: {e}")))?;
+        let device_name = self
+            .keys
+            .get_or_create_device_name()
+            .map_err(|e| AppError::Other(format!("poll_devices: get_device_name: {e}")))?;
+        let credential = MoatCredential::new(&my_did, &device_name, *self.mls.device_id());
+        let env = StepEnv {
+            my_did: &my_did,
+            credential: &credential,
+            key_bundle: &key_bundle,
+            now_ms: chrono::Utc::now().timestamp_millis(),
+            drawbridge_connected: self.drawbridge.has_own_connection(),
+            sync_session_active: self.sync_session.is_some(),
+            stealth_pubkeys: &[],
+            sibling_stealth: &[],
+        };
 
-        // For each conversation, check if any of our key packages represent new devices
-        for (group_id, conv_id) in groups_to_check {
-            // Get current members with their device names
-            let current_members = match self.mls.get_group_members(&group_id) {
+        // Snapshot conversations so we can mutate `self` later.
+        let groups: Vec<(Vec<u8>, String)> = self
+            .conversations
+            .iter()
+            .filter_map(|c| hex::decode(&c.id).ok().map(|g| (g, c.id.clone())))
+            .collect();
+
+        // Once per cycle, send at most one KpRequest per sibling whose
+        // pool is empty.  Without this, fan-out across N conversations
+        // with an empty pool would emit N redundant requests.
+        let mut requested_refill: HashSet<[u8; 16]> = HashSet::new();
+
+        for (group_id, conv_id) in &groups {
+            let current_members = match self.mls.get_group_members(group_id) {
                 Ok(m) => m,
                 Err(e) => {
-                    self.debug_log.log(&format!(
-                        "poll_devices: failed to get members for group {}: {}",
-                        &conv_id[..16.min(conv_id.len())],
-                        e
-                    ));
+                    self.debug_log
+                        .log(&format!("poll_devices: get_group_members: {e}"));
                     continue;
                 }
             };
-
-            // Build a set of (DID, device_id) pairs for existing members.
-            // Keyed by device_id (not device_name) so two devices sharing a name but
-            // different device_ids are both added.
-            // Declared mut so we can update it after each successful add, preventing
-            // a second (older) key package for the same device from triggering a
-            // duplicate add.
-            let mut existing_devices: std::collections::HashSet<(String, [u8; 16])> =
-                current_members
-                    .iter()
-                    .filter_map(|(_, cred)| {
-                        cred.as_ref()
-                            .map(|c| (c.did().to_string(), *c.device_id()))
-                    })
-                    .collect();
+            let existing_device_ids: HashSet<[u8; 16]> = current_members
+                .iter()
+                .filter_map(|(_, c)| c.as_ref().map(|c| *c.device_id()))
+                .collect();
 
             self.debug_log.log(&format!(
                 "poll_devices: group {} has {} devices",
                 &conv_id[..16.min(conv_id.len())],
-                existing_devices.len()
+                existing_device_ids.len()
             ));
 
-            // Check each of our key packages to see if it's a new device
-            for kp_record in &key_packages {
-                let credential = match self
-                    .mls
-                    .extract_credential_from_key_package(&kp_record.key_package)
-                {
-                    Ok(Some(c)) => c,
-                    Ok(None) => {
-                        self.debug_log
-                            .log("poll_devices: key package has no credential");
-                        continue;
-                    }
-                    Err(e) => {
-                        self.debug_log.log(&format!(
-                            "poll_devices: failed to extract credential: {}",
-                            e
-                        ));
-                        continue;
-                    }
-                };
-
-                let device_key = (
-                    credential.did().to_string(),
-                    *credential.device_id(),
-                );
-
-                self.debug_log.log(&format!(
-                    "poll_devices: key package device_name='{}' for did={}",
-                    credential.device_name(),
-                    &credential.did()[..20.min(credential.did().len())]
-                ));
-
-                // Skip if this device is already in the group
-                if existing_devices.contains(&device_key) {
-                    self.debug_log.log(&format!(
-                        "poll_devices: device '{}' already in group, skipping",
-                        credential.device_name()
-                    ));
+            for sibling_id in &siblings {
+                if existing_device_ids.contains(sibling_id) {
                     continue;
                 }
 
-                self.debug_log.log(&format!(
-                    "poll_devices: found new device '{}' for our DID",
-                    credential.device_name()
-                ));
+                // Ring-borne KP claim.  None ⇒ pool drained; defer.
+                let kp = match self.ring_driver.claim_kp(sibling_id) {
+                    Some(k) => k,
+                    None => {
+                        if requested_refill.insert(*sibling_id) {
+                            let cmds = self.ring_driver.emit_kp_request_for(
+                                &self.mls,
+                                &env,
+                                sibling_id,
+                            );
+                            for cmd in cmds {
+                                self.publish_ring_command(&client, cmd).await;
+                            }
+                            self.debug_log.log(&format!(
+                                "poll_devices: KP pool empty for sibling {}; emitted KpRequest, deferring",
+                                hex::encode(sibling_id)
+                            ));
+                        }
+                        continue;
+                    }
+                };
 
-                // Derive tag for the commit using pre-advance counter
-                let commit_tag = match self.mls.derive_next_tag(&group_id, &key_bundle) {
+                // Derive the tag at the CURRENT epoch before add_device
+                // advances it — same as the pre-Phase-E flow.
+                let commit_tag = match self.mls.derive_next_tag(group_id, &key_bundle) {
                     Ok(t) => t,
                     Err(e) => {
+                        self.debug_log
+                            .log(&format!("poll_devices: derive_next_tag: {e}"));
+                        continue;
+                    }
+                };
+
+                let welcome_result = match self.mls.add_device(group_id, &key_bundle, &kp.key_package) {
+                    Ok(w) => w,
+                    Err(e) => {
                         self.debug_log.log(&format!(
-                            "poll_devices: failed to derive pre-add tag: {}",
-                            e
+                            "poll_devices: add_device for sibling {} failed: {e}",
+                            hex::encode(sibling_id)
                         ));
                         continue;
                     }
                 };
 
-                // Add the new device
-                match self
-                    .mls
-                    .add_device(&group_id, &key_bundle, &kp_record.key_package)
-                {
-                    Ok(welcome_result) => {
-                        self.debug_log.log(&format!(
-                            "poll_devices: successfully added device '{}' to group",
-                            credential.device_name()
-                        ));
+                if let Err(e) = self.save_mls_state() {
+                    self.debug_log
+                        .log(&format!("poll_devices: save_mls_state: {e}"));
+                }
 
-                        // Mark device as seen so a second (older) key package for the
-                        // same device doesn't trigger a redundant add in this loop.
-                        existing_devices.insert(device_key);
-
-                        // Save MLS state
-                        if let Err(e) = self.save_mls_state() {
-                            self.debug_log
-                                .log(&format!("poll_devices: failed to save MLS state: {}", e));
-                        }
-
-                        // Repopulate candidate tags for the new epoch
-                        if let Ok(tags) = self.mls.populate_candidate_tags(&group_id) {
-                            for t in tags {
-                                self.tag_map.insert(t, conv_id.clone());
-                            }
-                        }
-
-                        // Publish the commit with PRE-advance epoch tag so others can see it
-                        if let Err(e) = client
-                            .publish_event(&commit_tag, &welcome_result.commit, None)
-                            .await
-                        {
-                            self.debug_log
-                                .log(&format!("poll_devices: failed to publish commit: {}", e));
-                        } else {
-                            self.debug_log.log("poll_devices: published commit");
-                        }
-
-                        // Encrypt and publish welcome for the new device using our stealth addresses
-                        match client.fetch_stealth_addresses(&my_did).await {
-                            Ok(stealth_records) if !stealth_records.is_empty() => {
-                                let stealth_pubkeys: Vec<[u8; 32]> =
-                                    stealth_records.iter().map(|r| r.scan_pubkey).collect();
-                                let welcome_envelope =
-                                    encode_welcome_envelope(&welcome_result.welcome, &[]);
-                                match moat_core::encrypt_for_stealth(
-                                    &stealth_pubkeys,
-                                    &welcome_envelope,
-                                ) {
-                                    Ok(stealth_ciphertext) => {
-                                        let random_tag: [u8; 16] = rand::random();
-                                        if let Err(e) = client
-                                            .publish_event(&random_tag, &stealth_ciphertext, None)
-                                            .await
-                                        {
-                                            self.debug_log.log(&format!(
-                                                "poll_devices: failed to publish welcome: {}",
-                                                e
-                                            ));
-                                        } else {
-                                            self.debug_log.log(&format!(
-                                                "poll_devices: published welcome for device '{}' (encrypted for {} stealth keys)",
-                                                credential.device_name(),
-                                                stealth_pubkeys.len()
-                                            ));
-                                        }
-                                    }
-                                    Err(e) => {
-                                        self.debug_log.log(&format!(
-                                            "poll_devices: failed to encrypt welcome: {}",
-                                            e
-                                        ));
-                                    }
-                                }
-                            }
-                            Ok(_) => {
-                                self.debug_log.log("poll_devices: no stealth addresses for own DID, cannot send welcome");
-                            }
-                            Err(e) => {
-                                self.debug_log.log(&format!(
-                                    "poll_devices: failed to fetch stealth addresses: {}",
-                                    e
-                                ));
-                            }
-                        }
-
-                        // Update conversation epoch in UI and add device alert
-                        let conv_name = self
-                            .conversations
-                            .iter()
-                            .find(|c| c.id == conv_id)
-                            .map(|c| c.display_name())
-                            .unwrap_or_else(|| "Unknown".to_string());
-
-                        if let Some(conv) = self.conversations.iter_mut().find(|c| c.id == conv_id)
-                        {
-                            if let Ok(Some(new_epoch)) = self.mls.get_group_epoch(&group_id) {
-                                conv.current_epoch = new_epoch;
-                            }
-                        }
-
-                        // Add device alert for UI notification
-                        self.device_alerts.push(DeviceAlert {
-                            conversation_name: conv_name,
-                            user_name: my_did.clone(),
-                            device_name: credential.device_name().to_string(),
-                            timestamp: chrono::Utc::now(),
-                        });
-                    }
-                    Err(e) => {
-                        self.debug_log.log(&format!(
-                            "poll_devices: failed to add device '{}': {}",
-                            credential.device_name(),
-                            e
-                        ));
+                if let Ok(tags) = self.mls.populate_candidate_tags(group_id) {
+                    for t in tags {
+                        self.tag_map.insert(t, conv_id.clone());
                     }
                 }
+
+                if let Err(e) = client
+                    .publish_event(&commit_tag, &welcome_result.commit, None)
+                    .await
+                {
+                    self.debug_log
+                        .log(&format!("poll_devices: publish commit: {e}"));
+                } else {
+                    self.debug_log.log("poll_devices: published commit");
+                }
+
+                // Ring-borne Welcome.  Replaces the stealth-PDS-Welcome
+                // publish used pre-Phase E.  Other users in this group
+                // see the Commit via the PDS as before; only the
+                // same-user delivery channel changes.
+                let msg = CoordMsg::UserConvWelcome {
+                    owner_device_id: sibling_id.to_vec(),
+                    group_id: group_id.clone(),
+                    welcome: welcome_result.welcome,
+                };
+                if let Some(cmd) = self.ring_driver.encrypt_for_ring(&self.mls, &env, &msg) {
+                    self.publish_ring_command(&client, cmd).await;
+                    self.debug_log.log(&format!(
+                        "poll_devices: published UserConvWelcome for sibling {} in group {}",
+                        hex::encode(sibling_id),
+                        &conv_id[..16.min(conv_id.len())]
+                    ));
+                } else {
+                    self.debug_log
+                        .log("poll_devices: encrypt_for_ring(UserConvWelcome) failed");
+                }
+
+                let conv_name = self
+                    .conversations
+                    .iter()
+                    .find(|c| c.id == *conv_id)
+                    .map(|c| c.display_name())
+                    .unwrap_or_else(|| "Unknown".to_string());
+
+                if let Some(conv) = self.conversations.iter_mut().find(|c| c.id == *conv_id) {
+                    if let Ok(Some(new_epoch)) = self.mls.get_group_epoch(group_id) {
+                        conv.current_epoch = new_epoch;
+                    }
+                }
+
+                let sibling_display = self
+                    .ring_driver
+                    .ring_id()
+                    .map(<[u8]>::to_vec)
+                    .and_then(|rid| self.mls.get_group_members(&rid).ok())
+                    .and_then(|members| {
+                        members.into_iter().find_map(|(_, c)| {
+                            c.as_ref().and_then(|c| {
+                                if c.device_id() == sibling_id {
+                                    Some(c.device_name().to_string())
+                                } else {
+                                    None
+                                }
+                            })
+                        })
+                    })
+                    .unwrap_or_else(|| hex::encode(sibling_id));
+
+                self.device_alerts.push(DeviceAlert {
+                    conversation_name: conv_name,
+                    user_name: my_did.clone(),
+                    device_name: sibling_display,
+                    timestamp: chrono::Utc::now(),
+                });
             }
         }
 
         Ok(())
+    }
+
+    /// Publish a single [`RingCommand::PublishEvent`] produced by the
+    /// ring driver (e.g., the `KpRequest` or `UserConvWelcome` that the
+    /// same-user fan-out path emits outside the normal ring_tick loop).
+    /// Any other variant is unexpected here — log and drop.
+    async fn publish_ring_command(
+        &mut self,
+        client: &moat_atproto::MoatAtprotoClient,
+        cmd: RingCommand,
+    ) {
+        match cmd {
+            RingCommand::PublishEvent { tag, ciphertext, mark_own } => {
+                if let Err(e) = client.publish_event(&tag, &ciphertext, None).await {
+                    self.debug_log
+                        .log(&format!("publish_ring_command: publish failed: {e}"));
+                } else if mark_own {
+                    self.own_published_tags.insert(tag);
+                }
+            }
+            other => {
+                self.debug_log.log(&format!(
+                    "publish_ring_command: unexpected variant {other:?} — dropping"
+                ));
+            }
+        }
     }
 
     // ── Device ring ───────────────────────────────────────────────────────────
@@ -4563,9 +4538,14 @@ impl App {
                     self.populate_candidate_tags(&group_id_hex, &group_id);
 
                     // User conversations discovered via ring_tick step-3 stealth
-                    // Welcome scan need to be surfaced in self.conversations.  The
-                    // normal poll path (try_process_welcome_sync) would fail here
-                    // because the Welcome was already consumed above.
+                    // Welcome scan, and same-user fan-out via Phase E
+                    // `UserConvWelcome`, both need to be surfaced in
+                    // self.conversations here.  Whether the cross-user
+                    // `social.moat.keyPackage` pool needs replenishing is
+                    // signalled explicitly by `RingCommand::ReplenishKeyPackage`
+                    // — the cross-user stealth-Welcome path emits it, the
+                    // same-user `UserConvWelcome` path does not (the consumed
+                    // init key came from the ring-borne pool).
                     if is_user_group
                         && !self.conversations.iter().any(|c| c.id == group_id_hex)
                     {
@@ -4585,8 +4565,6 @@ impl App {
                             current_epoch: 1,
                             unread: 1,
                         });
-                        // Replenish init key consumed by this Welcome.
-                        self.replenish_key_package();
                     }
                 }
                 RingCommand::ReplenishKeyPackage => {

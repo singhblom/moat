@@ -163,6 +163,23 @@ pub enum CoordMsg {
         owner_device_id: Vec<u8>,
         count: u32,
     },
+    /// Same-user fan-out: a sibling added the new sibling (`owner_device_id`)
+    /// to one of the sender's user conversations using a KP drawn from the
+    /// new sibling's ring-borne pool.  The Welcome embeds the MLS init
+    /// secret the recipient must already hold locally (it generated the KP
+    /// in `build_kp_batch`).  Other ring members ignore this message.
+    UserConvWelcome {
+        /// Device id of the intended recipient (16 bytes).  The Welcome
+        /// only makes sense to the device whose init key is referenced.
+        #[serde_as(as = "Base64")]
+        owner_device_id: Vec<u8>,
+        /// MLS group id of the user conversation the recipient is joining.
+        #[serde_as(as = "Base64")]
+        group_id: Vec<u8>,
+        /// Raw MLS Welcome bytes.
+        #[serde_as(as = "Base64")]
+        welcome: Vec<u8>,
+    },
 }
 
 /// A single key package entry inside a `CoordMsg::KpBatch`. The `seq` is
@@ -1389,6 +1406,33 @@ impl DeviceRingState {
                 }
                 self.fulfil_kp_request(mls, env, from_device_id, count)
             }
+            CoordMsg::UserConvWelcome { owner_device_id, group_id, welcome } => {
+                let me: &[u8] = &my_device_id;
+                if owner_device_id.as_slice() != me {
+                    return Vec::new();
+                }
+                // The init key for this Welcome lives in our local keystore
+                // (we generated it in `build_kp_batch` and shipped the
+                // public KP via `CoordMsg::KpBatch`).  `process_welcome`
+                // consumes it.  No `ReplenishKeyPackage` is emitted: the
+                // consumed key was a ring-pool init key, not a PDS-pool
+                // one, so the cross-user `social.moat.keyPackage` pool is
+                // untouched.
+                match mls.process_welcome(&welcome) {
+                    Ok(joined_group_id) => {
+                        // Guard against a mismatched payload: the Welcome
+                        // should land us in exactly the advertised group.
+                        if joined_group_id != group_id {
+                            return Vec::new();
+                        }
+                        vec![RingCommand::RegisterGroup {
+                            group_id,
+                            kind: GroupKind::User,
+                        }]
+                    }
+                    Err(_) => Vec::new(),
+                }
+            }
         }
     }
 
@@ -1416,6 +1460,78 @@ impl DeviceRingState {
         encrypt_ring_coord(mls, env, &ring_id, &request)
             .map(|cmd| vec![cmd])
             .unwrap_or_default()
+    }
+
+    /// Public version of [`maybe_emit_kp_request`] for the host's same-user
+    /// fan-out path: forces an unconditional `KpRequest` to `owner` when
+    /// the host has discovered it cannot draw a KP from the pool.  Caps
+    /// the request at `KP_POOL_TARGET` (the natural batch ceiling).  No-op
+    /// if not in a ring.
+    pub fn emit_kp_request_for(
+        &self,
+        mls: &MoatSession,
+        env: &StepEnv<'_>,
+        owner: &DeviceId,
+    ) -> Vec<RingCommand> {
+        let ring_id = match &self.ring {
+            RingMembership::InRing { ring_id, .. } => ring_id.clone(),
+            _ => return Vec::new(),
+        };
+        let request = CoordMsg::KpRequest {
+            owner_device_id: owner.to_vec(),
+            count: KP_POOL_TARGET as u32,
+        };
+        encrypt_ring_coord(mls, env, &ring_id, &request)
+            .map(|cmd| vec![cmd])
+            .unwrap_or_default()
+    }
+
+    /// MLS-encrypt an arbitrary [`CoordMsg`] for the current ring group
+    /// and return a [`RingCommand::PublishEvent`] the host can interpret.
+    /// Used by the same-user fan-out path to publish
+    /// [`CoordMsg::UserConvWelcome`] without re-implementing MLS framing
+    /// in the host.  Returns `None` if not in a ring or if encryption
+    /// fails (e.g. before any commits have advanced the ring epoch — in
+    /// practice impossible once `RingMembership::InRing` holds).
+    pub fn encrypt_for_ring(
+        &self,
+        mls: &MoatSession,
+        env: &StepEnv<'_>,
+        msg: &CoordMsg,
+    ) -> Option<RingCommand> {
+        let ring_id = match &self.ring {
+            RingMembership::InRing { ring_id, .. } => ring_id.clone(),
+            _ => return None,
+        };
+        encrypt_ring_coord(mls, env, &ring_id, msg)
+    }
+
+    /// Device ids of siblings whose ring-membership status is
+    /// [`RingLink::Joined`].  The host uses this to drive the same-user
+    /// fan-out: walk every confirmed ring member, and for each user
+    /// conversation they are not yet in, draw a KP and emit a
+    /// [`CoordMsg::UserConvWelcome`].
+    pub fn ring_joined_siblings(&self) -> Vec<DeviceId> {
+        self.peers
+            .iter()
+            .filter_map(|(hex_id, ps)| {
+                if let PeerState::CoordReady {
+                    ring_link: RingLink::Joined { .. },
+                    ..
+                } = ps
+                {
+                    let bytes = hex::decode(hex_id).ok()?;
+                    let mut out = [0u8; 16];
+                    if bytes.len() != 16 {
+                        return None;
+                    }
+                    out.copy_from_slice(&bytes);
+                    Some(out)
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     /// Owner-side response to a `KpRequest` from `consumer`: generate
@@ -2351,6 +2467,24 @@ mod tests {
         }
     }
 
+    #[test]
+    fn coord_msg_roundtrip_user_conv_welcome() {
+        let msg = CoordMsg::UserConvWelcome {
+            owner_device_id: vec![7u8; 16],
+            group_id: vec![3u8; 32],
+            welcome: vec![0xAB; 256],
+        };
+        let bytes = encode_coord_msg(&msg);
+        match decode_coord_msg(&bytes).unwrap() {
+            CoordMsg::UserConvWelcome { owner_device_id, group_id, welcome } => {
+                assert_eq!(owner_device_id, vec![7u8; 16]);
+                assert_eq!(group_id, vec![3u8; 32]);
+                assert_eq!(welcome, vec![0xAB; 256]);
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
     /// A realistic batch of `KP_BATCH_CAP` real-sized MLS key packages
     /// fits inside the 4 KB padding bucket. Typical MLS key packages with
     /// the moat ciphersuite serialize to ~400-500 bytes; we pad to ~700 here
@@ -2581,6 +2715,57 @@ mod tests {
         // Above low-water (3 > 2) — no request.
         s.ingest_kp_batch(&owner, vec![kp(3)]);
         assert!(s.kp_request_if_low(&owner).is_none());
+    }
+
+    /// Phase E deferred-add path: drain the pool, confirm `claim_kp`
+    /// stalls and the host gets a `KpRequest`, simulate the owner
+    /// shipping a fresh `KpBatch`, and confirm `claim_kp` succeeds with
+    /// a sane seq.  This is the protocol-level fix to the
+    /// three-device-history-sync race: the consumer never has to
+    /// fetch from the PDS, and a stalled add unblocks deterministically
+    /// once the next batch arrives over the ring.
+    #[test]
+    fn same_user_fan_out_deferred_add_unblocks_on_next_batch() {
+        let mut s = DeviceRingState::new();
+        let owner: DeviceId = [9u8; 16];
+
+        // 1. Seed an initial batch (the natural state after Phase D's
+        //    ship_initial_kp_batches_to runs at ring-join time).
+        s.ingest_kp_batch(&owner, vec![kp(1), kp(2)]);
+        assert_eq!(s.kp_pool_size(&owner), 2);
+
+        // 2. The host drains the pool to 0 via concurrent fan-outs.
+        let _ = s.claim_kp(&owner).unwrap();
+        let _ = s.claim_kp(&owner).unwrap();
+        assert!(s.claim_kp(&owner).is_none());
+
+        // 3. Pool-exhaustion forces the same-user fan-out path into the
+        //    deferred branch.  The host calls `emit_kp_request_for`
+        //    (instead of looking at `kp_request_if_low`, which would
+        //    also fire here).  We don't have an MoatSession + StepEnv
+        //    in this unit test, so we exercise the predicate
+        //    underneath: at-or-below the low-water mark, a request is
+        //    due.
+        assert!(s.kp_request_if_low(&owner).is_some());
+
+        // 4. The owner sees the KpRequest, builds a fresh KpBatch with
+        //    monotonic seqs, and ships it.  Consumer ingests it.
+        s.ingest_kp_batch(&owner, vec![kp(3), kp(4), kp(5)]);
+        assert_eq!(s.kp_pool_size(&owner), 3);
+
+        // 5. The previously stalled add retries on the next tick and
+        //    succeeds.  Lowest unused seq is 3 (1 and 2 are in
+        //    `used_kps`, 3/4/5 are fresh).
+        let claimed = s.claim_kp(&owner).unwrap();
+        assert_eq!(claimed.seq, 3);
+
+        // 6. The single-use invariant survives the round trip: seqs 1
+        //    and 2 stay refused even if some adversarial actor were to
+        //    splice them back into the pool.
+        let key = hex::encode(owner);
+        assert!(s.kp_pools[&key].used_kps.contains(&1));
+        assert!(s.kp_pools[&key].used_kps.contains(&2));
+        assert!(s.kp_pools[&key].used_kps.contains(&3));
     }
 
     #[test]
