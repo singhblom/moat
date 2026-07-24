@@ -263,6 +263,12 @@ class DeviceRingService {
           stealthPublishWelcome: (tag, ciphertext) async {
             await client.publishEvent(tag, ciphertext);
           },
+          // Stealth-addressed sibling payload (bootstrap KP or SiblingMsg).
+          // The host just publishes the ciphertext under the supplied tag;
+          // the recipient decrypts it out-of-band, so it is not marked own.
+          publishBootstrapKp: (tag, ciphertext) async {
+            await client.publishEvent(tag, ciphertext);
+          },
           replenishKeyPackage: () async {
             await _replenishKeyPackage();
           },
@@ -482,6 +488,24 @@ class DeviceRingService {
   /// Drop any pending pair-WS state — used when sync ends or aborts.
   void clearPendingPair() {
     _pendingPairToken = null;
+  }
+
+  /// Tell the ring driver a sync session ended (success or failure alike), so
+  /// the in-flight sync offer clears and the next peer owing one is served.
+  ///
+  /// Only one offer is in flight at a time, so a sync session that tears down
+  /// without reaching here stalls sync for every remaining peer.
+  Future<void> notifySyncSessionEnded() async {
+    final session = _auth.moatSession;
+    final did = _auth.did;
+    final driver = _driver;
+    if (session == null || did == null || driver == null) return;
+    try {
+      await driver.notifySyncSessionEnded(session: session, myDid: did);
+      await _persist();
+    } catch (e) {
+      moatLog('DeviceRingService: notifySyncSessionEnded failed: $e');
+    }
   }
 
   Future<void> dispose() async {

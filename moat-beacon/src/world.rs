@@ -702,7 +702,10 @@ fn free_port() -> Result<u16> {
 
 /// Path to the `moat-cli` binary in the Cargo target directory.
 ///
-/// If the binary does not exist, this function builds it automatically.
+/// Always runs `cargo build -p moat-cli` first. This is incremental (a no-op
+/// when nothing changed), and building only when the binary is *missing* means
+/// every run after a source edit silently tests the stale binary — which reads
+/// as a passing integration test against code that is no longer there.
 fn moat_cli_binary() -> Result<PathBuf> {
     // Cargo sets CARGO_MANIFEST_DIR; walk up to the workspace root.
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
@@ -719,24 +722,24 @@ fn moat_cli_binary() -> Result<PathBuf> {
     // The moat-cli package defines its binary as "moat" (not "moat-cli").
     let bin = workspace_root.join("target").join(profile).join("moat");
 
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let mut args = vec!["build", "-p", "moat-cli"];
+    if !cfg!(debug_assertions) {
+        args.push("--release");
+    }
+    let status = Command::new(&cargo)
+        .args(&args)
+        .current_dir(&workspace_root)
+        .status()
+        .context("running cargo build -p moat-cli")?;
+    if !status.success() {
+        anyhow::bail!("cargo build -p moat-cli failed");
+    }
     if !bin.exists() {
-        // Auto-build moat-cli if not yet compiled.
-        eprintln!("beacon: moat-cli not found, building…");
-        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-        let status = Command::new(&cargo)
-            .args(["build", "-p", "moat-cli"])
-            .current_dir(&workspace_root)
-            .status()
-            .context("running cargo build -p moat-cli")?;
-        if !status.success() {
-            anyhow::bail!("cargo build -p moat-cli failed");
-        }
-        if !bin.exists() {
-            anyhow::bail!(
-                "moat binary still not found at {} after build",
-                bin.display()
-            );
-        }
+        anyhow::bail!(
+            "moat binary still not found at {} after build",
+            bin.display()
+        );
     }
 
     Ok(bin)

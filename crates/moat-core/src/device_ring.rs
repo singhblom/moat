@@ -11,6 +11,20 @@
 //! [`SyncStatus`]) encode exhaustively which configurations are valid;
 //! transitions are written as `match`es so adding a new event or peer state
 //! is a compile error until every arm is handled.
+//!
+//! # Signing-key identity
+//!
+//! Every KeyPackage a device offers — cross-user pool, bootstrap KP, same-user
+//! KP lane — must carry that device's *identity* signing key (`env.key_bundle`),
+//! so KPs are minted with [`MoatSession::replenish_key_package`], never
+//! `generate_key_package`, which would mint a fresh throwaway keypair.
+//!
+//! This is load-bearing. A leaf's signing key is what the app later signs with
+//! to author into that group, and the app only ever holds one such key. A leaf
+//! created from a KP with any other signing key is unusable: every subsequent
+//! `encrypt_event` into that group fails with "Own member not found in group".
+//! Reusing the signing key shares nothing else — init and encryption keys stay
+//! unique per KP, so the single-use pool semantics are unaffected.
 
 use std::collections::{HashMap, HashSet};
 
@@ -1003,6 +1017,20 @@ impl DeviceRingState {
         Ok(())
     }
 
+    /// True if any peer has a sync offer awaiting acceptance.  Mirrors the
+    /// `MultipleOffersInFlight` invariant; see [`Self::check_invariants`].
+    fn any_offer_in_flight(&self) -> bool {
+        self.peers.values().any(|ps| {
+            matches!(
+                ps,
+                PeerState::CoordReady {
+                    ring_link: RingLink::Joined { sync: SyncStatus::OfferEmitted { .. }, .. },
+                    ..
+                }
+            )
+        })
+    }
+
     fn peer_get(&self, id: &DeviceId) -> Option<&PeerState> {
         self.peers.get(&hex::encode(id))
     }
@@ -1706,8 +1734,10 @@ impl DeviceRingState {
 
     /// Generate `count` fresh KPs and wrap them as `OfferedKp`s with
     /// monotonic owner-global seqs.  Init keys land in our local keystore
-    /// (via `mls.generate_key_package`) so we can decrypt the Welcomes
-    /// the consumer will eventually send back.
+    /// so we can decrypt the Welcomes the consumer will eventually send back.
+    ///
+    /// `replenish_key_package`, not `generate_key_package`: each KP must carry
+    /// our *identity* signing key.  See the module note on signing-key identity.
     fn build_kp_batch(
         &mut self,
         mls: &MoatSession,
@@ -1717,7 +1747,9 @@ impl DeviceRingState {
         let seqs = self.allocate_kp_seqs(count);
         let mut out = Vec::with_capacity(count);
         for seq in seqs {
-            let (kp_bytes, _bundle) = mls.generate_key_package(env.credential).ok()?;
+            let kp_bytes = mls
+                .replenish_key_package(env.credential, env.key_bundle)
+                .ok()?;
             let mut rkey = [0u8; 16];
             rand::Rng::fill(&mut rand::thread_rng(), &mut rkey);
             out.push(OfferedKp {
@@ -1977,10 +2009,10 @@ impl DeviceRingState {
             if self.published_bootstrap_for.contains(&key) {
                 continue;
             }
-            // Generate a fresh KP whose init key stays in our local
-            // keystore.  Not also written to the cross-user PDS pool —
-            // bootstrap KPs are exclusive to this lane.
-            let (kp_bytes, _bundle) = match mls.generate_key_package(env.credential) {
+            // Fresh init key, kept in our local keystore; never written to the
+            // cross-user PDS pool — bootstrap KPs are exclusive to this lane.
+            // Signing key is our identity key (see the module note).
+            let kp_bytes = match mls.replenish_key_package(env.credential, env.key_bundle) {
                 Ok(p) => p,
                 Err(_) => continue, // try again next tick
             };
@@ -2115,7 +2147,7 @@ impl DeviceRingState {
         cmds
     }
 
-    /// At most one offer per tick.  Walks peers, picks the first OweOffer
+    /// At most one offer **in flight**.  Walks peers, picks the first OweOffer
     /// (deterministic by hex key sort), and emits the offer if conditions
     /// allow.  Sets the peer's sync to OfferEmitted on success.
     fn try_emit_sync_offer(&mut self, mls: &MoatSession, env: &StepEnv<'_>) -> Vec<RingCommand> {
@@ -2125,6 +2157,13 @@ impl DeviceRingState {
         };
         if our_leaf != 0 {
             // Static-leaf-0 offerer rule (Phase 4).
+            return Vec::new();
+        }
+        // An emitted offer only makes `env.sync_session_active` true once the
+        // peer accepts it, so that flag alone doesn't cover the emit→accept
+        // window: with two peers owing offers we would emit to the second
+        // before the first cleared.  `SyncSessionEnded` resets these to `Done`.
+        if self.any_offer_in_flight() {
             return Vec::new();
         }
 
@@ -2168,12 +2207,17 @@ impl DeviceRingState {
         // pair_offer is registered on Drawbridge before the SyncOffer lands on
         // the PDS.
         cmds.push(RingCommand::SendDrawbridgePairOffer { token: token.clone() });
-        if let Ok(enc) = mls.encrypt_event(&ring_id, env.key_bundle, &offer_event) {
-            cmds.push(RingCommand::PublishEvent {
+        // We are InRing with this ring_id, so our leaf exists and is signed with
+        // our identity key — this cannot legitimately fail.  Swallowing it here
+        // once hid a signing-key mismatch that silently stopped every
+        // non-creator ring member from ever emitting a sync offer.
+        match mls.encrypt_event(&ring_id, env.key_bundle, &offer_event) {
+            Ok(enc) => cmds.push(RingCommand::PublishEvent {
                 tag: enc.tag,
                 ciphertext: enc.ciphertext,
                 mark_own: true,
-            });
+            }),
+            Err(e) => debug_assert!(false, "sync offer encrypt into own ring failed: {e}"),
         }
 
         // Update peer state to OfferEmitted.
@@ -2446,17 +2490,13 @@ fn my_device_id_or_placeholder(mls: &MoatSession) -> DeviceId {
 /// Find our own leaf index in `ring_id` by matching `device_id`, not
 /// signature key.
 ///
-/// `MoatSession::get_own_leaf_index` matches on the MLS leaf's signature
-/// key, which is unreliable here: `generate_key_package` mints a *fresh*
-/// Ed25519 keypair on every call (bootstrap KPs, cross-user pool KPs, and
-/// `ReplenishKeyPackage` refills are all separate calls), so a device's
-/// ring leaf — added via whichever KeyPackage the adder happened to
-/// consume — essentially never carries the same signature key as the
-/// long-lived "identity" key bundle callers pass in as `env.key_bundle`.
-/// `device_id`, in contrast, is embedded in every `MoatCredential` this
-/// session ever produces and is therefore stable across all of them. This
-/// is the same device_id-matching pattern used elsewhere in this file
-/// (e.g. `on_tick`'s section A, `on_ring_welcome`'s peer-marking loop).
+/// `device_id` is embedded in every `MoatCredential` this session produces and
+/// identifies the device directly, so the lookup stays correct no matter which
+/// KeyPackage the adder consumed. `MoatSession::get_own_leaf_index` matches on
+/// the leaf's signature key instead, which only works because every KP we offer
+/// carries our identity key (see the module note) — a stricter precondition
+/// than this lookup needs. Same device_id-matching pattern used elsewhere in
+/// this file (e.g. `on_tick`'s section A, `on_ring_welcome`'s peer-marking loop).
 fn find_own_leaf(mls: &MoatSession, ring_id: &[u8]) -> Option<u32> {
     let my_device_id = *mls.device_id();
     mls.get_group_members(ring_id).ok()?.into_iter().find_map(|(idx, cred)| {
@@ -2979,6 +3019,44 @@ mod tests {
             s.check_invariants(),
             Err(InvariantViolation::MultipleOffersInFlight)
         );
+    }
+
+    /// Two peers owing offers must not both get one: the first offer stays in
+    /// flight until `SyncSessionEnded`, and `sync_session_active` doesn't cover
+    /// the emit→accept window. Regression guard — emitting to the second peer
+    /// here trips `MultipleOffersInFlight` in the very next `step()`.
+    #[test]
+    fn sync_offer_not_emitted_while_one_is_in_flight() {
+        let dev = make_stealth_device("did:plc:user", "offerer");
+        let env = env_for(&dev, &[]);
+        let mut s = DeviceRingState::new();
+        s.ring = RingMembership::InRing { ring_id: vec![1u8], created_at: 0, our_leaf: 0 };
+        // Peer 1: offer already in flight.  Peer 2: owes an offer.
+        s.peers.insert(
+            hex::encode([1u8; 16]),
+            PeerState::CoordReady {
+                coord_group_id: vec![1u8],
+                ring_link: RingLink::Joined {
+                    added_by: AddedBy::Us,
+                    sync: SyncStatus::OfferEmitted { token: vec![1] },
+                },
+            },
+        );
+        s.peers.insert(
+            hex::encode([2u8; 16]),
+            PeerState::CoordReady {
+                coord_group_id: vec![2u8],
+                ring_link: RingLink::Joined { added_by: AddedBy::Us, sync: SyncStatus::OweOffer },
+            },
+        );
+
+        let cmds = s.try_emit_sync_offer(&dev.mls, &env);
+        assert!(cmds.is_empty(), "must not emit a second concurrent offer, got {cmds:?}");
+        assert!(s.check_invariants().is_ok());
+
+        // Once the in-flight offer resolves, the waiting peer gets served.
+        s.on_sync_session_ended();
+        assert!(s.any_offer_in_flight() == false);
     }
 
     #[test]
@@ -3551,6 +3629,16 @@ mod tests {
         // Replayed Welcome fails init-key lookup and is absorbed silently.
         let out2 = deliver_stealth(&cmds, &owner, &mut owner_state, &owner_env);
         assert!(out2.is_empty(), "replayed Welcome must be a no-op, got {out2:?}");
+
+        // Joining is only half the job: the fanned-in device must also be able
+        // to *author* in the group, which requires its leaf to carry the
+        // identity signing key it will sign with. Regression guard for the
+        // signing-key mismatch described in the module note.
+        let ev = Event::sibling_msg(owner_id.to_vec(), b"hello".to_vec());
+        owner
+            .mls
+            .encrypt_event(&group_id, &owner.key_bundle, &ev)
+            .expect("fanned-in device must be able to encrypt into the group it joined");
     }
 
     // ── Full three-device ring-bootstrap simulator ─────────────────────────
@@ -3578,21 +3666,11 @@ mod tests {
     }
 
     impl SimDevice {
-        /// `identity_kp` is the *same* KeyPackage whose private bundle is
-        /// stored as `key_bundle` — this is load-bearing, not incidental:
-        /// `MoatSession::encrypt_event`/`create_group` sign with whatever
-        /// `key_bundle` the caller passes, and a device's leaf in any group
-        /// it was added to is only signed with the *identity* key if that
-        /// specific KeyPackage's bytes were the ones consumed for the Add.
-        /// Publishing a *different*, separately-generated KP for cross-user
-        /// discovery (as an earlier, buggy version of this harness did)
-        /// gives the joining device a leaf signed with a keypair its own
-        /// `key_bundle` doesn't match — every future `encrypt_event` in
-        /// that specific group then signs with the wrong key, and peers'
-        /// signature verification silently rejects it. The real
-        /// `moat-cli::App::do_login` gets this right by construction — see
-        /// `crates/moat-cli/src/app.rs:3301-3311` — generating exactly once
-        /// and reusing both halves consistently ever after.
+        /// The returned `identity_kp` is the *same* KeyPackage whose private
+        /// bundle is stored as `key_bundle`, matching how `do_login`
+        /// provisions a real device. Publishing a separately-generated KP
+        /// here would give the joiner a leaf it can't sign for — see the
+        /// module note on signing-key identity.
         fn new(did: &str, name: &str) -> (Self, Vec<u8>) {
             let mls = MoatSession::new();
             let cred = make_credential(did, name, *mls.device_id());
@@ -3911,6 +3989,17 @@ mod tests {
                 "device {idx} sees {} members in the ring, expected 3 (forked/diverged commit)",
                 members.len()
             );
+        }
+
+        // Membership isn't enough — every ring member must be able to author
+        // into the ring, which is what sync offers depend on. Regression guard
+        // for the signing-key mismatch described in the module note; before the
+        // fix only the ring *creator* could encrypt here.
+        for (idx, dev) in devices.iter().enumerate() {
+            let ev = Event::sibling_msg(dev.mls.device_id().to_vec(), b"hello".to_vec());
+            dev.mls
+                .encrypt_event(&ring_id, &dev.key_bundle, &ev)
+                .unwrap_or_else(|e| panic!("device {idx} cannot encrypt into its own ring: {e}"));
         }
     }
 }

@@ -245,7 +245,7 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<RingDriverHandle>>
 abstract class RingDriverHandle implements RustOpaqueInterface {
-  /// Restore a ring driver from its persisted JSON state.
+  /// Restore a ring state from its persisted JSON.
   static Future<RingDriverHandle> fromStateJson({required String json}) =>
       RustLib.instance.api
           .crateApiSimpleRingDriverHandleFromStateJson(json: json);
@@ -257,18 +257,27 @@ abstract class RingDriverHandle implements RustOpaqueInterface {
       required List<int> groupId,
       required List<int> payload});
 
-  /// Create a new ring driver with empty state.
+  /// Create a new ring state with empty state.
   static RingDriverHandle newEmpty() =>
       RustLib.instance.api.crateApiSimpleRingDriverHandleNewEmpty();
 
   /// Called when a coord-group Welcome was consumed outside `tick()` (e.g. by
-  /// `_pollOwnDid`).  Registers the coord group and returns a Hello
-  /// `PublishEvent` command for the caller to execute.
+  /// `_pollOwnDid`).  The state machine records the coord group and emits
+  /// a Hello publish command for the caller to execute.
   Future<List<RingCommandDto>> notifyCoordGroupJoined(
       {required MoatSessionHandle session,
       required List<int> groupId,
       required List<int> keyBundle,
       required String myDid});
+
+  /// Report that a sync session ended (success or failure alike), clearing
+  /// the in-flight sync offer so the next peer owing one can be served.
+  ///
+  /// Only one offer is in flight at a time, so a host that drops a sync
+  /// session without calling this stalls sync for every remaining peer.
+  /// Emits no commands — pure state transition.
+  Future<void> notifySyncSessionEnded(
+      {required MoatSessionHandle session, required String myDid});
 
   /// Cursor (rkey) for incremental own-PDS stealth scan.
   String? ownEventsCursor();
@@ -280,7 +289,7 @@ abstract class RingDriverHandle implements RustOpaqueInterface {
   Future<List<RingCommandDto>> tick(
       {required MoatSessionHandle session, required TickInputsDto inputs});
 
-  /// Serialise the current ring driver state as JSON.
+  /// Serialise the current ring state as JSON.
   Future<String> toStateJson();
 }
 
@@ -719,6 +728,10 @@ sealed class RingCommandDto with _$RingCommandDto {
     required Uint8List tag,
     required Uint8List ciphertext,
   }) = RingCommandDto_StealthPublishWelcome;
+  const factory RingCommandDto.publishBootstrapKp({
+    required Uint8List tag,
+    required Uint8List ciphertext,
+  }) = RingCommandDto_PublishBootstrapKp;
   const factory RingCommandDto.replenishKeyPackage() =
       RingCommandDto_ReplenishKeyPackage;
   const factory RingCommandDto.registerGroup({

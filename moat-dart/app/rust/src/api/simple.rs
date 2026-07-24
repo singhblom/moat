@@ -503,9 +503,12 @@ impl EventDto {
                 EventKind::Modifier(ModifierKind::Reaction) => EventKindDto::Reaction,
                 EventKind::Coord => EventKindDto::Coord,
                 EventKind::SyncApp => EventKindDto::SyncApp,
+                // Ring-lane events (BootstrapKp, SiblingMsg) are consumed by
+                // the ring driver, not by Dart's event surface — no DTO.
                 EventKind::Modifier(_)
                 | EventKind::Control(_)
                 | EventKind::BootstrapKp
+                | EventKind::SiblingMsg
                 | EventKind::Unknown(_) => EventKindDto::Unknown,
             },
             message_id: e.message_id,
@@ -1120,6 +1123,34 @@ impl RingDriverHandle {
             },
         );
         Ok(cmds.into_iter().map(RingCommandDto::from).collect())
+    }
+
+    /// Report that a sync session ended (success or failure alike), clearing
+    /// the in-flight sync offer so the next peer owing one can be served.
+    ///
+    /// Only one offer is in flight at a time, so a host that drops a sync
+    /// session without calling this stalls sync for every remaining peer.
+    /// Emits no commands — pure state transition.
+    pub fn notify_sync_session_ended(&self, session: &MoatSessionHandle, my_did: String) {
+        let session_lock = session.inner.lock().unwrap();
+        let device_id = *session_lock.device_id();
+        let credential = MoatCredential::new(&my_did, "", device_id);
+        let key_bundle: Vec<u8> = Vec::new();
+        let env = StepEnv {
+            my_did: &my_did,
+            credential: &credential,
+            key_bundle: &key_bundle,
+            now_ms: 0,
+            drawbridge_connected: false,
+            sync_session_active: false,
+            stealth_pubkeys: &[],
+            sibling_stealth: &[],
+        };
+        let _ = self
+            .inner
+            .lock()
+            .unwrap()
+            .step(&session_lock, &env, RingEvent::SyncSessionEnded);
     }
 }
 

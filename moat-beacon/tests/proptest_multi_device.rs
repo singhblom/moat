@@ -21,18 +21,11 @@ fn run_cell(d1_kind: ParticipantKind, d2_kind: ParticipantKind) {
     });
 }
 
-// Was silently green before 2026-07-24: `multi_device_chat::run`'s
-// SendUserMessage handler used to swallow send failures
-// (`if ... .is_ok() { record it }`) instead of asserting on them, which hid
-// a real, deterministic bug — see `fanned-in-device-signing-key-bug.md`.
-// Device 1 (D2) was fanned into the conversation via same-user fan-out
-// (a KP-lane KeyPackage, not its own identity KeyPackage) and can
-// therefore never successfully send in it: `encrypt_event` always signs
-// with the device's one persistent identity key, which doesn't match the
-// signature key D2's leaf in this group actually carries. Any action
-// sequence that generates a `SendUserMessage { device: 1, .. }` now fails
-// loudly instead of silently. Un-ignore once that bug is fixed.
-#[ignore = "blocked on fanned-in-device-signing-key-bug.md: D2 can never send after same-user fan-out"]
+// This cell was silently green until 2026-07-24, when `multi_device_chat::run`
+// stopped swallowing send failures: a device fanned into a conversation via
+// same-user fan-out could never send in it. Fixed by minting KP-lane
+// KeyPackages with the identity signing key — see the signing-key note in
+// `moat-core/src/device_ring.rs`.
 #[test]
 fn multi_device_chat_rr() {
     run_cell(ParticipantKind::RustCli, ParticipantKind::RustCli);

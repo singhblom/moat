@@ -323,10 +323,14 @@ class SyncService {
     return out;
   }
 
+  /// Single teardown funnel for a sync session, however it ended. Every path
+  /// that drops the session goes through here so the ring driver always learns
+  /// the offer is no longer in flight.
   Future<void> _reset() async {
     _active = false;
     _session = null;
     _pendingFrames = null;
     _ring.clearPendingPair();
+    await _ring.notifySyncSessionEnded();
   }
 }

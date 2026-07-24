@@ -1648,6 +1648,7 @@ impl App {
                 self.drawbridge.clear_pair();
                 self.sync_session = None;
                 self.pending_pair_token = None;
+                self.notify_sync_session_ended();
             }
 
             BgEvent::PairConnected => {
@@ -1875,6 +1876,7 @@ impl App {
                         self.debug_log.log(&format!("sync: pair WS connect failed: {e}"));
                         self.sync_session = None;
                         self.pending_pair_token = None;
+                        self.notify_sync_session_ended();
                     }
                 }
             }
@@ -4725,6 +4727,42 @@ impl App {
         }
     }
 
+    /// Tell the ring driver a sync session has ended, so the in-flight
+    /// `OfferEmitted` clears and the next peer owing an offer can be served.
+    ///
+    /// Must be called from **every** path that drops `self.sync_session`,
+    /// success or failure alike. Only one offer is in flight at a time, so a
+    /// missed call here stalls sync for every remaining peer indefinitely.
+    fn notify_sync_session_ended(&mut self) {
+        let Some(client) = self.client.as_ref() else { return };
+        let my_did = client.did().to_string();
+        let Ok(key_bundle) = self.keys.load_identity_key() else { return };
+        let Ok(device_name) = self.keys.get_or_create_device_name() else { return };
+        let credential = MoatCredential::new(&my_did, &device_name, *self.mls.device_id());
+        let sibling_stealth = self.cached_sibling_stealth.clone();
+
+        let env = StepEnv {
+            my_did: &my_did,
+            credential: &credential,
+            key_bundle: &key_bundle,
+            now_ms: chrono::Utc::now().timestamp_millis(),
+            drawbridge_connected: self.drawbridge.has_own_connection(),
+            sync_session_active: false,
+            stealth_pubkeys: &[],
+            sibling_stealth: &sibling_stealth,
+        };
+
+        // SyncSessionEnded is a pure state transition — it emits no commands.
+        let _ = self
+            .ring_driver
+            .step(&self.mls, &env, RingEvent::SyncSessionEnded);
+
+        if let Err(e) = self.keys.save_ring_state(&self.ring_driver) {
+            self.debug_log
+                .log(&format!("ring: failed to save ring state: {e}"));
+        }
+    }
+
     /// Interpret the subset of [`RingCommand`]s that a synchronous coord-message
     /// handler can emit.  Async-only commands are logged and dropped — they
     /// will be re-emitted by the next `ring_tick_inner` invocation if needed.
@@ -4901,6 +4939,7 @@ impl App {
                     self.sync_session = None;
                     self.pending_pair_token = None;
                     self.drawbridge.clear_pair();
+                    self.notify_sync_session_ended();
                 }
             }
         }
