@@ -146,10 +146,35 @@ pub async fn run(
     assert_eq!(s1.ring_group_id, s2.ring_group_id, "d1 and d2 must share the ring");
     assert_eq!(s1.ring_group_id, s3.ring_group_id, "d1 and d3 must share the ring");
 
-    // Each device has one coord group per sibling: 3 devices → 2 coord groups each.
-    assert_eq!(s1.coord_group_count, 2, "d1 must have 2 coord groups");
-    assert_eq!(s2.coord_group_count, 2, "d2 must have 2 coord groups");
-    assert_eq!(s3.coord_group_count, 2, "d3 must have 2 coord groups");
+    // Coord-group counts are *not* symmetric across all three devices.
+    // D3 (the new joiner) independently discovers D1 and D2 from outside
+    // any ring, so it always ends up with one coord group per pre-existing
+    // device: 2.
+    //
+    // Among D1 and D2, only the *elected* member (whichever has the
+    // smaller device_id and therefore became the original ring's leaf 0)
+    // creates a coord group with a brand-new sibling once a ring exists;
+    // the other pre-existing member defers to it (see
+    // `on_peer_kp_observed`'s leaf-election gate in
+    // `crates/moat-core/src/device_ring.rs` — without this gate, both
+    // existing ring members would independently race to consume D3's same
+    // cross-user-pool KeyPackage, and only one could ever succeed,
+    // permanently stalling the other's ring-add path).  So the elected
+    // member ends up with 2 coord groups (the original D1-D2 one, plus the
+    // new one with D3); the non-elected member stays at 1 (just the
+    // original). Device_id assignment is random per run, so either of
+    // D1/D2 can be the elected one — assert the *set* of counts, not a
+    // fixed assignment.
+    assert_eq!(s3.coord_group_count, 2, "d3 must have 2 coord groups (one per pre-existing device)");
+    let mut d1_d2_counts = [s1.coord_group_count, s2.coord_group_count];
+    d1_d2_counts.sort();
+    assert_eq!(
+        d1_d2_counts,
+        [1, 2],
+        "exactly one of d1/d2 (the elected, smaller-device_id member) must have 2 coord groups; \
+         the other must have 1 (deferred to the elected member for D3's coord group) — got d1={}, d2={}",
+        s1.coord_group_count, s2.coord_group_count
+    );
 
     for (label, client) in [("d1", &d1), ("d2", &d2), ("d3", &d3)] {
         let convs = client

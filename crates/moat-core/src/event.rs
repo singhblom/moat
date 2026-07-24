@@ -31,6 +31,14 @@ pub enum EventKind {
     /// (the KP isn't bound to a group yet); use an empty group_id and
     /// epoch = 0 when constructing.
     BootstrapKp,
+    /// Steady-state same-user coordination message addressed to a specific
+    /// sibling device. The payload is a JSON-encoded [`crate::CoordMsg`]
+    /// (`KpBatch` / `KpRequest` / `UserConvWelcome`); the sender's device id
+    /// travels in `Event.sender_device_id`. Delivered as a stealth-encrypted
+    /// `social.moat.event` to the sibling's `scan_pubkey` — same lane as
+    /// [`EventKind::BootstrapKp`], epoch-free and order-insensitive.
+    /// `group_id` and `epoch` are not meaningful (empty / 0).
+    SiblingMsg,
     /// Legacy or unknown domain.
     Unknown(String),
 }
@@ -72,6 +80,7 @@ impl EventKind {
             EventKind::Coord => "coord".to_string(),
             EventKind::SyncApp => "sync.app".to_string(),
             EventKind::BootstrapKp => "bootstrap.kp".to_string(),
+            EventKind::SiblingMsg => "sibling.msg".to_string(),
             EventKind::Unknown(s) => s.clone(),
         }
     }
@@ -336,6 +345,24 @@ impl Event {
         }
     }
 
+    /// Create a sibling coordination event carrying a JSON-encoded `CoordMsg`
+    /// destined for a specific sibling via the stealth lane. `group_id` and
+    /// `epoch` are unused (empty / `0`); the sender identifies itself via
+    /// `sender_device_id` (unauthenticated at this layer — receivers verify
+    /// KP payloads against ring leaf credentials).
+    pub fn sibling_msg(sender_device_id: Vec<u8>, coord_msg_json: Vec<u8>) -> Self {
+        Self {
+            kind: EventKind::SiblingMsg,
+            group_id: Vec::new(),
+            epoch: 0,
+            payload: coord_msg_json,
+            message_id: None,
+            prev_event_hash: None,
+            epoch_fingerprint: None,
+            sender_device_id: Some(sender_device_id),
+        }
+    }
+
     /// Create a coordination message event for a `DeviceCoord` group.
     pub fn coord(group_id: Vec<u8>, epoch: u64, payload: Vec<u8>) -> Self {
         Self {
@@ -540,6 +567,7 @@ impl<'de> Deserialize<'de> for EventKind {
                 "modifier" => EventKind::Modifier(ModifierKind::from_variant(variant)),
                 "sync" => EventKind::SyncApp,
                 "bootstrap" if variant == "kp" => EventKind::BootstrapKp,
+                "sibling" if variant == "msg" => EventKind::SiblingMsg,
                 _ => EventKind::Unknown(raw),
             };
             Ok(kind)
@@ -718,6 +746,26 @@ mod tests {
         // Wire tag is `bootstrap.kp`.
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["kind"], serde_json::Value::String("bootstrap.kp".to_string()));
+    }
+
+    #[test]
+    fn test_sibling_msg_roundtrip() {
+        let sender = vec![7u8; 16];
+        let payload = br#"{"type":"kp_request","owner_device_id":"BwcHBwcHBwcHBwcHBwcHBw==","count":4}"#.to_vec();
+        let event = Event::sibling_msg(sender.clone(), payload.clone());
+
+        let bytes = event.to_bytes().unwrap();
+        let recovered = Event::from_bytes(&bytes).unwrap();
+
+        assert!(matches!(recovered.kind, EventKind::SiblingMsg));
+        assert_eq!(recovered.payload, payload);
+        assert_eq!(recovered.sender_device_id, Some(sender));
+        assert!(recovered.group_id.is_empty());
+        assert_eq!(recovered.epoch, 0);
+
+        // Wire tag is `sibling.msg`.
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["kind"], serde_json::Value::String("sibling.msg".to_string()));
     }
 
     #[test]

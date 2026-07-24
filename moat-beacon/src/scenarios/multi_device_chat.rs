@@ -145,17 +145,33 @@ pub async fn run(
                 }
                 let text = TEXT_VOCAB[text_idx % TEXT_VOCAB.len()];
                 let client = if d == 0 { &d1 } else { &d2 };
-                if client.send_message(&group_id, text).await.is_ok() {
-                    let message_id = client
-                        .get_messages(&group_id)
-                        .await
-                        .unwrap_or_default()
-                        .into_iter()
-                        .rev()
-                        .find(|m| m.is_own && m.content.contains(text))
-                        .and_then(|m| m.message_id);
-                    sent.push(SentMsg { message_id });
-                }
+                // Deliberately not swallowed: by construction, every device
+                // reachable here (`online[d]` true) already passed the
+                // pre-loop assertion that it's a member of `group_id`, and
+                // GoOffline/ComeOnline preserve local storage across a
+                // restart (no re-discovery needed) — so there is no
+                // legitimate, expected reason left for a send to fail once
+                // the random-action loop has started. An earlier version of
+                // this arm used `if ... .is_ok() { record it }`, which
+                // silently hid exactly this: device 1 (D2) sending in a
+                // conversation it was fanned into via same-user fan-out
+                // always fails with a signing-key mismatch (see
+                // `fanned-in-device-signing-key-bug.md`) — masked here for
+                // an unknown period until `three_device_staggered_rrr`
+                // happened to hard-assert on the same path.
+                client
+                    .send_message(&group_id, text)
+                    .await
+                    .unwrap_or_else(|e| panic!("device {d} send_message failed: {e}"));
+                let message_id = client
+                    .get_messages(&group_id)
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .rev()
+                    .find(|m| m.is_own && m.content.contains(text))
+                    .and_then(|m| m.message_id);
+                sent.push(SentMsg { message_id });
             }
             MultiDeviceAction::Poll { device } => {
                 if online[*device] {

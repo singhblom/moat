@@ -546,6 +546,26 @@ pub struct App {
 
     /// Pairing token for the in-flight pair WS session.
     pending_pair_token: Option<Vec<u8>>,
+
+    /// `RingCommand::PublishEvent`/`PublishBootstrapKp`s emitted from the
+    /// synchronous coord-message handler (`handle_coord_msg_sync`), which has
+    /// no async context to publish them.  Drained and published at the start
+    /// of the next `ring_tick_inner`.  This is the delivery path for
+    /// stealth-borne KP traffic (`KpBatch` ships on join, `KpRequest`
+    /// fulfillment) that a peer produces in response to an inbound coord
+    /// message.
+    ring_publish_queue: Vec<RingCommand>,
+
+    /// Cached per-sibling stealth address records (`scan_pubkey` +
+    /// `device_id`), refreshed each `ring_tick_inner` from
+    /// `fetch_stealth_addresses`.  Needed by any code path that stealth-
+    /// encrypts a `CoordMsg` to a sibling (same-user KP lane) outside the
+    /// tick's own fresh fetch — `poll_for_new_devices` and
+    /// `handle_coord_msg_sync` in particular.  A one-tick-stale cache is
+    /// fine: the consumer-driven low-water `KpRequest` retries self-heal
+    /// any miss caused by a sibling whose stealth record hasn't propagated
+    /// yet.
+    cached_sibling_stealth: Vec<moat_core::SiblingStealth>,
 }
 
 impl App {
@@ -670,6 +690,8 @@ impl App {
             last_ring_tick: None,
             sync_session: None,
             pending_pair_token: None,
+            ring_publish_queue: Vec::new(),
+            cached_sibling_stealth: Vec::new(),
         })
     }
 
@@ -4178,17 +4200,17 @@ impl App {
     /// - No race conditions with other users trying to add the same device
     /// - Simple, predictable behavior
     async fn poll_for_new_devices(&mut self) -> Result<()> {
-        // Phase E: same-user fan-out runs entirely over the ring.  We
-        // walk every confirmed ring sibling, and for each user
-        // conversation they are not yet in we draw a fresh KP from the
-        // ring-borne pool, MLS-add them, and ship the Welcome as a
-        // `CoordMsg::UserConvWelcome` ring message.  If the local pool
-        // is empty for a sibling, we emit one `CoordMsg::KpRequest`
-        // per poll cycle and defer the add — the next tick retries
-        // once the owner ships a fresh `CoordMsg::KpBatch`.  The init
-        // key consumed comes from the ring pool, not the PDS pool, so
-        // no replenish on the cross-user `social.moat.keyPackage`
-        // pool is required.
+        // Same-user fan-out: we walk every confirmed ring sibling, and
+        // for each user conversation they are not yet in we draw a
+        // fresh KP from the pool, MLS-add them, and ship the Welcome
+        // as a `CoordMsg::UserConvWelcome` stealth event addressed to
+        // the sibling.  If the local pool is empty for a sibling, we
+        // emit one `CoordMsg::KpRequest` per poll cycle (also
+        // stealth-addressed) and defer the add — the next tick
+        // retries once the owner ships a fresh `CoordMsg::KpBatch`.
+        // The init key consumed comes from the KP-lane pool, not the
+        // PDS pool, so no replenish on the cross-user
+        // `social.moat.keyPackage` pool is required.
         let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?.clone();
         let my_did = client.did().to_string();
 
@@ -4212,6 +4234,7 @@ impl App {
             .get_or_create_device_name()
             .map_err(|e| AppError::Other(format!("poll_devices: get_device_name: {e}")))?;
         let credential = MoatCredential::new(&my_did, &device_name, *self.mls.device_id());
+        let sibling_stealth = self.cached_sibling_stealth.clone();
         let env = StepEnv {
             my_did: &my_did,
             credential: &credential,
@@ -4220,7 +4243,7 @@ impl App {
             drawbridge_connected: self.drawbridge.has_own_connection(),
             sync_session_active: self.sync_session.is_some(),
             stealth_pubkeys: &[],
-            sibling_stealth: &[],
+            sibling_stealth: &sibling_stealth,
         };
 
         // Snapshot conversations so we can mutate `self` later.
@@ -4325,16 +4348,17 @@ impl App {
                     self.debug_log.log("poll_devices: published commit");
                 }
 
-                // Ring-borne Welcome.  Replaces the stealth-PDS-Welcome
-                // publish used pre-Phase E.  Other users in this group
-                // see the Commit via the PDS as before; only the
-                // same-user delivery channel changes.
+                // Stealth-addressed Welcome, same lane as bootstrap KPs.
+                // Other users in this group see the Commit via the PDS as
+                // before; only the same-user delivery channel changes.
                 let msg = CoordMsg::UserConvWelcome {
                     owner_device_id: sibling_id.to_vec(),
                     group_id: group_id.clone(),
                     welcome: welcome_result.welcome,
                 };
-                if let Some(cmd) = self.ring_driver.encrypt_for_ring(&self.mls, &env, &msg) {
+                if let Some(cmd) =
+                    self.ring_driver.encrypt_for_sibling(&self.mls, &env, sibling_id, &msg)
+                {
                     self.publish_ring_command(&client, cmd).await;
                     self.debug_log.log(&format!(
                         "poll_devices: published UserConvWelcome for sibling {} in group {}",
@@ -4343,7 +4367,7 @@ impl App {
                     ));
                 } else {
                     self.debug_log
-                        .log("poll_devices: encrypt_for_ring(UserConvWelcome) failed");
+                        .log("poll_devices: encrypt_for_sibling(UserConvWelcome) failed — sibling stealth record not yet known");
                 }
 
                 let conv_name = self
@@ -4407,6 +4431,16 @@ impl App {
                     self.own_published_tags.insert(tag);
                 }
             }
+            RingCommand::PublishBootstrapKp { tag, ciphertext } => {
+                // Same-user KP lane (KpBatch / KpRequest / UserConvWelcome),
+                // stealth-addressed to a specific sibling.  Stealth payloads
+                // are decrypted out-of-band by the recipient, so they are
+                // never marked own.
+                if let Err(e) = client.publish_event(&tag, &ciphertext, None).await {
+                    self.debug_log
+                        .log(&format!("publish_ring_command: stealth publish failed: {e}"));
+                }
+            }
             other => {
                 self.debug_log.log(&format!(
                     "publish_ring_command: unexpected variant {other:?} — dropping"
@@ -4430,6 +4464,14 @@ impl App {
 
         let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?.clone();
         let my_did = client.did().to_string();
+
+        // Drain any ring publishes buffered by the synchronous coord-message
+        // handler (KP batch ships / KpRequest fulfillment produced while
+        // processing an inbound ring event, which had no async context).
+        let queued = std::mem::take(&mut self.ring_publish_queue);
+        for cmd in queued {
+            self.publish_ring_command(&client, cmd).await;
+        }
 
         let key_bundle = self.keys.load_identity_key().map_err(|e| {
             AppError::Other(format!("ring: failed to load identity key: {e}"))
@@ -4466,6 +4508,10 @@ impl App {
                 device_id: r.device_id,
             })
             .collect();
+        // Cache for callers outside this tick (poll_for_new_devices,
+        // handle_coord_msg_sync) that also need to stealth-address a
+        // sibling for the same-user KP lane.
+        self.cached_sibling_stealth = sibling_stealth.clone();
 
         let event_records = client
             .fetch_events_from_did(&my_did, self.ring_driver.own_events_cursor())
@@ -4634,6 +4680,7 @@ impl App {
             Err(_) => return,
         };
         let credential = MoatCredential::new(&my_did, &device_name, *self.mls.device_id());
+        let sibling_stealth = self.cached_sibling_stealth.clone();
 
         let env = StepEnv {
             my_did: &my_did,
@@ -4644,9 +4691,13 @@ impl App {
             sync_session_active: self.sync_session.is_some(),
             stealth_pubkeys: &[],
             // Synchronous coord-message handler; no on-tick bootstrap
-            // publishing fires from here.  Phase C publishing happens in
-            // the async ring_tick_inner path via TickInputs.sibling_stealth.
-            sibling_stealth: &[],
+            // publishing fires from here.  Bootstrap KP publishing happens
+            // in the async ring_tick_inner path via TickInputs.sibling_stealth.
+            // `sibling_stealth` here is the last tick's cache — needed
+            // because `on_ring_welcome` (fired when a `RingWelcome` lands
+            // on this sync path) ships initial KP batches over the
+            // stealth lane, which requires each sibling's scan_pubkey.
+            sibling_stealth: &sibling_stealth,
         };
 
         let cmds = self.ring_driver.step(
@@ -4702,9 +4753,17 @@ impl App {
                     self.pending_pair_token = Some(token.clone());
                     let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairJoin { token });
                 }
-                RingCommand::PublishEvent { .. }
-                | RingCommand::StealthPublishWelcome { .. }
-                | RingCommand::PublishBootstrapKp { .. }
+                // Stealth-lane network publishes (KpBatch ships on join,
+                // KpRequest fulfillment, UserConvWelcome) are produced here
+                // in response to an inbound coord message but have no async
+                // context to publish from.  Queue them; `ring_tick_inner`
+                // drains the queue.  These are one-shot responses — nothing
+                // re-emits them on a later tick, so dropping them would
+                // silently stall the fan-out.
+                cmd @ (RingCommand::PublishEvent { .. } | RingCommand::PublishBootstrapKp { .. }) => {
+                    self.ring_publish_queue.push(cmd);
+                }
+                RingCommand::StealthPublishWelcome { .. }
                 | RingCommand::SendDrawbridgePairOffer { .. } => {
                     self.debug_log
                         .log("ring: async-only command emitted from sync path — dropped (will retry on next tick)");

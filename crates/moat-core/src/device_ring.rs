@@ -421,6 +421,18 @@ pub struct DeviceRingState {
     /// over the ring, after which the sibling's flag is moved to
     /// `consumed_bootstrap_for`.
     pending_bootstrap_kps: HashMap<String, Vec<u8>>,
+
+    /// Set when a `CoordMsg::RingInfo` arrives while we are not yet
+    /// `InRing`: `(ring_id, created_at)` of a ring a Hello-exchanged
+    /// sibling already belongs to.  Suppresses the Discovering-branch
+    /// "smallest device_id creates a ring" tiebreak, which otherwise
+    /// only consults locally Hello-exchanged peers and has no way to
+    /// know a ring already exists elsewhere — without this, a device
+    /// bootstrapping into an established multi-device ring can win that
+    /// local tiebreak and create a second, competing ring before the
+    /// real Add/Welcome from an existing member arrives.  Cleared once
+    /// we transition to `InRing` (the field is only meaningful pre-ring).
+    known_ring: Option<(Vec<u8>, i64)>,
 }
 
 // SyncStatus / AddedBy / RingLink / PeerState / RingMembership: we want
@@ -776,11 +788,17 @@ pub enum RingCommand {
         tag: [u8; 16],
         ciphertext: Vec<u8>,
     },
-    /// Publish a stealth-encrypted bootstrap KP event for a specific sibling.
+    /// Publish a stealth-encrypted sibling event for a specific sibling.
     /// Same wire shape as [`StealthPublishWelcome`] — the host just publishes
-    /// the ciphertext under the supplied tag.  The payload inside is an
-    /// `EventKind::BootstrapKp` event whose `payload` is the MLS KeyPackage
-    /// bytes; the recipient's own-PDS stealth scan picks it up.
+    /// the ciphertext under the supplied tag.  The payload inside is either an
+    /// `EventKind::BootstrapKp` event (MLS KeyPackage bytes for the ring
+    /// bootstrap) or an `EventKind::SiblingMsg` event (steady-state
+    /// `KpBatch` / `KpRequest` / `UserConvWelcome` CoordMsg JSON); the
+    /// recipient's own-PDS stealth scan picks it up.  Stealth delivery is
+    /// epoch-free and order-insensitive.
+    ///
+    /// Name kept from the bootstrap-only Phase B for FFI stability; the
+    /// rename to `PublishStealthEvent` happens with the Phase G FRB regen.
     PublishBootstrapKp {
         tag: [u8; 16],
         ciphertext: Vec<u8>,
@@ -1095,6 +1113,39 @@ impl DeviceRingState {
             return Vec::new();
         }
 
+        // Once a ring exists, only the elected (smallest-leaf) ring member
+        // discovers-and-creates a coord group from the shared cross-user
+        // KeyPackage pool. Without this gate, every existing ring member
+        // independently observes a brand-new sibling's *same* pool KP (the
+        // pool snapshot is identical for everyone) and each tries to
+        // `create_device_coord_group` using it. Only one Welcome can ever
+        // be successfully processed by the new sibling — its init secret
+        // is consumed on first success — so every other ring member's
+        // attempt is permanently stuck ("No matching key package was
+        // found in the key store"), with no retry, since `peer_get`'s
+        // dedup above prevents ever trying again. This is the exact
+        // same-KP race `same-user-key-distribution.md` fixed for ring-join
+        // and user-conversation fan-out, just never applied to this
+        // earlier coord-group-bootstrap step. Deferring to the elected
+        // member is safe: the elected member's coord group with the new
+        // sibling carries Hello/RingInfo/RingWelcome, which is all any
+        // *other* ring member needs — once the new sibling is a ring
+        // member, the ring itself is their shared channel for anything
+        // else (the same-user KP lane is stealth-addressed and doesn't
+        // need a coord group at all). Doesn't apply before any ring
+        // exists (Solo/Discovering) — the original two-device bootstrap
+        // symmetric-race-then-converge dance is unaffected.
+        if let RingMembership::InRing { ring_id, .. } = &self.ring {
+            let ring_id = ring_id.clone();
+            let members = mls.get_group_members(&ring_id).unwrap_or_default();
+            let my_leaf = find_own_leaf(mls, &ring_id);
+            let smallest_leaf = members.iter().map(|(idx, _)| *idx).min();
+            if my_leaf.is_none() || my_leaf != smallest_leaf {
+                self.peer_insert(sibling_id, PeerState::Discovered);
+                return Vec::new();
+            }
+        }
+
         // First sighting: create coord group, transition to AwaitingTheirHello.
         self.promote_to_discovering();
 
@@ -1138,6 +1189,11 @@ impl DeviceRingState {
                 ciphertext: enc.ciphertext,
                 mark_own: true,
             });
+        }
+        // Tell the sibling about our ring, if we have one — see
+        // `emit_ring_info` for why this closes the ring-creation race.
+        if let Some(cmd) = self.emit_ring_info(mls, env, &group_id) {
+            cmds.push(cmd);
         }
 
         // Stealth-publish the coord Welcome envelope so the sibling can find it.
@@ -1204,6 +1260,23 @@ impl DeviceRingState {
                         None => return Vec::new(),
                     };
                     return self.on_bootstrap_kp_received(from_device_id, &ev.payload);
+                }
+                // Steady-state sibling coordination (KP lane) — see
+                // `on_sibling_msg` for the authenticity model.
+                if matches!(ev.kind, crate::EventKind::SiblingMsg) {
+                    let sender: DeviceId = match ev
+                        .sender_device_id
+                        .as_deref()
+                        .and_then(|b| b.try_into().ok())
+                    {
+                        Some(id) => id,
+                        None => return Vec::new(),
+                    };
+                    let msg = match decode_coord_msg(&ev.payload) {
+                        Ok(m) => m,
+                        Err(_) => return Vec::new(),
+                    };
+                    return self.on_sibling_msg(mls, env, sender, msg);
                 }
             }
         }
@@ -1306,6 +1379,11 @@ impl DeviceRingState {
                             mark_own: true,
                         });
                     }
+                    // Tell the sibling about our ring, if we have one — see
+                    // `emit_ring_info` for why this closes the ring-creation race.
+                    if let Some(cmd) = self.emit_ring_info(mls, env, &group_id) {
+                        cmds.push(cmd);
+                    }
                 }
             }
             GroupKind::User => {
@@ -1390,34 +1468,87 @@ impl DeviceRingState {
                     Vec::new()
                 }
             }
+            // KP-lane messages ride the stealth lane (`EventKind::SiblingMsg`
+            // → `on_sibling_msg`), not MLS channels.  If one arrives here —
+            // e.g. published by a pre-E′ build — ignore it rather than
+            // double-processing.
+            CoordMsg::KpBatch { .. }
+            | CoordMsg::KpRequest { .. }
+            | CoordMsg::UserConvWelcome { .. } => Vec::new(),
+        }
+    }
+
+    /// Handle a stealth-delivered sibling CoordMsg (`EventKind::SiblingMsg`).
+    ///
+    /// Only the KP-lane variants are meaningful here; membership and sync
+    /// messages (`Hello`, `RingInfo`, `RingWelcome`, `SyncOffer`,
+    /// `Supersede`) stay on the MLS coord channels and are ignored if a
+    /// peer (mis)sends them via stealth.
+    ///
+    /// `sender` comes from the unauthenticated `Event.sender_device_id`
+    /// field — the stealth layer proves only that the publisher could write
+    /// to our own repo.  For `KpBatch` (the payload that could trick us
+    /// into adding a foreign device to user conversations) every entry is
+    /// therefore validated: the KP signature must verify and its embedded
+    /// credential must claim our DID and the sender's device id, and the
+    /// sender must be a confirmed ring member.  (Hardening TODO, tracked in
+    /// `same-user-key-distribution.md`: pin the KP signature key to the
+    /// sender's ring leaf credential.)  A forged `KpRequest` is at most a
+    /// top-up nuisance; a forged `UserConvWelcome` fails init-key lookup.
+    fn on_sibling_msg(
+        &mut self,
+        mls: &MoatSession,
+        env: &StepEnv<'_>,
+        sender: DeviceId,
+        msg: CoordMsg,
+    ) -> Vec<RingCommand> {
+        let my_device_id = *mls.device_id();
+        match msg {
             CoordMsg::KpBatch { recipient_device_id, kps } => {
-                let me: &[u8] = &my_device_id;
-                if recipient_device_id.as_slice() != me {
-                    // Batch addressed to another ring member; ignore.
+                if recipient_device_id.as_slice() != &my_device_id[..] {
+                    // Addressed to another sibling (shouldn't decrypt for
+                    // us at all, but be defensive).
                     return Vec::new();
                 }
-                self.ingest_kp_batch(&from_device_id, kps);
-                self.maybe_emit_kp_request(mls, env, &from_device_id)
+                if !self.ring_joined_siblings().contains(&sender) {
+                    // Not (yet) a confirmed ring member.  Drop; once the
+                    // ring Welcome lands, the low-water `KpRequest` path
+                    // refills the pool on a later tick.
+                    return Vec::new();
+                }
+                let verified: Vec<OfferedKp> = kps
+                    .into_iter()
+                    .filter(|kp| {
+                        matches!(
+                            mls.extract_credential_from_key_package(&kp.key_package),
+                            Ok(Some(ref c)) if c.did() == env.my_did && *c.device_id() == sender
+                        )
+                    })
+                    .collect();
+                if verified.is_empty() {
+                    return Vec::new();
+                }
+                self.ingest_kp_batch(&sender, verified);
+                self.maybe_emit_kp_request(mls, env, &sender)
             }
             CoordMsg::KpRequest { owner_device_id, count } => {
-                let me: &[u8] = &my_device_id;
-                if owner_device_id.as_slice() != me {
+                if owner_device_id.as_slice() != &my_device_id[..] {
                     return Vec::new();
                 }
-                self.fulfil_kp_request(mls, env, from_device_id, count)
+                self.fulfil_kp_request(mls, env, sender, count)
             }
             CoordMsg::UserConvWelcome { owner_device_id, group_id, welcome } => {
-                let me: &[u8] = &my_device_id;
-                if owner_device_id.as_slice() != me {
+                if owner_device_id.as_slice() != &my_device_id[..] {
                     return Vec::new();
                 }
                 // The init key for this Welcome lives in our local keystore
                 // (we generated it in `build_kp_batch` and shipped the
                 // public KP via `CoordMsg::KpBatch`).  `process_welcome`
                 // consumes it.  No `ReplenishKeyPackage` is emitted: the
-                // consumed key was a ring-pool init key, not a PDS-pool
-                // one, so the cross-user `social.moat.keyPackage` pool is
-                // untouched.
+                // consumed key was a pool init key, not a PDS-pool one, so
+                // the cross-user `social.moat.keyPackage` pool is
+                // untouched.  A replayed Welcome fails init-key lookup and
+                // is dropped by `process_welcome`.
                 match mls.process_welcome(&welcome) {
                     Ok(joined_group_id) => {
                         // Guard against a mismatched payload: the Welcome
@@ -1433,12 +1564,19 @@ impl DeviceRingState {
                     Err(_) => Vec::new(),
                 }
             }
+            // Membership/sync traffic does not ride the stealth lane.
+            CoordMsg::Hello { .. }
+            | CoordMsg::RingInfo { .. }
+            | CoordMsg::Supersede { .. }
+            | CoordMsg::RingWelcome { .. }
+            | CoordMsg::SyncOffer { .. } => Vec::new(),
         }
     }
 
     /// If the consumer's pool of `owner`'s KPs is at or below the
-    /// low-water mark, emit a `CoordMsg::KpRequest` over the ring.
-    /// No-op if not in a ring or if the pool is above the mark.
+    /// low-water mark, emit a `CoordMsg::KpRequest` to the owner via the
+    /// stealth lane.  No-op if not in a ring or if the pool is above the
+    /// mark.
     fn maybe_emit_kp_request(
         &self,
         mls: &MoatSession,
@@ -1449,15 +1587,14 @@ impl DeviceRingState {
             Some(c) => c,
             None => return Vec::new(),
         };
-        let ring_id = match &self.ring {
-            RingMembership::InRing { ring_id, .. } => ring_id.clone(),
-            _ => return Vec::new(),
-        };
+        if !matches!(self.ring, RingMembership::InRing { .. }) {
+            return Vec::new();
+        }
         let request = CoordMsg::KpRequest {
             owner_device_id: owner.to_vec(),
             count,
         };
-        encrypt_ring_coord(mls, env, &ring_id, &request)
+        encrypt_sibling_msg(mls, env, owner, &request)
             .map(|cmd| vec![cmd])
             .unwrap_or_default()
     }
@@ -1473,37 +1610,35 @@ impl DeviceRingState {
         env: &StepEnv<'_>,
         owner: &DeviceId,
     ) -> Vec<RingCommand> {
-        let ring_id = match &self.ring {
-            RingMembership::InRing { ring_id, .. } => ring_id.clone(),
-            _ => return Vec::new(),
-        };
+        if !matches!(self.ring, RingMembership::InRing { .. }) {
+            return Vec::new();
+        }
         let request = CoordMsg::KpRequest {
             owner_device_id: owner.to_vec(),
             count: KP_POOL_TARGET as u32,
         };
-        encrypt_ring_coord(mls, env, &ring_id, &request)
+        encrypt_sibling_msg(mls, env, owner, &request)
             .map(|cmd| vec![cmd])
             .unwrap_or_default()
     }
 
-    /// MLS-encrypt an arbitrary [`CoordMsg`] for the current ring group
-    /// and return a [`RingCommand::PublishEvent`] the host can interpret.
-    /// Used by the same-user fan-out path to publish
-    /// [`CoordMsg::UserConvWelcome`] without re-implementing MLS framing
-    /// in the host.  Returns `None` if not in a ring or if encryption
-    /// fails (e.g. before any commits have advanced the ring epoch — in
-    /// practice impossible once `RingMembership::InRing` holds).
-    pub fn encrypt_for_ring(
+    /// Stealth-encrypt an arbitrary [`CoordMsg`] to a specific sibling and
+    /// return the stealth-publish command the host can interpret.  Used by
+    /// the same-user fan-out path to publish [`CoordMsg::UserConvWelcome`]
+    /// without re-implementing the envelope framing in the host.  Returns
+    /// `None` if not in a ring or if the sibling's stealth record is not
+    /// known.
+    pub fn encrypt_for_sibling(
         &self,
         mls: &MoatSession,
         env: &StepEnv<'_>,
+        recipient: &DeviceId,
         msg: &CoordMsg,
     ) -> Option<RingCommand> {
-        let ring_id = match &self.ring {
-            RingMembership::InRing { ring_id, .. } => ring_id.clone(),
-            _ => return None,
-        };
-        encrypt_ring_coord(mls, env, &ring_id, msg)
+        if !matches!(self.ring, RingMembership::InRing { .. }) {
+            return None;
+        }
+        encrypt_sibling_msg(mls, env, recipient, msg)
     }
 
     /// Device ids of siblings whose ring-membership status is
@@ -1537,7 +1672,8 @@ impl DeviceRingState {
     /// Owner-side response to a `KpRequest` from `consumer`: generate
     /// `count` fresh KPs (capped at `KP_BATCH_CAP` per batch, splitting
     /// across multiple emits if more are asked for), allocate monotonic
-    /// seqs, and emit one `CoordMsg::KpBatch` per chunk over the ring.
+    /// seqs, and emit one `CoordMsg::KpBatch` per chunk via the stealth
+    /// lane.
     fn fulfil_kp_request(
         &mut self,
         mls: &MoatSession,
@@ -1545,10 +1681,9 @@ impl DeviceRingState {
         consumer: DeviceId,
         count: u32,
     ) -> Vec<RingCommand> {
-        let ring_id = match &self.ring {
-            RingMembership::InRing { ring_id, .. } => ring_id.clone(),
-            _ => return Vec::new(),
-        };
+        if !matches!(self.ring, RingMembership::InRing { .. }) {
+            return Vec::new();
+        }
         let mut cmds = Vec::new();
         let mut remaining = count as usize;
         while remaining > 0 {
@@ -1561,7 +1696,7 @@ impl DeviceRingState {
                 recipient_device_id: consumer.to_vec(),
                 kps: batch,
             };
-            if let Some(cmd) = encrypt_ring_coord(mls, env, &ring_id, &msg) {
+            if let Some(cmd) = encrypt_sibling_msg(mls, env, &consumer, &msg) {
                 cmds.push(cmd);
             }
             remaining -= take;
@@ -1630,7 +1765,39 @@ impl DeviceRingState {
                     };
                 }
             }
+        } else {
+            // Not yet in a ring: remember that one already exists so the
+            // Discovering-branch creator tiebreak (which only sees locally
+            // Hello-exchanged peers) doesn't race to create a second,
+            // competing ring.  We don't adopt `theirs_ring_id` directly —
+            // `RingInfo` carries no Welcome, so we hold no MLS state for
+            // that group yet; real membership still arrives via the
+            // normal Add/Welcome path once an existing member processes
+            // our bootstrap KP.
+            self.known_ring = Some((theirs_ring_id.to_vec(), theirs_created_at));
         }
+    }
+
+    /// If we're already `InRing`, build a `CoordMsg::RingInfo` for the given
+    /// coord group so a newly Hello-exchanged sibling learns of our ring
+    /// immediately — before its own Discovering-branch tiebreak could
+    /// otherwise race to create a second one.  No-op (returns `None`) if we
+    /// have no ring yet or encryption fails.
+    fn emit_ring_info(
+        &self,
+        mls: &MoatSession,
+        env: &StepEnv<'_>,
+        coord_group_id: &[u8],
+    ) -> Option<RingCommand> {
+        let (ring_id, created_at) = match &self.ring {
+            RingMembership::InRing { ring_id, created_at, .. } => (ring_id.clone(), *created_at),
+            _ => return None,
+        };
+        let msg = CoordMsg::RingInfo { ring_id, created_at };
+        let epoch = mls.get_group_epoch(coord_group_id).ok().flatten().unwrap_or(0);
+        let event = Event::coord(coord_group_id.to_vec(), epoch, encode_coord_msg(&msg));
+        let enc = mls.encrypt_event(coord_group_id, env.key_bundle, &event).ok()?;
+        Some(RingCommand::PublishEvent { tag: enc.tag, ciphertext: enc.ciphertext, mark_own: true })
     }
 
     fn on_ring_welcome(
@@ -1652,18 +1819,17 @@ impl DeviceRingState {
         if joined != ring_id {
             return Vec::new();
         }
-        let our_leaf = mls
-            .get_own_leaf_index(&ring_id, env.key_bundle)
-            .ok()
-            .flatten()
-            .unwrap_or(u32::MAX);
+        let our_leaf = find_own_leaf(mls, &ring_id).unwrap_or(u32::MAX);
         self.ring = RingMembership::InRing { ring_id: ring_id.clone(), created_at, our_leaf };
+        self.known_ring = None; // no longer meaningful once we hold real membership
 
         // All ring members (other than us) are siblings already; mark them
         // Joined with sync: OweOffer.  We (the joiner) won't actually emit a
-        // sync offer (try_emit_sync_offer gates on our_leaf == 0), but the
-        // OweOffer presence is what drives `PollForNewDevices` from the Tick
-        // handler so we add these siblings to any user conversations we own.
+        // sync offer (try_emit_sync_offer gates on our_leaf == 0); OweOffer
+        // here only tracks the one-shot pairing-offer obligation.
+        // `PollForNewDevices` itself now fires every tick for any Joined
+        // sibling (see `on_tick`), independent of this flag, so we add
+        // these siblings to any user conversations we own.
         let members = mls.get_group_members(&ring_id).unwrap_or_default();
         let my_device_id = *mls.device_id();
         for (_, cred) in &members {
@@ -1688,7 +1854,24 @@ impl DeviceRingState {
                             sync: SyncStatus::OweOffer,
                         },
                     },
-                    Some(PeerState::Discovered) | None => PeerState::Discovered,
+                    // No coord group with this peer (either never
+                    // established, or its creation was deferred to the
+                    // elected ring member — see `on_peer_kp_observed`'s
+                    // leaf-election gate). We've just confirmed them as an
+                    // authoritative ring member via `get_group_members`
+                    // directly, so mark Joined anyway with an empty
+                    // `coord_group_id` — same-user fan-out
+                    // (`ring_joined_siblings`) only cares about `Joined`,
+                    // and any future `do_ring_add` for this peer will
+                    // short-circuit on the "already a member" check before
+                    // ever consulting `coord_group_id_for`.
+                    Some(PeerState::Discovered) | None => PeerState::CoordReady {
+                        coord_group_id: Vec::new(),
+                        ring_link: RingLink::Joined {
+                            added_by: AddedBy::Them,
+                            sync: SyncStatus::OweOffer,
+                        },
+                    },
                 };
                 self.peers.insert(key, new_state);
             }
@@ -1713,7 +1896,7 @@ impl DeviceRingState {
                 if c.did() != env.my_did || dev_id == my_device_id {
                     continue;
                 }
-                cmds.extend(self.ship_initial_kp_batches_to(mls, env, &ring_id, &dev_id));
+                cmds.extend(self.ship_initial_kp_batches_to(mls, env, &dev_id));
             }
         }
         cmds
@@ -1876,27 +2059,48 @@ impl DeviceRingState {
                                 sync: SyncStatus::OweOffer,
                             },
                         },
-                        Some(PeerState::Discovered) | None => PeerState::Discovered,
+                        // See the matching comment in `on_ring_welcome`: no
+                        // coord group with this peer (deferred to the
+                        // elected ring member), but `get_group_members`
+                        // just confirmed them as a real ring member, so
+                        // mark Joined with an empty `coord_group_id`.
+                        Some(PeerState::Discovered) | None => PeerState::CoordReady {
+                            coord_group_id: Vec::new(),
+                            ring_link: RingLink::Joined {
+                                added_by: AddedBy::OtherSibling(my_device_id_or_placeholder(mls)),
+                                sync: SyncStatus::OweOffer,
+                            },
+                        },
                     };
                     self.peers.insert(key, new_state);
                 }
             }
         }
 
-        // ── B. PollForNewDevices fires whenever any peer is freshly in the ring
-        //       and still owes a sync offer — this drives the
-        //       per-conversation add_device fan-out on the inviting side
-        //       independently of Drawbridge availability.
-        let any_owe_offer = self.peers.values().any(|ps| {
+        // ── B. PollForNewDevices fires on every tick while we have at least
+        //       one confirmed ring sibling — this drives the per-conversation
+        //       add_device fan-out on the inviting side, independently of
+        //       Drawbridge/history-sync availability.
+        //
+        //       Previously gated on `SyncStatus::OweOffer`, which is a
+        //       one-shot signal that clears as soon as the (also one-shot)
+        //       history-sync pairing offer is emitted.  That conflated two
+        //       unrelated retry cadences: pairing-offer is genuinely
+        //       one-shot, but same-user fan-out is not — it must keep
+        //       retrying every tick until every user conversation contains
+        //       every ring sibling, since a fan-out attempt can stall
+        //       waiting on a KP-pool refill (`emit_kp_request_for` /
+        //       `claim_kp` in the host's `poll_for_new_devices`) that only
+        //       resolves on a later tick.  `poll_for_new_devices` is
+        //       idempotent — it skips conversations that already contain a
+        //       given sibling — so firing it unconditionally here is safe.
+        let any_joined_sibling = self.peers.values().any(|ps| {
             matches!(
                 ps,
-                PeerState::CoordReady {
-                    ring_link: RingLink::Joined { sync: SyncStatus::OweOffer, .. },
-                    ..
-                }
+                PeerState::CoordReady { ring_link: RingLink::Joined { .. }, .. }
             )
         });
-        if any_owe_offer {
+        if any_joined_sibling {
             cmds.push(RingCommand::PollForNewDevices);
         }
 
@@ -2010,6 +2214,11 @@ impl DeviceRingState {
         match &self.ring {
             RingMembership::InRing { ring_id, .. } => {
                 let ring_id = ring_id.clone();
+                // Every pending peer is checked (do_ring_add recognises an
+                // already-present MLS member and updates bookkeeping to
+                // Joined for ANY device, elected or not — see the leaf-
+                // election gate inside do_ring_add for why the actual
+                // `add_device` mutation itself is restricted to one device).
                 for sib in &pending {
                     if let Some(cmds_for_add) =
                         self.do_ring_add(mls, env, &ring_id, *sib)
@@ -2019,6 +2228,18 @@ impl DeviceRingState {
                 }
             }
             RingMembership::Discovering { defer_ticks } => {
+                // A Hello-exchanged peer has already told us (via
+                // `CoordMsg::RingInfo`) that a ring exists.  The
+                // smallest-device_id tiebreak below only sees peers we've
+                // personally exchanged Hellos with, so without this check
+                // we could win that local tiebreak and create a second,
+                // competing ring while the real Add/Welcome from an
+                // existing member is still in flight.  Stay Discovering
+                // and wait for that Welcome instead.
+                if self.known_ring.is_some() {
+                    return cmds;
+                }
+
                 // Are we the smallest device_id among ourselves + hello-exchanged peers?
                 let mut all_ids: Vec<DeviceId> = pending.clone();
                 all_ids.push(my_device_id);
@@ -2038,11 +2259,7 @@ impl DeviceRingState {
                     Ok(id) => id,
                     Err(_) => return cmds,
                 };
-                let our_leaf = mls
-                    .get_own_leaf_index(&ring_id, env.key_bundle)
-                    .ok()
-                    .flatten()
-                    .unwrap_or(0);
+                let our_leaf = find_own_leaf(mls, &ring_id).unwrap_or(0);
                 self.ring = RingMembership::InRing {
                     ring_id: ring_id.clone(),
                     created_at: env.now_ms,
@@ -2076,14 +2293,36 @@ impl DeviceRingState {
         ring_id: &[u8],
         sibling_id: DeviceId,
     ) -> Option<Vec<RingCommand>> {
-        // Already a ring member?  Mark Joined and exit.
-        if let Ok(members) = mls.get_group_members(ring_id) {
-            if members.iter().any(|(_, c)| {
-                c.as_ref().map(|c| *c.device_id() == sibling_id).unwrap_or(false)
-            }) {
-                self.mark_peer_joined(sibling_id, AddedBy::OtherSibling([0u8; 16]), SyncStatus::OweOffer);
-                return Some(Vec::new());
-            }
+        // Already a ring member?  Mark Joined and exit.  This check runs
+        // for every device regardless of election status below — every
+        // ring member independently recognises peers already present in
+        // the MLS group and updates its own bookkeeping accordingly.
+        let members = mls.get_group_members(ring_id).unwrap_or_default();
+        if members.iter().any(|(_, c)| {
+            c.as_ref().map(|c| *c.device_id() == sibling_id).unwrap_or(false)
+        }) {
+            self.mark_peer_joined(sibling_id, AddedBy::OtherSibling([0u8; 16]), SyncStatus::OweOffer);
+            return Some(Vec::new());
+        }
+
+        // Only the smallest-leaf-index ring member actually performs the
+        // Add — mirrors the pairing-offer tiebreak in `try_emit_sync_offer`
+        // ("the *only* device that issues pair_offer is the member whose
+        // leaf index is the smallest") and closes a genuine concurrent-add
+        // race: without a single elected adder, two existing ring members
+        // can each independently see the same new sibling as `PendingAdd`
+        // and both call `add_device` from the same base epoch. Only one of
+        // the resulting commits can be the real successor; the new sibling
+        // processes whichever Welcome arrives first and the other fails
+        // outright ("Invalid node signature") or leaves the adders' local
+        // states silently diverged. Uses `find_own_leaf` (device_id-based),
+        // not the stored `our_leaf` or `MoatSession::get_own_leaf_index`
+        // (signature-key-based) — see `find_own_leaf`'s doc comment for why
+        // signature-key matching is unreliable here.
+        let my_leaf = find_own_leaf(mls, ring_id);
+        let smallest_leaf = members.iter().map(|(idx, _)| *idx).min();
+        if my_leaf.is_none() || my_leaf != smallest_leaf {
+            return None; // not our turn to add — the elected member will
         }
 
         // Phase C: use the bootstrap KP this sibling delivered to us
@@ -2135,25 +2374,26 @@ impl DeviceRingState {
             }
         }
 
-        // Phase D: ship the new sibling an initial KP batch so they can
-        // immediately add us to user conversations.  Batches encrypt at
-        // the new (post-add) ring epoch; the joiner advances to that
-        // epoch via the embedded Commit before decrypting.
-        cmds.extend(self.ship_initial_kp_batches_to(mls, env, ring_id, &sibling_id));
+        // Ship the new sibling an initial KP batch via the stealth lane so
+        // they can immediately add us to user conversations.  Stealth
+        // delivery is epoch-free, so this is safe to emit in the same
+        // breath as the ring Add commit.
+        cmds.extend(self.ship_initial_kp_batches_to(mls, env, &sibling_id));
 
         self.mark_peer_joined(sibling_id, AddedBy::Us, SyncStatus::OweOffer);
         Some(cmds)
     }
 
-    /// Emit `KP_POOL_TARGET` fresh KPs to `recipient` over the ring,
+    /// Emit `KP_POOL_TARGET` fresh KPs to `recipient` via the stealth lane,
     /// split across `ceil(KP_POOL_TARGET / KP_BATCH_CAP)` batches.
     /// Called whenever the ring topology changes (we added a sibling,
-    /// or we joined the ring ourselves).
+    /// or we joined the ring ourselves).  If the recipient's stealth
+    /// record is not yet known the batch is skipped — the consumer-driven
+    /// low-water `KpRequest` retries the fill on later ticks.
     fn ship_initial_kp_batches_to(
         &mut self,
         mls: &MoatSession,
         env: &StepEnv<'_>,
-        ring_id: &[u8],
         recipient: &DeviceId,
     ) -> Vec<RingCommand> {
         let mut cmds = Vec::new();
@@ -2168,7 +2408,7 @@ impl DeviceRingState {
                 recipient_device_id: recipient.to_vec(),
                 kps: batch,
             };
-            if let Some(cmd) = encrypt_ring_coord(mls, env, ring_id, &msg) {
+            if let Some(cmd) = encrypt_sibling_msg(mls, env, recipient, &msg) {
                 cmds.push(cmd);
             }
             remaining -= take;
@@ -2187,7 +2427,13 @@ impl DeviceRingState {
                 coord_group_id,
                 ring_link: RingLink::Joined { added_by, sync },
             },
-            Some(PeerState::Discovered) | None => PeerState::Discovered,
+            // See the matching comment in `on_ring_welcome`: no coord
+            // group with this peer, but the caller (`do_ring_add`'s
+            // "already a member" check) just confirmed them as a real
+            // ring member, so mark Joined with an empty `coord_group_id`.
+            Some(PeerState::Discovered) | None => {
+                PeerState::CoordReady { coord_group_id: Vec::new(), ring_link: RingLink::Joined { added_by, sync } }
+            }
         };
         self.peers.insert(key, new_state);
     }
@@ -2197,22 +2443,55 @@ fn my_device_id_or_placeholder(mls: &MoatSession) -> DeviceId {
     *mls.device_id()
 }
 
-/// Encode `msg`, wrap in an `Event::coord` for the ring group, MLS-encrypt
-/// it with the current ring epoch, and return a `PublishEvent` command
-/// ready for the host to publish.  Returns `None` if encryption fails.
-fn encrypt_ring_coord(
+/// Find our own leaf index in `ring_id` by matching `device_id`, not
+/// signature key.
+///
+/// `MoatSession::get_own_leaf_index` matches on the MLS leaf's signature
+/// key, which is unreliable here: `generate_key_package` mints a *fresh*
+/// Ed25519 keypair on every call (bootstrap KPs, cross-user pool KPs, and
+/// `ReplenishKeyPackage` refills are all separate calls), so a device's
+/// ring leaf — added via whichever KeyPackage the adder happened to
+/// consume — essentially never carries the same signature key as the
+/// long-lived "identity" key bundle callers pass in as `env.key_bundle`.
+/// `device_id`, in contrast, is embedded in every `MoatCredential` this
+/// session ever produces and is therefore stable across all of them. This
+/// is the same device_id-matching pattern used elsewhere in this file
+/// (e.g. `on_tick`'s section A, `on_ring_welcome`'s peer-marking loop).
+fn find_own_leaf(mls: &MoatSession, ring_id: &[u8]) -> Option<u32> {
+    let my_device_id = *mls.device_id();
+    mls.get_group_members(ring_id).ok()?.into_iter().find_map(|(idx, cred)| {
+        cred.and_then(|c| (*c.device_id() == my_device_id).then_some(idx))
+    })
+}
+
+/// Encode `msg`, wrap it in an `EventKind::SiblingMsg` envelope carrying our
+/// device id, pad to the standard bucket, stealth-encrypt to `recipient`'s
+/// `scan_pubkey` (looked up from `env.sibling_stealth`), and return the
+/// generic stealth-publish command.  This is the steady-state carrier for
+/// the same-user KP lane — epoch-free and order-insensitive, unlike MLS
+/// application messages over the ring (see `same-user-key-distribution.md`).
+///
+/// Returns `None` if the recipient's stealth record is not (yet) known; the
+/// consumer-driven `KpRequest` refill path makes a skipped send self-healing
+/// on a later tick.
+fn encrypt_sibling_msg(
     mls: &MoatSession,
     env: &StepEnv<'_>,
-    ring_id: &[u8],
+    recipient: &DeviceId,
     msg: &CoordMsg,
 ) -> Option<RingCommand> {
-    let epoch = mls.get_group_epoch(ring_id).ok().flatten().unwrap_or(0);
-    let event = Event::coord(ring_id.to_vec(), epoch, encode_coord_msg(msg));
-    let enc = mls.encrypt_event(ring_id, env.key_bundle, &event).ok()?;
-    Some(RingCommand::PublishEvent {
-        tag: enc.tag,
-        ciphertext: enc.ciphertext,
-        mark_own: true,
+    let scan_pubkey = env
+        .sibling_stealth
+        .iter()
+        .find(|s| s.device_id == *recipient)?
+        .scan_pubkey;
+    let event = Event::sibling_msg(mls.device_id().to_vec(), encode_coord_msg(msg));
+    let event_bytes = event.to_bytes().ok()?;
+    let padded = crate::padding::pad_to_bucket(&event_bytes);
+    let ciphertext = encrypt_for_stealth(&[scan_pubkey], &padded).ok()?;
+    Some(RingCommand::PublishBootstrapKp {
+        tag: rand::random(),
+        ciphertext,
     })
 }
 
@@ -2550,6 +2829,116 @@ mod tests {
         // Bob can process the Welcome.
         let joined = bob.process_welcome(&coord.welcome).expect("bob join");
         assert_eq!(joined, coord.group_id);
+    }
+
+    /// Raw MLS-level reproduction (no state machine) of the three-device
+    /// bootstrap flow: D2 creates a 2-party ring and adds D1; then D1 (an
+    /// existing ring member, NOT the ring creator) adds D3.  Confirms both
+    /// that D3's Welcome processes successfully AND that D3's reconstructed
+    /// view includes all three devices — i.e. the ratchet-tree extension
+    /// gives a joiner full visibility into pre-existing members from a
+    /// single Welcome, with no separate fetch needed.
+    #[test]
+    fn third_device_add_by_non_creator_member_succeeds_at_mls_layer() {
+        let d1 = MoatSession::new();
+        let d2 = MoatSession::new();
+        let d3 = MoatSession::new();
+        let d1_cred = make_credential("did:plc:user", "d1", *d1.device_id());
+        let d2_cred = make_credential("did:plc:user", "d2", *d2.device_id());
+        let d3_cred = make_credential("did:plc:user", "d3", *d3.device_id());
+        let (d1_kp, d1_kb) = d1.generate_key_package(&d1_cred).expect("d1 kp");
+        let (_d2_kp, d2_kb) = d2.generate_key_package(&d2_cred).expect("d2 kp");
+        let (d3_kp, _d3_kb) = d3.generate_key_package(&d3_cred).expect("d3 kp");
+
+        // D2 creates the ring and adds D1.
+        let ring_id = d2.create_device_ring(&d2_cred, &d2_kb).expect("create ring");
+        let wr1 = d2.add_device(&ring_id, &d2_kb, &d1_kp).expect("d2 add d1");
+        let joined_by_d1 = d1.process_welcome(&wr1.welcome).expect("d1 join");
+        assert_eq!(joined_by_d1, ring_id);
+
+        // D1 (not the creator) adds D3.
+        let wr2 = d1.add_device(&ring_id, &d1_kb, &d3_kp).expect("d1 add d3");
+        let joined_by_d3 = d3.process_welcome(&wr2.welcome).expect("d3 join");
+        assert_eq!(joined_by_d3, ring_id);
+
+        let members = d3.get_group_members(&ring_id).expect("d3 members");
+        assert_eq!(
+            members.len(),
+            3,
+            "d3 must see all three devices (d1, d2, d3) from d1's Welcome alone, got {} members",
+            members.len()
+        );
+    }
+
+    /// State-machine-level check that the leaf-election guard in
+    /// `try_advance_ring_membership` prevents a non-elected ring member
+    /// from re-adding a peer that's already an MLS member.  D3 has already
+    /// joined via D1's Welcome (real MLS group has all 3 members).  D3's
+    /// peer map separately marks D2 `PendingAdd` (an unavoidable race from
+    /// D3 independently exchanging Hello with D2). A tick must not mutate
+    /// the MLS group and must recognise D2 as already `Joined`.
+    #[test]
+    fn on_tick_does_not_re_add_a_peer_already_in_the_mls_group() {
+        let d1 = MoatSession::new();
+        let d2 = MoatSession::new();
+        let d3 = MoatSession::new();
+        let d1_cred = make_credential("did:plc:user", "d1", *d1.device_id());
+        let d2_cred = make_credential("did:plc:user", "d2", *d2.device_id());
+        let d3_cred = make_credential("did:plc:user", "d3", *d3.device_id());
+        let (d1_kp, d1_kb) = d1.generate_key_package(&d1_cred).expect("d1 kp");
+        let (_d2_kp, d2_kb) = d2.generate_key_package(&d2_cred).expect("d2 kp");
+        let (d3_kp, d3_kb) = d3.generate_key_package(&d3_cred).expect("d3 kp");
+
+        let ring_id = d2.create_device_ring(&d2_cred, &d2_kb).expect("create ring");
+        let wr1 = d2.add_device(&ring_id, &d2_kb, &d1_kp).expect("d2 add d1");
+        d1.process_welcome(&wr1.welcome).expect("d1 join");
+
+        let wr2 = d1.add_device(&ring_id, &d1_kb, &d3_kp).expect("d1 add d3");
+        d3.process_welcome(&wr2.welcome).expect("d3 join");
+        let members_before = d3.get_group_members(&ring_id).expect("d3 members");
+        assert_eq!(members_before.len(), 3);
+
+        let d2_id = *d2.device_id();
+        let mut s3 = DeviceRingState::new();
+        // Our own leaf in the freshly-joined group happens to be 2 here;
+        // the guard recomputes it fresh via `find_own_leaf` rather than
+        // trusting this stored value, so its exact number doesn't matter
+        // for this test beyond being `RingMembership::InRing`.
+        s3.ring = RingMembership::InRing { ring_id: ring_id.clone(), created_at: 1, our_leaf: 2 };
+        s3.peers.insert(
+            hex::encode(d2_id),
+            PeerState::CoordReady {
+                coord_group_id: vec![0xAA; 16],
+                ring_link: RingLink::PendingAdd,
+            },
+        );
+
+        let env = StepEnv {
+            my_did: "did:plc:user",
+            credential: &d3_cred,
+            key_bundle: &d3_kb,
+            now_ms: 0,
+            drawbridge_connected: false,
+            sync_session_active: false,
+            stealth_pubkeys: &[],
+            sibling_stealth: &[],
+        };
+        let _cmds = s3.step(&d3, &env, RingEvent::Tick { key_packages: &[] });
+
+        let members_after = d3.get_group_members(&ring_id).expect("d3 members after tick");
+        assert_eq!(
+            members_after.len(),
+            3,
+            "on_tick must not mutate group membership for an already-present peer"
+        );
+        assert!(
+            matches!(
+                s3.peers.get(&hex::encode(d2_id)),
+                Some(PeerState::CoordReady { ring_link: RingLink::Joined { .. }, .. })
+            ),
+            "D2 should be recognised as Joined via the already-a-member guard, got {:?}",
+            s3.peers.get(&hex::encode(d2_id))
+        );
     }
 
     #[test]
@@ -2912,5 +3301,616 @@ mod tests {
             Some(&vec![0xDE; 16])
         );
         assert!(parsed.published_bootstrap_for.contains(&hex::encode([5u8; 16])));
+    }
+
+    // ── Phase E′: stealth carrier for the KP lane ──────────────────────────
+
+    /// A device fixture for stealth-lane tests: a real MoatSession plus
+    /// stealth keypair, credential, and key bundle.
+    struct StealthDevice {
+        mls: MoatSession,
+        cred: MoatCredential,
+        key_bundle: Vec<u8>,
+        stealth_priv: [u8; 32],
+        stealth_pub: [u8; 32],
+    }
+
+    fn make_stealth_device(did: &str, name: &str) -> StealthDevice {
+        let mls = MoatSession::new();
+        let cred = make_credential(did, name, *mls.device_id());
+        let (_kp, key_bundle) = mls.generate_key_package(&cred).expect("kp");
+        let (stealth_priv, stealth_pub) = crate::generate_stealth_keypair();
+        StealthDevice { mls, cred, key_bundle, stealth_priv, stealth_pub }
+    }
+
+    fn env_for<'a>(dev: &'a StealthDevice, siblings: &'a [SiblingStealth]) -> StepEnv<'a> {
+        StepEnv {
+            my_did: dev.cred.did(),
+            credential: &dev.cred,
+            key_bundle: &dev.key_bundle,
+            now_ms: 0,
+            drawbridge_connected: false,
+            sync_session_active: false,
+            stealth_pubkeys: &[],
+            sibling_stealth: siblings,
+        }
+    }
+
+    fn mark_in_ring(s: &mut DeviceRingState) {
+        s.ring = RingMembership::InRing { ring_id: vec![0xEE; 32], created_at: 1, our_leaf: 0 };
+    }
+
+    fn mark_joined_peer(s: &mut DeviceRingState, peer: DeviceId) {
+        s.peers.insert(
+            hex::encode(peer),
+            PeerState::CoordReady {
+                coord_group_id: vec![0xCC; 16],
+                ring_link: RingLink::Joined { added_by: AddedBy::Them, sync: SyncStatus::Done },
+            },
+        );
+    }
+
+    /// Decrypt every stealth-publish command addressed to `dev` and feed the
+    /// plaintexts through `step(StealthPayloadDecrypted)`, returning the
+    /// commands the receiver emits in response.
+    fn deliver_stealth(
+        cmds: &[RingCommand],
+        dev: &StealthDevice,
+        state: &mut DeviceRingState,
+        env: &StepEnv<'_>,
+    ) -> Vec<RingCommand> {
+        let mut out = Vec::new();
+        for cmd in cmds {
+            if let RingCommand::PublishBootstrapKp { ciphertext, .. } = cmd {
+                if let Some(pt) = try_decrypt_stealth(&dev.stealth_priv, ciphertext) {
+                    out.extend(state.step(&dev.mls, env, RingEvent::StealthPayloadDecrypted {
+                        plaintext: &pt,
+                    }));
+                }
+            }
+        }
+        out
+    }
+
+    /// End-to-end over the stealth lane: consumer emits a KpRequest, owner
+    /// decrypts it and ships KpBatches back, consumer ingests and can claim.
+    /// No MLS group carries any of this traffic — no epochs involved.
+    #[test]
+    fn kp_request_and_batch_roundtrip_over_stealth() {
+        let did = "did:plc:user";
+        let owner = make_stealth_device(did, "owner");
+        let consumer = make_stealth_device(did, "consumer");
+        let owner_id = *owner.mls.device_id();
+        let consumer_id = *consumer.mls.device_id();
+
+        let mut owner_state = DeviceRingState::new();
+        mark_in_ring(&mut owner_state);
+        mark_joined_peer(&mut owner_state, consumer_id);
+        let mut consumer_state = DeviceRingState::new();
+        mark_in_ring(&mut consumer_state);
+        mark_joined_peer(&mut consumer_state, owner_id);
+
+        let owner_sib = [SiblingStealth { scan_pubkey: consumer.stealth_pub, device_id: consumer_id }];
+        let consumer_sib = [SiblingStealth { scan_pubkey: owner.stealth_pub, device_id: owner_id }];
+        let owner_env = env_for(&owner, &owner_sib);
+        let consumer_env = env_for(&consumer, &consumer_sib);
+
+        // 1. Consumer requests KPs from the owner (pool empty).
+        let req_cmds = consumer_state.emit_kp_request_for(&consumer.mls, &consumer_env, &owner_id);
+        assert_eq!(req_cmds.len(), 1, "one stealth publish for the request");
+        assert!(matches!(req_cmds[0], RingCommand::PublishBootstrapKp { .. }));
+
+        // The request is addressed to the owner: the consumer must not be
+        // able to decrypt its own publish (no mark-own bookkeeping needed).
+        if let RingCommand::PublishBootstrapKp { ciphertext, .. } = &req_cmds[0] {
+            assert!(try_decrypt_stealth(&consumer.stealth_priv, ciphertext).is_none());
+        }
+
+        // 2. Owner decrypts the request and responds with KpBatches.
+        let batch_cmds = deliver_stealth(&req_cmds, &owner, &mut owner_state, &owner_env);
+        assert!(
+            batch_cmds.iter().all(|c| matches!(c, RingCommand::PublishBootstrapKp { .. })),
+            "owner responds only with stealth publishes"
+        );
+        assert!(!batch_cmds.is_empty(), "owner shipped at least one batch");
+
+        // 3. Consumer ingests the batches; pool fills; claim succeeds.
+        let _ = deliver_stealth(&batch_cmds, &consumer, &mut consumer_state, &consumer_env);
+        assert_eq!(consumer_state.kp_pool_size(&owner_id), KP_POOL_TARGET);
+        assert!(consumer_state.claim_kp(&owner_id).is_some());
+
+        // 4. Replay of the same batches is fully absorbed (order-insensitive
+        //    lane; dedupe by seq).
+        let _ = deliver_stealth(&batch_cmds, &consumer, &mut consumer_state, &consumer_env);
+        assert_eq!(consumer_state.kp_pool_size(&owner_id), KP_POOL_TARGET - 1);
+    }
+
+    /// Batches whose KPs don't verify against the claimed sender are dropped:
+    /// the embedded credential must carry our DID and the sender's device id.
+    #[test]
+    fn kp_batch_with_mismatched_credential_is_rejected() {
+        let did = "did:plc:user";
+        let owner = make_stealth_device(did, "owner");
+        let consumer = make_stealth_device(did, "consumer");
+        let imposter = make_stealth_device("did:plc:other", "imposter");
+        let owner_id = *owner.mls.device_id();
+        let consumer_id = *consumer.mls.device_id();
+
+        let mut consumer_state = DeviceRingState::new();
+        mark_in_ring(&mut consumer_state);
+        mark_joined_peer(&mut consumer_state, owner_id);
+        let consumer_sib = [SiblingStealth { scan_pubkey: owner.stealth_pub, device_id: owner_id }];
+        let consumer_env = env_for(&consumer, &consumer_sib);
+
+        // A batch claiming to come from `owner` but carrying KPs generated
+        // under the imposter's credential (wrong DID + wrong device id).
+        let (bad_kp, _) = imposter.mls.generate_key_package(&imposter.cred).expect("kp");
+        let forged = CoordMsg::KpBatch {
+            recipient_device_id: consumer_id.to_vec(),
+            kps: vec![OfferedKp { rkey: vec![1u8; 16], seq: 1, key_package: bad_kp }],
+        };
+        let cmds = consumer_state.on_sibling_msg(&consumer.mls, &consumer_env, owner_id, forged);
+        assert!(cmds.is_empty());
+        assert_eq!(consumer_state.kp_pool_size(&owner_id), 0, "forged KP must not enter the pool");
+
+        // Sanity: a genuine batch from the owner is accepted.
+        let (good_kp, _) = owner.mls.generate_key_package(&owner.cred).expect("kp");
+        let genuine = CoordMsg::KpBatch {
+            recipient_device_id: consumer_id.to_vec(),
+            kps: vec![OfferedKp { rkey: vec![2u8; 16], seq: 2, key_package: good_kp }],
+        };
+        let _ = consumer_state.on_sibling_msg(&consumer.mls, &consumer_env, owner_id, genuine);
+        assert_eq!(consumer_state.kp_pool_size(&owner_id), 1);
+    }
+
+    /// Batches arriving before the sender is a confirmed ring member are
+    /// dropped (and the pool stays empty until the low-water request path
+    /// refills it after the join completes).
+    #[test]
+    fn kp_batch_from_unjoined_peer_is_dropped() {
+        let did = "did:plc:user";
+        let owner = make_stealth_device(did, "owner");
+        let consumer = make_stealth_device(did, "consumer");
+        let owner_id = *owner.mls.device_id();
+        let consumer_id = *consumer.mls.device_id();
+
+        let mut consumer_state = DeviceRingState::new();
+        mark_in_ring(&mut consumer_state);
+        // NOTE: owner deliberately NOT marked as a joined peer.
+        let consumer_env = env_for(&consumer, &[]);
+
+        let (kp_bytes, _) = owner.mls.generate_key_package(&owner.cred).expect("kp");
+        let batch = CoordMsg::KpBatch {
+            recipient_device_id: consumer_id.to_vec(),
+            kps: vec![OfferedKp { rkey: vec![1u8; 16], seq: 1, key_package: kp_bytes }],
+        };
+        let cmds = consumer_state.on_sibling_msg(&consumer.mls, &consumer_env, owner_id, batch);
+        assert!(cmds.is_empty());
+        assert_eq!(consumer_state.kp_pool_size(&owner_id), 0);
+    }
+
+    /// Same-user fan-out end to end: the owner ships KPs over stealth, the
+    /// consumer claims one to `add_device` the owner into a user group, and
+    /// the resulting `UserConvWelcome` travels back over stealth.  The owner
+    /// joins the group and emits `RegisterGroup { kind: User }`.
+    #[test]
+    fn user_conv_welcome_roundtrip_over_stealth() {
+        let did = "did:plc:user";
+        let owner = make_stealth_device(did, "owner");
+        let consumer = make_stealth_device(did, "consumer");
+        let owner_id = *owner.mls.device_id();
+        let consumer_id = *consumer.mls.device_id();
+
+        let mut owner_state = DeviceRingState::new();
+        mark_in_ring(&mut owner_state);
+        mark_joined_peer(&mut owner_state, consumer_id);
+        let mut consumer_state = DeviceRingState::new();
+        mark_in_ring(&mut consumer_state);
+        mark_joined_peer(&mut consumer_state, owner_id);
+
+        let owner_sib = [SiblingStealth { scan_pubkey: consumer.stealth_pub, device_id: consumer_id }];
+        let consumer_sib = [SiblingStealth { scan_pubkey: owner.stealth_pub, device_id: owner_id }];
+        let owner_env = env_for(&owner, &owner_sib);
+        let consumer_env = env_for(&consumer, &consumer_sib);
+
+        // Owner ships an initial batch; consumer ingests it.
+        let batch_cmds = owner_state.ship_initial_kp_batches_to(&owner.mls, &owner_env, &consumer_id);
+        let _ = deliver_stealth(&batch_cmds, &consumer, &mut consumer_state, &consumer_env);
+        assert!(consumer_state.kp_pool_size(&owner_id) > 0);
+
+        // Consumer has a user conversation and fans the owner out into it.
+        let group_id = consumer
+            .mls
+            .create_group(&consumer.cred, &consumer.key_bundle)
+            .expect("group");
+        let claimed = consumer_state.claim_kp(&owner_id).expect("claim");
+        let wr = consumer
+            .mls
+            .add_device(&group_id, &consumer.key_bundle, &claimed.key_package)
+            .expect("add");
+        let welcome_msg = CoordMsg::UserConvWelcome {
+            owner_device_id: owner_id.to_vec(),
+            group_id: group_id.clone(),
+            welcome: wr.welcome,
+        };
+        let cmds = consumer_state
+            .encrypt_for_sibling(&consumer.mls, &consumer_env, &owner_id, &welcome_msg)
+            .map(|c| vec![c])
+            .expect("stealth encrypt");
+
+        // Owner decrypts, processes the Welcome, and registers the group.
+        let out = deliver_stealth(&cmds, &owner, &mut owner_state, &owner_env);
+        assert!(
+            out.iter().any(|c| matches!(
+                c,
+                RingCommand::RegisterGroup { group_id: g, kind: GroupKind::User } if *g == group_id
+            )),
+            "owner must register the joined user conversation, got {out:?}"
+        );
+
+        // Replayed Welcome fails init-key lookup and is absorbed silently.
+        let out2 = deliver_stealth(&cmds, &owner, &mut owner_state, &owner_env);
+        assert!(out2.is_empty(), "replayed Welcome must be a no-op, got {out2:?}");
+    }
+
+    // ── Full three-device ring-bootstrap simulator ─────────────────────────
+    //
+    // Drives real DeviceRingState::step()/tick() calls for three in-process
+    // devices against real MoatSession MLS state, with a hand-rolled but
+    // faithful transport: a shared cross-user KeyPackage pool (sibling
+    // discovery, same as the real `social.moat.keyPackage` pool), a shared
+    // per-DID stealth event feed (bootstrap KPs + same-user KP lane, same
+    // as the real own-PDS event stream), and direct delivery of ring/coord
+    // ciphertexts to whichever OTHER devices are members of that specific
+    // group (bypassing PDS tag-guessing, which is a transport-layer
+    // mechanism orthogonal to the state-machine convergence question this
+    // harness checks). No sleeps, no subprocesses, no Beacon — deterministic
+    // and fast, so it can assert a *bounded* round count rather than "give
+    // up after N and hope."
+
+    struct SimDevice {
+        mls: MoatSession,
+        cred: MoatCredential,
+        key_bundle: Vec<u8>,
+        stealth_priv: [u8; 32],
+        stealth_pub: [u8; 32],
+        state: DeviceRingState,
+    }
+
+    impl SimDevice {
+        /// `identity_kp` is the *same* KeyPackage whose private bundle is
+        /// stored as `key_bundle` — this is load-bearing, not incidental:
+        /// `MoatSession::encrypt_event`/`create_group` sign with whatever
+        /// `key_bundle` the caller passes, and a device's leaf in any group
+        /// it was added to is only signed with the *identity* key if that
+        /// specific KeyPackage's bytes were the ones consumed for the Add.
+        /// Publishing a *different*, separately-generated KP for cross-user
+        /// discovery (as an earlier, buggy version of this harness did)
+        /// gives the joining device a leaf signed with a keypair its own
+        /// `key_bundle` doesn't match — every future `encrypt_event` in
+        /// that specific group then signs with the wrong key, and peers'
+        /// signature verification silently rejects it. The real
+        /// `moat-cli::App::do_login` gets this right by construction — see
+        /// `crates/moat-cli/src/app.rs:3301-3311` — generating exactly once
+        /// and reusing both halves consistently ever after.
+        fn new(did: &str, name: &str) -> (Self, Vec<u8>) {
+            let mls = MoatSession::new();
+            let cred = make_credential(did, name, *mls.device_id());
+            let (identity_kp, key_bundle) = mls.generate_key_package(&cred).expect("kp");
+            let (stealth_priv, stealth_pub) = crate::generate_stealth_keypair();
+            (
+                Self { mls, cred, key_bundle, stealth_priv, stealth_pub, state: DeviceRingState::new() },
+                identity_kp,
+            )
+        }
+
+        fn device_id(&self) -> DeviceId {
+            *self.mls.device_id()
+        }
+    }
+
+    /// Simulation network state threaded through every round.
+    struct SimNetwork {
+        /// Shared cross-user `social.moat.keyPackage` pool: every device's
+        /// full current snapshot is fed to every device every round (fresh,
+        /// non-incremental — matching real `fetch_key_packages` semantics).
+        kp_pool: Vec<Vec<u8>>,
+        /// Shared per-DID stealth event feed (bootstrap KPs + same-user KP
+        /// lane). Incremental — each device tracks its own read cursor,
+        /// matching real own-PDS-scan semantics.
+        own_events: Vec<Vec<u8>>,
+        own_cursor: [usize; 3],
+        /// Every group id each device has ever been told to `RegisterGroup`
+        /// for — mirrors the real host's `populate_candidate_tags`, which
+        /// is additive and never forgotten just because `DeviceRingState`'s
+        /// `peers` bookkeeping later overwrites which coord group is
+        /// "preferred" for a given sibling (see `on_group_joined_via_welcome`'s
+        /// "always update routing entry" comment). Two devices discovering
+        /// each other in the same round each independently create their own
+        /// 2-party coord group, so a pair can end up with two coord groups;
+        /// `peers` only remembers the most-recently-joined one for
+        /// send-routing, but reception must still work against both —
+        /// exactly as real tag-scanning would.
+        known_groups: [Vec<Vec<u8>>; 3],
+        /// Every ring/coord `PublishEvent` ciphertext ever produced, with
+        /// its sender index. Persistent and retried every round against
+        /// every recipient's currently-known groups — mirrors the real PDS,
+        /// where a ciphertext just sits under its tag for any later poll to
+        /// find, rather than being a one-shot delivery attempt. A device
+        /// that hasn't yet joined the relevant group simply hasn't
+        /// registered a matching tag yet and tries again next poll; it
+        /// doesn't miss the message forever.
+        broadcasts: Vec<(usize, Vec<u8>)>,
+    }
+
+    /// Run one simulation round: gather fresh `TickInputs` per device from
+    /// `net`, call `tick()`, then deliver every resulting command back into
+    /// `net` (stealth feed, cross-user pool) or directly to whichever other
+    /// devices' known groups the ciphertext decrypts against.
+    /// Interpret one `RingCommand` produced by device `i`, exactly as the
+    /// real host's command loop would (`app.rs::ring_tick_inner`'s match,
+    /// or `interpret_sync_commands` for the synchronous coord-message
+    /// path) — shared by both Phase 1 (`tick()`) and Phase 3
+    /// (`step(CoordMsgReceived)`) callers so neither one silently drops
+    /// commands the other would have handled.
+    fn interpret_ring_command(devices: &mut [SimDevice; 3], net: &mut SimNetwork, i: usize, cmd: RingCommand) {
+        match cmd {
+            RingCommand::PublishEvent { ciphertext, .. } => net.broadcasts.push((i, ciphertext)),
+            RingCommand::PublishBootstrapKp { ciphertext, .. }
+            | RingCommand::StealthPublishWelcome { ciphertext, .. } => net.own_events.push(ciphertext),
+            RingCommand::ReplenishKeyPackage => {
+                let (kp, _bundle) = devices[i].mls.generate_key_package(&devices[i].cred).expect("replenish kp");
+                net.kp_pool.push(kp);
+            }
+            RingCommand::RegisterGroup { group_id, .. } => {
+                if !net.known_groups[i].contains(&group_id) {
+                    net.known_groups[i].push(group_id);
+                }
+            }
+            RingCommand::SendDrawbridgePairOffer { .. }
+            | RingCommand::SendDrawbridgePairJoin { .. }
+            | RingCommand::PollForNewDevices => {
+                // Out of scope for ring-join convergence: Drawbridge
+                // pairing and same-user conversation fan-out (app.rs-
+                // level, not part of DeviceRingState) don't affect
+                // whether the ring itself converges to one group with
+                // one leaf per device.
+            }
+        }
+    }
+
+    fn three_device_sim_round(devices: &mut [SimDevice; 3], net: &mut SimNetwork, now_ms: i64) {
+        let sibling_stealth: Vec<Vec<SiblingStealth>> = (0..3)
+            .map(|i| {
+                (0..3)
+                    .filter(|&j| j != i)
+                    .map(|j| SiblingStealth { scan_pubkey: devices[j].stealth_pub, device_id: devices[j].device_id() })
+                    .collect()
+            })
+            .collect();
+        let stealth_pubkeys: Vec<[u8; 32]> = devices.iter().map(|d| d.stealth_pub).collect();
+
+        // Phase 1: each device ticks and we collect the resulting commands
+        // alongside which device produced them (for delivery/self-exclusion).
+        let mut produced: Vec<(usize, RingCommand)> = Vec::new();
+        let key_packages: Vec<KeyPackageInput> =
+            net.kp_pool.iter().map(|kp| KeyPackageInput { key_package: kp.clone() }).collect();
+
+        for i in 0..3 {
+            let unseen: Vec<OwnEventInput> = net.own_events[net.own_cursor[i]..]
+                .iter()
+                .enumerate()
+                .map(|(k, ct)| OwnEventInput { rkey: format!("{:020}", net.own_cursor[i] + k), ciphertext: ct.clone() })
+                .collect();
+            net.own_cursor[i] = net.own_events.len();
+
+            let dev = &mut devices[i];
+            let inputs = TickInputs {
+                key_packages: &key_packages,
+                stealth_pubkeys: &stealth_pubkeys,
+                sibling_stealth: &sibling_stealth[i],
+                own_events: &unseen,
+                stealth_privkey: &dev.stealth_priv,
+                credential: &dev.cred,
+                key_bundle: &dev.key_bundle,
+                now_ms,
+                drawbridge_has_own_connection: false,
+                sync_session_active: false,
+                my_did: dev.cred.did(),
+            };
+            let cmds = dev.state.tick(&dev.mls, inputs);
+            for cmd in cmds {
+                produced.push((i, cmd));
+            }
+        }
+
+        // Phase 2: interpret each command exactly as the real host would.
+        for (i, cmd) in produced {
+            interpret_ring_command(devices, net, i, cmd);
+        }
+
+        // Phase 3: retry EVERY broadcast ever produced (not just this
+        // round's) against every OTHER device's currently-known groups. A
+        // wrong-group or already-consumed-generation attempt just errors
+        // and is skipped — this is the retry-on-every-poll behaviour a real
+        // PDS gives for free (a ciphertext sits under its tag until some
+        // poll's candidate-tag set finally covers it), which a one-shot
+        // per-round delivery would NOT capture: two devices discovering
+        // each other in the same round each create their own coord group,
+        // so a Hello into the group the *other* side created can't be
+        // decrypted by the recipient until a later round when it has
+        // joined that specific group via Welcome — it must not be dropped
+        // just because that hadn't happened yet this round.
+        for (sender_idx, ciphertext) in net.broadcasts.clone() {
+            for j in 0..3 {
+                if j == sender_idx {
+                    continue; // MLS forbids self-decryption; mirrors mark_own
+                }
+                for gid in net.known_groups[j].clone() {
+                    let outcome = match devices[j].mls.decrypt_event(&gid, &ciphertext) {
+                        Ok(o) => o,
+                        Err(_) => continue,
+                    };
+                    let result = outcome.result();
+                    if matches!(result.event.kind, crate::EventKind::Coord) {
+                        if let Ok(msg) = decode_coord_msg(&result.event.payload) {
+                            let sender_device_id = result.sender.as_ref().map(|s| s.device_id);
+                            // Owned copies so `env`'s borrows don't tie up
+                            // `devices[j]` while we also need `&mut
+                            // devices[j].state` below.
+                            let my_did = devices[j].cred.did().to_string();
+                            let cred = devices[j].cred.clone();
+                            let key_bundle = devices[j].key_bundle.clone();
+                            let env = StepEnv {
+                                my_did: &my_did,
+                                credential: &cred,
+                                key_bundle: &key_bundle,
+                                now_ms,
+                                drawbridge_connected: false,
+                                sync_session_active: false,
+                                stealth_pubkeys: &stealth_pubkeys,
+                                sibling_stealth: &sibling_stealth[j],
+                            };
+                            let dev = &mut devices[j];
+                            let cmds = dev.state.step(
+                                &dev.mls,
+                                &env,
+                                RingEvent::CoordMsgReceived { source_group_id: gid.clone(), sender_device_id, msg },
+                            );
+                            // Route resulting commands (RegisterGroup,
+                            // ReplenishKeyPackage, further PublishEvents —
+                            // e.g. `on_ring_welcome`'s initial KP-batch
+                            // shipping or its RegisterGroup{Ring}) through
+                            // the same interpreter Phase 2 uses. An earlier
+                            // version of this harness discarded these
+                            // (`let _ = ...`), which silently dropped
+                            // RegisterGroup{Ring} for whichever device
+                            // processed its RingWelcome via this coord-
+                            // message path (as opposed to the stealth/
+                            // `tick()` path) — that device's `known_groups`
+                            // then never included the ring, so it could
+                            // never decrypt (or even attempt) the ring's
+                            // own subsequent commits, even though they were
+                            // sitting right there in `net.broadcasts`.
+                            for cmd in cmds {
+                                interpret_ring_command(devices, net, j, cmd);
+                            }
+                        }
+                    }
+                    // Commit case: decrypt_event already merged it. Either
+                    // way, this ciphertext belonged to `gid` — stop trying
+                    // other group ids for this (sender, ciphertext) pair.
+                    break;
+                }
+            }
+        }
+    }
+
+    /// The three-device bootstrap race, driven deterministically: D1 and D2
+    /// bootstrap a ring first (mirrors the Beacon scenario's initial
+    /// "d1d2-bootstrap" phase), then D3 joins. Asserts convergence to a
+    /// *single* shared ring within a fixed, generous round budget, with no
+    /// forked ring ids and all three MLS groups agreeing on 3 members.
+    ///
+    /// This is the deterministic, fast counterpart to
+    /// `three_device_bootstrap_rrr` in `moat-beacon` — no network, no
+    /// subprocess timing, so a failure here is a real state-machine
+    /// convergence bug, not test impatience.
+    #[test]
+    fn three_device_bootstrap_converges_within_bounded_rounds() {
+        const ROUND_BUDGET: usize = 40;
+        const D1D2_ROUNDS: usize = 12;
+
+        let (d1, d1_identity_kp) = SimDevice::new("did:plc:user", "d1");
+        let (d2, d2_identity_kp) = SimDevice::new("did:plc:user", "d2");
+        let (d3, d3_identity_kp) = SimDevice::new("did:plc:user", "d3");
+        let mut devices = [d1, d2, d3];
+
+        // Seed the cross-user pool with D1 and D2's *identity* KPs only —
+        // D3 hasn't "logged in" yet (mirroring the Beacon scenario where
+        // D3 is spawned only after D1+D2 already share a ring) — and its
+        // KeyPackage is deliberately not the one whose bundle is
+        // `devices[2].key_bundle` until we push it below.
+        let mut net = SimNetwork {
+            kp_pool: vec![d1_identity_kp, d2_identity_kp],
+            own_events: Vec::new(),
+            own_cursor: [0; 3],
+            known_groups: [Vec::new(), Vec::new(), Vec::new()],
+            broadcasts: Vec::new(),
+        };
+
+        // D3's KeyPackage isn't in the pool yet, so it's undiscoverable and
+        // ticks harmlessly on its own — no need to special-case it out of
+        // `three_device_sim_round`'s always-3-wide plumbing.
+        let mut now_ms = 0i64;
+        for _ in 0..D1D2_ROUNDS {
+            now_ms += 1;
+            three_device_sim_round(&mut devices, &mut net, now_ms);
+            if devices[0].state.ring_id().is_some() && devices[1].state.ring_id().is_some() {
+                break;
+            }
+        }
+        assert!(
+            devices[0].state.ring_id().is_some() && devices[1].state.ring_id().is_some(),
+            "D1+D2 must bootstrap a ring before D3 joins"
+        );
+        assert_eq!(devices[0].state.ring_id(), devices[1].state.ring_id());
+
+        // Now D3 "logs in": publish its identity KP to the pool so D1/D2
+        // can discover it, and let all three devices tick together.
+        net.kp_pool.push(d3_identity_kp);
+
+        // Convergence means every device (a) has joined the *same* ring_id
+        // and (b) has actually applied every commit that grew it to 3
+        // members — `ring_id()` alone only reflects Join time and never
+        // changes as later commits merge, so it can't detect a device that
+        // joined the ring but hasn't yet caught up on a subsequent Add.
+        let mut converged_at = None;
+        for round in 0..ROUND_BUDGET {
+            now_ms += 1;
+            three_device_sim_round(&mut devices, &mut net, now_ms);
+            if let Some(ring_id) = devices[0].state.ring_id().map(<[u8]>::to_vec) {
+                let all_same_ring = devices.iter().all(|d| d.state.ring_id() == Some(ring_id.as_slice()));
+                let all_see_3_members = devices
+                    .iter()
+                    .all(|d| d.mls.get_group_members(&ring_id).map(|m| m.len()).unwrap_or(0) == 3);
+                if all_same_ring && all_see_3_members {
+                    converged_at = Some(round);
+                    break;
+                }
+            }
+        }
+
+        let ring_ids: Vec<Option<Vec<u8>>> =
+            devices.iter().map(|d| d.state.ring_id().map(<[u8]>::to_vec)).collect();
+        let member_counts: Vec<usize> = devices
+            .iter()
+            .map(|d| {
+                d.state
+                    .ring_id()
+                    .and_then(|rid| d.mls.get_group_members(rid).ok())
+                    .map(|m| m.len())
+                    .unwrap_or(0)
+            })
+            .collect();
+        assert!(
+            converged_at.is_some(),
+            "three devices did not converge on a single shared 3-member ring within {ROUND_BUDGET} rounds; \
+             final ring ids: {ring_ids:?}, member counts as each device sees them: {member_counts:?}"
+        );
+
+        // No fork: every device's own MLS view of the ring must agree on
+        // exactly 3 members (this is the assertion the leaf-election fix
+        // exists to guarantee — a lost race here means a forked commit).
+        let ring_id = devices[0].state.ring_id().unwrap().to_vec();
+        for (idx, dev) in devices.iter().enumerate() {
+            let members = dev.mls.get_group_members(&ring_id).unwrap_or_default();
+            assert_eq!(
+                members.len(),
+                3,
+                "device {idx} sees {} members in the ring, expected 3 (forked/diverged commit)",
+                members.len()
+            );
+        }
     }
 }
