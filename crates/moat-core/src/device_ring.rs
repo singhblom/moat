@@ -382,19 +382,12 @@ pub enum RingMembership {
     },
 }
 
-/// Ticks a peer may sit in a no-acknowledgement wait before we retry.
+/// Ticks a peer may sit in a wait that has no acknowledgement path before
+/// we retry it. See [`DeviceRingState::recover_stalled_peers`].
 ///
-/// Two states qualify. `SyncStatus::OfferEmitted`: the peer may be busy in
-/// another pair session and never accept, and `any_offer_in_flight()` blocks
-/// *all* of our further offers while it is outstanding, so one unaccepted
-/// offer would otherwise mute this device permanently. `AwaitingTheirHello`:
-/// the coord-group Welcome we sent may have been built from a key package
-/// whose init key was already consumed, which fails silently at the peer.
-///
-/// Sized in ticks rather than wall-clock because the deterministic
-/// simulation advances `now_ms` by 1 per round; a millisecond budget large
-/// enough to be sane in production would never elapse there. At the host's
-/// tick cadence this is on the order of tens of seconds.
+/// Sized in ticks rather than wall-clock so it behaves identically under the
+/// deterministic simulation, which advances `now_ms` by 1 per round. At the
+/// host's tick cadence this is on the order of tens of seconds.
 pub const STALL_RETRY_TICKS: u32 = 4;
 
 /// Target number of an owner's key packages a consumer maintains locally.
@@ -453,6 +446,11 @@ pub struct DeviceRingState {
     /// persisted, so a restart re-arms everything.
     #[serde(skip)]
     stall_ticks: HashMap<String, u32>,
+    /// Per-peer count of sync offers we have emitted. Used only to order
+    /// selection: an unresponsive peer must not be retried ahead of peers
+    /// that have never been offered to. Not persisted.
+    #[serde(skip)]
+    offer_attempts: HashMap<String, u32>,
 
     /// Owner-global monotonic counter for `OfferedKp.seq`.  Incremented
     /// every time we publish a KP into a `KpBatch` (any recipient).  See
@@ -1912,13 +1910,11 @@ impl DeviceRingState {
         generation: u64,
         created_at: i64,
     ) -> Vec<RingCommand> {
-        // Already in a ring? Only a *superseding* one displaces it. This is
-        // the receiving half of joiner-created rings: a device onboarding
-        // into an established set creates generation N+1 and invites the
-        // existing members, so those members must be willing to move. The
-        // decision uses the same ordering as `RingInfo` reconciliation, so a
-        // stale or replayed Welcome for a lower generation is ignored rather
-        // than thrashing the ring.
+        // Already in a ring? Only a superseding one displaces it — a device
+        // onboarding into an established set creates generation N+1 and
+        // invites the existing members, so those members must be willing to
+        // move. Uses the same ordering as `RingInfo` reconciliation, so a
+        // stale or replayed Welcome for a lower generation is ignored.
         if let RingMembership::InRing { ring_id: mine_id, created_at: mine_at, generation: mine_gen, .. } =
             &self.ring
         {
@@ -2235,28 +2231,21 @@ impl DeviceRingState {
         cmds
     }
 
-    /// Advance the stall clock for peers waiting on something that will
-    /// never be reported as failed, and recover the ones that have waited
-    /// long enough.
+    /// Recover peers stuck in a wait that will never be reported as failed.
     ///
-    /// Two states have no acknowledgement path, so a failure in either is
+    /// Two states have no acknowledgement path, so failure is
     /// indistinguishable from slowness and neither self-corrects:
     ///
-    /// - `OfferEmitted` — the peer may be occupied with another sibling's
-    ///   pair session and never accept. Because `any_offer_in_flight()` is a
-    ///   per-device gate, one unaccepted offer blocks every future offer this
-    ///   device would make, to anyone. Recovery is to return the peer to
-    ///   `OweOffer` so the next tick can re-emit. Safe to repeat: pairing
-    ///   tokens are single-use with their own relay-side expiry, so a stale
-    ///   one simply goes unused.
-    /// - `AwaitingTheirHello` — we created a coord group and sent the peer a
-    ///   Welcome. If that Welcome was built from a key package whose init key
-    ///   had already been consumed, the peer cannot process it and will never
-    ///   reply. Recovery is to drop the peer entry entirely so the next
-    ///   `PeerKeyPackageObserved` rediscovers it and builds a fresh coord
-    ///   group from whatever the newest key package is by then —
-    ///   `on_peer_kp_observed` dedups on the entry existing, so clearing it is
-    ///   what re-arms discovery.
+    /// - `OfferEmitted` — the peer may be busy in another pair session and
+    ///   never accept. `any_offer_in_flight()` is a per-device gate, so one
+    ///   unaccepted offer blocks every future offer to anyone. Recovery
+    ///   returns the peer to `OweOffer`; safe to repeat, since pairing tokens
+    ///   are single-use with a relay-side expiry.
+    /// - `AwaitingTheirHello` — the coord-group Welcome we sent may have been
+    ///   built from a key package whose init key was already consumed, which
+    ///   the peer cannot process and never reports. Recovery drops the peer
+    ///   entry so discovery re-arms: `on_peer_kp_observed` dedups on the entry
+    ///   existing, so clearing it is what allows a fresh attempt.
     fn recover_stalled_peers(&mut self) -> Vec<RingCommand> {
         let waiting: Vec<String> = self
             .peers
@@ -2314,44 +2303,41 @@ impl DeviceRingState {
             return Vec::new();
         }
 
-        // Offerer election is **per pair**, not global: within each pair the
-        // smaller `device_id` offers. `SyncStatus::OweOffer` is set
-        // symmetrically — both sides mark each other when they become ring
-        // members — so without a tiebreak both would offer and open two
-        // pairing sessions for one pair.
+        // Offerer election is per pair: within each pair the smaller
+        // `device_id` offers. `SyncStatus::OweOffer` is set symmetrically, so
+        // without a tiebreak both sides would offer and open two pairing
+        // sessions for one pair.
         //
-        // This replaces a static `our_leaf != 0` rule, under which only the
-        // ring's leaf 0 ever offered. That had two problems. It was a global
-        // single point of failure of the same class as the ring-add election
-        // this design removes; and it left a coverage gap, since two devices
-        // that were both non-leaf-0 never synced with each other at all — a
-        // new device could only ever receive history from leaf 0, never from
-        // any other sibling holding history it lacked.
-        //
-        // Unlike ring-add, a fixed per-pair choice costs nothing in liveness:
-        // history transfer needs a pair WebSocket with *both* ends online, so
-        // if the designated offerer for a pair is offline that pair could not
-        // have synced regardless. Every pair has its own offerer, so no
-        // single device's absence blocks any other pair.
+        // A fixed per-pair choice costs nothing in liveness: history transfer
+        // needs a pair WebSocket with both ends online, so if a pair's
+        // offerer is offline that pair could not have synced anyway. Every
+        // pair has its own offerer, so no device's absence blocks another
+        // pair.
+        // Serve the least-attempted peer first, breaking ties by key for
+        // determinism. Sorted-key order alone starves: stall recovery returns
+        // an unresponsive peer to `OweOffer`, so it would be re-selected on
+        // every attempt while peers sorting after it are never served. Only
+        // one offer may be in flight per device, so that is a permanent
+        // block, not a delay.
         let my_key = hex::encode(mls.device_id());
-        let mut sorted_keys: Vec<&String> = self.peers.keys().collect();
-        sorted_keys.sort();
-        let target_key = sorted_keys
-            .into_iter()
-            .find(|k| {
+        let mut candidates: Vec<&String> = self
+            .peers
+            .iter()
+            .filter(|(k, ps)| {
                 // Fixed-width lowercase hex, so string order is byte order.
-                if my_key.as_str() >= k.as_str() {
-                    return false;
-                }
-                matches!(
-                    self.peers.get(*k),
-                    Some(PeerState::CoordReady {
-                        ring_link: RingLink::Joined { sync: SyncStatus::OweOffer, .. },
-                        ..
-                    })
-                )
+                my_key.as_str() < k.as_str()
+                    && matches!(
+                        ps,
+                        PeerState::CoordReady {
+                            ring_link: RingLink::Joined { sync: SyncStatus::OweOffer, .. },
+                            ..
+                        }
+                    )
             })
-            .cloned();
+            .map(|(k, _)| k)
+            .collect();
+        candidates.sort_by_key(|k| (self.offer_attempts.get(*k).copied().unwrap_or(0), (*k).clone()));
+        let target_key = candidates.first().map(|k| (*k).clone());
         let Some(target_key) = target_key else { return Vec::new() };
 
         let target_id_bytes = hex::decode(&target_key).unwrap_or_default();
@@ -2390,6 +2376,8 @@ impl DeviceRingState {
             }),
             Err(e) => debug_assert!(false, "sync offer encrypt into own ring failed: {e}"),
         }
+
+        *self.offer_attempts.entry(target_key.clone()).or_insert(0) += 1;
 
         // Update peer state to OfferEmitted.
         if let Some(PeerState::CoordReady { ring_link: RingLink::Joined { sync, .. }, .. }) =
@@ -2572,6 +2560,14 @@ impl DeviceRingState {
         let sib_kp_key = hex::encode(sibling_id);
         let sib_kp_bytes = self.pending_bootstrap_kps.get(&sib_kp_key).cloned()?;
 
+        // Derive the commit tag at the current epoch, BEFORE `add_device`
+        // advances it. Receivers scan for tags at the epoch they are on and
+        // `populate_candidate_tags` covers the current and prior epochs only,
+        // so a tag derived after the add is unmatchable by every other member.
+        let commit_tag = mls
+            .derive_next_tag(ring_id, env.key_bundle)
+            .unwrap_or_else(|_| rand::random());
+
         let wr = match mls.add_device(ring_id, env.key_bundle, &sib_kp_bytes) {
             Ok(w) => w,
             Err(_) => return None,
@@ -2583,9 +2579,6 @@ impl DeviceRingState {
         self.consumed_bootstrap_for.insert(sib_kp_key);
 
         let mut cmds = Vec::new();
-        let commit_tag = mls
-            .derive_next_tag(ring_id, env.key_bundle)
-            .unwrap_or_else(|_| rand::random());
         cmds.push(RingCommand::PublishEvent {
             tag: commit_tag,
             ciphertext: wr.commit,
@@ -2704,17 +2697,13 @@ fn my_device_id_or_placeholder(mls: &MoatSession) -> DeviceId {
 /// rkey order, so the *last* entry for a device id is its most recent
 /// publication and the only one with a good chance of being unconsumed.
 ///
-/// Feeding the state machine anything older builds Welcomes against dead
-/// init keys, which fail at the recipient with "No matching key package
-/// was found in the key store" and are invisible to the sender — see
-/// `welcome_built_from_a_consumed_key_package_is_undeliverable`. Before
-/// this reduction, `on_peer_kp_observed`'s first-match-wins dedup meant a
-/// third device deterministically picked the two identity packages its
-/// siblings had already consumed from each other.
+/// Anything older risks building a Welcome against a dead init key, which
+/// fails at the recipient with "No matching key package was found in the
+/// key store" and is invisible to the sender.
 ///
-/// This is a filter, not a fix for the general case: with concurrent
-/// consumers (siblings plus cross-user inviters) even the newest entry can
-/// lose a race, which is what the retry path is for.
+/// This is a filter, not a guarantee: with concurrent consumers (siblings
+/// plus cross-user inviters) even the newest entry can lose a race, which
+/// is what the retry path is for.
 ///
 /// Packages whose credential cannot be extracted are dropped —
 /// `on_peer_kp_observed` would have ignored them anyway.
@@ -3405,10 +3394,9 @@ mod tests {
         );
     }
 
-    /// Regression guard for the coverage gap the old static `our_leaf != 0`
-    /// rule left: a device that is not ring leaf 0 must still be able to
-    /// offer, or two non-leaf-0 siblings never sync with each other and
-    /// history held only by one of them can never reach the other.
+    /// A device that is not ring leaf 0 must still be able to offer, or two
+    /// non-leaf-0 siblings never sync and history held only by one of them
+    /// can never reach the other.
     #[test]
     fn sync_offer_is_not_restricted_to_ring_leaf_zero() {
         let dev = make_stealth_device("did:plc:user", "d");
@@ -3524,6 +3512,62 @@ mod tests {
         assert!(
             s.peers.contains_key(&hex::encode(peer)),
             "clock should have restarted on the transition"
+        );
+    }
+
+    /// A peer that never accepts must not starve the others: only one offer
+    /// may be in flight per device, so a peer that is retried forever would
+    /// permanently block every other pair.
+    #[test]
+    fn a_peer_that_never_accepts_does_not_starve_the_others() {
+        let dev = make_stealth_device("did:plc:user", "d");
+        let env = env_for(&dev, &[]);
+        let me = *dev.mls.device_id();
+        // Two peers that both sort above us, so we own both pairs.
+        let mut lower = [0xFEu8; 16];
+        let mut higher = [0xFFu8; 16];
+        assert!(me < lower && lower < higher, "fixture assumes our id sorts below both");
+        lower[0] = 0xFE;
+        higher[0] = 0xFF;
+
+        let ring_id = dev.mls.create_device_ring(&dev.cred, &dev.key_bundle).expect("ring");
+        let mut s = DeviceRingState::new();
+        s.ring = RingMembership::InRing {
+            ring_id,
+            created_at: 1,
+            generation: 1,
+            our_leaf: 0,
+        };
+        for peer in [lower, higher] {
+            s.peers.insert(
+                hex::encode(peer),
+                PeerState::CoordReady {
+                    coord_group_id: vec![1u8],
+                    ring_link: RingLink::Joined { added_by: AddedBy::Us, sync: SyncStatus::OweOffer },
+                },
+            );
+        }
+
+        // Drive many rounds. `lower` never accepts, so every offer to it
+        // stalls and is recovered. `higher` must still get served.
+        let mut higher_offered = false;
+        for _ in 0..40 {
+            s.recover_stalled_peers();
+            let _ = s.try_emit_sync_offer(&dev.mls, &env);
+            if matches!(
+                s.peers.get(&hex::encode(higher)),
+                Some(PeerState::CoordReady {
+                    ring_link: RingLink::Joined { sync: SyncStatus::OfferEmitted { .. }, .. },
+                    ..
+                })
+            ) {
+                higher_offered = true;
+                break;
+            }
+        }
+        assert!(
+            higher_offered,
+            "the second peer never received an offer — the unresponsive peer starves it"
         );
     }
 
@@ -4212,17 +4256,12 @@ mod tests {
             RingCommand::PublishStealthEvent { ciphertext, .. }
             | RingCommand::StealthPublishWelcome { ciphertext, .. } => net.own_events.push(ciphertext),
             RingCommand::ReplenishKeyPackage => {
-                // MUST mirror the host (`app.rs::replenish_key_package`) and
-                // use `replenish_key_package`, not `generate_key_package`.
-                // The latter mints a *fresh* Ed25519 signature keypair per
-                // call, so a sibling that consumes such a KeyPackage joins
-                // with a leaf it cannot sign for: the Welcome processes, but
-                // every later `encrypt_event` into that group fails with
-                // "Own member not found in group". `replenish_key_package`
-                // keeps the device's one identity signing key while still
-                // giving each KeyPackage a fresh single-use init key — see
-                // `fanned-in-device-signing-key-bug.md` for the same defect
-                // in three production sites.
+                // Must mirror the host (`app.rs::replenish_key_package`):
+                // `generate_key_package` mints a fresh signature keypair per
+                // call, so a sibling consuming that KeyPackage joins with a
+                // leaf it cannot sign for — the Welcome processes, but every
+                // later `encrypt_event` into the group fails with "Own member
+                // not found in group".
                 let kp = devices[i]
                     .mls
                     .replenish_key_package(&devices[i].cred, &devices[i].key_bundle)
@@ -4410,18 +4449,12 @@ mod tests {
             own_cursor: [0; 3],
             known_groups: [Vec::new(), Vec::new(), Vec::new()],
             broadcasts: Vec::new(),
-            // D3 is offline until it "logs in" below. An earlier version of
-            // this test left it ticking throughout, on the reasoning that its
-            // KeyPackage wasn't in the pool yet so it was undiscoverable and
-            // therefore harmless. It is not harmless: discovery runs in the
-            // other direction too. A ticking D3 observes D1's and D2's
-            // identity KeyPackages in round one and consumes both to build
-            // coord groups, before either sibling has replenished — and
-            // `on_peer_kp_observed`'s dedup makes that choice permanent. The
-            // device ends up poisoned before it has notionally been unboxed.
-            // This test tolerated that only because the elected member drives
-            // the join here; the liveness tests below, where the joiner must
-            // act for itself, did not.
+            // D3 is offline until it "logs in" below. Leaving it ticking is
+            // not equivalent to being undiscoverable: discovery runs in the
+            // other direction too, so a ticking D3 would consume D1's and
+            // D2's identity KeyPackages in round one, before either has
+            // replenished, and `on_peer_kp_observed`'s dedup makes that
+            // permanent.
             online: [true, true, false],
         };
 
@@ -4510,16 +4543,10 @@ mod tests {
     }
 
     /// The shared `social.moat.keyPackage` pool accumulates: packages are
-    /// published with `createRecord` and never deleted, so a *consumed*
-    /// package stays visible on the PDS next to its replacement. Whoever
-    /// picks one has no way to tell the difference — and a Welcome built
-    /// against a consumed init key is silently undeliverable forever.
-    ///
-    /// This is the mechanism behind
-    /// `new_device_joins_when_smallest_leaf_never_returns`: a third device
-    /// picks the *first* (oldest) pool entry for each sibling, which after
-    /// those siblings have bootstrapped with each other is exactly the pair
-    /// of already-consumed identity KeyPackages.
+    /// published with `createRecord` and never deleted, so a consumed
+    /// package stays visible next to its replacement and consumers cannot
+    /// tell them apart. A Welcome built against a consumed init key is
+    /// silently undeliverable forever.
     #[test]
     fn welcome_built_from_a_consumed_key_package_is_undeliverable() {
         let a = MoatSession::new();
@@ -4564,28 +4591,14 @@ mod tests {
 
     // ── Liveness: onboarding must not depend on one specific device ────────
     //
-    // See `ring-inversion.md`. The adder-elected model gates ring joins on
-    // the smallest-leaf ring member. Nothing re-elects when that device is
-    // gone, so a user who loses the phone that happens to hold leaf 0 can
-    // never onboard a replacement — the state machine has no path to it,
-    // with or without a timeout.
-    //
-    // These tests describe the behaviour we want, not the behaviour we
-    // have. They are expected to FAIL until the joiner-created-ring change
-    // lands, and the failure mode matters: D3 stuck in `Discovering` with
-    // `known_ring` set is the diagnosis in `ring-inversion.md`. Any other
-    // failure means that diagnosis is wrong.
+    // A user who loses a device must be able to onboard a replacement
+    // through any surviving sibling. See `ring-inversion.md`.
 
     /// Bootstrap D1+D2 into a shared ring and return its id. Shared setup
     /// for the liveness tests below.
     ///
-    /// D3 must be **offline** for this (`online[2] == false`). A replacement
-    /// device does not exist while its siblings are bootstrapping, and
-    /// simulating it as merely "undiscoverable but ticking" is not the same
-    /// thing: it would observe D1's and D2's identity key packages in round
-    /// one and consume both to build coord groups, before either sibling has
-    /// replenished. `on_peer_kp_observed`'s dedup then makes that permanent,
-    /// so the device is poisoned before it has notionally been unboxed.
+    /// D3 must be offline for this (`online[2] == false`) — a replacement
+    /// device does not exist while its siblings are bootstrapping.
     fn bootstrap_d1_d2_ring(
         devices: &mut [SimDevice; 3],
         net: &mut SimNetwork,
@@ -4607,9 +4620,7 @@ mod tests {
         devices[0].state.ring_id().expect("D1+D2 ring").to_vec()
     }
 
-    /// Index of whichever of D1/D2 holds the smallest ring leaf — the device
-    /// the current design elects for every ring-mutating operation, and
-    /// therefore the single point of failure this test removes.
+    /// Index of whichever of D1/D2 holds the smallest ring leaf.
     fn smallest_leaf_index(devices: &[SimDevice; 3], ring_id: &[u8]) -> usize {
         let d1 = find_own_leaf(&devices[0].mls, ring_id).expect("D1 leaf");
         let d2 = find_own_leaf(&devices[1].mls, ring_id).expect("D2 leaf");
@@ -4643,12 +4654,9 @@ mod tests {
         sees(a, b) && sees(b, a)
     }
 
-    /// Diagnostic dump used by the assertion messages below. Deliberately
-    /// prints `ring` membership and `known_ring` as well as the outward
-    /// symptom: `ring-inversion.md` predicts a *specific* stuck state for
-    /// the new device (`Discovering` with `known_ring` set, peer entries
-    /// left at `Discovered`), and a failure in some other shape would mean
-    /// that diagnosis — and the design built on it — is wrong.
+    /// Diagnostic dump for the assertion messages below. Prints `ring`
+    /// membership, `known_ring` and both peer maps, so a failure can be
+    /// diagnosed from the output without re-instrumenting.
     fn liveness_debug(devices: &[SimDevice; 3], survivor: usize) -> String {
         let ring_of = |i: usize| {
             devices[i].state.ring_id().map(hex::encode).unwrap_or_else(|| "<none>".into())
@@ -4674,15 +4682,9 @@ mod tests {
         )
     }
 
-    /// **The headline liveness test.** The user loses the device holding the
-    /// smallest ring leaf and buys a replacement. The surviving sibling is
-    /// online and fully capable throughout, so onboarding must complete
-    /// without the lost device ever returning.
-    ///
-    /// Today this fails: the survivor defers every ring-mutating step to the
-    /// elected member (`on_peer_kp_observed`, `do_ring_add`), which never
-    /// runs again, while `RingInfo` tells D3 a ring exists and suppresses
-    /// its own ring creation — so D3 waits in `Discovering` forever.
+    /// The user loses the device holding the smallest ring leaf and buys a
+    /// replacement. The surviving sibling is online throughout, so onboarding
+    /// must complete without the lost device ever returning.
     #[test]
     fn new_device_joins_when_smallest_leaf_never_returns() {
         const ROUND_BUDGET: usize = 60;

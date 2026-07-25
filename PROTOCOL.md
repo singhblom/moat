@@ -22,11 +22,15 @@ Three ATProto lexicons, all under `social.moat.*`:
 
 | Record | Purpose | Contents |
 |--------|---------|----------|
-| `keyPackage` | MLS key distribution | TLS-serialized MLS KeyPackage + expiry |
-| `stealthAddress` | Receiving invites privately | X25519 public key + device name |
+| `keyPackage` | MLS key distribution (cross-user only) | TLS-serialized MLS KeyPackage + expiry |
+| `stealthAddress` | Receiving invites privately | X25519 public key + device name + 16-byte device id (v3) |
 | `event` | All encrypted payloads | 16-byte tag + ciphertext + timestamp |
 
-Every event record looks identical — messages, commits, welcomes, and reactions all use the same `event` schema, hiding the operation type from observers.
+Every event record looks identical — messages, commits, welcomes, reactions, and same-user key distribution all use the same `event` schema, hiding the operation type from observers.
+
+`keyPackage` records form a **public, shared pool**: they are published with `createRecord` (a new rkey each time), never deleted, and any user may fetch them. A consumed key package therefore stays visible on the PDS alongside its replacement, so consumers must select the **most recently published** record (highest rkey) — the older entries may already have had their init keys consumed. Same-user key distribution deliberately does *not* use this record type; see [Same-user Key Distribution](#same-user-key-distribution).
+
+`stealthAddress` gained a stable 16-byte `device_id` in v3, which lets a device address a specific sibling's stealth key. The number of `stealthAddress` records under a DID already exposes the device count, so a stable per-record id reveals nothing that was not already inferable. Records predating v3 decode with an all-zero `device_id` and are ignored as stealth-addressing targets.
 
 ## Envelope Buckets & Off-Chain Payloads
 
@@ -62,7 +66,7 @@ Large payloads (full-resolution images, long text, video) live off-chain as repo
 
 This is the most complex part. The goal: Alice invites Bob without revealing to observers who the invite is for.
 
-**Setup (once per device):** Bob generates an X25519 stealth keypair and publishes the public key as a `stealthAddress` record on his PDS.
+**Setup (once per device):** Bob generates an X25519 stealth keypair and publishes the public key, his device name, and his stable 16-byte device id as a `stealthAddress` record on his PDS.
 
 **Alice invites Bob:**
 
@@ -88,17 +92,17 @@ When an existing member (Alice) adds a new member (Carol) to a group that alread
 
 **Alice (adder):**
 
-1. Resolve Carol's handle → DID, fetch her stealth public keys and MLS key package — use the **most recently published** key package (highest rkey) in case Carol has been removed and re-invited before and has already replenished her package
+1. Resolve Carol's handle → DID, fetch her stealth public keys and MLS key package — use the **most recently published** key package (highest rkey). `listRecords` returns ascending rkey order and consumed packages are never deleted, so any earlier entry may already have had its init key consumed; picking one produces a Welcome Carol can never process
 2. Derive a commit tag using the **current** epoch (pre-advance), since existing members scan for tags at this epoch
 3. Call MLS `add_member` → produces a Welcome (for Carol) and a Commit (for existing members). The epoch advances.
 4. Stealth-encrypt the Welcome for Carol's devices, publish with a **random** tag (same as the initial invite flow)
 5. Publish the raw Commit with the **pre-advance tag** so existing members (Bob) can find and process it
-6. Publish a Drawbridge hint bundle alongside the Welcome — this contains the Drawbridge hints of all existing group members (see [Drawbridge Hints — Adding Members](#adding-members)). Carol can use these to immediately connect to every existing member's relay without waiting for them to come online.
+6. Publish a Drawbridge hint bundle alongside the Welcome — this contains the Drawbridge hints of all existing group members (see [Drawbridge Hints for New Members](#drawbridge-hints-for-new-members)). Carol can use these to immediately connect to every existing member's relay without waiting for them to come online.
 
 **Carol (new member):**
 
 1. Detect the Welcome via stealth decryption while polling Alice's PDS
-2. Process the Welcome to join the group; immediately upload a **fresh key package** (using the same leaf-node signing key) to the PDS so Carol can be re-invited in the future — MLS key packages are single-use and are deleted from local storage after a Welcome is consumed
+2. Process the Welcome to join the group; immediately upload a **fresh key package** (reusing the device's one signing key — see [Signing-key Identity](#signing-key-identity)) to the PDS so Carol can be re-invited in the future. MLS key packages are single-use: the init key is consumed and dropped from local storage once a Welcome uses it. The consumed *record* stays on the PDS, which is why consumers must take the newest
 3. Call `get_group_dids` to discover **all** current members (not just the Welcome author), and store the full member list
 4. Process the Drawbridge hint bundle from Alice to connect to all existing members' relays
 5. Generate candidate tags for all members and register them
@@ -122,7 +126,8 @@ When an existing member (Alice) adds a new member (Carol) to a group that alread
 | **Stealth addresses** | Invite recipient identity; fresh ephemeral keys make invites unlinkable |
 | **Per-event unique tags** | Conversation identity — every event gets a unique tag, preventing clustering |
 | **Padding** | Message length patterns (512B/1KB/4KB control buckets) |
-| **Unified event schema** | Operation type — messages, commits, welcomes all look the same on-chain |
+| **Unified event schema** | Operation type — messages, commits, welcomes, and same-user key distribution all look the same on-chain |
+| **Stealth-borne key distribution** | The multi-device relationship — sibling key packages travel as ordinary encrypted events rather than as records naming a `device_id` in the clear |
 
 ### Known Privacy Limitation: Image Messages Are Distinguishable
 
@@ -212,6 +217,12 @@ Every event’s `kind` is now namespaced as `<domain>.<variant>`:
 | `control.*` | `control.commit`, `control.welcome`, `control.checkpoint` | MLS state management and coordination; payload is TLS-serialized bytes. No `message_id` is present. |
 | `message.*` | `message.short_text`, `message.medium_text`, `message.long_text`, `message.image` | User-visible content plus optional previews/external blobs. Each carries a 16-byte `message_id`. |
 | `modifier.*` | `modifier.reaction` (more to follow) | Small toggles or annotations that reference an existing `message_id`. |
+| `coord` | — | Multi-device coordination, as an MLS application message over a `DeviceCoord` group. Payload is `CoordMsg` JSON. See [Coordination Messages](#coordination-messages). |
+| `sync.app` | — | History-sync frames over the Drawbridge pair WebSocket, encrypted to the device ring. |
+| `bootstrap.kp` | — | A single MLS KeyPackage offered to one sibling so it can add this device to the ring. Stealth-encrypted, not MLS-framed. `group_id` is empty and `epoch` is 0 — the KeyPackage is not yet bound to any group. |
+| `sibling.msg` | — | Steady-state same-user coordination addressed to one sibling. Payload is `CoordMsg` JSON (`kp_batch` / `kp_request` / `user_conv_welcome`); the sender's device id travels in `Event.sender_device_id`. Stealth-encrypted, not MLS-framed. `group_id` empty, `epoch` 0. |
+
+The last two are the only event kinds that are stealth-encrypted rather than MLS-framed, and the only ones whose `group_id`/`epoch` carry no meaning. Both are recognised by attempting stealth decryption during the [Own-PDS Stealth Scan](#own-pds-stealth-scan).
 
 ## Message Payloads & External Blobs
 
@@ -315,6 +326,20 @@ This is a singleton record (upserted via `putRecord`). Clients fetch partner Dra
 ### Message Delivery
 
 When a sender posts an event, their client sends an envelope to their own Drawbridge containing the encrypted payload and the recipient Drawbridge URLs (discovered from `social.moat.drawbridgeConfig`). The sender's Drawbridge fans out to each recipient's Drawbridge via `POST /relay/event`. Recipient Drawbridges deliver immediately to clients watching the matching tag.
+
+### Drawbridge Hints for New Members
+
+`social.moat.drawbridgeConfig` lets a member discover a *contact's* relay, but a newly-added member would have to wait for each existing member to come online before learning where to reach them. To avoid that, the adder bundles the relay coordinates of every existing member alongside the Welcome, inside the same stealth-encrypted payload.
+
+The Welcome is wrapped in an envelope rather than published raw:
+
+```
+[4-byte magic "MWE1"][4-byte welcome_len BE][welcome][hints_json]
+```
+
+`hints_json` is an array of `{ did, url, device_id, ticket }` — one entry per existing member device. A decoder that finds no trailing bytes treats the payload as a bare Welcome, so the envelope is backward-compatible with raw-Welcome publishers.
+
+The new member decodes the bundle, connects to each listed relay, and then publishes a **reciprocal hint** as an ordinary group event so existing members learn their relay through normal tag scanning. This is why adding a member costs exactly three published events regardless of group size: the Welcome-with-bundle, the Commit, and the reciprocal hint.
 
 ### Privacy Properties of Drawbridge
 
@@ -447,7 +472,7 @@ For every pair of sibling devices, a hidden pairwise MLS group (`GroupKind::Devi
 
 1. Device `D_new` publishes a key package on its PDS.
 2. On the next `ring_tick`, `D_new` fetches all key packages under its DID and discovers sibling devices `D1, D2, …` it has no coord group with yet.
-3. For each new sibling, `D_new` calls `create_device_coord_group`, stealth-encrypts the Welcome (same stealth scheme as regular conversation invites), and publishes it to its own PDS with a random tag.
+3. For each new sibling, `D_new` calls `create_device_coord_group`, stealth-encrypts the Welcome (same stealth scheme as regular conversation invites), and publishes it to its own PDS with a random tag. Once a ring exists, only the elected (smallest-leaf) ring member does this — the sibling's key package sits in the shared pool where every member sees it identically, so an unelected creator would race for the same record. Non-elected members record the sibling as discovered and wait.
 4. `D_new` sends `CoordMsg::Hello` as an MLS application message in each new coord group (queued until the sibling joins).
 5. When the sibling polls its own PDS (`ring_tick` always includes the device's own DID in the polling set), it stealth-decrypts the coord Welcome, joins the coord group, sends its own `CoordMsg::Hello` back, and replenishes its key package.
 6. On the creator's next `ring_tick`, it processes the sibling's commit (joining the group) and the Hello, making the sibling "exchanged" in the driver's state.
@@ -467,16 +492,103 @@ Coordination messages are MLS application messages sent over `DeviceCoord` group
 { "type": "supersede", "old_ring_id": "<base64>" }
 
 { "type": "ring_welcome", "ring_id": "<base64>", "welcome": "<base64-MLS-Welcome>", "created_at": 1234567890 }
+
+{ "type": "sync_offer", "token": "<base64-32-bytes>", "target_device_id": "<base64-16-bytes>" }
 ```
 
 | Variant | Sender | Purpose |
 |---------|--------|---------|
 | `hello` | coord group creator AND coord group joiner | Signals presence so each side can detect `Hello` exchange |
-| `ring_info` | ring member | Informs a sibling of the current ring (for future reconciliation) |
+| `ring_info` | ring member | Informs a sibling that a ring already exists. Emitted alongside every `Hello`; a device that learns of an existing ring suppresses its own ring self-creation until the real Add/Welcome arrives, which is what prevents two devices from each forming a competing ring |
 | `supersede` | losing ring member | Tells the recipient to abandon an old ring during split-brain recovery |
 | `ring_welcome` | ring creator/adder | Delivers the MLS ring Welcome inline so the recipient can classify the group as `Ring` without a separate `RingInfo` round-trip |
+| `sync_offer` | ring offerer | Carries the Drawbridge pairing token to one new member; `target_device_id` names the sole intended recipient and other ring members MUST ignore the offer |
+
+Three further `CoordMsg` variants — `kp_batch`, `kp_request`, and `user_conv_welcome` — share this schema but are **not** sent over coord groups. They ride the stealth lane as `sibling.msg` events; see [Same-user Key Distribution](#same-user-key-distribution). The handlers are transport-agnostic, which is why they share the enum.
+
+**Election for ring-mutating operations.** Where several ring members could act, only the member with the smallest leaf index does. This applies to ring `add_device`, to emitting the pairing offer, and to creating a coord group with a newly-discovered sibling once a ring exists. Without it, two members can each add the same device from the same base epoch and produce irreconcilable commits, or each consume the same shared-pool KeyPackage and leave the loser permanently unable to establish a coord group. A non-elected member records the sibling as discovered and defers; it still recognises that sibling as a ring member once it observes them directly in the ring roster. The election does not apply before any ring exists, where the symmetric two-device bootstrap race is harmless because each device contests only its own KeyPackage.
 
 **Why `RingWelcome` instead of stealth delivery for ring Welcomes**: delivering the ring Welcome over the ordered coord channel means the recipient always has the `ring_id` available at processing time, enabling correct `GroupKind::Ring` classification. Stealth delivery would arrive in an unordered namespace and could be processed before the recipient knows which group ID is the ring.
+
+### Same-user Key Distribution
+
+Adding a sibling device to the ring, and later to every existing user conversation, requires a fresh MLS KeyPackage from that sibling for each add. Drawing those from the public `keyPackage` pool does not work: the pool is visible to every sibling simultaneously, so two devices can fetch the same record and build two Welcomes against the same init key. MLS consumes that init secret on the first successful `process_welcome`, and the second Welcome is permanently undeliverable. Same-user key distribution therefore uses its own lane with a single-use invariant enforced by the protocol rather than by timing.
+
+Three lanes exist, and they never share a record type:
+
+| Scope | Transport | KeyPackage source |
+|---|---|---|
+| Cross-user (bob ↔ alice) | Stealth event under a random tag | Public `social.moat.keyPackage` pool |
+| Same-user bootstrap (a new device joining the ring) | Stealth event addressed to one sibling | One `bootstrap.kp` event per sibling |
+| Same-user steady state (fanning a sibling into conversations) | Stealth event addressed to one sibling | Consumer-held pool, refilled via `kp_batch` |
+
+#### Why stealth events rather than the ring
+
+Every message in this lane is **unicast** — addressed to one sibling and dropped by everyone else — so the ring's one structural benefit, broadcast, goes unused. The payloads also need none of MLS's protections: KeyPackages are public values (the cross-user pool publishes them in the clear) and MLS Welcomes are already encrypted to the target's init key. What the lane needs is addressing, authenticity, and single-use accounting.
+
+Carrying it over the ring actively hurts. MLS application messages decrypt only if the receiver has processed exactly the right prefix of commits — never for future epochs, only a bounded window backward, and never one's own messages. The PDS transport underneath (per-epoch rotating tags, polled per tag, no cross-tag ordering) provides none of that, and ring epochs churn precisely when key-package traffic peaks: a join triggers an Add commit immediately followed by fan-out in both directions. The stealth lane is epoch-free and order-insensitive, which is what this traffic actually requires.
+
+The ring keeps the roles it genuinely simplifies: device-set membership itself, the trust root that maps `device_id → signature key` for siblings, the session layer for bulk history sync over the live ordered pair WebSocket, and future loss-tolerant broadcast state sync. The general rule is that the ring helps when the operation *is* membership, when the payload is genuinely broadcast and retryable, or when the channel underneath is live and ordered — and hurts when pressed into service as an async point-to-point mailbox, which is what the stealth lane already is.
+
+#### Bootstrap
+
+When a device first comes online and discovers siblings:
+
+1. `D_new` enumerates siblings from `social.moat.stealthAddress` records under its own DID, learning each sibling's `scan_pubkey` and `device_id`.
+2. For each sibling `S`, `D_new` generates a fresh KeyPackage (retaining the init key), wraps it in a `bootstrap.kp` event, pads to the standard bucket, encrypts to `S.scan_pubkey`, and publishes it as a `social.moat.event` under a random 16-byte tag.
+3. `S` finds it on its own-PDS stealth scan, decrypts, and uses the embedded KeyPackage to perform the ring `add_device`.
+4. `D_new` processes the resulting `CoordMsg::RingWelcome` and joins. All later key-package exchange with that sibling flows over the steady-state lane.
+
+**The bootstrap event is not deleted.** Moat events normally persist as the canonical log, so a `deleteRecord` shortly after `putRecord` would be a distinctive firehose pattern — reintroducing exactly the metadata leak this lane exists to avoid. The event stays encrypted and useless to anyone but `S`.
+
+Because it persists, `S` MUST record a local "consumed bootstrap KP from `D_new`" flag and refuse to build a second Welcome from the same payload if a later scan returns it again. Single use is otherwise guaranteed structurally: each event carries exactly one KeyPackage, encrypted to exactly one sibling, whose init key `D_new` holds only once.
+
+#### Steady state
+
+Once a sibling is in the ring, key packages flow as `sibling.msg` events carrying `CoordMsg` JSON, addressed per sibling via the `scan_pubkey` from its `stealthAddress` record. Ring membership still gates the lane: batches are only shipped to and accepted from confirmed ring members.
+
+```json
+{
+  "type": "kp_batch",
+  "recipient_device_id": "<base64-16-bytes>",
+  "kps": [ { "rkey": "<base64-16-bytes>", "seq": 12, "key_package": "<base64>" } ]
+}
+
+{ "type": "kp_request", "owner_device_id": "<base64-16-bytes>", "count": 8 }
+
+{
+  "type": "user_conv_welcome",
+  "owner_device_id": "<base64-16-bytes>",
+  "group_id": "<base64>",
+  "welcome": "<base64-MLS-Welcome>"
+}
+```
+
+| Variant | Sender | Purpose |
+|---|---|---|
+| `kp_batch` | Owner of the KeyPackages | Pushes fresh key packages with monotonic per-owner sequence numbers to one sibling |
+| `kp_request` | Consumer | Asks the owner to top up the consumer's pool when it runs low |
+| `user_conv_welcome` | Consumer | Delivers a Welcome built from a pool KeyPackage, addressed to that KeyPackage's owner |
+
+**Pool maintenance.** Each consumer keeps a pool per owner, targeting `KP_POOL_TARGET` = 8 entries and refilling when it drops to `KP_POOL_LOW_WATER` = 2. A single `kp_batch` carries at most `KP_BATCH_CAP` = 4 entries so it fits the 4 KB control bucket; larger refills split across several messages. Refill is consumer-driven only — there is no owner-side wake-up top-up and no pre-emptive high-water trigger, because user-visible latency is dominated by MLS Add work and PDS propagation, not by refill.
+
+**Consumer-side state**, per `(consumer, owner)` pair:
+
+| Field | Purpose |
+|---|---|
+| `local_pool` | KeyPackages received but not yet consumed |
+| `highest_seq_observed` | Replay defence for `kp_batch` |
+| `used_kps` | Set of seqs already consumed — single-use enforcement |
+
+`used_kps` is the irreducible piece of state. Even if a buggy refill, a malicious replay, or out-of-order delivery reinserts an already-used KeyPackage into the pool, the consumer refuses to claim it again. It is stored as a full set rather than a high-water mark with exceptions: the high-water schemes are correct only under constrained consumption orderings, and their failure modes surface exactly where they are hardest to find. A full set's only surprise is bounded growth (~80 KB per pair after 10k consumptions), which is trivial to diagnose.
+
+**Owner-side counter discipline.** The owner assigns `seq` strictly monotonically across *all* recipients (one global counter per owner), never reuses a value, and persists the counter alongside ring state. Gaps in any single consumer's view are harmless — dedupe only needs `seq <= highest_seq_observed` to reject replays.
+
+**Fan-out.** To add an owner to a conversation, the consumer claims one unused KeyPackage from its pool, marks its `seq` used, derives the commit tag at the *current* epoch, calls `add_device`, publishes the Commit under that tag (so cross-user members see it), and sends the Welcome as a `user_conv_welcome` sibling message. If the pool is empty the add is deferred and one `kp_request` is emitted per sibling per cycle; the next poll retries once a batch arrives.
+
+**Authenticity.** The ring provides sender authentication for free; the stealth lane does not. Two anchors replace it. First, the own-PDS scan reads only the user's *own* repo, so injecting a forged sibling message requires repo write authority — the same trust boundary bootstrap already assumes. Second, on `kp_batch` ingest the consumer MUST verify each KeyPackage's signature against the signature key it holds for that `device_id` from the ring leaf credential. A forged `kp_request` is at most a top-up nuisance, and a forged `user_conv_welcome` cannot be built without the pool KeyPackage's public init key, which only ever travels inside a stealth-encrypted batch.
+
+**Delivery properties.** Decryption is a single ECDH against the recipient's scan key: no epoch binding, no ordering requirement, no mark-own bookkeeping (one's own publishes simply fail to trial-decrypt). Duplicates and replays are absorbed by `highest_seq_observed`, `used_kps`, and MLS's own consume-once init-key semantics.
 
 ### Split-brain Reconciliation
 
@@ -492,9 +604,13 @@ A split-brain arises when two devices form independent rings (typically after a 
 Every `ring_tick` call polls the device's own PDS for stealth-encrypted events (in addition to the normal per-conversation polling of contacts' PDS records). This is the mechanism by which:
 
 - Coord group Welcomes (published by a sibling discovering this device) are found and joined.
+- `bootstrap.kp` events (a sibling offering a KeyPackage so we can add it to the ring) are found.
+- `sibling.msg` events (`kp_batch` / `kp_request` / `user_conv_welcome`) are found.
 - The device's own DID is always included in the polling set, even when the device has no user conversations.
 
-Coord Welcome events carry random tags (same as stealth invite tags in regular conversation flow) and are identified by attempting stealth decryption. Successfully decrypted Welcomes are processed, the joining device sends `CoordMsg::Hello`, and key packages are replenished immediately to avoid exhaustion on the next cycle.
+All of these carry random tags (same as stealth invite tags in regular conversation flow) and are identified by attempting stealth decryption, then dispatching on the decrypted event's `kind`. Because a device's own publishes do not trial-decrypt as its own, no mark-own bookkeeping is needed on this path. Successfully decrypted coord Welcomes are processed, the joining device sends `CoordMsg::Hello`, and key packages are replenished immediately to avoid exhaustion on the next cycle.
+
+The scan is cursor-based (`own_events_cursor`, an rkey), so events are fetched incrementally rather than re-scanned. Delivery here is order-insensitive by construction: a `sibling.msg` arriving before or after unrelated ring commits decrypts identically.
 
 Ring Welcomes are delivered via `CoordMsg::RingWelcome` over the coord channel, not via the stealth scan. This ensures the `ring_id` is present at processing time.
 
@@ -654,10 +770,13 @@ All private material stays on the device, never on the PDS:
 ├── mls.bin              # MLS group state (all groups, all epochs)
 └── keys/
     ├── credentials.json # ATProto session tokens
-    ├── identity.key     # MLS signing key bundle
+    ├── identity.key     # MLS signing key bundle (one per device, reused by every KeyPackage)
     ├── stealth.key      # X25519 stealth private key
+    ├── ring.json        # Device ring state: peers, ring membership, KP pools, used_kps
     └── conversations/   # Per-group metadata and sent message history
 ```
+
+`ring.json` holds the single-use accounting described in [Same-user Key Distribution](#same-user-key-distribution). Losing it does not compromise confidentiality, but it discards `used_kps` and the bootstrap-consumed flags, so a device that restores an older copy can re-consume a key package it has already used.
 
 ## What Goes Where
 
@@ -665,6 +784,8 @@ All private material stays on the device, never on the PDS:
 |------|----------|-----------|
 | MLS group state | Local filesystem | No (local trust boundary) |
 | Private keys (signing, stealth) | Local filesystem | No |
-| Key packages | Sender's PDS | No (public by design) |
-| Stealth addresses | Recipient's PDS | No (public key only) |
+| Device ring state (`ring.json`) | Local filesystem | No |
+| Key packages (cross-user pool) | Owner's PDS | No (public by design) |
+| Key packages (same-user lanes) | Owner's PDS, inside a stealth event | Yes (stealth, addressed to one sibling) |
+| Stealth addresses | Recipient's PDS | No (public key + device id) |
 | Messages, commits, welcomes | Sender's PDS | Yes (MLS or stealth) |

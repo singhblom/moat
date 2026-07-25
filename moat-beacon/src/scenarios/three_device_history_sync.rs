@@ -1,12 +1,11 @@
 //! Three-device history sync scenario.
 //!
 //! D1 sends messages into an Alice-Bob conversation, then D2 joins the ring
-//! and syncs from D1, then D3 joins and must also sync from D1 (leaf-0 is
-//! always the offerer).  After both syncs D3 must have every message that D1
-//! had before D2 joined.
+//! and syncs from D1, then D3 joins and must also sync from D1.  After both
+//! syncs D3 must have every message that D1 had before D2 joined.
 //!
 //! Tested for four runtime combinations (RRR, DDD, DRR, RRD) to cover:
-//! - D1 as Dart offerer (DRR, DDD)
+//! - D1 as Dart history donor (DRR, DDD)
 //! - D3 as Dart late joiner (RRD, DDD)
 //!
 //! Invariants verified:
@@ -127,7 +126,7 @@ pub async fn run(
         assert_eq!(s1.ring_group_id, s2.ring_group_id, "d1 and d2 must share ring");
     }
 
-    // Add D2 to the Alice-Bob conversation and trigger sync from D1 (leaf-0).
+    // Add D2 to the Alice-Bob conversation and trigger sync from D1.
     for _ in 0..12 {
         let _ = d1.ring_tick().await;
         let _ = d2.ring_tick().await;
@@ -164,7 +163,7 @@ pub async fn run(
         vlog!("[check] d2 synced ok ({} messages)", d2_msgs.len());
     }
 
-    // ── D3 joins and syncs from D1 (leaf-0 remains offerer) ──────────────────
+    // ── D3 joins and syncs from D1 ───────────────────────────────────────────
     let d3 = world
         .spawn_nth_device("alice-d3", d3_kind)
         .await
@@ -224,7 +223,7 @@ pub async fn run(
         vlog!("[diag] d1 sync_active={d1_sync} d3 sync_active={d3_sync}");
     }
 
-    // Trigger sync — D1 (leaf-0) sends SyncOffer; D3 joins.
+    // Trigger sync between D1 and D3.
     d1.sync_start().await.expect("d1 sync_start after d3 join");
     d3.sync_start().await.expect("d3 sync_start");
 

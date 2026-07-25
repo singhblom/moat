@@ -2,7 +2,7 @@
 //!
 //! D1 sets up a conversation with Bob, then D2 joins and sends a message,
 //! then D3 joins.  D3 must receive both D1's pre-join history and D2's
-//! staggered message via backward sync from D1 (leaf-0 offerer).
+//! staggered message via backward sync from D1.
 //!
 //! Tested for four runtime combinations (RRR, DDD, DRR, RRD).
 //!
@@ -193,7 +193,7 @@ pub async fn run(
         }
     }
 
-    // Sync: D1 (leaf-0) offers, D3 joins.  D1's local store has both messages.
+    // Sync D1 <-> D3.  D1's local store has both messages.
     d1.sync_start().await.expect("d1 sync_start after d3 join");
     d3.sync_start().await.expect("d3 sync_start");
 

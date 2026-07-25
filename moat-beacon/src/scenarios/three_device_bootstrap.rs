@@ -114,7 +114,7 @@ pub async fn run(
     tokio::time::sleep(Duration::from_millis(800)).await;
 
     // More cycles needed: D3 must exchange coord Hellos with both D1 and D2, then
-    // D1 (leaf-0) adds D3 to the ring and stealth-publishes the Welcome.
+    // D3 is added to the ring and the Welcome is stealth-published.
     for i in 0..10 {
         vlog!("[d3-join {i}]");
         d1.ring_tick().await.expect("d1 ring_tick");
@@ -146,21 +146,9 @@ pub async fn run(
     assert_eq!(s1.ring_group_id, s2.ring_group_id, "d1 and d2 must share the ring");
     assert_eq!(s1.ring_group_id, s3.ring_group_id, "d1 and d3 must share the ring");
 
-    // Coord-group counts are symmetric: every device ends up with one per
-    // sibling, so 2 each.
-    //
-    // This assertion previously expected an asymmetry — D3 with 2, and
-    // `{d1, d2} == {1, 2}` — because only the *elected* (smallest-leaf)
-    // pre-existing member created a coord group with a brand-new sibling,
-    // and the other deferred to it. That election existed to stop both
-    // existing members racing to consume D3's single shared-pool
-    // KeyPackage.
-    //
-    // Joiner-created rings remove the need for it (see
-    // `ring-inversion.md`): the onboarding device creates coord groups with
-    // every sibling itself, because it is the only participant guaranteed
-    // to be online. Deferring to an elected member deadlocks permanently
-    // when that member is the device the user just lost.
+    // Coord-group counts are symmetric: the onboarding device creates a
+    // coord group with every sibling itself, so all three end up with one
+    // per sibling.
     for (label, count) in [("d1", s1.coord_group_count), ("d2", s2.coord_group_count), ("d3", s3.coord_group_count)] {
         assert_eq!(count, 2, "{label} must have 2 coord groups (one per sibling), got {count}");
     }
