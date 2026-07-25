@@ -297,7 +297,7 @@ class DeviceRingService {
           // Stealth-addressed sibling payload (bootstrap KP or SiblingMsg).
           // The host just publishes the ciphertext under the supplied tag;
           // the recipient decrypts it out-of-band, so it is not marked own.
-          publishBootstrapKp: (tag, ciphertext) async {
+          publishStealthEvent: (tag, ciphertext) async {
             await client.publishEvent(tag, ciphertext);
           },
           replenishKeyPackage: () async {

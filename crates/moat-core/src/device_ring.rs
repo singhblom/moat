@@ -810,10 +810,7 @@ pub enum RingCommand {
     /// `KpBatch` / `KpRequest` / `UserConvWelcome` CoordMsg JSON); the
     /// recipient's own-PDS stealth scan picks it up.  Stealth delivery is
     /// epoch-free and order-insensitive.
-    ///
-    /// Name kept from the bootstrap-only Phase B for FFI stability; the
-    /// rename to `PublishStealthEvent` happens with the Phase G FRB regen.
-    PublishBootstrapKp {
+    PublishStealthEvent {
         tag: [u8; 16],
         ciphertext: Vec<u8>,
     },
@@ -2027,7 +2024,7 @@ impl DeviceRingState {
                 Err(_) => continue,
             };
             let tag: [u8; 16] = rand::random();
-            cmds.push(RingCommand::PublishBootstrapKp { tag, ciphertext });
+            cmds.push(RingCommand::PublishStealthEvent { tag, ciphertext });
             self.published_bootstrap_for.insert(key);
         }
         cmds
@@ -2529,7 +2526,7 @@ fn encrypt_sibling_msg(
     let event_bytes = event.to_bytes().ok()?;
     let padded = crate::padding::pad_to_bucket(&event_bytes);
     let ciphertext = encrypt_for_stealth(&[scan_pubkey], &padded).ok()?;
-    Some(RingCommand::PublishBootstrapKp {
+    Some(RingCommand::PublishStealthEvent {
         tag: rand::random(),
         ciphertext,
     })
@@ -3439,7 +3436,7 @@ mod tests {
     ) -> Vec<RingCommand> {
         let mut out = Vec::new();
         for cmd in cmds {
-            if let RingCommand::PublishBootstrapKp { ciphertext, .. } = cmd {
+            if let RingCommand::PublishStealthEvent { ciphertext, .. } = cmd {
                 if let Some(pt) = try_decrypt_stealth(&dev.stealth_priv, ciphertext) {
                     out.extend(state.step(&dev.mls, env, RingEvent::StealthPayloadDecrypted {
                         plaintext: &pt,
@@ -3476,18 +3473,18 @@ mod tests {
         // 1. Consumer requests KPs from the owner (pool empty).
         let req_cmds = consumer_state.emit_kp_request_for(&consumer.mls, &consumer_env, &owner_id);
         assert_eq!(req_cmds.len(), 1, "one stealth publish for the request");
-        assert!(matches!(req_cmds[0], RingCommand::PublishBootstrapKp { .. }));
+        assert!(matches!(req_cmds[0], RingCommand::PublishStealthEvent { .. }));
 
         // The request is addressed to the owner: the consumer must not be
         // able to decrypt its own publish (no mark-own bookkeeping needed).
-        if let RingCommand::PublishBootstrapKp { ciphertext, .. } = &req_cmds[0] {
+        if let RingCommand::PublishStealthEvent { ciphertext, .. } = &req_cmds[0] {
             assert!(try_decrypt_stealth(&consumer.stealth_priv, ciphertext).is_none());
         }
 
         // 2. Owner decrypts the request and responds with KpBatches.
         let batch_cmds = deliver_stealth(&req_cmds, &owner, &mut owner_state, &owner_env);
         assert!(
-            batch_cmds.iter().all(|c| matches!(c, RingCommand::PublishBootstrapKp { .. })),
+            batch_cmds.iter().all(|c| matches!(c, RingCommand::PublishStealthEvent { .. })),
             "owner responds only with stealth publishes"
         );
         assert!(!batch_cmds.is_empty(), "owner shipped at least one batch");
@@ -3734,7 +3731,7 @@ mod tests {
     fn interpret_ring_command(devices: &mut [SimDevice; 3], net: &mut SimNetwork, i: usize, cmd: RingCommand) {
         match cmd {
             RingCommand::PublishEvent { ciphertext, .. } => net.broadcasts.push((i, ciphertext)),
-            RingCommand::PublishBootstrapKp { ciphertext, .. }
+            RingCommand::PublishStealthEvent { ciphertext, .. }
             | RingCommand::StealthPublishWelcome { ciphertext, .. } => net.own_events.push(ciphertext),
             RingCommand::ReplenishKeyPackage => {
                 let (kp, _bundle) = devices[i].mls.generate_key_package(&devices[i].cred).expect("replenish kp");

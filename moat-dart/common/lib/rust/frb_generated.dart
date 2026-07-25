@@ -2627,7 +2627,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           ciphertext: dco_decode_list_prim_u_8_strict(raw[2]),
         );
       case 2:
-        return RingCommandDto_PublishBootstrapKp(
+        return RingCommandDto_PublishStealthEvent(
           tag: dco_decode_list_prim_u_8_strict(raw[1]),
           ciphertext: dco_decode_list_prim_u_8_strict(raw[2]),
         );
@@ -3464,7 +3464,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case 2:
         var var_tag = sse_decode_list_prim_u_8_strict(deserializer);
         var var_ciphertext = sse_decode_list_prim_u_8_strict(deserializer);
-        return RingCommandDto_PublishBootstrapKp(
+        return RingCommandDto_PublishStealthEvent(
             tag: var_tag, ciphertext: var_ciphertext);
       case 3:
         return RingCommandDto_ReplenishKeyPackage();
@@ -4224,7 +4224,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_i_32(1, serializer);
         sse_encode_list_prim_u_8_strict(tag, serializer);
         sse_encode_list_prim_u_8_strict(ciphertext, serializer);
-      case RingCommandDto_PublishBootstrapKp(
+      case RingCommandDto_PublishStealthEvent(
           tag: final tag,
           ciphertext: final ciphertext
         ):

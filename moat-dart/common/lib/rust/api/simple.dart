@@ -792,10 +792,10 @@ sealed class RingCommandDto with _$RingCommandDto {
     required Uint8List tag,
     required Uint8List ciphertext,
   }) = RingCommandDto_StealthPublishWelcome;
-  const factory RingCommandDto.publishBootstrapKp({
+  const factory RingCommandDto.publishStealthEvent({
     required Uint8List tag,
     required Uint8List ciphertext,
-  }) = RingCommandDto_PublishBootstrapKp;
+  }) = RingCommandDto_PublishStealthEvent;
   const factory RingCommandDto.replenishKeyPackage() =
       RingCommandDto_ReplenishKeyPackage;
   const factory RingCommandDto.registerGroup({

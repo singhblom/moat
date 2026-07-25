@@ -3458,7 +3458,7 @@ impl SseDecode for crate::api::simple::RingCommandDto {
             2 => {
                 let mut var_tag = <Vec<u8>>::sse_decode(deserializer);
                 let mut var_ciphertext = <Vec<u8>>::sse_decode(deserializer);
-                return crate::api::simple::RingCommandDto::PublishBootstrapKp {
+                return crate::api::simple::RingCommandDto::PublishStealthEvent {
                     tag: var_tag,
                     ciphertext: var_ciphertext,
                 };
@@ -4388,7 +4388,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::simple::RingCommandDto {
                 ciphertext.into_into_dart().into_dart(),
             ]
             .into_dart(),
-            crate::api::simple::RingCommandDto::PublishBootstrapKp { tag, ciphertext } => [
+            crate::api::simple::RingCommandDto::PublishStealthEvent { tag, ciphertext } => [
                 2.into_dart(),
                 tag.into_into_dart().into_dart(),
                 ciphertext.into_into_dart().into_dart(),
@@ -5134,7 +5134,7 @@ impl SseEncode for crate::api::simple::RingCommandDto {
                 <Vec<u8>>::sse_encode(tag, serializer);
                 <Vec<u8>>::sse_encode(ciphertext, serializer);
             }
-            crate::api::simple::RingCommandDto::PublishBootstrapKp { tag, ciphertext } => {
+            crate::api::simple::RingCommandDto::PublishStealthEvent { tag, ciphertext } => {
                 <i32>::sse_encode(2, serializer);
                 <Vec<u8>>::sse_encode(tag, serializer);
                 <Vec<u8>>::sse_encode(ciphertext, serializer);

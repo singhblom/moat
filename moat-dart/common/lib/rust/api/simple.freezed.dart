@@ -23,7 +23,7 @@ mixin _$RingCommandDto {
     required TResult Function(Uint8List tag, Uint8List ciphertext)
         stealthPublishWelcome,
     required TResult Function(Uint8List tag, Uint8List ciphertext)
-        publishBootstrapKp,
+        publishStealthEvent,
     required TResult Function() replenishKeyPackage,
     required TResult Function(Uint8List groupId, GroupKindDto kind)
         registerGroup,
@@ -38,7 +38,7 @@ mixin _$RingCommandDto {
         publishEvent,
     TResult? Function(Uint8List tag, Uint8List ciphertext)?
         stealthPublishWelcome,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishBootstrapKp,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult? Function()? replenishKeyPackage,
     TResult? Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
     TResult? Function(Uint8List token)? sendDrawbridgePairOffer,
@@ -52,7 +52,7 @@ mixin _$RingCommandDto {
         publishEvent,
     TResult Function(Uint8List tag, Uint8List ciphertext)?
         stealthPublishWelcome,
-    TResult Function(Uint8List tag, Uint8List ciphertext)? publishBootstrapKp,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult Function()? replenishKeyPackage,
     TResult Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
     TResult Function(Uint8List token)? sendDrawbridgePairOffer,
@@ -66,8 +66,8 @@ mixin _$RingCommandDto {
     required TResult Function(RingCommandDto_PublishEvent value) publishEvent,
     required TResult Function(RingCommandDto_StealthPublishWelcome value)
         stealthPublishWelcome,
-    required TResult Function(RingCommandDto_PublishBootstrapKp value)
-        publishBootstrapKp,
+    required TResult Function(RingCommandDto_PublishStealthEvent value)
+        publishStealthEvent,
     required TResult Function(RingCommandDto_ReplenishKeyPackage value)
         replenishKeyPackage,
     required TResult Function(RingCommandDto_RegisterGroup value) registerGroup,
@@ -84,8 +84,8 @@ mixin _$RingCommandDto {
     TResult? Function(RingCommandDto_PublishEvent value)? publishEvent,
     TResult? Function(RingCommandDto_StealthPublishWelcome value)?
         stealthPublishWelcome,
-    TResult? Function(RingCommandDto_PublishBootstrapKp value)?
-        publishBootstrapKp,
+    TResult? Function(RingCommandDto_PublishStealthEvent value)?
+        publishStealthEvent,
     TResult? Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult? Function(RingCommandDto_RegisterGroup value)? registerGroup,
@@ -102,8 +102,8 @@ mixin _$RingCommandDto {
     TResult Function(RingCommandDto_PublishEvent value)? publishEvent,
     TResult Function(RingCommandDto_StealthPublishWelcome value)?
         stealthPublishWelcome,
-    TResult Function(RingCommandDto_PublishBootstrapKp value)?
-        publishBootstrapKp,
+    TResult Function(RingCommandDto_PublishStealthEvent value)?
+        publishStealthEvent,
     TResult Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult Function(RingCommandDto_RegisterGroup value)? registerGroup,
@@ -238,7 +238,7 @@ class _$RingCommandDto_PublishEventImpl extends RingCommandDto_PublishEvent {
     required TResult Function(Uint8List tag, Uint8List ciphertext)
         stealthPublishWelcome,
     required TResult Function(Uint8List tag, Uint8List ciphertext)
-        publishBootstrapKp,
+        publishStealthEvent,
     required TResult Function() replenishKeyPackage,
     required TResult Function(Uint8List groupId, GroupKindDto kind)
         registerGroup,
@@ -256,7 +256,7 @@ class _$RingCommandDto_PublishEventImpl extends RingCommandDto_PublishEvent {
         publishEvent,
     TResult? Function(Uint8List tag, Uint8List ciphertext)?
         stealthPublishWelcome,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishBootstrapKp,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult? Function()? replenishKeyPackage,
     TResult? Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
     TResult? Function(Uint8List token)? sendDrawbridgePairOffer,
@@ -273,7 +273,7 @@ class _$RingCommandDto_PublishEventImpl extends RingCommandDto_PublishEvent {
         publishEvent,
     TResult Function(Uint8List tag, Uint8List ciphertext)?
         stealthPublishWelcome,
-    TResult Function(Uint8List tag, Uint8List ciphertext)? publishBootstrapKp,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult Function()? replenishKeyPackage,
     TResult Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
     TResult Function(Uint8List token)? sendDrawbridgePairOffer,
@@ -293,8 +293,8 @@ class _$RingCommandDto_PublishEventImpl extends RingCommandDto_PublishEvent {
     required TResult Function(RingCommandDto_PublishEvent value) publishEvent,
     required TResult Function(RingCommandDto_StealthPublishWelcome value)
         stealthPublishWelcome,
-    required TResult Function(RingCommandDto_PublishBootstrapKp value)
-        publishBootstrapKp,
+    required TResult Function(RingCommandDto_PublishStealthEvent value)
+        publishStealthEvent,
     required TResult Function(RingCommandDto_ReplenishKeyPackage value)
         replenishKeyPackage,
     required TResult Function(RingCommandDto_RegisterGroup value) registerGroup,
@@ -314,8 +314,8 @@ class _$RingCommandDto_PublishEventImpl extends RingCommandDto_PublishEvent {
     TResult? Function(RingCommandDto_PublishEvent value)? publishEvent,
     TResult? Function(RingCommandDto_StealthPublishWelcome value)?
         stealthPublishWelcome,
-    TResult? Function(RingCommandDto_PublishBootstrapKp value)?
-        publishBootstrapKp,
+    TResult? Function(RingCommandDto_PublishStealthEvent value)?
+        publishStealthEvent,
     TResult? Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult? Function(RingCommandDto_RegisterGroup value)? registerGroup,
@@ -335,8 +335,8 @@ class _$RingCommandDto_PublishEventImpl extends RingCommandDto_PublishEvent {
     TResult Function(RingCommandDto_PublishEvent value)? publishEvent,
     TResult Function(RingCommandDto_StealthPublishWelcome value)?
         stealthPublishWelcome,
-    TResult Function(RingCommandDto_PublishBootstrapKp value)?
-        publishBootstrapKp,
+    TResult Function(RingCommandDto_PublishStealthEvent value)?
+        publishStealthEvent,
     TResult Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult Function(RingCommandDto_RegisterGroup value)? registerGroup,
@@ -465,7 +465,7 @@ class _$RingCommandDto_StealthPublishWelcomeImpl
     required TResult Function(Uint8List tag, Uint8List ciphertext)
         stealthPublishWelcome,
     required TResult Function(Uint8List tag, Uint8List ciphertext)
-        publishBootstrapKp,
+        publishStealthEvent,
     required TResult Function() replenishKeyPackage,
     required TResult Function(Uint8List groupId, GroupKindDto kind)
         registerGroup,
@@ -483,7 +483,7 @@ class _$RingCommandDto_StealthPublishWelcomeImpl
         publishEvent,
     TResult? Function(Uint8List tag, Uint8List ciphertext)?
         stealthPublishWelcome,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishBootstrapKp,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult? Function()? replenishKeyPackage,
     TResult? Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
     TResult? Function(Uint8List token)? sendDrawbridgePairOffer,
@@ -500,7 +500,7 @@ class _$RingCommandDto_StealthPublishWelcomeImpl
         publishEvent,
     TResult Function(Uint8List tag, Uint8List ciphertext)?
         stealthPublishWelcome,
-    TResult Function(Uint8List tag, Uint8List ciphertext)? publishBootstrapKp,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult Function()? replenishKeyPackage,
     TResult Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
     TResult Function(Uint8List token)? sendDrawbridgePairOffer,
@@ -520,8 +520,8 @@ class _$RingCommandDto_StealthPublishWelcomeImpl
     required TResult Function(RingCommandDto_PublishEvent value) publishEvent,
     required TResult Function(RingCommandDto_StealthPublishWelcome value)
         stealthPublishWelcome,
-    required TResult Function(RingCommandDto_PublishBootstrapKp value)
-        publishBootstrapKp,
+    required TResult Function(RingCommandDto_PublishStealthEvent value)
+        publishStealthEvent,
     required TResult Function(RingCommandDto_ReplenishKeyPackage value)
         replenishKeyPackage,
     required TResult Function(RingCommandDto_RegisterGroup value) registerGroup,
@@ -541,8 +541,8 @@ class _$RingCommandDto_StealthPublishWelcomeImpl
     TResult? Function(RingCommandDto_PublishEvent value)? publishEvent,
     TResult? Function(RingCommandDto_StealthPublishWelcome value)?
         stealthPublishWelcome,
-    TResult? Function(RingCommandDto_PublishBootstrapKp value)?
-        publishBootstrapKp,
+    TResult? Function(RingCommandDto_PublishStealthEvent value)?
+        publishStealthEvent,
     TResult? Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult? Function(RingCommandDto_RegisterGroup value)? registerGroup,
@@ -562,8 +562,8 @@ class _$RingCommandDto_StealthPublishWelcomeImpl
     TResult Function(RingCommandDto_PublishEvent value)? publishEvent,
     TResult Function(RingCommandDto_StealthPublishWelcome value)?
         stealthPublishWelcome,
-    TResult Function(RingCommandDto_PublishBootstrapKp value)?
-        publishBootstrapKp,
+    TResult Function(RingCommandDto_PublishStealthEvent value)?
+        publishStealthEvent,
     TResult Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult Function(RingCommandDto_RegisterGroup value)? registerGroup,
@@ -599,23 +599,23 @@ abstract class RingCommandDto_StealthPublishWelcome extends RingCommandDto {
 }
 
 /// @nodoc
-abstract class _$$RingCommandDto_PublishBootstrapKpImplCopyWith<$Res> {
-  factory _$$RingCommandDto_PublishBootstrapKpImplCopyWith(
-          _$RingCommandDto_PublishBootstrapKpImpl value,
-          $Res Function(_$RingCommandDto_PublishBootstrapKpImpl) then) =
-      __$$RingCommandDto_PublishBootstrapKpImplCopyWithImpl<$Res>;
+abstract class _$$RingCommandDto_PublishStealthEventImplCopyWith<$Res> {
+  factory _$$RingCommandDto_PublishStealthEventImplCopyWith(
+          _$RingCommandDto_PublishStealthEventImpl value,
+          $Res Function(_$RingCommandDto_PublishStealthEventImpl) then) =
+      __$$RingCommandDto_PublishStealthEventImplCopyWithImpl<$Res>;
   @useResult
   $Res call({Uint8List tag, Uint8List ciphertext});
 }
 
 /// @nodoc
-class __$$RingCommandDto_PublishBootstrapKpImplCopyWithImpl<$Res>
+class __$$RingCommandDto_PublishStealthEventImplCopyWithImpl<$Res>
     extends _$RingCommandDtoCopyWithImpl<$Res,
-        _$RingCommandDto_PublishBootstrapKpImpl>
-    implements _$$RingCommandDto_PublishBootstrapKpImplCopyWith<$Res> {
-  __$$RingCommandDto_PublishBootstrapKpImplCopyWithImpl(
-      _$RingCommandDto_PublishBootstrapKpImpl _value,
-      $Res Function(_$RingCommandDto_PublishBootstrapKpImpl) _then)
+        _$RingCommandDto_PublishStealthEventImpl>
+    implements _$$RingCommandDto_PublishStealthEventImplCopyWith<$Res> {
+  __$$RingCommandDto_PublishStealthEventImplCopyWithImpl(
+      _$RingCommandDto_PublishStealthEventImpl _value,
+      $Res Function(_$RingCommandDto_PublishStealthEventImpl) _then)
       : super(_value, _then);
 
   /// Create a copy of RingCommandDto
@@ -626,7 +626,7 @@ class __$$RingCommandDto_PublishBootstrapKpImplCopyWithImpl<$Res>
     Object? tag = null,
     Object? ciphertext = null,
   }) {
-    return _then(_$RingCommandDto_PublishBootstrapKpImpl(
+    return _then(_$RingCommandDto_PublishStealthEventImpl(
       tag: null == tag
           ? _value.tag
           : tag // ignore: cast_nullable_to_non_nullable
@@ -641,9 +641,9 @@ class __$$RingCommandDto_PublishBootstrapKpImplCopyWithImpl<$Res>
 
 /// @nodoc
 
-class _$RingCommandDto_PublishBootstrapKpImpl
-    extends RingCommandDto_PublishBootstrapKp {
-  const _$RingCommandDto_PublishBootstrapKpImpl(
+class _$RingCommandDto_PublishStealthEventImpl
+    extends RingCommandDto_PublishStealthEvent {
+  const _$RingCommandDto_PublishStealthEventImpl(
       {required this.tag, required this.ciphertext})
       : super._();
 
@@ -654,14 +654,14 @@ class _$RingCommandDto_PublishBootstrapKpImpl
 
   @override
   String toString() {
-    return 'RingCommandDto.publishBootstrapKp(tag: $tag, ciphertext: $ciphertext)';
+    return 'RingCommandDto.publishStealthEvent(tag: $tag, ciphertext: $ciphertext)';
   }
 
   @override
   bool operator ==(Object other) {
     return identical(this, other) ||
         (other.runtimeType == runtimeType &&
-            other is _$RingCommandDto_PublishBootstrapKpImpl &&
+            other is _$RingCommandDto_PublishStealthEventImpl &&
             const DeepCollectionEquality().equals(other.tag, tag) &&
             const DeepCollectionEquality()
                 .equals(other.ciphertext, ciphertext));
@@ -678,10 +678,10 @@ class _$RingCommandDto_PublishBootstrapKpImpl
   @JsonKey(includeFromJson: false, includeToJson: false)
   @override
   @pragma('vm:prefer-inline')
-  _$$RingCommandDto_PublishBootstrapKpImplCopyWith<
-          _$RingCommandDto_PublishBootstrapKpImpl>
-      get copyWith => __$$RingCommandDto_PublishBootstrapKpImplCopyWithImpl<
-          _$RingCommandDto_PublishBootstrapKpImpl>(this, _$identity);
+  _$$RingCommandDto_PublishStealthEventImplCopyWith<
+          _$RingCommandDto_PublishStealthEventImpl>
+      get copyWith => __$$RingCommandDto_PublishStealthEventImplCopyWithImpl<
+          _$RingCommandDto_PublishStealthEventImpl>(this, _$identity);
 
   @override
   @optionalTypeArgs
@@ -691,7 +691,7 @@ class _$RingCommandDto_PublishBootstrapKpImpl
     required TResult Function(Uint8List tag, Uint8List ciphertext)
         stealthPublishWelcome,
     required TResult Function(Uint8List tag, Uint8List ciphertext)
-        publishBootstrapKp,
+        publishStealthEvent,
     required TResult Function() replenishKeyPackage,
     required TResult Function(Uint8List groupId, GroupKindDto kind)
         registerGroup,
@@ -699,7 +699,7 @@ class _$RingCommandDto_PublishBootstrapKpImpl
     required TResult Function(Uint8List token) sendDrawbridgePairJoin,
     required TResult Function() pollForNewDevices,
   }) {
-    return publishBootstrapKp(tag, ciphertext);
+    return publishStealthEvent(tag, ciphertext);
   }
 
   @override
@@ -709,14 +709,14 @@ class _$RingCommandDto_PublishBootstrapKpImpl
         publishEvent,
     TResult? Function(Uint8List tag, Uint8List ciphertext)?
         stealthPublishWelcome,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishBootstrapKp,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult? Function()? replenishKeyPackage,
     TResult? Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
     TResult? Function(Uint8List token)? sendDrawbridgePairOffer,
     TResult? Function(Uint8List token)? sendDrawbridgePairJoin,
     TResult? Function()? pollForNewDevices,
   }) {
-    return publishBootstrapKp?.call(tag, ciphertext);
+    return publishStealthEvent?.call(tag, ciphertext);
   }
 
   @override
@@ -726,7 +726,7 @@ class _$RingCommandDto_PublishBootstrapKpImpl
         publishEvent,
     TResult Function(Uint8List tag, Uint8List ciphertext)?
         stealthPublishWelcome,
-    TResult Function(Uint8List tag, Uint8List ciphertext)? publishBootstrapKp,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult Function()? replenishKeyPackage,
     TResult Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
     TResult Function(Uint8List token)? sendDrawbridgePairOffer,
@@ -734,8 +734,8 @@ class _$RingCommandDto_PublishBootstrapKpImpl
     TResult Function()? pollForNewDevices,
     required TResult orElse(),
   }) {
-    if (publishBootstrapKp != null) {
-      return publishBootstrapKp(tag, ciphertext);
+    if (publishStealthEvent != null) {
+      return publishStealthEvent(tag, ciphertext);
     }
     return orElse();
   }
@@ -746,8 +746,8 @@ class _$RingCommandDto_PublishBootstrapKpImpl
     required TResult Function(RingCommandDto_PublishEvent value) publishEvent,
     required TResult Function(RingCommandDto_StealthPublishWelcome value)
         stealthPublishWelcome,
-    required TResult Function(RingCommandDto_PublishBootstrapKp value)
-        publishBootstrapKp,
+    required TResult Function(RingCommandDto_PublishStealthEvent value)
+        publishStealthEvent,
     required TResult Function(RingCommandDto_ReplenishKeyPackage value)
         replenishKeyPackage,
     required TResult Function(RingCommandDto_RegisterGroup value) registerGroup,
@@ -758,7 +758,7 @@ class _$RingCommandDto_PublishBootstrapKpImpl
     required TResult Function(RingCommandDto_PollForNewDevices value)
         pollForNewDevices,
   }) {
-    return publishBootstrapKp(this);
+    return publishStealthEvent(this);
   }
 
   @override
@@ -767,8 +767,8 @@ class _$RingCommandDto_PublishBootstrapKpImpl
     TResult? Function(RingCommandDto_PublishEvent value)? publishEvent,
     TResult? Function(RingCommandDto_StealthPublishWelcome value)?
         stealthPublishWelcome,
-    TResult? Function(RingCommandDto_PublishBootstrapKp value)?
-        publishBootstrapKp,
+    TResult? Function(RingCommandDto_PublishStealthEvent value)?
+        publishStealthEvent,
     TResult? Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult? Function(RingCommandDto_RegisterGroup value)? registerGroup,
@@ -779,7 +779,7 @@ class _$RingCommandDto_PublishBootstrapKpImpl
     TResult? Function(RingCommandDto_PollForNewDevices value)?
         pollForNewDevices,
   }) {
-    return publishBootstrapKp?.call(this);
+    return publishStealthEvent?.call(this);
   }
 
   @override
@@ -788,8 +788,8 @@ class _$RingCommandDto_PublishBootstrapKpImpl
     TResult Function(RingCommandDto_PublishEvent value)? publishEvent,
     TResult Function(RingCommandDto_StealthPublishWelcome value)?
         stealthPublishWelcome,
-    TResult Function(RingCommandDto_PublishBootstrapKp value)?
-        publishBootstrapKp,
+    TResult Function(RingCommandDto_PublishStealthEvent value)?
+        publishStealthEvent,
     TResult Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult Function(RingCommandDto_RegisterGroup value)? registerGroup,
@@ -800,18 +800,18 @@ class _$RingCommandDto_PublishBootstrapKpImpl
     TResult Function(RingCommandDto_PollForNewDevices value)? pollForNewDevices,
     required TResult orElse(),
   }) {
-    if (publishBootstrapKp != null) {
-      return publishBootstrapKp(this);
+    if (publishStealthEvent != null) {
+      return publishStealthEvent(this);
     }
     return orElse();
   }
 }
 
-abstract class RingCommandDto_PublishBootstrapKp extends RingCommandDto {
-  const factory RingCommandDto_PublishBootstrapKp(
+abstract class RingCommandDto_PublishStealthEvent extends RingCommandDto {
+  const factory RingCommandDto_PublishStealthEvent(
           {required final Uint8List tag, required final Uint8List ciphertext}) =
-      _$RingCommandDto_PublishBootstrapKpImpl;
-  const RingCommandDto_PublishBootstrapKp._() : super._();
+      _$RingCommandDto_PublishStealthEventImpl;
+  const RingCommandDto_PublishStealthEvent._() : super._();
 
   Uint8List get tag;
   Uint8List get ciphertext;
@@ -819,8 +819,8 @@ abstract class RingCommandDto_PublishBootstrapKp extends RingCommandDto {
   /// Create a copy of RingCommandDto
   /// with the given fields replaced by the non-null parameter values.
   @JsonKey(includeFromJson: false, includeToJson: false)
-  _$$RingCommandDto_PublishBootstrapKpImplCopyWith<
-          _$RingCommandDto_PublishBootstrapKpImpl>
+  _$$RingCommandDto_PublishStealthEventImplCopyWith<
+          _$RingCommandDto_PublishStealthEventImpl>
       get copyWith => throw _privateConstructorUsedError;
 }
 
@@ -875,7 +875,7 @@ class _$RingCommandDto_ReplenishKeyPackageImpl
     required TResult Function(Uint8List tag, Uint8List ciphertext)
         stealthPublishWelcome,
     required TResult Function(Uint8List tag, Uint8List ciphertext)
-        publishBootstrapKp,
+        publishStealthEvent,
     required TResult Function() replenishKeyPackage,
     required TResult Function(Uint8List groupId, GroupKindDto kind)
         registerGroup,
@@ -893,7 +893,7 @@ class _$RingCommandDto_ReplenishKeyPackageImpl
         publishEvent,
     TResult? Function(Uint8List tag, Uint8List ciphertext)?
         stealthPublishWelcome,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishBootstrapKp,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult? Function()? replenishKeyPackage,
     TResult? Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
     TResult? Function(Uint8List token)? sendDrawbridgePairOffer,
@@ -910,7 +910,7 @@ class _$RingCommandDto_ReplenishKeyPackageImpl
         publishEvent,
     TResult Function(Uint8List tag, Uint8List ciphertext)?
         stealthPublishWelcome,
-    TResult Function(Uint8List tag, Uint8List ciphertext)? publishBootstrapKp,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult Function()? replenishKeyPackage,
     TResult Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
     TResult Function(Uint8List token)? sendDrawbridgePairOffer,
@@ -930,8 +930,8 @@ class _$RingCommandDto_ReplenishKeyPackageImpl
     required TResult Function(RingCommandDto_PublishEvent value) publishEvent,
     required TResult Function(RingCommandDto_StealthPublishWelcome value)
         stealthPublishWelcome,
-    required TResult Function(RingCommandDto_PublishBootstrapKp value)
-        publishBootstrapKp,
+    required TResult Function(RingCommandDto_PublishStealthEvent value)
+        publishStealthEvent,
     required TResult Function(RingCommandDto_ReplenishKeyPackage value)
         replenishKeyPackage,
     required TResult Function(RingCommandDto_RegisterGroup value) registerGroup,
@@ -951,8 +951,8 @@ class _$RingCommandDto_ReplenishKeyPackageImpl
     TResult? Function(RingCommandDto_PublishEvent value)? publishEvent,
     TResult? Function(RingCommandDto_StealthPublishWelcome value)?
         stealthPublishWelcome,
-    TResult? Function(RingCommandDto_PublishBootstrapKp value)?
-        publishBootstrapKp,
+    TResult? Function(RingCommandDto_PublishStealthEvent value)?
+        publishStealthEvent,
     TResult? Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult? Function(RingCommandDto_RegisterGroup value)? registerGroup,
@@ -972,8 +972,8 @@ class _$RingCommandDto_ReplenishKeyPackageImpl
     TResult Function(RingCommandDto_PublishEvent value)? publishEvent,
     TResult Function(RingCommandDto_StealthPublishWelcome value)?
         stealthPublishWelcome,
-    TResult Function(RingCommandDto_PublishBootstrapKp value)?
-        publishBootstrapKp,
+    TResult Function(RingCommandDto_PublishStealthEvent value)?
+        publishStealthEvent,
     TResult Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult Function(RingCommandDto_RegisterGroup value)? registerGroup,
@@ -1086,7 +1086,7 @@ class _$RingCommandDto_RegisterGroupImpl extends RingCommandDto_RegisterGroup {
     required TResult Function(Uint8List tag, Uint8List ciphertext)
         stealthPublishWelcome,
     required TResult Function(Uint8List tag, Uint8List ciphertext)
-        publishBootstrapKp,
+        publishStealthEvent,
     required TResult Function() replenishKeyPackage,
     required TResult Function(Uint8List groupId, GroupKindDto kind)
         registerGroup,
@@ -1104,7 +1104,7 @@ class _$RingCommandDto_RegisterGroupImpl extends RingCommandDto_RegisterGroup {
         publishEvent,
     TResult? Function(Uint8List tag, Uint8List ciphertext)?
         stealthPublishWelcome,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishBootstrapKp,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult? Function()? replenishKeyPackage,
     TResult? Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
     TResult? Function(Uint8List token)? sendDrawbridgePairOffer,
@@ -1121,7 +1121,7 @@ class _$RingCommandDto_RegisterGroupImpl extends RingCommandDto_RegisterGroup {
         publishEvent,
     TResult Function(Uint8List tag, Uint8List ciphertext)?
         stealthPublishWelcome,
-    TResult Function(Uint8List tag, Uint8List ciphertext)? publishBootstrapKp,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult Function()? replenishKeyPackage,
     TResult Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
     TResult Function(Uint8List token)? sendDrawbridgePairOffer,
@@ -1141,8 +1141,8 @@ class _$RingCommandDto_RegisterGroupImpl extends RingCommandDto_RegisterGroup {
     required TResult Function(RingCommandDto_PublishEvent value) publishEvent,
     required TResult Function(RingCommandDto_StealthPublishWelcome value)
         stealthPublishWelcome,
-    required TResult Function(RingCommandDto_PublishBootstrapKp value)
-        publishBootstrapKp,
+    required TResult Function(RingCommandDto_PublishStealthEvent value)
+        publishStealthEvent,
     required TResult Function(RingCommandDto_ReplenishKeyPackage value)
         replenishKeyPackage,
     required TResult Function(RingCommandDto_RegisterGroup value) registerGroup,
@@ -1162,8 +1162,8 @@ class _$RingCommandDto_RegisterGroupImpl extends RingCommandDto_RegisterGroup {
     TResult? Function(RingCommandDto_PublishEvent value)? publishEvent,
     TResult? Function(RingCommandDto_StealthPublishWelcome value)?
         stealthPublishWelcome,
-    TResult? Function(RingCommandDto_PublishBootstrapKp value)?
-        publishBootstrapKp,
+    TResult? Function(RingCommandDto_PublishStealthEvent value)?
+        publishStealthEvent,
     TResult? Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult? Function(RingCommandDto_RegisterGroup value)? registerGroup,
@@ -1183,8 +1183,8 @@ class _$RingCommandDto_RegisterGroupImpl extends RingCommandDto_RegisterGroup {
     TResult Function(RingCommandDto_PublishEvent value)? publishEvent,
     TResult Function(RingCommandDto_StealthPublishWelcome value)?
         stealthPublishWelcome,
-    TResult Function(RingCommandDto_PublishBootstrapKp value)?
-        publishBootstrapKp,
+    TResult Function(RingCommandDto_PublishStealthEvent value)?
+        publishStealthEvent,
     TResult Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult Function(RingCommandDto_RegisterGroup value)? registerGroup,
@@ -1301,7 +1301,7 @@ class _$RingCommandDto_SendDrawbridgePairOfferImpl
     required TResult Function(Uint8List tag, Uint8List ciphertext)
         stealthPublishWelcome,
     required TResult Function(Uint8List tag, Uint8List ciphertext)
-        publishBootstrapKp,
+        publishStealthEvent,
     required TResult Function() replenishKeyPackage,
     required TResult Function(Uint8List groupId, GroupKindDto kind)
         registerGroup,
@@ -1319,7 +1319,7 @@ class _$RingCommandDto_SendDrawbridgePairOfferImpl
         publishEvent,
     TResult? Function(Uint8List tag, Uint8List ciphertext)?
         stealthPublishWelcome,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishBootstrapKp,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult? Function()? replenishKeyPackage,
     TResult? Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
     TResult? Function(Uint8List token)? sendDrawbridgePairOffer,
@@ -1336,7 +1336,7 @@ class _$RingCommandDto_SendDrawbridgePairOfferImpl
         publishEvent,
     TResult Function(Uint8List tag, Uint8List ciphertext)?
         stealthPublishWelcome,
-    TResult Function(Uint8List tag, Uint8List ciphertext)? publishBootstrapKp,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult Function()? replenishKeyPackage,
     TResult Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
     TResult Function(Uint8List token)? sendDrawbridgePairOffer,
@@ -1356,8 +1356,8 @@ class _$RingCommandDto_SendDrawbridgePairOfferImpl
     required TResult Function(RingCommandDto_PublishEvent value) publishEvent,
     required TResult Function(RingCommandDto_StealthPublishWelcome value)
         stealthPublishWelcome,
-    required TResult Function(RingCommandDto_PublishBootstrapKp value)
-        publishBootstrapKp,
+    required TResult Function(RingCommandDto_PublishStealthEvent value)
+        publishStealthEvent,
     required TResult Function(RingCommandDto_ReplenishKeyPackage value)
         replenishKeyPackage,
     required TResult Function(RingCommandDto_RegisterGroup value) registerGroup,
@@ -1377,8 +1377,8 @@ class _$RingCommandDto_SendDrawbridgePairOfferImpl
     TResult? Function(RingCommandDto_PublishEvent value)? publishEvent,
     TResult? Function(RingCommandDto_StealthPublishWelcome value)?
         stealthPublishWelcome,
-    TResult? Function(RingCommandDto_PublishBootstrapKp value)?
-        publishBootstrapKp,
+    TResult? Function(RingCommandDto_PublishStealthEvent value)?
+        publishStealthEvent,
     TResult? Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult? Function(RingCommandDto_RegisterGroup value)? registerGroup,
@@ -1398,8 +1398,8 @@ class _$RingCommandDto_SendDrawbridgePairOfferImpl
     TResult Function(RingCommandDto_PublishEvent value)? publishEvent,
     TResult Function(RingCommandDto_StealthPublishWelcome value)?
         stealthPublishWelcome,
-    TResult Function(RingCommandDto_PublishBootstrapKp value)?
-        publishBootstrapKp,
+    TResult Function(RingCommandDto_PublishStealthEvent value)?
+        publishStealthEvent,
     TResult Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult Function(RingCommandDto_RegisterGroup value)? registerGroup,
@@ -1514,7 +1514,7 @@ class _$RingCommandDto_SendDrawbridgePairJoinImpl
     required TResult Function(Uint8List tag, Uint8List ciphertext)
         stealthPublishWelcome,
     required TResult Function(Uint8List tag, Uint8List ciphertext)
-        publishBootstrapKp,
+        publishStealthEvent,
     required TResult Function() replenishKeyPackage,
     required TResult Function(Uint8List groupId, GroupKindDto kind)
         registerGroup,
@@ -1532,7 +1532,7 @@ class _$RingCommandDto_SendDrawbridgePairJoinImpl
         publishEvent,
     TResult? Function(Uint8List tag, Uint8List ciphertext)?
         stealthPublishWelcome,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishBootstrapKp,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult? Function()? replenishKeyPackage,
     TResult? Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
     TResult? Function(Uint8List token)? sendDrawbridgePairOffer,
@@ -1549,7 +1549,7 @@ class _$RingCommandDto_SendDrawbridgePairJoinImpl
         publishEvent,
     TResult Function(Uint8List tag, Uint8List ciphertext)?
         stealthPublishWelcome,
-    TResult Function(Uint8List tag, Uint8List ciphertext)? publishBootstrapKp,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult Function()? replenishKeyPackage,
     TResult Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
     TResult Function(Uint8List token)? sendDrawbridgePairOffer,
@@ -1569,8 +1569,8 @@ class _$RingCommandDto_SendDrawbridgePairJoinImpl
     required TResult Function(RingCommandDto_PublishEvent value) publishEvent,
     required TResult Function(RingCommandDto_StealthPublishWelcome value)
         stealthPublishWelcome,
-    required TResult Function(RingCommandDto_PublishBootstrapKp value)
-        publishBootstrapKp,
+    required TResult Function(RingCommandDto_PublishStealthEvent value)
+        publishStealthEvent,
     required TResult Function(RingCommandDto_ReplenishKeyPackage value)
         replenishKeyPackage,
     required TResult Function(RingCommandDto_RegisterGroup value) registerGroup,
@@ -1590,8 +1590,8 @@ class _$RingCommandDto_SendDrawbridgePairJoinImpl
     TResult? Function(RingCommandDto_PublishEvent value)? publishEvent,
     TResult? Function(RingCommandDto_StealthPublishWelcome value)?
         stealthPublishWelcome,
-    TResult? Function(RingCommandDto_PublishBootstrapKp value)?
-        publishBootstrapKp,
+    TResult? Function(RingCommandDto_PublishStealthEvent value)?
+        publishStealthEvent,
     TResult? Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult? Function(RingCommandDto_RegisterGroup value)? registerGroup,
@@ -1611,8 +1611,8 @@ class _$RingCommandDto_SendDrawbridgePairJoinImpl
     TResult Function(RingCommandDto_PublishEvent value)? publishEvent,
     TResult Function(RingCommandDto_StealthPublishWelcome value)?
         stealthPublishWelcome,
-    TResult Function(RingCommandDto_PublishBootstrapKp value)?
-        publishBootstrapKp,
+    TResult Function(RingCommandDto_PublishStealthEvent value)?
+        publishStealthEvent,
     TResult Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult Function(RingCommandDto_RegisterGroup value)? registerGroup,
@@ -1697,7 +1697,7 @@ class _$RingCommandDto_PollForNewDevicesImpl
     required TResult Function(Uint8List tag, Uint8List ciphertext)
         stealthPublishWelcome,
     required TResult Function(Uint8List tag, Uint8List ciphertext)
-        publishBootstrapKp,
+        publishStealthEvent,
     required TResult Function() replenishKeyPackage,
     required TResult Function(Uint8List groupId, GroupKindDto kind)
         registerGroup,
@@ -1715,7 +1715,7 @@ class _$RingCommandDto_PollForNewDevicesImpl
         publishEvent,
     TResult? Function(Uint8List tag, Uint8List ciphertext)?
         stealthPublishWelcome,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishBootstrapKp,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult? Function()? replenishKeyPackage,
     TResult? Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
     TResult? Function(Uint8List token)? sendDrawbridgePairOffer,
@@ -1732,7 +1732,7 @@ class _$RingCommandDto_PollForNewDevicesImpl
         publishEvent,
     TResult Function(Uint8List tag, Uint8List ciphertext)?
         stealthPublishWelcome,
-    TResult Function(Uint8List tag, Uint8List ciphertext)? publishBootstrapKp,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult Function()? replenishKeyPackage,
     TResult Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
     TResult Function(Uint8List token)? sendDrawbridgePairOffer,
@@ -1752,8 +1752,8 @@ class _$RingCommandDto_PollForNewDevicesImpl
     required TResult Function(RingCommandDto_PublishEvent value) publishEvent,
     required TResult Function(RingCommandDto_StealthPublishWelcome value)
         stealthPublishWelcome,
-    required TResult Function(RingCommandDto_PublishBootstrapKp value)
-        publishBootstrapKp,
+    required TResult Function(RingCommandDto_PublishStealthEvent value)
+        publishStealthEvent,
     required TResult Function(RingCommandDto_ReplenishKeyPackage value)
         replenishKeyPackage,
     required TResult Function(RingCommandDto_RegisterGroup value) registerGroup,
@@ -1773,8 +1773,8 @@ class _$RingCommandDto_PollForNewDevicesImpl
     TResult? Function(RingCommandDto_PublishEvent value)? publishEvent,
     TResult? Function(RingCommandDto_StealthPublishWelcome value)?
         stealthPublishWelcome,
-    TResult? Function(RingCommandDto_PublishBootstrapKp value)?
-        publishBootstrapKp,
+    TResult? Function(RingCommandDto_PublishStealthEvent value)?
+        publishStealthEvent,
     TResult? Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult? Function(RingCommandDto_RegisterGroup value)? registerGroup,
@@ -1794,8 +1794,8 @@ class _$RingCommandDto_PollForNewDevicesImpl
     TResult Function(RingCommandDto_PublishEvent value)? publishEvent,
     TResult Function(RingCommandDto_StealthPublishWelcome value)?
         stealthPublishWelcome,
-    TResult Function(RingCommandDto_PublishBootstrapKp value)?
-        publishBootstrapKp,
+    TResult Function(RingCommandDto_PublishStealthEvent value)?
+        publishStealthEvent,
     TResult Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult Function(RingCommandDto_RegisterGroup value)? registerGroup,

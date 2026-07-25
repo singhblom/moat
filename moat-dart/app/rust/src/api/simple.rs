@@ -1354,7 +1354,7 @@ impl From<GroupKind> for GroupKindDto {
 pub enum RingCommandDto {
     PublishEvent { tag: Vec<u8>, ciphertext: Vec<u8>, mark_own: bool },
     StealthPublishWelcome { tag: Vec<u8>, ciphertext: Vec<u8> },
-    PublishBootstrapKp { tag: Vec<u8>, ciphertext: Vec<u8> },
+    PublishStealthEvent { tag: Vec<u8>, ciphertext: Vec<u8> },
     ReplenishKeyPackage,
     RegisterGroup { group_id: Vec<u8>, kind: GroupKindDto },
     SendDrawbridgePairOffer { token: Vec<u8> },
@@ -1371,8 +1371,8 @@ impl From<RingCommand> for RingCommandDto {
             RingCommand::StealthPublishWelcome { tag, ciphertext } => {
                 RingCommandDto::StealthPublishWelcome { tag: tag.to_vec(), ciphertext }
             }
-            RingCommand::PublishBootstrapKp { tag, ciphertext } => {
-                RingCommandDto::PublishBootstrapKp { tag: tag.to_vec(), ciphertext }
+            RingCommand::PublishStealthEvent { tag, ciphertext } => {
+                RingCommandDto::PublishStealthEvent { tag: tag.to_vec(), ciphertext }
             }
             RingCommand::ReplenishKeyPackage => RingCommandDto::ReplenishKeyPackage,
             RingCommand::RegisterGroup { group_id, kind } => {

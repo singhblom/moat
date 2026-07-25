@@ -547,7 +547,7 @@ pub struct App {
     /// Pairing token for the in-flight pair WS session.
     pending_pair_token: Option<Vec<u8>>,
 
-    /// `RingCommand::PublishEvent`/`PublishBootstrapKp`s emitted from the
+    /// `RingCommand::PublishEvent`/`PublishStealthEvent`s emitted from the
     /// synchronous coord-message handler (`handle_coord_msg_sync`), which has
     /// no async context to publish them.  Drained and published at the start
     /// of the next `ring_tick_inner`.  This is the delivery path for
@@ -4433,7 +4433,7 @@ impl App {
                     self.own_published_tags.insert(tag);
                 }
             }
-            RingCommand::PublishBootstrapKp { tag, ciphertext } => {
+            RingCommand::PublishStealthEvent { tag, ciphertext } => {
                 // Same-user KP lane (KpBatch / KpRequest / UserConvWelcome),
                 // stealth-addressed to a specific sibling.  Stealth payloads
                 // are decrypted out-of-band by the recipient, so they are
@@ -4566,7 +4566,7 @@ impl App {
                             .log(&format!("ring: failed to publish stealth welcome: {e}"));
                     }
                 }
-                RingCommand::PublishBootstrapKp { tag, ciphertext } => {
+                RingCommand::PublishStealthEvent { tag, ciphertext } => {
                     if let Err(e) = client.publish_event(&tag, &ciphertext, None).await {
                         self.debug_log
                             .log(&format!("ring: failed to publish bootstrap kp: {e}"));
@@ -4798,7 +4798,7 @@ impl App {
                 // drains the queue.  These are one-shot responses — nothing
                 // re-emits them on a later tick, so dropping them would
                 // silently stall the fan-out.
-                cmd @ (RingCommand::PublishEvent { .. } | RingCommand::PublishBootstrapKp { .. }) => {
+                cmd @ (RingCommand::PublishEvent { .. } | RingCommand::PublishStealthEvent { .. }) => {
                     self.ring_publish_queue.push(cmd);
                 }
                 RingCommand::StealthPublishWelcome { .. }
