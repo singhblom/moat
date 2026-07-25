@@ -382,6 +382,21 @@ pub enum RingMembership {
     },
 }
 
+/// Ticks a peer may sit in a no-acknowledgement wait before we retry.
+///
+/// Two states qualify. `SyncStatus::OfferEmitted`: the peer may be busy in
+/// another pair session and never accept, and `any_offer_in_flight()` blocks
+/// *all* of our further offers while it is outstanding, so one unaccepted
+/// offer would otherwise mute this device permanently. `AwaitingTheirHello`:
+/// the coord-group Welcome we sent may have been built from a key package
+/// whose init key was already consumed, which fails silently at the peer.
+///
+/// Sized in ticks rather than wall-clock because the deterministic
+/// simulation advances `now_ms` by 1 per round; a millisecond budget large
+/// enough to be sane in production would never elapse there. At the host's
+/// tick cadence this is on the order of tens of seconds.
+pub const STALL_RETRY_TICKS: u32 = 4;
+
 /// Target number of an owner's key packages a consumer maintains locally.
 pub const KP_POOL_TARGET: usize = 8;
 
@@ -430,6 +445,14 @@ pub struct DeviceRingState {
     peers: HashMap<String, PeerState>,
     /// Cursor (rkey) for incremental own-PDS stealth scan.
     own_events_cursor: Option<String>,
+    /// Per-peer count of consecutive ticks spent in a state that waits on
+    /// something with **no acknowledgement path** — an emitted pairing offer
+    /// the peer may never accept, or a coord-group Welcome the peer may never
+    /// be able to process. Neither failure is reported back to us, so without
+    /// a bound they stall forever. Reset on any peer-state transition; not
+    /// persisted, so a restart re-arms everything.
+    #[serde(skip)]
+    stall_ticks: HashMap<String, u32>,
 
     /// Owner-global monotonic counter for `OfferedKp.seq`.  Incremented
     /// every time we publish a KP into a `KpBatch` (any recipient).  See
@@ -1072,7 +1095,11 @@ impl DeviceRingState {
     }
 
     fn peer_insert(&mut self, id: DeviceId, state: PeerState) {
-        self.peers.insert(hex::encode(id), state);
+        let key = hex::encode(id);
+        // Any transition means we are no longer waiting on whatever we were
+        // waiting on, so the stall clock restarts.
+        self.stall_ticks.remove(&key);
+        self.peers.insert(key, state);
     }
 
     fn peer_iter(&self) -> impl Iterator<Item = (DeviceId, &PeerState)> {
@@ -2194,7 +2221,10 @@ impl DeviceRingState {
             cmds.push(RingCommand::PollForNewDevices);
         }
 
-        // ── C. Issue sync offers for any OweOffer peer (we are leaf-0) ────
+        // ── B bis. Recover peers stalled with no acknowledgement path ────
+        cmds.extend(self.recover_stalled_peers());
+
+        // ── C. Issue a sync offer to any OweOffer peer we out-rank ───────
         if env.drawbridge_connected && !env.sync_session_active {
             cmds.extend(self.try_emit_sync_offer(mls, env));
         }
@@ -2205,18 +2235,77 @@ impl DeviceRingState {
         cmds
     }
 
+    /// Advance the stall clock for peers waiting on something that will
+    /// never be reported as failed, and recover the ones that have waited
+    /// long enough.
+    ///
+    /// Two states have no acknowledgement path, so a failure in either is
+    /// indistinguishable from slowness and neither self-corrects:
+    ///
+    /// - `OfferEmitted` — the peer may be occupied with another sibling's
+    ///   pair session and never accept. Because `any_offer_in_flight()` is a
+    ///   per-device gate, one unaccepted offer blocks every future offer this
+    ///   device would make, to anyone. Recovery is to return the peer to
+    ///   `OweOffer` so the next tick can re-emit. Safe to repeat: pairing
+    ///   tokens are single-use with their own relay-side expiry, so a stale
+    ///   one simply goes unused.
+    /// - `AwaitingTheirHello` — we created a coord group and sent the peer a
+    ///   Welcome. If that Welcome was built from a key package whose init key
+    ///   had already been consumed, the peer cannot process it and will never
+    ///   reply. Recovery is to drop the peer entry entirely so the next
+    ///   `PeerKeyPackageObserved` rediscovers it and builds a fresh coord
+    ///   group from whatever the newest key package is by then —
+    ///   `on_peer_kp_observed` dedups on the entry existing, so clearing it is
+    ///   what re-arms discovery.
+    fn recover_stalled_peers(&mut self) -> Vec<RingCommand> {
+        let waiting: Vec<String> = self
+            .peers
+            .iter()
+            .filter(|(_, ps)| {
+                matches!(
+                    ps,
+                    PeerState::AwaitingTheirHello { .. }
+                        | PeerState::CoordReady {
+                            ring_link: RingLink::Joined { sync: SyncStatus::OfferEmitted { .. }, .. },
+                            ..
+                        }
+                )
+            })
+            .map(|(k, _)| k.clone())
+            .collect();
+
+        // Peers that are no longer waiting should not keep a stale clock.
+        self.stall_ticks.retain(|k, _| waiting.contains(k));
+
+        for key in waiting {
+            let ticks = self.stall_ticks.entry(key.clone()).or_insert(0);
+            *ticks += 1;
+            if *ticks <= STALL_RETRY_TICKS {
+                continue;
+            }
+            self.stall_ticks.remove(&key);
+            match self.peers.get_mut(&key) {
+                Some(PeerState::CoordReady {
+                    ring_link: RingLink::Joined { sync, .. },
+                    ..
+                }) => *sync = SyncStatus::OweOffer,
+                Some(PeerState::AwaitingTheirHello { .. }) => {
+                    self.peers.remove(&key);
+                }
+                _ => {}
+            }
+        }
+        Vec::new()
+    }
+
     /// At most one offer **in flight**.  Walks peers, picks the first OweOffer
     /// (deterministic by hex key sort), and emits the offer if conditions
     /// allow.  Sets the peer's sync to OfferEmitted on success.
     fn try_emit_sync_offer(&mut self, mls: &MoatSession, env: &StepEnv<'_>) -> Vec<RingCommand> {
-        let (ring_id, our_leaf) = match &self.ring {
-            RingMembership::InRing { ring_id, our_leaf, .. } => (ring_id.clone(), *our_leaf),
+        let ring_id = match &self.ring {
+            RingMembership::InRing { ring_id, .. } => ring_id.clone(),
             _ => return Vec::new(),
         };
-        if our_leaf != 0 {
-            // Static-leaf-0 offerer rule (Phase 4).
-            return Vec::new();
-        }
         // An emitted offer only makes `env.sync_session_active` true once the
         // peer accepts it, so that flag alone doesn't cover the emit→accept
         // window: with two peers owing offers we would emit to the second
@@ -2225,11 +2314,35 @@ impl DeviceRingState {
             return Vec::new();
         }
 
+        // Offerer election is **per pair**, not global: within each pair the
+        // smaller `device_id` offers. `SyncStatus::OweOffer` is set
+        // symmetrically — both sides mark each other when they become ring
+        // members — so without a tiebreak both would offer and open two
+        // pairing sessions for one pair.
+        //
+        // This replaces a static `our_leaf != 0` rule, under which only the
+        // ring's leaf 0 ever offered. That had two problems. It was a global
+        // single point of failure of the same class as the ring-add election
+        // this design removes; and it left a coverage gap, since two devices
+        // that were both non-leaf-0 never synced with each other at all — a
+        // new device could only ever receive history from leaf 0, never from
+        // any other sibling holding history it lacked.
+        //
+        // Unlike ring-add, a fixed per-pair choice costs nothing in liveness:
+        // history transfer needs a pair WebSocket with *both* ends online, so
+        // if the designated offerer for a pair is offline that pair could not
+        // have synced regardless. Every pair has its own offerer, so no
+        // single device's absence blocks any other pair.
+        let my_key = hex::encode(mls.device_id());
         let mut sorted_keys: Vec<&String> = self.peers.keys().collect();
         sorted_keys.sort();
         let target_key = sorted_keys
             .into_iter()
             .find(|k| {
+                // Fixed-width lowercase hex, so string order is byte order.
+                if my_key.as_str() >= k.as_str() {
+                    return false;
+                }
                 matches!(
                     self.peers.get(*k),
                     Some(PeerState::CoordReady {
@@ -3232,6 +3345,186 @@ mod tests {
         // Once the in-flight offer resolves, the waiting peer gets served.
         s.on_sync_session_ended();
         assert!(s.any_offer_in_flight() == false);
+    }
+
+    /// Offerer election is per pair: the smaller `device_id` offers.
+    /// `OweOffer` is set symmetrically, so without this exactly one pair
+    /// would open two pairing sessions.
+    #[test]
+    fn sync_offer_emitted_only_by_the_smaller_device_id_of_a_pair() {
+        let dev = make_stealth_device("did:plc:user", "d");
+        let env = env_for(&dev, &[]);
+        let me = *dev.mls.device_id();
+
+        // A peer that sorts *above* us: we are the offerer, so we emit.
+        let mut higher = me;
+        higher[15] = higher[15].wrapping_add(1);
+        if higher <= me {
+            higher = [0xFF; 16];
+        }
+        let ring_id = dev.mls.create_device_ring(&dev.cred, &dev.key_bundle).expect("ring");
+        let mut s = DeviceRingState::new();
+        s.ring = RingMembership::InRing {
+            ring_id: ring_id.clone(),
+            created_at: 1,
+            generation: 1,
+            our_leaf: 0,
+        };
+        s.peers.insert(
+            hex::encode(higher),
+            PeerState::CoordReady {
+                coord_group_id: vec![1u8],
+                ring_link: RingLink::Joined { added_by: AddedBy::Us, sync: SyncStatus::OweOffer },
+            },
+        );
+        assert!(
+            !s.try_emit_sync_offer(&dev.mls, &env).is_empty(),
+            "we out-rank the peer, so we must be the one to offer"
+        );
+
+        // A peer that sorts *below* us: they are the offerer, we stay quiet.
+        let lower = [0u8; 16];
+        assert!(lower < me, "test fixture assumption: our device_id is not all-zero");
+        let mut s2 = DeviceRingState::new();
+        s2.ring = RingMembership::InRing {
+            ring_id: ring_id.clone(),
+            created_at: 1,
+            generation: 1,
+            our_leaf: 0,
+        };
+        s2.peers.insert(
+            hex::encode(lower),
+            PeerState::CoordReady {
+                coord_group_id: vec![1u8],
+                ring_link: RingLink::Joined { added_by: AddedBy::Us, sync: SyncStatus::OweOffer },
+            },
+        );
+        assert!(
+            s2.try_emit_sync_offer(&dev.mls, &env).is_empty(),
+            "the lower device_id owns this pair's offer; we must not duplicate it"
+        );
+    }
+
+    /// Regression guard for the coverage gap the old static `our_leaf != 0`
+    /// rule left: a device that is not ring leaf 0 must still be able to
+    /// offer, or two non-leaf-0 siblings never sync with each other and
+    /// history held only by one of them can never reach the other.
+    #[test]
+    fn sync_offer_is_not_restricted_to_ring_leaf_zero() {
+        let dev = make_stealth_device("did:plc:user", "d");
+        let env = env_for(&dev, &[]);
+        let me = *dev.mls.device_id();
+        let mut higher = me;
+        higher[15] = higher[15].wrapping_add(1);
+        if higher <= me {
+            higher = [0xFF; 16];
+        }
+
+        let ring_id = dev.mls.create_device_ring(&dev.cred, &dev.key_bundle).expect("ring");
+        let mut s = DeviceRingState::new();
+        // Deliberately NOT leaf 0.
+        s.ring = RingMembership::InRing {
+            ring_id,
+            created_at: 1,
+            generation: 1,
+            our_leaf: 7,
+        };
+        s.peers.insert(
+            hex::encode(higher),
+            PeerState::CoordReady {
+                coord_group_id: vec![1u8],
+                ring_link: RingLink::Joined { added_by: AddedBy::Us, sync: SyncStatus::OweOffer },
+            },
+        );
+        assert!(
+            !s.try_emit_sync_offer(&dev.mls, &env).is_empty(),
+            "leaf index must no longer gate offering"
+        );
+    }
+
+    /// An emitted offer the peer never accepts must not mute this device
+    /// forever. `any_offer_in_flight()` is a per-device gate, so without
+    /// recovery a single unaccepted offer blocks every later offer to
+    /// every peer.
+    #[test]
+    fn stalled_sync_offer_returns_to_owe_offer_and_unblocks_the_device() {
+        let mut s = DeviceRingState::new();
+        mark_in_ring(&mut s);
+        let peer = [7u8; 16];
+        s.peers.insert(
+            hex::encode(peer),
+            PeerState::CoordReady {
+                coord_group_id: vec![1u8],
+                ring_link: RingLink::Joined {
+                    added_by: AddedBy::Us,
+                    sync: SyncStatus::OfferEmitted { token: vec![9] },
+                },
+            },
+        );
+        assert!(s.any_offer_in_flight(), "precondition: an offer is outstanding");
+
+        for _ in 0..STALL_RETRY_TICKS {
+            s.recover_stalled_peers();
+            assert!(s.any_offer_in_flight(), "must not give up before the budget elapses");
+        }
+        s.recover_stalled_peers();
+
+        assert!(!s.any_offer_in_flight(), "the device must be free to offer again");
+        assert!(
+            matches!(
+                s.peers.get(&hex::encode(peer)),
+                Some(PeerState::CoordReady {
+                    ring_link: RingLink::Joined { sync: SyncStatus::OweOffer, .. },
+                    ..
+                })
+            ),
+            "peer should be re-armed for a fresh offer, got {:?}",
+            s.peers.get(&hex::encode(peer))
+        );
+    }
+
+    /// A coord-group Welcome built from an already-consumed key package
+    /// fails silently at the peer, so `AwaitingTheirHello` never resolves.
+    /// Recovery drops the entry so discovery re-arms with a newer package.
+    #[test]
+    fn stalled_awaiting_hello_is_dropped_so_discovery_can_retry() {
+        let mut s = DeviceRingState::new();
+        let peer = [3u8; 16];
+        s.peers.insert(
+            hex::encode(peer),
+            PeerState::AwaitingTheirHello { coord_group_id: vec![4u8] },
+        );
+
+        for _ in 0..STALL_RETRY_TICKS {
+            s.recover_stalled_peers();
+            assert!(s.peers.contains_key(&hex::encode(peer)), "must not drop early");
+        }
+        s.recover_stalled_peers();
+
+        assert!(
+            !s.peers.contains_key(&hex::encode(peer)),
+            "entry must be cleared; on_peer_kp_observed dedups on it existing, \
+             so leaving it would make the retry a no-op"
+        );
+    }
+
+    /// The stall clock must not accumulate across unrelated states — a peer
+    /// that keeps transitioning is making progress, not stalling.
+    #[test]
+    fn stall_clock_resets_on_peer_state_transition() {
+        let mut s = DeviceRingState::new();
+        let peer = [5u8; 16];
+        s.peer_insert(peer, PeerState::AwaitingTheirHello { coord_group_id: vec![1u8] });
+        for _ in 0..STALL_RETRY_TICKS {
+            s.recover_stalled_peers();
+        }
+        // A transition arrives just before the budget would have elapsed.
+        s.peer_insert(peer, PeerState::AwaitingTheirHello { coord_group_id: vec![2u8] });
+        s.recover_stalled_peers();
+        assert!(
+            s.peers.contains_key(&hex::encode(peer)),
+            "clock should have restarted on the transition"
+        );
     }
 
     #[test]
