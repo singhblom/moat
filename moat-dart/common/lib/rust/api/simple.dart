@@ -8,7 +8,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'simple.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `from_core`, `into_core`, `push_media_label`, `push_plaintext_preview`
+// These functions are ignored because they are not marked as `pub`: `from_core`, `into_core`, `push_media_label`, `push_plaintext_preview`, `to_core_sibling_stealth`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `MoatError`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
@@ -245,6 +245,38 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<RingDriverHandle>>
 abstract class RingDriverHandle implements RustOpaqueInterface {
+  /// Claim one unused key package from the local pool for `owner`, marking
+  /// its seq consumed.  `None` means the pool is drained — the host should
+  /// emit a `KpRequest` via [`Self::emit_kp_request_for`] and defer the add
+  /// until a `KpBatch` arrives.  Single-use enforcement lives here, not in
+  /// the host: a seq is never returned twice, even if replayed into the
+  /// pool.
+  OfferedKpDto? claimKp({required List<int> ownerDeviceId});
+
+  /// Emit a `KpRequest` to `owner` asking it to top up our pool.  The host
+  /// publishes the returned commands.  Empty if not in a ring or if the
+  /// sibling's stealth record is not yet known (self-healing: the next poll
+  /// retries).
+  Future<List<RingCommandDto>> emitKpRequestFor(
+      {required MoatSessionHandle session,
+      required String myDid,
+      required List<int> keyBundle,
+      required List<SiblingStealthDto> siblingStealth,
+      required List<int> ownerDeviceId});
+
+  /// Build the stealth-publish command carrying a `CoordMsg::UserConvWelcome`
+  /// for `owner`.  The CoordMsg framing stays in Rust so the wire format has
+  /// a single owner.  `None` if not in a ring or the sibling's stealth
+  /// record is unknown.
+  Future<RingCommandDto?> encryptUserConvWelcome(
+      {required MoatSessionHandle session,
+      required String myDid,
+      required List<int> keyBundle,
+      required List<SiblingStealthDto> siblingStealth,
+      required List<int> ownerDeviceId,
+      required List<int> groupId,
+      required List<int> welcome});
+
   /// Restore a ring state from its persisted JSON.
   static Future<RingDriverHandle> fromStateJson({required String json}) =>
       RustLib.instance.api
@@ -255,7 +287,10 @@ abstract class RingDriverHandle implements RustOpaqueInterface {
       {required MoatSessionHandle session,
       required String myDid,
       required List<int> groupId,
-      required List<int> payload});
+      required List<int> payload,
+      Uint8List? senderDeviceId,
+      required List<SiblingStealthDto> siblingStealth,
+      required List<int> keyBundle});
 
   /// Create a new ring state with empty state.
   static RingDriverHandle newEmpty() =>
@@ -284,6 +319,10 @@ abstract class RingDriverHandle implements RustOpaqueInterface {
 
   /// Raw ring group ID, if a ring exists.
   Uint8List? ringGroupId();
+
+  /// Device ids of siblings confirmed to be in the ring.  Drives the
+  /// same-user fan-out loop in the host.
+  List<Uint8List> ringJoinedSiblings();
 
   /// Drive one ring coordination tick. Returns commands for the host to interpret.
   Future<List<RingCommandDto>> tick(
@@ -672,6 +711,31 @@ class KeyPackageResult {
           keyBundle == other.keyBundle;
 }
 
+/// One key package drawn from the same-user KP pool.
+class OfferedKpDto {
+  final Uint8List rkey;
+  final BigInt seq;
+  final Uint8List keyPackage;
+
+  const OfferedKpDto({
+    required this.rkey,
+    required this.seq,
+    required this.keyPackage,
+  });
+
+  @override
+  int get hashCode => rkey.hashCode ^ seq.hashCode ^ keyPackage.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is OfferedKpDto &&
+          runtimeType == other.runtimeType &&
+          rkey == other.rkey &&
+          seq == other.seq &&
+          keyPackage == other.keyPackage;
+}
+
 class OwnEventInputDto {
   final String rkey;
   final Uint8List ciphertext;
@@ -756,13 +820,19 @@ class SenderInfoDto {
   /// The sender's device name (format: "did:plc:xxx/Device Name")
   final String deviceName;
 
+  /// The sender's stable 16-byte device id, from their MLS credential.
+  /// Hosts pass this back into `handle_coord_msg` so the ring driver can
+  /// attribute coord messages without a coord-group member lookup.
+  final Uint8List deviceId;
+
   const SenderInfoDto({
     required this.did,
     required this.deviceName,
+    required this.deviceId,
   });
 
   @override
-  int get hashCode => did.hashCode ^ deviceName.hashCode;
+  int get hashCode => did.hashCode ^ deviceName.hashCode ^ deviceId.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -770,7 +840,31 @@ class SenderInfoDto {
       other is SenderInfoDto &&
           runtimeType == other.runtimeType &&
           did == other.did &&
-          deviceName == other.deviceName;
+          deviceName == other.deviceName &&
+          deviceId == other.deviceId;
+}
+
+/// A sibling device's stealth address: the 32-byte X25519 scan pubkey plus the
+/// stable 16-byte device id it belongs to.  Mirrors `moat_core::SiblingStealth`.
+class SiblingStealthDto {
+  final Uint8List scanPubkey;
+  final Uint8List deviceId;
+
+  const SiblingStealthDto({
+    required this.scanPubkey,
+    required this.deviceId,
+  });
+
+  @override
+  int get hashCode => scanPubkey.hashCode ^ deviceId.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SiblingStealthDto &&
+          runtimeType == other.runtimeType &&
+          scanPubkey == other.scanPubkey &&
+          deviceId == other.deviceId;
 }
 
 class StealthKeypair {
@@ -941,6 +1035,12 @@ class TickInputsDto {
   /// Stealth scan-pubkeys (32 bytes each) for all of our devices.
   final List<Uint8List> stealthPubkeys;
 
+  /// Per-sibling stealth addressing: `scan_pubkey` paired with the stable
+  /// `device_id` it belongs to.  Required for the ring driver to address
+  /// bootstrap KPs and steady-state `SiblingMsg` payloads at a specific
+  /// sibling.  Callers should filter out their own device.
+  final List<SiblingStealthDto> siblingStealth;
+
   /// Own-PDS events since `own_events_cursor`.
   final List<OwnEventInputDto> ownEvents;
 
@@ -968,6 +1068,7 @@ class TickInputsDto {
   const TickInputsDto({
     required this.keyPackages,
     required this.stealthPubkeys,
+    required this.siblingStealth,
     required this.ownEvents,
     required this.stealthPrivkey,
     required this.did,
@@ -982,6 +1083,7 @@ class TickInputsDto {
   int get hashCode =>
       keyPackages.hashCode ^
       stealthPubkeys.hashCode ^
+      siblingStealth.hashCode ^
       ownEvents.hashCode ^
       stealthPrivkey.hashCode ^
       did.hashCode ^
@@ -998,6 +1100,7 @@ class TickInputsDto {
           runtimeType == other.runtimeType &&
           keyPackages == other.keyPackages &&
           stealthPubkeys == other.stealthPubkeys &&
+          siblingStealth == other.siblingStealth &&
           ownEvents == other.ownEvents &&
           stealthPrivkey == other.stealthPrivkey &&
           did == other.did &&

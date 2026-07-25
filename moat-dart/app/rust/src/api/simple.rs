@@ -10,7 +10,7 @@ use moat_core::{
     RingEvent, SenderInfo, StepEnv, TickInputs, WelcomeResult,
 };
 use moat_core::DeviceRingState;
-use moat_core::decode_coord_msg;
+use moat_core::{decode_coord_msg, CoordMsg};
 use std::sync::Mutex;
 
 // --- Error handling ---
@@ -427,6 +427,10 @@ pub struct SenderInfoDto {
     pub did: String,
     /// The sender's device name (format: "did:plc:xxx/Device Name")
     pub device_name: String,
+    /// The sender's stable 16-byte device id, from their MLS credential.
+    /// Hosts pass this back into `handle_coord_msg` so the ring driver can
+    /// attribute coord messages without a coord-group member lookup.
+    pub device_id: Vec<u8>,
 }
 
 impl From<SenderInfo> for SenderInfoDto {
@@ -434,6 +438,7 @@ impl From<SenderInfo> for SenderInfoDto {
         SenderInfoDto {
             did: s.did,
             device_name: s.device_name,
+            device_id: s.device_id.to_vec(),
         }
     }
 }
@@ -999,6 +1004,113 @@ impl RingDriverHandle {
         self.inner.lock().unwrap().own_events_cursor().map(str::to_string)
     }
 
+    /// Device ids of siblings confirmed to be in the ring.  Drives the
+    /// same-user fan-out loop in the host.
+    #[frb(sync)]
+    pub fn ring_joined_siblings(&self) -> Vec<Vec<u8>> {
+        self.inner
+            .lock()
+            .unwrap()
+            .ring_joined_siblings()
+            .into_iter()
+            .map(|d| d.to_vec())
+            .collect()
+    }
+
+    /// Claim one unused key package from the local pool for `owner`, marking
+    /// its seq consumed.  `None` means the pool is drained — the host should
+    /// emit a `KpRequest` via [`Self::emit_kp_request_for`] and defer the add
+    /// until a `KpBatch` arrives.  Single-use enforcement lives here, not in
+    /// the host: a seq is never returned twice, even if replayed into the
+    /// pool.
+    #[frb(sync)]
+    pub fn claim_kp(&self, owner_device_id: Vec<u8>) -> Result<Option<OfferedKpDto>, String> {
+        let owner: [u8; 16] = owner_device_id
+            .try_into()
+            .map_err(|_| "owner_device_id must be 16 bytes".to_string())?;
+        Ok(self.inner.lock().unwrap().claim_kp(&owner).map(|kp| OfferedKpDto {
+            rkey: kp.rkey,
+            seq: kp.seq,
+            key_package: kp.key_package,
+        }))
+    }
+
+    /// Emit a `KpRequest` to `owner` asking it to top up our pool.  The host
+    /// publishes the returned commands.  Empty if not in a ring or if the
+    /// sibling's stealth record is not yet known (self-healing: the next poll
+    /// retries).
+    pub fn emit_kp_request_for(
+        &self,
+        session: &MoatSessionHandle,
+        my_did: String,
+        key_bundle: Vec<u8>,
+        sibling_stealth: Vec<SiblingStealthDto>,
+        owner_device_id: Vec<u8>,
+    ) -> Result<Vec<RingCommandDto>, String> {
+        let owner: [u8; 16] = owner_device_id
+            .try_into()
+            .map_err(|_| "owner_device_id must be 16 bytes".to_string())?;
+        let sibling_stealth = to_core_sibling_stealth(sibling_stealth)?;
+        let session_lock = session.inner.lock().unwrap();
+        let credential = MoatCredential::new(&my_did, "", *session_lock.device_id());
+        let env = StepEnv {
+            my_did: &my_did,
+            credential: &credential,
+            key_bundle: &key_bundle,
+            now_ms: 0,
+            drawbridge_connected: false,
+            sync_session_active: false,
+            stealth_pubkeys: &[],
+            sibling_stealth: &sibling_stealth,
+        };
+        let cmds = self.inner.lock().unwrap().emit_kp_request_for(&session_lock, &env, &owner);
+        Ok(cmds.into_iter().map(RingCommandDto::from).collect())
+    }
+
+    /// Build the stealth-publish command carrying a `CoordMsg::UserConvWelcome`
+    /// for `owner`.  The CoordMsg framing stays in Rust so the wire format has
+    /// a single owner.  `None` if not in a ring or the sibling's stealth
+    /// record is unknown.
+    pub fn encrypt_user_conv_welcome(
+        &self,
+        session: &MoatSessionHandle,
+        my_did: String,
+        key_bundle: Vec<u8>,
+        sibling_stealth: Vec<SiblingStealthDto>,
+        owner_device_id: Vec<u8>,
+        group_id: Vec<u8>,
+        welcome: Vec<u8>,
+    ) -> Result<Option<RingCommandDto>, String> {
+        let owner: [u8; 16] = owner_device_id
+            .clone()
+            .try_into()
+            .map_err(|_| "owner_device_id must be 16 bytes".to_string())?;
+        let sibling_stealth = to_core_sibling_stealth(sibling_stealth)?;
+        let session_lock = session.inner.lock().unwrap();
+        let credential = MoatCredential::new(&my_did, "", *session_lock.device_id());
+        let env = StepEnv {
+            my_did: &my_did,
+            credential: &credential,
+            key_bundle: &key_bundle,
+            now_ms: 0,
+            drawbridge_connected: false,
+            sync_session_active: false,
+            stealth_pubkeys: &[],
+            sibling_stealth: &sibling_stealth,
+        };
+        let msg = CoordMsg::UserConvWelcome {
+            owner_device_id,
+            group_id,
+            welcome,
+        };
+        let cmd = self
+            .inner
+            .lock()
+            .unwrap()
+            .encrypt_for_sibling(&session_lock, &env, &owner, &msg);
+        Ok(cmd.map(RingCommandDto::from))
+    }
+
     /// Drive one ring coordination tick. Returns commands for the host to interpret.
     pub fn tick(
         &self,
@@ -1015,11 +1127,7 @@ impl RingDriverHandle {
             .into_iter()
             .map(|pk| pk.try_into().map_err(|_| "stealth_pubkey must be 32 bytes".to_string()))
             .collect::<Result<_, _>>()?;
-        // Phase G will surface sibling_stealth across the FFI so the Dart
-        // ring driver can publish bootstrap KPs.  For now the FFI passes an
-        // empty list — Dart bootstrap publication is a no-op until Phase G
-        // regenerates FRB bindings; Rust CLI hosts continue to publish.
-        let sibling_stealth: Vec<moat_core::SiblingStealth> = Vec::new();
+        let sibling_stealth = to_core_sibling_stealth(inputs.sibling_stealth)?;
         let own_events: Vec<OwnEventInput> = inputs
             .own_events
             .into_iter()
@@ -1090,15 +1198,20 @@ impl RingDriverHandle {
         my_did: String,
         group_id: Vec<u8>,
         payload: Vec<u8>,
+        sender_device_id: Option<Vec<u8>>,
+        sibling_stealth: Vec<SiblingStealthDto>,
+        key_bundle: Vec<u8>,
     ) -> Result<Vec<RingCommandDto>, String> {
         let msg = decode_coord_msg(&payload).map_err(|e| e.to_string())?;
+        let sender_device_id: Option<[u8; 16]> = sender_device_id
+            .map(|d| {
+                d.try_into().map_err(|_| "sender_device_id must be 16 bytes".to_string())
+            })
+            .transpose()?;
+        let sibling_stealth = to_core_sibling_stealth(sibling_stealth)?;
         let session_lock = session.inner.lock().unwrap();
         let device_id = *session_lock.device_id();
         let credential = MoatCredential::new(&my_did, "", device_id);
-        // key_bundle isn't used by coord-msg handlers (they don't emit
-        // PublishEvents needing encryption directly), but step requires it.
-        // Callers that need encrypted outputs should run a follow-up tick.
-        let key_bundle: Vec<u8> = Vec::new();
         let env = StepEnv {
             my_did: &my_did,
             credential: &credential,
@@ -1107,18 +1220,18 @@ impl RingDriverHandle {
             drawbridge_connected: false,
             sync_session_active: false,
             stealth_pubkeys: &[],
-            sibling_stealth: &[],
+            // `on_ring_welcome` fires from this path and ships the initial KP
+            // batches over the stealth lane, which needs each sibling's
+            // scan_pubkey — mirrors `handle_coord_msg_sync` in moat-cli.  An
+            // empty list here silently skips batch shipping.
+            sibling_stealth: &sibling_stealth,
         };
-        // Phase D plumbs sender_device_id through; the FFI call site does
-        // not yet pass it (Phase G adds the DTO field + FRB regen).  The
-        // ring driver falls back to coord-group member lookup for the
-        // 2-party arms we exercise from Dart today.
         let cmds = self.inner.lock().unwrap().step(
             &session_lock,
             &env,
             RingEvent::CoordMsgReceived {
                 source_group_id: group_id,
-                sender_device_id: None,
+                sender_device_id,
                 msg,
             },
         );
@@ -1159,6 +1272,11 @@ pub struct TickInputsDto {
     pub key_packages: Vec<Vec<u8>>,
     /// Stealth scan-pubkeys (32 bytes each) for all of our devices.
     pub stealth_pubkeys: Vec<Vec<u8>>,
+    /// Per-sibling stealth addressing: `scan_pubkey` paired with the stable
+    /// `device_id` it belongs to.  Required for the ring driver to address
+    /// bootstrap KPs and steady-state `SiblingMsg` payloads at a specific
+    /// sibling.  Callers should filter out their own device.
+    pub sibling_stealth: Vec<SiblingStealthDto>,
     /// Own-PDS events since `own_events_cursor`.
     pub own_events: Vec<OwnEventInputDto>,
     /// Our stealth scan private key (32 bytes).
@@ -1180,6 +1298,39 @@ pub struct TickInputsDto {
 pub struct OwnEventInputDto {
     pub rkey: String,
     pub ciphertext: Vec<u8>,
+}
+
+/// One key package drawn from the same-user KP pool.
+pub struct OfferedKpDto {
+    pub rkey: Vec<u8>,
+    pub seq: u64,
+    pub key_package: Vec<u8>,
+}
+
+/// A sibling device's stealth address: the 32-byte X25519 scan pubkey plus the
+/// stable 16-byte device id it belongs to.  Mirrors `moat_core::SiblingStealth`.
+pub struct SiblingStealthDto {
+    pub scan_pubkey: Vec<u8>,
+    pub device_id: Vec<u8>,
+}
+
+fn to_core_sibling_stealth(
+    dtos: Vec<SiblingStealthDto>,
+) -> Result<Vec<moat_core::SiblingStealth>, String> {
+    dtos.into_iter()
+        .map(|s| {
+            Ok(moat_core::SiblingStealth {
+                scan_pubkey: s
+                    .scan_pubkey
+                    .try_into()
+                    .map_err(|_| "sibling scan_pubkey must be 32 bytes".to_string())?,
+                device_id: s
+                    .device_id
+                    .try_into()
+                    .map_err(|_| "sibling device_id must be 16 bytes".to_string())?,
+            })
+        })
+        .collect()
 }
 
 #[derive(Debug)]
@@ -1887,6 +2038,7 @@ mod ring_sync_ffi_tests {
         let inputs = TickInputsDto {
             key_packages: vec![],
             stealth_pubkeys: vec![],
+            sibling_stealth: vec![],
             own_events: vec![],
             stealth_privkey: vec![0u8; 32],
             did: "did:plc:alice".into(),
@@ -1910,6 +2062,7 @@ mod ring_sync_ffi_tests {
         let inputs = TickInputsDto {
             key_packages: vec![],
             stealth_pubkeys: vec![],
+            sibling_stealth: vec![],
             own_events: vec![],
             stealth_privkey: vec![0u8; 31],
             did: "did:plc:alice".into(),

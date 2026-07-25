@@ -70,7 +70,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => 1933178629;
+  int get rustContentHash => 1650401378;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -177,6 +177,27 @@ abstract class RustLibApi extends BaseApi {
       required String deviceName,
       required List<int> keyBundle});
 
+  OfferedKpDto? crateApiSimpleRingDriverHandleClaimKp(
+      {required RingDriverHandle that, required List<int> ownerDeviceId});
+
+  Future<List<RingCommandDto>> crateApiSimpleRingDriverHandleEmitKpRequestFor(
+      {required RingDriverHandle that,
+      required MoatSessionHandle session,
+      required String myDid,
+      required List<int> keyBundle,
+      required List<SiblingStealthDto> siblingStealth,
+      required List<int> ownerDeviceId});
+
+  Future<RingCommandDto?> crateApiSimpleRingDriverHandleEncryptUserConvWelcome(
+      {required RingDriverHandle that,
+      required MoatSessionHandle session,
+      required String myDid,
+      required List<int> keyBundle,
+      required List<SiblingStealthDto> siblingStealth,
+      required List<int> ownerDeviceId,
+      required List<int> groupId,
+      required List<int> welcome});
+
   Future<RingDriverHandle> crateApiSimpleRingDriverHandleFromStateJson(
       {required String json});
 
@@ -185,7 +206,10 @@ abstract class RustLibApi extends BaseApi {
       required MoatSessionHandle session,
       required String myDid,
       required List<int> groupId,
-      required List<int> payload});
+      required List<int> payload,
+      Uint8List? senderDeviceId,
+      required List<SiblingStealthDto> siblingStealth,
+      required List<int> keyBundle});
 
   RingDriverHandle crateApiSimpleRingDriverHandleNewEmpty();
 
@@ -206,6 +230,9 @@ abstract class RustLibApi extends BaseApi {
       {required RingDriverHandle that});
 
   Uint8List? crateApiSimpleRingDriverHandleRingGroupId(
+      {required RingDriverHandle that});
+
+  List<Uint8List> crateApiSimpleRingDriverHandleRingJoinedSiblings(
       {required RingDriverHandle that});
 
   Future<List<RingCommandDto>> crateApiSimpleRingDriverHandleTick(
@@ -1035,6 +1062,146 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
 
   @override
+  OfferedKpDto? crateApiSimpleRingDriverHandleClaimKp(
+      {required RingDriverHandle that, required List<int> ownerDeviceId}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRingDriverHandle(
+            that, serializer);
+        sse_encode_list_prim_u_8_loose(ownerDeviceId, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 25)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_opt_box_autoadd_offered_kp_dto,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiSimpleRingDriverHandleClaimKpConstMeta,
+      argValues: [that, ownerDeviceId],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSimpleRingDriverHandleClaimKpConstMeta =>
+      const TaskConstMeta(
+        debugName: "RingDriverHandle_claim_kp",
+        argNames: ["that", "ownerDeviceId"],
+      );
+
+  @override
+  Future<List<RingCommandDto>> crateApiSimpleRingDriverHandleEmitKpRequestFor(
+      {required RingDriverHandle that,
+      required MoatSessionHandle session,
+      required String myDid,
+      required List<int> keyBundle,
+      required List<SiblingStealthDto> siblingStealth,
+      required List<int> ownerDeviceId}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRingDriverHandle(
+            that, serializer);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+            session, serializer);
+        sse_encode_String(myDid, serializer);
+        sse_encode_list_prim_u_8_loose(keyBundle, serializer);
+        sse_encode_list_sibling_stealth_dto(siblingStealth, serializer);
+        sse_encode_list_prim_u_8_loose(ownerDeviceId, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 26, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_ring_command_dto,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiSimpleRingDriverHandleEmitKpRequestForConstMeta,
+      argValues: [
+        that,
+        session,
+        myDid,
+        keyBundle,
+        siblingStealth,
+        ownerDeviceId
+      ],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSimpleRingDriverHandleEmitKpRequestForConstMeta =>
+      const TaskConstMeta(
+        debugName: "RingDriverHandle_emit_kp_request_for",
+        argNames: [
+          "that",
+          "session",
+          "myDid",
+          "keyBundle",
+          "siblingStealth",
+          "ownerDeviceId"
+        ],
+      );
+
+  @override
+  Future<RingCommandDto?> crateApiSimpleRingDriverHandleEncryptUserConvWelcome(
+      {required RingDriverHandle that,
+      required MoatSessionHandle session,
+      required String myDid,
+      required List<int> keyBundle,
+      required List<SiblingStealthDto> siblingStealth,
+      required List<int> ownerDeviceId,
+      required List<int> groupId,
+      required List<int> welcome}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRingDriverHandle(
+            that, serializer);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+            session, serializer);
+        sse_encode_String(myDid, serializer);
+        sse_encode_list_prim_u_8_loose(keyBundle, serializer);
+        sse_encode_list_sibling_stealth_dto(siblingStealth, serializer);
+        sse_encode_list_prim_u_8_loose(ownerDeviceId, serializer);
+        sse_encode_list_prim_u_8_loose(groupId, serializer);
+        sse_encode_list_prim_u_8_loose(welcome, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 27, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_opt_box_autoadd_ring_command_dto,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiSimpleRingDriverHandleEncryptUserConvWelcomeConstMeta,
+      argValues: [
+        that,
+        session,
+        myDid,
+        keyBundle,
+        siblingStealth,
+        ownerDeviceId,
+        groupId,
+        welcome
+      ],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta
+      get kCrateApiSimpleRingDriverHandleEncryptUserConvWelcomeConstMeta =>
+          const TaskConstMeta(
+            debugName: "RingDriverHandle_encrypt_user_conv_welcome",
+            argNames: [
+              "that",
+              "session",
+              "myDid",
+              "keyBundle",
+              "siblingStealth",
+              "ownerDeviceId",
+              "groupId",
+              "welcome"
+            ],
+          );
+
+  @override
   Future<RingDriverHandle> crateApiSimpleRingDriverHandleFromStateJson(
       {required String json}) {
     return handler.executeNormal(NormalTask(
@@ -1042,7 +1209,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(json, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 25, port: port_);
+            funcId: 28, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData:
@@ -1067,7 +1234,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       required MoatSessionHandle session,
       required String myDid,
       required List<int> groupId,
-      required List<int> payload}) {
+      required List<int> payload,
+      Uint8List? senderDeviceId,
+      required List<SiblingStealthDto> siblingStealth,
+      required List<int> keyBundle}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1078,15 +1248,27 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(myDid, serializer);
         sse_encode_list_prim_u_8_loose(groupId, serializer);
         sse_encode_list_prim_u_8_loose(payload, serializer);
+        sse_encode_opt_list_prim_u_8_strict(senderDeviceId, serializer);
+        sse_encode_list_sibling_stealth_dto(siblingStealth, serializer);
+        sse_encode_list_prim_u_8_loose(keyBundle, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 26, port: port_);
+            funcId: 29, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_ring_command_dto,
         decodeErrorData: sse_decode_String,
       ),
       constMeta: kCrateApiSimpleRingDriverHandleHandleCoordMsgConstMeta,
-      argValues: [that, session, myDid, groupId, payload],
+      argValues: [
+        that,
+        session,
+        myDid,
+        groupId,
+        payload,
+        senderDeviceId,
+        siblingStealth,
+        keyBundle
+      ],
       apiImpl: this,
     ));
   }
@@ -1094,7 +1276,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiSimpleRingDriverHandleHandleCoordMsgConstMeta =>
       const TaskConstMeta(
         debugName: "RingDriverHandle_handle_coord_msg",
-        argNames: ["that", "session", "myDid", "groupId", "payload"],
+        argNames: [
+          "that",
+          "session",
+          "myDid",
+          "groupId",
+          "payload",
+          "senderDeviceId",
+          "siblingStealth",
+          "keyBundle"
+        ],
       );
 
   @override
@@ -1102,7 +1293,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 27)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 30)!;
       },
       codec: SseCodec(
         decodeSuccessData:
@@ -1140,7 +1331,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_prim_u_8_loose(keyBundle, serializer);
         sse_encode_String(myDid, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 28, port: port_);
+            funcId: 31, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_ring_command_dto,
@@ -1173,7 +1364,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             session, serializer);
         sse_encode_String(myDid, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 29, port: port_);
+            funcId: 32, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -1200,7 +1391,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRingDriverHandle(
             that, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 30)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 33)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_opt_String,
@@ -1226,7 +1417,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRingDriverHandle(
             that, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 31)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 34)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_opt_list_prim_u_8_strict,
@@ -1245,6 +1436,33 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  List<Uint8List> crateApiSimpleRingDriverHandleRingJoinedSiblings(
+      {required RingDriverHandle that}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRingDriverHandle(
+            that, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 35)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_list_prim_u_8_strict,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateApiSimpleRingDriverHandleRingJoinedSiblingsConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta
+      get kCrateApiSimpleRingDriverHandleRingJoinedSiblingsConstMeta =>
+          const TaskConstMeta(
+            debugName: "RingDriverHandle_ring_joined_siblings",
+            argNames: ["that"],
+          );
+
+  @override
   Future<List<RingCommandDto>> crateApiSimpleRingDriverHandleTick(
       {required RingDriverHandle that,
       required MoatSessionHandle session,
@@ -1258,7 +1476,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             session, serializer);
         sse_encode_box_autoadd_tick_inputs_dto(inputs, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 32, port: port_);
+            funcId: 36, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_ring_command_dto,
@@ -1285,7 +1503,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRingDriverHandle(
             that, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 33, port: port_);
+            funcId: 37, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -1320,7 +1538,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_sync_message_dto(ourMessages, serializer);
         sse_encode_bool(expectingBatch, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 34, port: port_);
+            funcId: 38, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -1352,7 +1570,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncSessionHandle(
             that, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 35)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 39)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_bool,
@@ -1375,7 +1593,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 36)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 40)!;
       },
       codec: SseCodec(
         decodeSuccessData:
@@ -1407,7 +1625,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_prim_u_8_loose(msgBytes, serializer);
         sse_encode_String(ourDid, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 37, port: port_);
+            funcId: 41, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_sync_output_dto,
@@ -1438,7 +1656,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_conv_state_dto(ourConvs, serializer);
         sse_encode_u_64(ringEpoch, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 38, port: port_);
+            funcId: 42, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_sync_output_dto,
@@ -1470,7 +1688,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_prim_u_8_loose(ciphertextHash, serializer);
         sse_encode_list_prim_u_8_loose(contentHash, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 39, port: port_);
+            funcId: 43, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -1495,7 +1713,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_list_prim_u_8_loose(plaintext, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 40, port: port_);
+            funcId: 44, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_blob_encrypt_result,
@@ -1520,7 +1738,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_list_prim_u_8_loose(hash, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 41, port: port_);
+            funcId: 45, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_thumb_hash_result,
@@ -1552,7 +1770,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_prim_u_8_loose(tag, serializer);
         sse_encode_list_prim_u_8_loose(ciphertext, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 42, port: port_);
+            funcId: 46, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_decrypted_push,
@@ -1582,7 +1800,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             handle, serializer);
         sse_encode_list_prim_u_8_loose(groupId, serializer);
         sse_encode_list_prim_u_8_loose(keyBundle, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 43)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 47)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -1610,7 +1828,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_list_prim_u_8_strict(recipientScanPubkeys, serializer);
         sse_encode_list_prim_u_8_loose(welcomeBytes, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 44, port: port_);
+            funcId: 48, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -1635,7 +1853,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_event_dto(that, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 45)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 49)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_opt_box_autoadd_reaction_payload_dto,
@@ -1671,7 +1889,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_prim_u_8_loose(senderDeviceId, serializer);
         sse_encode_u_64(fromCounter, serializer);
         sse_encode_u_64(count, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 46)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 50)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_list_prim_u_8_strict,
@@ -1708,7 +1926,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 47)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 51)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_stealth_keypair,
@@ -1732,7 +1950,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 48, port: port_);
+            funcId: 52, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -1755,7 +1973,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_list_prim_u_8_loose(plaintext, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 49)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 53)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -1780,7 +1998,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_list_prim_u_8_loose(imageBytes, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 50, port: port_);
+            funcId: 54, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_image_process_result,
@@ -1807,7 +2025,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_prim_u_8_loose(keyBundle, serializer);
         sse_encode_list_prim_u_8_loose(message, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 51, port: port_);
+            funcId: 55, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_drawbridge_challenge_signature,
@@ -1833,7 +2051,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_list_prim_u_8_loose(scanPrivkey, serializer);
         sse_encode_list_prim_u_8_loose(payload, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 52)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 56)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_opt_list_prim_u_8_strict,
@@ -1857,7 +2075,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_list_prim_u_8_loose(padded, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 53)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 57)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -2009,6 +2227,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  OfferedKpDto dco_decode_box_autoadd_offered_kp_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_offered_kp_dto(raw);
+  }
+
+  @protected
   ReactionPayloadDto dco_decode_box_autoadd_reaction_payload_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_reaction_payload_dto(raw);
@@ -2018,6 +2242,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   (String, String) dco_decode_box_autoadd_record_string_string(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as (String, String);
+  }
+
+  @protected
+  RingCommandDto dco_decode_box_autoadd_ring_command_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_ring_command_dto(raw);
   }
 
   @protected
@@ -2242,6 +2472,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<SiblingStealthDto> dco_decode_list_sibling_stealth_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_sibling_stealth_dto).toList();
+  }
+
+  @protected
   List<SyncAnchorDto> dco_decode_list_sync_anchor_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>).map(dco_decode_sync_anchor_dto).toList();
@@ -2260,6 +2496,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  OfferedKpDto dco_decode_offered_kp_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return OfferedKpDto(
+      rkey: dco_decode_list_prim_u_8_strict(arr[0]),
+      seq: dco_decode_u_64(arr[1]),
+      keyPackage: dco_decode_list_prim_u_8_strict(arr[2]),
+    );
+  }
+
+  @protected
   String? dco_decode_opt_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_String(raw);
@@ -2269,6 +2518,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   CredentialDto? dco_decode_opt_box_autoadd_credential_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_credential_dto(raw);
+  }
+
+  @protected
+  OfferedKpDto? dco_decode_opt_box_autoadd_offered_kp_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_offered_kp_dto(raw);
   }
 
   @protected
@@ -2287,6 +2542,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return raw == null
         ? null
         : dco_decode_box_autoadd_record_string_string(raw);
+  }
+
+  @protected
+  RingCommandDto? dco_decode_opt_box_autoadd_ring_command_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_ring_command_dto(raw);
   }
 
   @protected
@@ -2396,11 +2657,24 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   SenderInfoDto dco_decode_sender_info_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
     return SenderInfoDto(
       did: dco_decode_String(arr[0]),
       deviceName: dco_decode_String(arr[1]),
+      deviceId: dco_decode_list_prim_u_8_strict(arr[2]),
+    );
+  }
+
+  @protected
+  SiblingStealthDto dco_decode_sibling_stealth_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return SiblingStealthDto(
+      scanPubkey: dco_decode_list_prim_u_8_strict(arr[0]),
+      deviceId: dco_decode_list_prim_u_8_strict(arr[1]),
     );
   }
 
@@ -2490,19 +2764,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TickInputsDto dco_decode_tick_inputs_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 10)
-      throw Exception('unexpected arr length: expect 10 but see ${arr.length}');
+    if (arr.length != 11)
+      throw Exception('unexpected arr length: expect 11 but see ${arr.length}');
     return TickInputsDto(
       keyPackages: dco_decode_list_list_prim_u_8_strict(arr[0]),
       stealthPubkeys: dco_decode_list_list_prim_u_8_strict(arr[1]),
-      ownEvents: dco_decode_list_own_event_input_dto(arr[2]),
-      stealthPrivkey: dco_decode_list_prim_u_8_strict(arr[3]),
-      did: dco_decode_String(arr[4]),
-      deviceName: dco_decode_String(arr[5]),
-      keyBundle: dco_decode_list_prim_u_8_strict(arr[6]),
-      nowMs: dco_decode_i_64(arr[7]),
-      drawbridgeHasOwnConnection: dco_decode_bool(arr[8]),
-      syncSessionActive: dco_decode_bool(arr[9]),
+      siblingStealth: dco_decode_list_sibling_stealth_dto(arr[2]),
+      ownEvents: dco_decode_list_own_event_input_dto(arr[3]),
+      stealthPrivkey: dco_decode_list_prim_u_8_strict(arr[4]),
+      did: dco_decode_String(arr[5]),
+      deviceName: dco_decode_String(arr[6]),
+      keyBundle: dco_decode_list_prim_u_8_strict(arr[7]),
+      nowMs: dco_decode_i_64(arr[8]),
+      drawbridgeHasOwnConnection: dco_decode_bool(arr[9]),
+      syncSessionActive: dco_decode_bool(arr[10]),
     );
   }
 
@@ -2673,6 +2948,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  OfferedKpDto sse_decode_box_autoadd_offered_kp_dto(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_offered_kp_dto(deserializer));
+  }
+
+  @protected
   ReactionPayloadDto sse_decode_box_autoadd_reaction_payload_dto(
       SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -2684,6 +2966,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_record_string_string(deserializer));
+  }
+
+  @protected
+  RingCommandDto sse_decode_box_autoadd_ring_command_dto(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_ring_command_dto(deserializer));
   }
 
   @protected
@@ -2950,6 +3239,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<SiblingStealthDto> sse_decode_list_sibling_stealth_dto(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <SiblingStealthDto>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_sibling_stealth_dto(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   List<SyncAnchorDto> sse_decode_list_sync_anchor_dto(
       SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -2989,6 +3291,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  OfferedKpDto sse_decode_offered_kp_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_rkey = sse_decode_list_prim_u_8_strict(deserializer);
+    var var_seq = sse_decode_u_64(deserializer);
+    var var_keyPackage = sse_decode_list_prim_u_8_strict(deserializer);
+    return OfferedKpDto(
+        rkey: var_rkey, seq: var_seq, keyPackage: var_keyPackage);
+  }
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -3006,6 +3318,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
     if (sse_decode_bool(deserializer)) {
       return (sse_decode_box_autoadd_credential_dto(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  OfferedKpDto? sse_decode_opt_box_autoadd_offered_kp_dto(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_offered_kp_dto(deserializer));
     } else {
       return null;
     }
@@ -3030,6 +3354,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
     if (sse_decode_bool(deserializer)) {
       return (sse_decode_box_autoadd_record_string_string(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  RingCommandDto? sse_decode_opt_box_autoadd_ring_command_dto(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_ring_command_dto(deserializer));
     } else {
       return null;
     }
@@ -3155,7 +3491,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_did = sse_decode_String(deserializer);
     var var_deviceName = sse_decode_String(deserializer);
-    return SenderInfoDto(did: var_did, deviceName: var_deviceName);
+    var var_deviceId = sse_decode_list_prim_u_8_strict(deserializer);
+    return SenderInfoDto(
+        did: var_did, deviceName: var_deviceName, deviceId: var_deviceId);
+  }
+
+  @protected
+  SiblingStealthDto sse_decode_sibling_stealth_dto(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_scanPubkey = sse_decode_list_prim_u_8_strict(deserializer);
+    var var_deviceId = sse_decode_list_prim_u_8_strict(deserializer);
+    return SiblingStealthDto(
+        scanPubkey: var_scanPubkey, deviceId: var_deviceId);
   }
 
   @protected
@@ -3246,6 +3594,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_keyPackages = sse_decode_list_list_prim_u_8_strict(deserializer);
     var var_stealthPubkeys = sse_decode_list_list_prim_u_8_strict(deserializer);
+    var var_siblingStealth = sse_decode_list_sibling_stealth_dto(deserializer);
     var var_ownEvents = sse_decode_list_own_event_input_dto(deserializer);
     var var_stealthPrivkey = sse_decode_list_prim_u_8_strict(deserializer);
     var var_did = sse_decode_String(deserializer);
@@ -3257,6 +3606,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return TickInputsDto(
         keyPackages: var_keyPackages,
         stealthPubkeys: var_stealthPubkeys,
+        siblingStealth: var_siblingStealth,
         ownEvents: var_ownEvents,
         stealthPrivkey: var_stealthPrivkey,
         did: var_did,
@@ -3437,6 +3787,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_offered_kp_dto(
+      OfferedKpDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_offered_kp_dto(self, serializer);
+  }
+
+  @protected
   void sse_encode_box_autoadd_reaction_payload_dto(
       ReactionPayloadDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -3448,6 +3805,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       (String, String) self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_record_string_string(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_ring_command_dto(
+      RingCommandDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_ring_command_dto(self, serializer);
   }
 
   @protected
@@ -3661,6 +4025,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_list_sibling_stealth_dto(
+      List<SiblingStealthDto> self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_sibling_stealth_dto(item, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_list_sync_anchor_dto(
       List<SyncAnchorDto> self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -3691,6 +4065,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_offered_kp_dto(OfferedKpDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_list_prim_u_8_strict(self.rkey, serializer);
+    sse_encode_u_64(self.seq, serializer);
+    sse_encode_list_prim_u_8_strict(self.keyPackage, serializer);
+  }
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -3708,6 +4090,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self != null, serializer);
     if (self != null) {
       sse_encode_box_autoadd_credential_dto(self, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_opt_box_autoadd_offered_kp_dto(
+      OfferedKpDto? self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_offered_kp_dto(self, serializer);
     }
   }
 
@@ -3730,6 +4123,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self != null, serializer);
     if (self != null) {
       sse_encode_box_autoadd_record_string_string(self, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_opt_box_autoadd_ring_command_dto(
+      RingCommandDto? self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_ring_command_dto(self, serializer);
     }
   }
 
@@ -3853,6 +4257,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.did, serializer);
     sse_encode_String(self.deviceName, serializer);
+    sse_encode_list_prim_u_8_strict(self.deviceId, serializer);
+  }
+
+  @protected
+  void sse_encode_sibling_stealth_dto(
+      SiblingStealthDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_list_prim_u_8_strict(self.scanPubkey, serializer);
+    sse_encode_list_prim_u_8_strict(self.deviceId, serializer);
   }
 
   @protected
@@ -3924,6 +4337,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_list_prim_u_8_strict(self.keyPackages, serializer);
     sse_encode_list_list_prim_u_8_strict(self.stealthPubkeys, serializer);
+    sse_encode_list_sibling_stealth_dto(self.siblingStealth, serializer);
     sse_encode_list_own_event_input_dto(self.ownEvents, serializer);
     sse_encode_list_prim_u_8_strict(self.stealthPrivkey, serializer);
     sse_encode_String(self.did, serializer);
@@ -4173,18 +4587,74 @@ class RingDriverHandleImpl extends RustOpaque implements RingDriverHandle {
         .instance.api.rust_arc_decrement_strong_count_RingDriverHandlePtr,
   );
 
+  /// Claim one unused key package from the local pool for `owner`, marking
+  /// its seq consumed.  `None` means the pool is drained — the host should
+  /// emit a `KpRequest` via [`Self::emit_kp_request_for`] and defer the add
+  /// until a `KpBatch` arrives.  Single-use enforcement lives here, not in
+  /// the host: a seq is never returned twice, even if replayed into the
+  /// pool.
+  OfferedKpDto? claimKp({required List<int> ownerDeviceId}) =>
+      RustLib.instance.api.crateApiSimpleRingDriverHandleClaimKp(
+          that: this, ownerDeviceId: ownerDeviceId);
+
+  /// Emit a `KpRequest` to `owner` asking it to top up our pool.  The host
+  /// publishes the returned commands.  Empty if not in a ring or if the
+  /// sibling's stealth record is not yet known (self-healing: the next poll
+  /// retries).
+  Future<List<RingCommandDto>> emitKpRequestFor(
+          {required MoatSessionHandle session,
+          required String myDid,
+          required List<int> keyBundle,
+          required List<SiblingStealthDto> siblingStealth,
+          required List<int> ownerDeviceId}) =>
+      RustLib.instance.api.crateApiSimpleRingDriverHandleEmitKpRequestFor(
+          that: this,
+          session: session,
+          myDid: myDid,
+          keyBundle: keyBundle,
+          siblingStealth: siblingStealth,
+          ownerDeviceId: ownerDeviceId);
+
+  /// Build the stealth-publish command carrying a `CoordMsg::UserConvWelcome`
+  /// for `owner`.  The CoordMsg framing stays in Rust so the wire format has
+  /// a single owner.  `None` if not in a ring or the sibling's stealth
+  /// record is unknown.
+  Future<RingCommandDto?> encryptUserConvWelcome(
+          {required MoatSessionHandle session,
+          required String myDid,
+          required List<int> keyBundle,
+          required List<SiblingStealthDto> siblingStealth,
+          required List<int> ownerDeviceId,
+          required List<int> groupId,
+          required List<int> welcome}) =>
+      RustLib.instance.api.crateApiSimpleRingDriverHandleEncryptUserConvWelcome(
+          that: this,
+          session: session,
+          myDid: myDid,
+          keyBundle: keyBundle,
+          siblingStealth: siblingStealth,
+          ownerDeviceId: ownerDeviceId,
+          groupId: groupId,
+          welcome: welcome);
+
   /// Handle an incoming coord-group message (decrypted JSON payload).
   Future<List<RingCommandDto>> handleCoordMsg(
           {required MoatSessionHandle session,
           required String myDid,
           required List<int> groupId,
-          required List<int> payload}) =>
+          required List<int> payload,
+          Uint8List? senderDeviceId,
+          required List<SiblingStealthDto> siblingStealth,
+          required List<int> keyBundle}) =>
       RustLib.instance.api.crateApiSimpleRingDriverHandleHandleCoordMsg(
           that: this,
           session: session,
           myDid: myDid,
           groupId: groupId,
-          payload: payload);
+          payload: payload,
+          senderDeviceId: senderDeviceId,
+          siblingStealth: siblingStealth,
+          keyBundle: keyBundle);
 
   /// Called when a coord-group Welcome was consumed outside `tick()` (e.g. by
   /// `_pollOwnDid`).  The state machine records the coord group and emits
@@ -4221,6 +4691,13 @@ class RingDriverHandleImpl extends RustOpaque implements RingDriverHandle {
   /// Raw ring group ID, if a ring exists.
   Uint8List? ringGroupId() =>
       RustLib.instance.api.crateApiSimpleRingDriverHandleRingGroupId(
+        that: this,
+      );
+
+  /// Device ids of siblings confirmed to be in the ring.  Drives the
+  /// same-user fan-out loop in the host.
+  List<Uint8List> ringJoinedSiblings() =>
+      RustLib.instance.api.crateApiSimpleRingDriverHandleRingJoinedSiblings(
         that: this,
       );
 

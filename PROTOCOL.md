@@ -414,7 +414,21 @@ Exceeding the byte cap closes both pair WSes and delivers `pair_closed{reason:"b
 
 ## Multi-device
 
-A user may run Moat on multiple devices simultaneously. Each device has independent MLS signing keys, a stealth keypair, and a tag derivation stream, but they all share the same ATProto DID. The sections below describe how devices discover each other, establish shared encrypted channels, and coordinate without exposing the multi-device relationship to outside observers.
+A user may run Moat on multiple devices simultaneously. Each device has one MLS signing key, a stealth keypair, and a tag derivation stream, but they all share the same ATProto DID. The sections below describe how devices discover each other, establish shared encrypted channels, and coordinate without exposing the multi-device relationship to outside observers.
+
+### Signing-key Identity
+
+A device has exactly **one** signing key, generated at first login and stored at `~/.moat/keys/identity.key`. Every KeyPackage that device ever offers carries it — across all three lanes:
+
+| Lane | KeyPackage published to | Consumed by |
+|---|---|---|
+| Cross-user pool | `social.moat.keyPackage` on the PDS (public) | Another user inviting us to a conversation |
+| Bootstrap KP | Stealth event addressed to one sibling | That sibling, to add us to the device ring |
+| Same-user KP lane | `CoordMsg::KpBatch` over stealth to one sibling | That sibling, to fan us into a conversation |
+
+Only the init and encryption keys are fresh per KeyPackage, which is what keeps every KeyPackage single-use and keeps two concurrent consumers from claiming the same one.
+
+Reusing the signing key is required, not an optimization. A leaf's signing key is the key its device must sign with to author into that group, and a device only holds one. If a KeyPackage carried a throwaway signing key, the leaf created from it would be unusable: the device could join and decrypt, but every message it tried to send in that group would fail leaf lookup. Because the two same-user lanes are stealth-addressed to a single sibling and never public, sharing the key across them adds no linkable public metadata — only one KeyPackage per device is ever published openly.
 
 ### Device Ring
 

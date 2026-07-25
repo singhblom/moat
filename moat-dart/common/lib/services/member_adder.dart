@@ -49,12 +49,13 @@ Future<void> addMemberToConversation({
   }
   final stealthPubkeys = stealthRecords.map((r) => r.scanPubkey).toList();
 
-  // 5. Fetch key packages for new member.
+  // 5. Fetch key packages for new member — newest (last in ascending rkey
+  //    order); older ones may already be consumed.
   final keyPackages = await client.fetchKeyPackages(newDid);
   if (keyPackages.isEmpty) {
     throw Exception('No key package found for $memberHandle');
   }
-  final newMemberKeyPackage = keyPackages.first.keyPackage;
+  final newMemberKeyPackage = keyPackages.last.keyPackage;
 
   // 6. Load our key bundle.
   final keyBundle = await authService.getKeyBundle();

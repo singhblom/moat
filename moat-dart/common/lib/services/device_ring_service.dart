@@ -1,11 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math';
 import 'dart:typed_data';
 
 import '../models/conversation.dart';
 import '../rust/api/simple.dart' as ffi;
-import '../utils/welcome_envelope.dart';
 import 'auth_service.dart';
 import 'conversations_service.dart';
 import 'debug_log.dart';
@@ -37,6 +35,15 @@ class DeviceRingService {
   /// Tags published by this device (mark_own=true) that the polling service
   /// must skip to avoid self-processing ring-group coord events (e.g. SyncOffer).
   final Set<String> _ownPublishedTagHexes = {};
+
+  /// Last tick's sibling stealth addresses, kept so the synchronous
+  /// coord-message path ([handleCoordMsg]) can stealth-address KP batches
+  /// without re-fetching.  `on_ring_welcome` fires from that path and ships
+  /// the initial KP batches, which needs each sibling's scan_pubkey — an
+  /// empty list there silently skips batch shipping.  Mirrors moat-cli's
+  /// `App.cached_sibling_stealth`; a one-tick-stale cache is fine because a
+  /// skipped send self-heals via the consumer-driven KpRequest refill.
+  List<ffi.SiblingStealthDto> _cachedSiblingStealth = const [];
 
   /// Injected by the server/app setup so pollForNewDevices and registerGroup
   /// for User groups can surface conversations.
@@ -170,11 +177,26 @@ class DeviceRingService {
           return client.fetchEvents(did, afterRkey: cursorBefore);
         })) ??
         [];
-    moatLog('DeviceRingService: tick cursor=$cursorBefore ownEvents=${ownEvents.map((e) => e.rkey).toList()} keyPackages=${keyPackages.length}');
+    // Sibling stealth addressing: every stealth record under our own DID
+    // except our own device.  Pre-v3 records decode with an all-zero
+    // deviceId and are unusable as a routing key, so drop them too.
+    final myDeviceId = session.deviceId();
+    final siblingStealth = stealthRecords
+        .where((r) =>
+            !_bytesEqual(r.deviceId, myDeviceId) && !_isAllZero(r.deviceId))
+        .map((r) => ffi.SiblingStealthDto(
+              scanPubkey: r.scanPubkey,
+              deviceId: r.deviceId,
+            ))
+        .toList();
+    _cachedSiblingStealth = siblingStealth;
+
+    moatLog('DeviceRingService: tick cursor=$cursorBefore ownEvents=${ownEvents.map((e) => e.rkey).toList()} keyPackages=${keyPackages.length} siblingStealth=${siblingStealth.length}');
 
     final inputs = ffi.TickInputsDto(
       keyPackages: keyPackages.map((kp) => kp.keyPackage).toList(),
       stealthPubkeys: stealthRecords.map((r) => r.scanPubkey).toList(),
+      siblingStealth: siblingStealth,
       ownEvents: ownEvents
           .map((e) => ffi.OwnEventInputDto(
                 rkey: e.rkey,
@@ -225,6 +247,7 @@ class DeviceRingService {
   Future<void> handleCoordMsg({
     required Uint8List groupId,
     required Uint8List payload,
+    Uint8List? senderDeviceId,
   }) async {
     final session = _auth.moatSession;
     final did = _auth.did;
@@ -233,12 +256,20 @@ class DeviceRingService {
       moatLog('DeviceRingService: handleCoordMsg skipped — not ready');
       return;
     }
+    final keyBundle = await _auth.secureStorage.loadKeyBundle();
+    if (keyBundle == null) {
+      moatLog('DeviceRingService: handleCoordMsg skipped — no key bundle');
+      return;
+    }
     try {
       final cmds = await driver.handleCoordMsg(
         session: session,
         myDid: did,
         groupId: groupId,
         payload: payload,
+        senderDeviceId: senderDeviceId,
+        siblingStealth: _cachedSiblingStealth,
+        keyBundle: keyBundle,
       );
       await _persist();
       await _interpret(cmds, did);
@@ -345,7 +376,16 @@ class DeviceRingService {
   }
 
   /// Add sibling devices (same DID, different device_id) to all user
-  /// conversations.  Dart equivalent of Rust's poll_for_new_devices.
+  /// conversations.  Dart equivalent of Rust's `poll_for_new_devices`.
+  ///
+  /// Same-user fan-out: walk every confirmed ring sibling, and for each user
+  /// conversation they are not yet in, draw a KP from the same-user pool,
+  /// MLS-add them, and ship the Welcome as a `CoordMsg::UserConvWelcome`
+  /// stealth event addressed to that sibling.  If the pool is drained we emit
+  /// one `KpRequest` per sibling per cycle and defer the add; the next poll
+  /// retries once a `KpBatch` arrives.  The init key consumed comes from the
+  /// KP-lane pool, not the shared `social.moat.keyPackage` pool, so no
+  /// cross-user replenish is required.
   Future<void> _pollForNewDevices(String myDid) async {
     final cs = convsService;
     if (cs == null) {
@@ -353,31 +393,29 @@ class DeviceRingService {
       return;
     }
     final session = _auth.moatSession;
-    if (session == null) return;
+    final driver = _driver;
+    if (session == null || driver == null) return;
     final client = _auth.atprotoClient;
     final keyBundle = await _auth.getKeyBundle();
     if (keyBundle == null) return;
 
-    // Fetch all key packages for our own DID (all our devices).
-    final keyPackageRecords = await client.fetchKeyPackages(myDid);
-    if (keyPackageRecords.isEmpty) return;
+    // No ring → no KP pool → nothing to fan out.  Bootstrap and ring
+    // formation happen elsewhere; we wait for them.
+    if (driver.ringGroupId() == null) return;
 
-    // Sort newest-first so we prefer replenished packages over consumed ones.
-    final sorted = List.of(keyPackageRecords)
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    final siblings = driver.ringJoinedSiblings();
+    if (siblings.isEmpty) return;
 
-    final stealthRecords = await client.fetchStealthAddresses(myDid);
-    final stealthPubkeys = stealthRecords.map((r) => r.scanPubkey).toList();
-    if (stealthPubkeys.isEmpty) {
-      moatLog('DeviceRingService: pollForNewDevices — no stealth addresses');
-      return;
-    }
+    final siblingStealth = _cachedSiblingStealth;
+
+    // At most one KpRequest per sibling per cycle — without this, fan-out
+    // across N conversations with an empty pool emits N redundant requests.
+    final requestedRefill = <String>{};
 
     for (final conv in cs.conversations) {
       final groupId = conv.groupId;
       final groupIdHex = conv.groupIdHex;
 
-      // Collect existing (did, deviceId) pairs for this group.
       final List<ffi.CredentialDto> existingCreds;
       try {
         existingCreds = await session.getGroupMemberCredentials(
@@ -391,44 +429,63 @@ class DeviceRingService {
       final existingDeviceIds =
           existingCreds.map((c) => c.deviceId.join(',')).toSet();
 
-      for (final kpRecord in sorted) {
-        final rawKp = kpRecord.keyPackage;
-        ffi.CredentialDto? cred;
-        try {
-          cred = await session
-              .extractCredentialFromKeyPackage(keyPackage: rawKp);
-        } catch (_) {}
-        if (cred == null) continue;
-        if (cred.did != myDid) continue;
-        final deviceIdKey = cred.deviceId.join(',');
-        if (existingDeviceIds.contains(deviceIdKey)) continue;
+      for (final siblingId in siblings) {
+        final siblingKey = siblingId.join(',');
+        if (existingDeviceIds.contains(siblingKey)) continue;
 
-        // Compute pre-epoch commit tag.
+        // Pool claim.  null ⇒ drained; request a refill and defer.
+        final ffi.OfferedKpDto? kp;
+        try {
+          kp = driver.claimKp(ownerDeviceId: Uint8List.fromList(siblingId));
+        } catch (e) {
+          moatLog('DeviceRingService: pollForNewDevices claimKp failed: $e');
+          continue;
+        }
+        if (kp == null) {
+          if (requestedRefill.add(siblingKey)) {
+            try {
+              final cmds = await driver.emitKpRequestFor(
+                session: session,
+                myDid: myDid,
+                keyBundle: keyBundle,
+                siblingStealth: siblingStealth,
+                ownerDeviceId: Uint8List.fromList(siblingId),
+              );
+              await _interpret(cmds, myDid);
+              moatLog(
+                  'DeviceRingService: pollForNewDevices KP pool empty for sibling $siblingKey; emitted KpRequest, deferring');
+            } catch (e) {
+              moatLog(
+                  'DeviceRingService: pollForNewDevices emitKpRequestFor failed: $e');
+            }
+          }
+          continue;
+        }
+
+        // Derive the tag at the CURRENT epoch, before add_device advances it.
         final commitTag = ffi.deriveNextTag(
           handle: session,
           groupId: groupId.toList(),
           keyBundle: keyBundle,
         );
 
-        // Add device to group.
-        ffi.WelcomeResultDto welcomeResult;
+        final ffi.WelcomeResultDto welcomeResult;
         try {
           welcomeResult = await session.addMember(
             groupId: groupId.toList(),
             keyBundle: keyBundle,
-            newMemberKeyPackage: rawKp,
+            newMemberKeyPackage: kp.keyPackage,
           );
         } catch (e) {
-          moatLog(
-              'DeviceRingService: pollForNewDevices addMember failed: $e');
+          moatLog('DeviceRingService: pollForNewDevices addMember failed: $e');
           continue;
         }
 
-        existingDeviceIds.add(deviceIdKey);
+        existingDeviceIds.add(siblingKey);
         await _auth.saveMlsState();
         await _auth.populateConversationTags(Uint8List.fromList(groupId));
 
-        // Publish commit.
+        // Publish the commit so cross-user members of this group see it.
         try {
           await client.publishEvent(commitTag, welcomeResult.commit);
         } catch (e) {
@@ -436,25 +493,32 @@ class DeviceRingService {
               'DeviceRingService: pollForNewDevices publish commit failed: $e');
         }
 
-        // Publish stealth-encrypted Welcome.
-        final envelope = encodeWelcomeEnvelope(welcomeResult.welcome);
+        // Stealth-addressed Welcome, same lane as bootstrap KPs.
         try {
-          final ct = await ffi.encryptForStealth(
-            recipientScanPubkeys: stealthPubkeys,
-            welcomeBytes: envelope,
+          final cmd = await driver.encryptUserConvWelcome(
+            session: session,
+            myDid: myDid,
+            keyBundle: keyBundle,
+            siblingStealth: siblingStealth,
+            ownerDeviceId: Uint8List.fromList(siblingId),
+            groupId: groupId.toList(),
+            welcome: welcomeResult.welcome,
           );
-          final rng = Random.secure();
-          final randomTag =
-              Uint8List.fromList(List.generate(16, (_) => rng.nextInt(256)));
-          await client.publishEvent(randomTag, ct);
-          moatLog(
-              'DeviceRingService: pollForNewDevices added device ${cred.deviceName} to $groupIdHex');
+          if (cmd == null) {
+            moatLog(
+                'DeviceRingService: pollForNewDevices UserConvWelcome skipped — sibling $siblingKey stealth record not yet known');
+          } else {
+            await _interpret([cmd], myDid);
+            moatLog(
+                'DeviceRingService: pollForNewDevices added sibling $siblingKey to $groupIdHex');
+          }
         } catch (e) {
           moatLog(
               'DeviceRingService: pollForNewDevices publish welcome failed: $e');
         }
       }
     }
+    await _persist();
   }
 
   void _handlePairReady(DrawbridgePairReady ready) {
@@ -522,4 +586,14 @@ class DeviceRingService {
       return null;
     }
   }
+
+  static bool _bytesEqual(Uint8List a, Uint8List b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  static bool _isAllZero(Uint8List b) => b.every((byte) => byte == 0);
 }

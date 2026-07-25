@@ -473,6 +473,7 @@ class PollingService {
         await _ringService.handleCoordMsg(
           groupId: ringGroupId,
           payload: Uint8List.fromList(result.event.payload),
+          senderDeviceId: result.sender?.deviceId,
         );
       } else if (result.event.kind == EventKindDto.commit) {
         // Ring epoch advanced — refresh tag map for the new epoch.
@@ -503,6 +504,7 @@ class PollingService {
         await _ringService.handleCoordMsg(
           groupId: coordGroupId,
           payload: Uint8List.fromList(result.event.payload),
+          senderDeviceId: result.sender?.deviceId,
         );
       }
     } catch (e) {

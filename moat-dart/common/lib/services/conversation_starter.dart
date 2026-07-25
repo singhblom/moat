@@ -37,12 +37,13 @@ Future<Conversation> startConversation({
   }
   final stealthPubkeys = stealthRecords.map((r) => r.scanPubkey).toList();
 
-  // 4. Fetch key packages.
+  // 4. Fetch key packages — newest (last in ascending rkey order); older
+  //    ones may already be consumed.
   final keyPackages = await client.fetchKeyPackages(recipientDid);
   if (keyPackages.isEmpty) {
     throw Exception('Recipient has no valid key packages');
   }
-  final recipientKeyPackage = keyPackages.first.keyPackage;
+  final recipientKeyPackage = keyPackages.last.keyPackage;
 
   // 5. Create MLS group + welcome.
   final result = await authService.createConversation(

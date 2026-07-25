@@ -91,10 +91,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   EventDto dco_decode_box_autoadd_event_dto(dynamic raw);
 
   @protected
+  OfferedKpDto dco_decode_box_autoadd_offered_kp_dto(dynamic raw);
+
+  @protected
   ReactionPayloadDto dco_decode_box_autoadd_reaction_payload_dto(dynamic raw);
 
   @protected
   (String, String) dco_decode_box_autoadd_record_string_string(dynamic raw);
+
+  @protected
+  RingCommandDto dco_decode_box_autoadd_ring_command_dto(dynamic raw);
 
   @protected
   SenderInfoDto dco_decode_box_autoadd_sender_info_dto(dynamic raw);
@@ -173,6 +179,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<RingCommandDto> dco_decode_list_ring_command_dto(dynamic raw);
 
   @protected
+  List<SiblingStealthDto> dco_decode_list_sibling_stealth_dto(dynamic raw);
+
+  @protected
   List<SyncAnchorDto> dco_decode_list_sync_anchor_dto(dynamic raw);
 
   @protected
@@ -182,10 +191,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<SyncOutputDto> dco_decode_list_sync_output_dto(dynamic raw);
 
   @protected
+  OfferedKpDto dco_decode_offered_kp_dto(dynamic raw);
+
+  @protected
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
   CredentialDto? dco_decode_opt_box_autoadd_credential_dto(dynamic raw);
+
+  @protected
+  OfferedKpDto? dco_decode_opt_box_autoadd_offered_kp_dto(dynamic raw);
 
   @protected
   ReactionPayloadDto? dco_decode_opt_box_autoadd_reaction_payload_dto(
@@ -194,6 +209,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   (String, String)? dco_decode_opt_box_autoadd_record_string_string(
       dynamic raw);
+
+  @protected
+  RingCommandDto? dco_decode_opt_box_autoadd_ring_command_dto(dynamic raw);
 
   @protected
   SenderInfoDto? dco_decode_opt_box_autoadd_sender_info_dto(dynamic raw);
@@ -221,6 +239,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SenderInfoDto dco_decode_sender_info_dto(dynamic raw);
+
+  @protected
+  SiblingStealthDto dco_decode_sibling_stealth_dto(dynamic raw);
 
   @protected
   StealthKeypair dco_decode_stealth_keypair(dynamic raw);
@@ -321,11 +342,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   EventDto sse_decode_box_autoadd_event_dto(SseDeserializer deserializer);
 
   @protected
+  OfferedKpDto sse_decode_box_autoadd_offered_kp_dto(
+      SseDeserializer deserializer);
+
+  @protected
   ReactionPayloadDto sse_decode_box_autoadd_reaction_payload_dto(
       SseDeserializer deserializer);
 
   @protected
   (String, String) sse_decode_box_autoadd_record_string_string(
+      SseDeserializer deserializer);
+
+  @protected
+  RingCommandDto sse_decode_box_autoadd_ring_command_dto(
       SseDeserializer deserializer);
 
   @protected
@@ -413,6 +442,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
+  List<SiblingStealthDto> sse_decode_list_sibling_stealth_dto(
+      SseDeserializer deserializer);
+
+  @protected
   List<SyncAnchorDto> sse_decode_list_sync_anchor_dto(
       SseDeserializer deserializer);
 
@@ -425,10 +458,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
+  OfferedKpDto sse_decode_offered_kp_dto(SseDeserializer deserializer);
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
   CredentialDto? sse_decode_opt_box_autoadd_credential_dto(
+      SseDeserializer deserializer);
+
+  @protected
+  OfferedKpDto? sse_decode_opt_box_autoadd_offered_kp_dto(
       SseDeserializer deserializer);
 
   @protected
@@ -437,6 +477,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   (String, String)? sse_decode_opt_box_autoadd_record_string_string(
+      SseDeserializer deserializer);
+
+  @protected
+  RingCommandDto? sse_decode_opt_box_autoadd_ring_command_dto(
       SseDeserializer deserializer);
 
   @protected
@@ -468,6 +512,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SenderInfoDto sse_decode_sender_info_dto(SseDeserializer deserializer);
+
+  @protected
+  SiblingStealthDto sse_decode_sibling_stealth_dto(
+      SseDeserializer deserializer);
 
   @protected
   StealthKeypair sse_decode_stealth_keypair(SseDeserializer deserializer);
@@ -569,12 +617,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       EventDto self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_offered_kp_dto(
+      OfferedKpDto self, SseSerializer serializer);
+
+  @protected
   void sse_encode_box_autoadd_reaction_payload_dto(
       ReactionPayloadDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_box_autoadd_record_string_string(
       (String, String) self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_ring_command_dto(
+      RingCommandDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_box_autoadd_sender_info_dto(
@@ -665,6 +721,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       List<RingCommandDto> self, SseSerializer serializer);
 
   @protected
+  void sse_encode_list_sibling_stealth_dto(
+      List<SiblingStealthDto> self, SseSerializer serializer);
+
+  @protected
   void sse_encode_list_sync_anchor_dto(
       List<SyncAnchorDto> self, SseSerializer serializer);
 
@@ -677,11 +737,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       List<SyncOutputDto> self, SseSerializer serializer);
 
   @protected
+  void sse_encode_offered_kp_dto(OfferedKpDto self, SseSerializer serializer);
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_box_autoadd_credential_dto(
       CredentialDto? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_offered_kp_dto(
+      OfferedKpDto? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_box_autoadd_reaction_payload_dto(
@@ -690,6 +757,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_opt_box_autoadd_record_string_string(
       (String, String)? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_ring_command_dto(
+      RingCommandDto? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_box_autoadd_sender_info_dto(
@@ -723,6 +794,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_sender_info_dto(SenderInfoDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_sibling_stealth_dto(
+      SiblingStealthDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_stealth_keypair(

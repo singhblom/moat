@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1933178629;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1650401378;
 
 // Section: executor
 
@@ -1286,6 +1286,205 @@ fn wire__crate__api__simple__MoatSessionHandle_replenish_key_package_impl(
         },
     )
 }
+fn wire__crate__api__simple__RingDriverHandle_claim_kp_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "RingDriverHandle_claim_kp",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<RingDriverHandle>,
+            >>::sse_decode(&mut deserializer);
+            let api_owner_device_id = <Vec<u8>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, String>((move || {
+                let mut api_that_guard = None;
+                let decode_indices_ =
+                    flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                        flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                            &api_that, 0, false,
+                        ),
+                    ]);
+                for i in decode_indices_ {
+                    match i {
+                        0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                        _ => unreachable!(),
+                    }
+                }
+                let api_that_guard = api_that_guard.unwrap();
+                let output_ok = crate::api::simple::RingDriverHandle::claim_kp(
+                    &*api_that_guard,
+                    api_owner_device_id,
+                )?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__simple__RingDriverHandle_emit_kp_request_for_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "RingDriverHandle_emit_kp_request_for",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<RingDriverHandle>,
+            >>::sse_decode(&mut deserializer);
+            let api_session = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MoatSessionHandle>,
+            >>::sse_decode(&mut deserializer);
+            let api_my_did = <String>::sse_decode(&mut deserializer);
+            let api_key_bundle = <Vec<u8>>::sse_decode(&mut deserializer);
+            let api_sibling_stealth =
+                <Vec<crate::api::simple::SiblingStealthDto>>::sse_decode(&mut deserializer);
+            let api_owner_device_id = <Vec<u8>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let mut api_that_guard = None;
+                    let mut api_session_guard = None;
+                    let decode_indices_ =
+                        flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_that, 0, false,
+                            ),
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_session,
+                                1,
+                                false,
+                            ),
+                        ]);
+                    for i in decode_indices_ {
+                        match i {
+                            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                            1 => api_session_guard = Some(api_session.lockable_decode_sync_ref()),
+                            _ => unreachable!(),
+                        }
+                    }
+                    let api_that_guard = api_that_guard.unwrap();
+                    let api_session_guard = api_session_guard.unwrap();
+                    let output_ok = crate::api::simple::RingDriverHandle::emit_kp_request_for(
+                        &*api_that_guard,
+                        &*api_session_guard,
+                        api_my_did,
+                        api_key_bundle,
+                        api_sibling_stealth,
+                        api_owner_device_id,
+                    )?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__simple__RingDriverHandle_encrypt_user_conv_welcome_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "RingDriverHandle_encrypt_user_conv_welcome",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<RingDriverHandle>,
+            >>::sse_decode(&mut deserializer);
+            let api_session = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MoatSessionHandle>,
+            >>::sse_decode(&mut deserializer);
+            let api_my_did = <String>::sse_decode(&mut deserializer);
+            let api_key_bundle = <Vec<u8>>::sse_decode(&mut deserializer);
+            let api_sibling_stealth =
+                <Vec<crate::api::simple::SiblingStealthDto>>::sse_decode(&mut deserializer);
+            let api_owner_device_id = <Vec<u8>>::sse_decode(&mut deserializer);
+            let api_group_id = <Vec<u8>>::sse_decode(&mut deserializer);
+            let api_welcome = <Vec<u8>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let mut api_that_guard = None;
+                    let mut api_session_guard = None;
+                    let decode_indices_ =
+                        flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_that, 0, false,
+                            ),
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_session,
+                                1,
+                                false,
+                            ),
+                        ]);
+                    for i in decode_indices_ {
+                        match i {
+                            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                            1 => api_session_guard = Some(api_session.lockable_decode_sync_ref()),
+                            _ => unreachable!(),
+                        }
+                    }
+                    let api_that_guard = api_that_guard.unwrap();
+                    let api_session_guard = api_session_guard.unwrap();
+                    let output_ok =
+                        crate::api::simple::RingDriverHandle::encrypt_user_conv_welcome(
+                            &*api_that_guard,
+                            &*api_session_guard,
+                            api_my_did,
+                            api_key_bundle,
+                            api_sibling_stealth,
+                            api_owner_device_id,
+                            api_group_id,
+                            api_welcome,
+                        )?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__simple__RingDriverHandle_from_state_json_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -1351,6 +1550,10 @@ fn wire__crate__api__simple__RingDriverHandle_handle_coord_msg_impl(
             let api_my_did = <String>::sse_decode(&mut deserializer);
             let api_group_id = <Vec<u8>>::sse_decode(&mut deserializer);
             let api_payload = <Vec<u8>>::sse_decode(&mut deserializer);
+            let api_sender_device_id = <Option<Vec<u8>>>::sse_decode(&mut deserializer);
+            let api_sibling_stealth =
+                <Vec<crate::api::simple::SiblingStealthDto>>::sse_decode(&mut deserializer);
+            let api_key_bundle = <Vec<u8>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, String>((move || {
@@ -1382,6 +1585,9 @@ fn wire__crate__api__simple__RingDriverHandle_handle_coord_msg_impl(
                         api_my_did,
                         api_group_id,
                         api_payload,
+                        api_sender_device_id,
+                        api_sibling_stealth,
+                        api_key_bundle,
                     )?;
                     Ok(output_ok)
                 })())
@@ -1646,6 +1852,54 @@ fn wire__crate__api__simple__RingDriverHandle_ring_group_id_impl(
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok = Result::<_, ()>::Ok(
                     crate::api::simple::RingDriverHandle::ring_group_id(&*api_that_guard),
+                )?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__simple__RingDriverHandle_ring_joined_siblings_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "RingDriverHandle_ring_joined_siblings",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<RingDriverHandle>,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let mut api_that_guard = None;
+                let decode_indices_ =
+                    flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                        flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                            &api_that, 0, false,
+                        ),
+                    ]);
+                for i in decode_indices_ {
+                    match i {
+                        0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                        _ => unreachable!(),
+                    }
+                }
+                let api_that_guard = api_that_guard.unwrap();
+                let output_ok = Result::<_, ()>::Ok(
+                    crate::api::simple::RingDriverHandle::ring_joined_siblings(&*api_that_guard),
                 )?;
                 Ok(output_ok)
             })())
@@ -2957,6 +3211,20 @@ impl SseDecode for Vec<crate::api::simple::RingCommandDto> {
     }
 }
 
+impl SseDecode for Vec<crate::api::simple::SiblingStealthDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = vec![];
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::simple::SiblingStealthDto>::sse_decode(
+                deserializer,
+            ));
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for Vec<crate::api::simple::SyncAnchorDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2999,6 +3267,20 @@ impl SseDecode for Vec<crate::api::simple::SyncOutputDto> {
     }
 }
 
+impl SseDecode for crate::api::simple::OfferedKpDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_rkey = <Vec<u8>>::sse_decode(deserializer);
+        let mut var_seq = <u64>::sse_decode(deserializer);
+        let mut var_keyPackage = <Vec<u8>>::sse_decode(deserializer);
+        return crate::api::simple::OfferedKpDto {
+            rkey: var_rkey,
+            seq: var_seq,
+            key_package: var_keyPackage,
+        };
+    }
+}
+
 impl SseDecode for Option<String> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -3023,6 +3305,17 @@ impl SseDecode for Option<crate::api::simple::CredentialDto> {
     }
 }
 
+impl SseDecode for Option<crate::api::simple::OfferedKpDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::simple::OfferedKpDto>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
 impl SseDecode for Option<crate::api::simple::ReactionPayloadDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -3041,6 +3334,19 @@ impl SseDecode for Option<(String, String)> {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
             return Some(<(String, String)>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<crate::api::simple::RingCommandDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::simple::RingCommandDto>::sse_decode(
+                deserializer,
+            ));
         } else {
             return None;
         }
@@ -3195,9 +3501,23 @@ impl SseDecode for crate::api::simple::SenderInfoDto {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_did = <String>::sse_decode(deserializer);
         let mut var_deviceName = <String>::sse_decode(deserializer);
+        let mut var_deviceId = <Vec<u8>>::sse_decode(deserializer);
         return crate::api::simple::SenderInfoDto {
             did: var_did,
             device_name: var_deviceName,
+            device_id: var_deviceId,
+        };
+    }
+}
+
+impl SseDecode for crate::api::simple::SiblingStealthDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_scanPubkey = <Vec<u8>>::sse_decode(deserializer);
+        let mut var_deviceId = <Vec<u8>>::sse_decode(deserializer);
+        return crate::api::simple::SiblingStealthDto {
+            scan_pubkey: var_scanPubkey,
+            device_id: var_deviceId,
         };
     }
 }
@@ -3311,6 +3631,8 @@ impl SseDecode for crate::api::simple::TickInputsDto {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_keyPackages = <Vec<Vec<u8>>>::sse_decode(deserializer);
         let mut var_stealthPubkeys = <Vec<Vec<u8>>>::sse_decode(deserializer);
+        let mut var_siblingStealth =
+            <Vec<crate::api::simple::SiblingStealthDto>>::sse_decode(deserializer);
         let mut var_ownEvents =
             <Vec<crate::api::simple::OwnEventInputDto>>::sse_decode(deserializer);
         let mut var_stealthPrivkey = <Vec<u8>>::sse_decode(deserializer);
@@ -3323,6 +3645,7 @@ impl SseDecode for crate::api::simple::TickInputsDto {
         return crate::api::simple::TickInputsDto {
             key_packages: var_keyPackages,
             stealth_pubkeys: var_stealthPubkeys,
+            sibling_stealth: var_siblingStealth,
             own_events: var_ownEvents,
             stealth_privkey: var_stealthPrivkey,
             did: var_did,
@@ -3501,69 +3824,81 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        25 => wire__crate__api__simple__RingDriverHandle_from_state_json_impl(
+        26 => wire__crate__api__simple__RingDriverHandle_emit_kp_request_for_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        26 => wire__crate__api__simple__RingDriverHandle_handle_coord_msg_impl(
+        27 => wire__crate__api__simple__RingDriverHandle_encrypt_user_conv_welcome_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        28 => wire__crate__api__simple__RingDriverHandle_notify_coord_group_joined_impl(
+        28 => wire__crate__api__simple__RingDriverHandle_from_state_json_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        29 => wire__crate__api__simple__RingDriverHandle_notify_sync_session_ended_impl(
+        29 => wire__crate__api__simple__RingDriverHandle_handle_coord_msg_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        32 => {
+        31 => wire__crate__api__simple__RingDriverHandle_notify_coord_group_joined_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        32 => wire__crate__api__simple__RingDriverHandle_notify_sync_session_ended_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        36 => {
             wire__crate__api__simple__RingDriverHandle_tick_impl(port, ptr, rust_vec_len, data_len)
         }
-        33 => wire__crate__api__simple__RingDriverHandle_to_state_json_impl(
+        37 => wire__crate__api__simple__RingDriverHandle_to_state_json_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        34 => wire__crate__api__simple__SyncSessionHandle_add_conv_plan_impl(
+        38 => wire__crate__api__simple__SyncSessionHandle_add_conv_plan_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        37 => wire__crate__api__simple__SyncSessionHandle_on_message_impl(
+        41 => wire__crate__api__simple__SyncSessionHandle_on_message_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        38 => wire__crate__api__simple__SyncSessionHandle_on_paired_impl(
+        42 => wire__crate__api__simple__SyncSessionHandle_on_paired_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        39 => wire__crate__api__simple__blob_decrypt_impl(port, ptr, rust_vec_len, data_len),
-        40 => wire__crate__api__simple__blob_encrypt_impl(port, ptr, rust_vec_len, data_len),
-        41 => wire__crate__api__simple__decode_thumbhash_impl(port, ptr, rust_vec_len, data_len),
-        42 => {
+        43 => wire__crate__api__simple__blob_decrypt_impl(port, ptr, rust_vec_len, data_len),
+        44 => wire__crate__api__simple__blob_encrypt_impl(port, ptr, rust_vec_len, data_len),
+        45 => wire__crate__api__simple__decode_thumbhash_impl(port, ptr, rust_vec_len, data_len),
+        46 => {
             wire__crate__api__simple__decrypt_push_payload_impl(port, ptr, rust_vec_len, data_len)
         }
-        44 => wire__crate__api__simple__encrypt_for_stealth_impl(port, ptr, rust_vec_len, data_len),
-        48 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
-        50 => {
+        48 => wire__crate__api__simple__encrypt_for_stealth_impl(port, ptr, rust_vec_len, data_len),
+        52 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
+        54 => {
             wire__crate__api__simple__process_image_for_send_impl(port, ptr, rust_vec_len, data_len)
         }
-        51 => wire__crate__api__simple__sign_drawbridge_challenge_impl(
+        55 => wire__crate__api__simple__sign_drawbridge_challenge_impl(
             port,
             ptr,
             rust_vec_len,
@@ -3609,34 +3944,40 @@ fn pde_ffi_dispatcher_sync_impl(
             rust_vec_len,
             data_len,
         ),
-        27 => {
+        25 => wire__crate__api__simple__RingDriverHandle_claim_kp_impl(ptr, rust_vec_len, data_len),
+        30 => {
             wire__crate__api__simple__RingDriverHandle_new_empty_impl(ptr, rust_vec_len, data_len)
         }
-        30 => wire__crate__api__simple__RingDriverHandle_own_events_cursor_impl(
+        33 => wire__crate__api__simple__RingDriverHandle_own_events_cursor_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        31 => wire__crate__api__simple__RingDriverHandle_ring_group_id_impl(
+        34 => wire__crate__api__simple__RingDriverHandle_ring_group_id_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        35 => wire__crate__api__simple__SyncSessionHandle_is_done_impl(ptr, rust_vec_len, data_len),
-        36 => wire__crate__api__simple__SyncSessionHandle_new_session_impl(
+        35 => wire__crate__api__simple__RingDriverHandle_ring_joined_siblings_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        43 => wire__crate__api__simple__derive_next_tag_impl(ptr, rust_vec_len, data_len),
-        45 => {
+        39 => wire__crate__api__simple__SyncSessionHandle_is_done_impl(ptr, rust_vec_len, data_len),
+        40 => wire__crate__api__simple__SyncSessionHandle_new_session_impl(
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        47 => wire__crate__api__simple__derive_next_tag_impl(ptr, rust_vec_len, data_len),
+        49 => {
             wire__crate__api__simple__event_dto_reaction_payload_impl(ptr, rust_vec_len, data_len)
         }
-        46 => wire__crate__api__simple__generate_candidate_tags_impl(ptr, rust_vec_len, data_len),
-        47 => wire__crate__api__simple__generate_stealth_keypair_impl(ptr, rust_vec_len, data_len),
-        49 => wire__crate__api__simple__pad_to_bucket_impl(ptr, rust_vec_len, data_len),
-        52 => wire__crate__api__simple__try_decrypt_stealth_impl(ptr, rust_vec_len, data_len),
-        53 => wire__crate__api__simple__unpad_impl(ptr, rust_vec_len, data_len),
+        50 => wire__crate__api__simple__generate_candidate_tags_impl(ptr, rust_vec_len, data_len),
+        51 => wire__crate__api__simple__generate_stealth_keypair_impl(ptr, rust_vec_len, data_len),
+        53 => wire__crate__api__simple__pad_to_bucket_impl(ptr, rust_vec_len, data_len),
+        56 => wire__crate__api__simple__try_decrypt_stealth_impl(ptr, rust_vec_len, data_len),
+        57 => wire__crate__api__simple__unpad_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -3963,6 +4304,28 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::simple::KeyPackageResult>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::simple::OfferedKpDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.rkey.into_into_dart().into_dart(),
+            self.seq.into_into_dart().into_dart(),
+            self.key_package.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::simple::OfferedKpDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::simple::OfferedKpDto>
+    for crate::api::simple::OfferedKpDto
+{
+    fn into_into_dart(self) -> crate::api::simple::OfferedKpDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::simple::OwnEventInputDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -4068,6 +4431,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::simple::SenderInfoDto {
         [
             self.did.into_into_dart().into_dart(),
             self.device_name.into_into_dart().into_dart(),
+            self.device_id.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -4080,6 +4444,27 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::simple::SenderInfoDto>
     for crate::api::simple::SenderInfoDto
 {
     fn into_into_dart(self) -> crate::api::simple::SenderInfoDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::simple::SiblingStealthDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.scan_pubkey.into_into_dart().into_dart(),
+            self.device_id.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::simple::SiblingStealthDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::simple::SiblingStealthDto>
+    for crate::api::simple::SiblingStealthDto
+{
+    fn into_into_dart(self) -> crate::api::simple::SiblingStealthDto {
         self
     }
 }
@@ -4218,6 +4603,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::simple::TickInputsDto {
         [
             self.key_packages.into_into_dart().into_dart(),
             self.stealth_pubkeys.into_into_dart().into_dart(),
+            self.sibling_stealth.into_into_dart().into_dart(),
             self.own_events.into_into_dart().into_dart(),
             self.stealth_privkey.into_into_dart().into_dart(),
             self.did.into_into_dart().into_dart(),
@@ -4556,6 +4942,16 @@ impl SseEncode for Vec<crate::api::simple::RingCommandDto> {
     }
 }
 
+impl SseEncode for Vec<crate::api::simple::SiblingStealthDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::simple::SiblingStealthDto>::sse_encode(item, serializer);
+        }
+    }
+}
+
 impl SseEncode for Vec<crate::api::simple::SyncAnchorDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -4586,6 +4982,15 @@ impl SseEncode for Vec<crate::api::simple::SyncOutputDto> {
     }
 }
 
+impl SseEncode for crate::api::simple::OfferedKpDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <Vec<u8>>::sse_encode(self.rkey, serializer);
+        <u64>::sse_encode(self.seq, serializer);
+        <Vec<u8>>::sse_encode(self.key_package, serializer);
+    }
+}
+
 impl SseEncode for Option<String> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -4606,6 +5011,16 @@ impl SseEncode for Option<crate::api::simple::CredentialDto> {
     }
 }
 
+impl SseEncode for Option<crate::api::simple::OfferedKpDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::simple::OfferedKpDto>::sse_encode(value, serializer);
+        }
+    }
+}
+
 impl SseEncode for Option<crate::api::simple::ReactionPayloadDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -4622,6 +5037,16 @@ impl SseEncode for Option<(String, String)> {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <(String, String)>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<crate::api::simple::RingCommandDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::simple::RingCommandDto>::sse_encode(value, serializer);
         }
     }
 }
@@ -4745,6 +5170,15 @@ impl SseEncode for crate::api::simple::SenderInfoDto {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.did, serializer);
         <String>::sse_encode(self.device_name, serializer);
+        <Vec<u8>>::sse_encode(self.device_id, serializer);
+    }
+}
+
+impl SseEncode for crate::api::simple::SiblingStealthDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <Vec<u8>>::sse_encode(self.scan_pubkey, serializer);
+        <Vec<u8>>::sse_encode(self.device_id, serializer);
     }
 }
 
@@ -4822,6 +5256,7 @@ impl SseEncode for crate::api::simple::TickInputsDto {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <Vec<Vec<u8>>>::sse_encode(self.key_packages, serializer);
         <Vec<Vec<u8>>>::sse_encode(self.stealth_pubkeys, serializer);
+        <Vec<crate::api::simple::SiblingStealthDto>>::sse_encode(self.sibling_stealth, serializer);
         <Vec<crate::api::simple::OwnEventInputDto>>::sse_encode(self.own_events, serializer);
         <Vec<u8>>::sse_encode(self.stealth_privkey, serializer);
         <String>::sse_encode(self.did, serializer);
