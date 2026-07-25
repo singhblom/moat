@@ -129,6 +129,8 @@ pub enum CoordMsg {
     RingInfo {
         #[serde_as(as = "Base64")]
         ring_id: Vec<u8>,
+        /// Monotonic ring generation; highest wins reconciliation.
+        generation: u64,
         /// Unix timestamp (ms) when the ring was created.
         created_at: i64,
     },
@@ -147,6 +149,8 @@ pub enum CoordMsg {
         ring_id: Vec<u8>,
         #[serde_as(as = "Base64")]
         welcome: Vec<u8>,
+        /// Generation of the ring this Welcome admits the recipient to.
+        generation: u64,
         created_at: i64,
     },
     /// Carries the Drawbridge pairing token from the ring offerer to a new member.
@@ -237,23 +241,43 @@ pub enum ReconcileDecision {
     AlreadyInTheirs,
 }
 
+/// Identifies one ring for reconciliation purposes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RingRef<'a> {
+    pub ring_id: &'a [u8],
+    pub generation: u64,
+    pub created_at: i64,
+}
+
 /// Decide which ring wins when two devices discover they are in different rings.
 ///
-/// Oldest `created_at` wins. Tie broken by lexicographically smallest `ring_id`.
-pub fn reconcile_rings(
-    mine_ring_id: &[u8],
-    mine_created_at: i64,
-    theirs_ring_id: &[u8],
-    theirs_created_at: i64,
-) -> ReconcileDecision {
-    if mine_ring_id == theirs_ring_id {
+/// **Highest `generation` wins**, then oldest `created_at`, then
+/// lexicographically smallest `ring_id`.
+///
+/// Generation-first is what makes joiner-created rings work. A device
+/// joining an established device-set creates generation `N+1` containing
+/// everyone it knows about, because it is the only participant guaranteed
+/// to be online — see `ring-inversion.md`. Under the previous oldest-wins
+/// rule such a ring always had the newest `created_at` and so always lost,
+/// being superseded straight back to a ring whose members may all be gone.
+///
+/// `created_at` and `ring_id` remain as tiebreaks for the case this rule
+/// was originally written for: two devices independently forming a *first*
+/// ring (both generation 1) after a long partition.
+pub fn reconcile_rings(mine: RingRef<'_>, theirs: RingRef<'_>) -> ReconcileDecision {
+    if mine.ring_id == theirs.ring_id {
         return ReconcileDecision::AlreadyInTheirs;
     }
-    match mine_created_at.cmp(&theirs_created_at) {
+    match theirs.generation.cmp(&mine.generation) {
+        std::cmp::Ordering::Greater => return ReconcileDecision::SwitchToTheirs,
+        std::cmp::Ordering::Less => return ReconcileDecision::KeepMine,
+        std::cmp::Ordering::Equal => {}
+    }
+    match mine.created_at.cmp(&theirs.created_at) {
         std::cmp::Ordering::Less => ReconcileDecision::KeepMine,
         std::cmp::Ordering::Greater => ReconcileDecision::SwitchToTheirs,
         std::cmp::Ordering::Equal => {
-            if mine_ring_id <= theirs_ring_id {
+            if mine.ring_id <= theirs.ring_id {
                 ReconcileDecision::KeepMine
             } else {
                 ReconcileDecision::SwitchToTheirs
@@ -350,6 +374,10 @@ pub enum RingMembership {
     InRing {
         ring_id: Vec<u8>,
         created_at: i64,
+        /// Monotonic ring generation. A device joining an established
+        /// device-set creates generation `N+1`; the highest generation wins
+        /// reconciliation. See `ring-inversion.md`.
+        generation: u64,
         our_leaf: u32,
     },
 }
@@ -446,7 +474,7 @@ pub struct DeviceRingState {
     /// local tiebreak and create a second, competing ring before the
     /// real Add/Welcome from an existing member arrives.  Cleared once
     /// we transition to `InRing` (the field is only meaningful pre-ring).
-    known_ring: Option<(Vec<u8>, i64)>,
+    known_ring: Option<(Vec<u8>, u64, i64)>,
 }
 
 // SyncStatus / AddedBy / RingLink / PeerState / RingMembership: we want
@@ -615,6 +643,7 @@ enum RingMembershipWire {
         #[serde_as(as = "Base64")]
         ring_id: Vec<u8>,
         created_at: i64,
+        generation: u64,
         our_leaf: u32,
     },
 }
@@ -626,9 +655,10 @@ impl Serialize for RingMembership {
             RingMembership::Discovering { defer_ticks } => {
                 RingMembershipWire::Discovering { defer_ticks: *defer_ticks }
             }
-            RingMembership::InRing { ring_id, created_at, our_leaf } => RingMembershipWire::InRing {
+            RingMembership::InRing { ring_id, created_at, generation, our_leaf } => RingMembershipWire::InRing {
                 ring_id: ring_id.clone(),
                 created_at: *created_at,
+                generation: *generation,
                 our_leaf: *our_leaf,
             },
         };
@@ -642,7 +672,8 @@ impl<'de> Deserialize<'de> for RingMembership {
         Ok(match wire {
             RingMembershipWire::Solo => RingMembership::Solo,
             RingMembershipWire::Discovering { defer_ticks } => RingMembership::Discovering { defer_ticks },
-            RingMembershipWire::InRing { ring_id, created_at, our_leaf } => RingMembership::InRing {
+            RingMembershipWire::InRing { ring_id, created_at, generation, our_leaf } => RingMembership::InRing {
+                generation,
                 ring_id,
                 created_at,
                 our_leaf,
@@ -854,6 +885,14 @@ impl DeviceRingState {
     pub fn ring_id(&self) -> Option<&[u8]> {
         match &self.ring {
             RingMembership::InRing { ring_id, .. } => Some(ring_id.as_slice()),
+            _ => None,
+        }
+    }
+
+    /// Generation of the ring we are a member of, if any.
+    pub fn ring_generation(&self) -> Option<u64> {
+        match &self.ring {
+            RingMembership::InRing { generation, .. } => Some(*generation),
             _ => None,
         }
     }
@@ -1100,8 +1139,8 @@ impl DeviceRingState {
             sibling_stealth: inputs.sibling_stealth,
         };
         let mut cmds = Vec::new();
-        for kp in inputs.key_packages {
-            cmds.extend(self.step(mls, &env, RingEvent::PeerKeyPackageObserved { key_package: &kp.key_package }));
+        for kp in newest_key_package_per_device(mls, inputs.key_packages) {
+            cmds.extend(self.step(mls, &env, RingEvent::PeerKeyPackageObserved { key_package: kp }));
         }
         for ev in inputs.own_events {
             if let Some(plaintext) = try_decrypt_stealth(inputs.stealth_privkey, &ev.ciphertext) {
@@ -1464,8 +1503,8 @@ impl DeviceRingState {
                 self.record_hello_from(id, source_group_id);
                 Vec::new()
             }
-            CoordMsg::RingInfo { ring_id, created_at } => {
-                self.maybe_reconcile(&ring_id, created_at);
+            CoordMsg::RingInfo { ring_id, generation, created_at } => {
+                self.maybe_reconcile(&ring_id, generation, created_at);
                 Vec::new()
             }
             CoordMsg::Supersede { old_ring_id } => {
@@ -1480,8 +1519,8 @@ impl DeviceRingState {
                 }
                 Vec::new()
             }
-            CoordMsg::RingWelcome { ring_id, welcome, created_at } => {
-                self.on_ring_welcome(mls, env, ring_id, welcome, created_at)
+            CoordMsg::RingWelcome { ring_id, welcome, generation, created_at } => {
+                self.on_ring_welcome(mls, env, ring_id, welcome, generation, created_at)
             }
             CoordMsg::SyncOffer { token, target_device_id } => {
                 let for_us = target_device_id
@@ -1782,9 +1821,15 @@ impl DeviceRingState {
         self.promote_to_discovering();
     }
 
-    fn maybe_reconcile(&mut self, theirs_ring_id: &[u8], theirs_created_at: i64) {
-        if let RingMembership::InRing { ring_id, created_at, .. } = &self.ring {
-            match reconcile_rings(ring_id, *created_at, theirs_ring_id, theirs_created_at) {
+    fn maybe_reconcile(&mut self, theirs_ring_id: &[u8], theirs_generation: u64, theirs_created_at: i64) {
+        let theirs = RingRef {
+            ring_id: theirs_ring_id,
+            generation: theirs_generation,
+            created_at: theirs_created_at,
+        };
+        if let RingMembership::InRing { ring_id, created_at, generation, .. } = &self.ring {
+            let mine = RingRef { ring_id, generation: *generation, created_at: *created_at };
+            match reconcile_rings(mine, theirs) {
                 ReconcileDecision::AlreadyInTheirs | ReconcileDecision::KeepMine => {}
                 ReconcileDecision::SwitchToTheirs => {
                     self.ring = if self.peers.is_empty() {
@@ -1803,7 +1848,7 @@ impl DeviceRingState {
             // that group yet; real membership still arrives via the
             // normal Add/Welcome path once an existing member processes
             // our bootstrap KP.
-            self.known_ring = Some((theirs_ring_id.to_vec(), theirs_created_at));
+            self.known_ring = Some((theirs_ring_id.to_vec(), theirs_generation, theirs_created_at));
         }
     }
 
@@ -1818,11 +1863,13 @@ impl DeviceRingState {
         env: &StepEnv<'_>,
         coord_group_id: &[u8],
     ) -> Option<RingCommand> {
-        let (ring_id, created_at) = match &self.ring {
-            RingMembership::InRing { ring_id, created_at, .. } => (ring_id.clone(), *created_at),
+        let (ring_id, generation, created_at) = match &self.ring {
+            RingMembership::InRing { ring_id, generation, created_at, .. } => {
+                (ring_id.clone(), *generation, *created_at)
+            }
             _ => return None,
         };
-        let msg = CoordMsg::RingInfo { ring_id, created_at };
+        let msg = CoordMsg::RingInfo { ring_id, generation, created_at };
         let epoch = mls.get_group_epoch(coord_group_id).ok().flatten().unwrap_or(0);
         let event = Event::coord(coord_group_id.to_vec(), epoch, encode_coord_msg(&msg));
         let enc = mls.encrypt_event(coord_group_id, env.key_bundle, &event).ok()?;
@@ -1835,11 +1882,25 @@ impl DeviceRingState {
         env: &StepEnv<'_>,
         ring_id: Vec<u8>,
         welcome: Vec<u8>,
+        generation: u64,
         created_at: i64,
     ) -> Vec<RingCommand> {
-        // Only act if we don't already have a ring.
-        if matches!(self.ring, RingMembership::InRing { .. }) {
-            return Vec::new();
+        // Already in a ring? Only a *superseding* one displaces it. This is
+        // the receiving half of joiner-created rings: a device onboarding
+        // into an established set creates generation N+1 and invites the
+        // existing members, so those members must be willing to move. The
+        // decision uses the same ordering as `RingInfo` reconciliation, so a
+        // stale or replayed Welcome for a lower generation is ignored rather
+        // than thrashing the ring.
+        if let RingMembership::InRing { ring_id: mine_id, created_at: mine_at, generation: mine_gen, .. } =
+            &self.ring
+        {
+            let mine = RingRef { ring_id: mine_id, generation: *mine_gen, created_at: *mine_at };
+            let theirs = RingRef { ring_id: &ring_id, generation, created_at };
+            match reconcile_rings(mine, theirs) {
+                ReconcileDecision::AlreadyInTheirs | ReconcileDecision::KeepMine => return Vec::new(),
+                ReconcileDecision::SwitchToTheirs => {}
+            }
         }
         let joined = match mls.process_welcome(&welcome) {
             Ok(id) => id,
@@ -1849,7 +1910,7 @@ impl DeviceRingState {
             return Vec::new();
         }
         let our_leaf = find_own_leaf(mls, &ring_id).unwrap_or(u32::MAX);
-        self.ring = RingMembership::InRing { ring_id: ring_id.clone(), created_at, our_leaf };
+        self.ring = RingMembership::InRing { ring_id: ring_id.clone(), created_at, generation, our_leaf };
         self.known_ring = None; // no longer meaningful once we hold real membership
 
         // All ring members (other than us) are siblings already; mark them
@@ -2269,28 +2330,46 @@ impl DeviceRingState {
                 }
             }
             RingMembership::Discovering { defer_ticks } => {
-                // A Hello-exchanged peer has already told us (via
-                // `CoordMsg::RingInfo`) that a ring exists.  The
-                // smallest-device_id tiebreak below only sees peers we've
-                // personally exchanged Hellos with, so without this check
-                // we could win that local tiebreak and create a second,
-                // competing ring while the real Add/Welcome from an
-                // existing member is still in flight.  Stay Discovering
-                // and wait for that Welcome instead.
-                if self.known_ring.is_some() {
-                    return cmds;
-                }
+                // Two different situations reach this arm, and they take
+                // opposite decisions.
+                //
+                // (a) `known_ring` is set: a sibling has told us via
+                //     `CoordMsg::RingInfo` that a ring already exists and we
+                //     are not in it. We are onboarding into an established
+                //     device set, so *we* create the next generation and
+                //     invite everyone we know. We are the only participant
+                //     guaranteed to be online — waiting to be added means
+                //     waiting on a device that may be asleep or destroyed,
+                //     which is the deadlock `ring-inversion.md` documents.
+                //     The device_id tiebreak deliberately does not apply:
+                //     the existing members are `InRing` and will never
+                //     compete for creation, so applying it would just block
+                //     us behind a device that is not going to act.
+                //
+                // (b) `known_ring` is unset: no ring exists anywhere yet, so
+                //     this is first-ring formation among mutually-discovering
+                //     devices. Keep the smallest-device_id tiebreak, which
+                //     picks one creator among genuine competitors.
+                let joining_established = self.known_ring.clone();
 
-                // Are we the smallest device_id among ourselves + hello-exchanged peers?
-                let mut all_ids: Vec<DeviceId> = pending.clone();
-                all_ids.push(my_device_id);
-                all_ids.sort();
-                if all_ids[0] != my_device_id {
-                    // We're not the creator; wait for a RingWelcome from the smallest.
-                    return cmds;
+                if joining_established.is_none() {
+                    // Are we the smallest device_id among ourselves + hello-exchanged peers?
+                    let mut all_ids: Vec<DeviceId> = pending.clone();
+                    all_ids.push(my_device_id);
+                    all_ids.sort();
+                    if all_ids[0] != my_device_id {
+                        // We're not the creator; wait for a RingWelcome from the smallest.
+                        return cmds;
+                    }
                 }
 
                 if *defer_ticks == 0 {
+                    // One tick of grace either way. In case (a) it lets an
+                    // in-flight `RingWelcome` from an existing member land
+                    // first, which is cheaper than a generation bump — if it
+                    // does, `on_ring_welcome` moves us to `InRing` and we
+                    // never reach here. Unlike the old behaviour, the wait
+                    // is bounded: we act on the next tick regardless.
                     self.ring = RingMembership::Discovering { defer_ticks: 1 };
                     return cmds; // skip this tick
                 }
@@ -2301,11 +2380,18 @@ impl DeviceRingState {
                     Err(_) => return cmds,
                 };
                 let our_leaf = find_own_leaf(mls, &ring_id).unwrap_or(0);
+                // Superseding an established ring means strictly exceeding
+                // its generation; a first ring is generation 1.
+                let generation = joining_established.map_or(1, |(_, gen, _)| gen + 1);
                 self.ring = RingMembership::InRing {
                     ring_id: ring_id.clone(),
                     created_at: env.now_ms,
+                    generation,
                     our_leaf,
                 };
+                // We hold real membership now, so the remembered "someone
+                // else has a ring" hint is spent.
+                self.known_ring = None;
                 cmds.push(RingCommand::RegisterGroup {
                     group_id: ring_id.clone(),
                     kind: GroupKind::Ring,
@@ -2402,6 +2488,7 @@ impl DeviceRingState {
             let msg = CoordMsg::RingWelcome {
                 ring_id: ring_id.to_vec(),
                 welcome: wr.welcome,
+                generation: self.ring_generation().unwrap_or(1),
                 created_at,
             };
             let epoch = mls.get_group_epoch(&coord_id).ok().flatten().unwrap_or(0);
@@ -2494,6 +2581,52 @@ fn my_device_id_or_placeholder(mls: &MoatSession) -> DeviceId {
 /// carries our identity key (see the module note) — a stricter precondition
 /// than this lookup needs. Same device_id-matching pattern used elsewhere in
 /// this file (e.g. `on_tick`'s section A, `on_ring_welcome`'s peer-marking loop).
+/// Reduce a raw key-package pool snapshot to the **newest** package per
+/// sibling device, preserving first-seen device order.
+///
+/// The `social.moat.keyPackage` pool accumulates: packages are published
+/// with `createRecord` and never deleted, so a package whose init key has
+/// already been consumed stays visible next to its replacement, and no
+/// consumer can tell them apart. `fetch_key_packages` returns ascending
+/// rkey order, so the *last* entry for a device id is its most recent
+/// publication and the only one with a good chance of being unconsumed.
+///
+/// Feeding the state machine anything older builds Welcomes against dead
+/// init keys, which fail at the recipient with "No matching key package
+/// was found in the key store" and are invisible to the sender — see
+/// `welcome_built_from_a_consumed_key_package_is_undeliverable`. Before
+/// this reduction, `on_peer_kp_observed`'s first-match-wins dedup meant a
+/// third device deterministically picked the two identity packages its
+/// siblings had already consumed from each other.
+///
+/// This is a filter, not a fix for the general case: with concurrent
+/// consumers (siblings plus cross-user inviters) even the newest entry can
+/// lose a race, which is what the retry path is for.
+///
+/// Packages whose credential cannot be extracted are dropped —
+/// `on_peer_kp_observed` would have ignored them anyway.
+fn newest_key_package_per_device<'a>(
+    mls: &MoatSession,
+    pool: &'a [KeyPackageInput],
+) -> Vec<&'a [u8]> {
+    let mut newest: Vec<(DeviceId, &'a [u8])> = Vec::new();
+    for kp in pool {
+        let Some(cred) = mls
+            .extract_credential_from_key_package(&kp.key_package)
+            .ok()
+            .flatten()
+        else {
+            continue;
+        };
+        let device_id = *cred.device_id();
+        match newest.iter_mut().find(|(id, _)| *id == device_id) {
+            Some(slot) => slot.1 = &kp.key_package,
+            None => newest.push((device_id, &kp.key_package)),
+        }
+    }
+    newest.into_iter().map(|(_, kp)| kp).collect()
+}
+
 fn find_own_leaf(mls: &MoatSession, ring_id: &[u8]) -> Option<u32> {
     let my_device_id = *mls.device_id();
     mls.get_group_members(ring_id).ok()?.into_iter().find_map(|(idx, cred)| {
@@ -2557,6 +2690,7 @@ mod tests {
         s.ring = RingMembership::InRing {
             ring_id: vec![1u8; 32],
             created_at: 12345,
+            generation: 1,
             our_leaf: 0,
         };
         s.peers.insert(
@@ -2572,7 +2706,7 @@ mod tests {
         let json = serde_json::to_string(&s).expect("serialize");
         let restored: DeviceRingState = serde_json::from_str(&json).expect("deserialize");
         match restored.ring {
-            RingMembership::InRing { ring_id, created_at, our_leaf } => {
+            RingMembership::InRing { ring_id, created_at, generation: _, our_leaf } => {
                 assert_eq!(ring_id, vec![1u8; 32]);
                 assert_eq!(created_at, 12345);
                 assert_eq!(our_leaf, 0);
@@ -2608,7 +2742,7 @@ mod tests {
     fn supersede_clears_matching_ring() {
         let mut s = DeviceRingState::new();
         let ring = vec![1u8; 32];
-        s.ring = RingMembership::InRing { ring_id: ring.clone(), created_at: 1, our_leaf: 0 };
+        s.ring = RingMembership::InRing { ring_id: ring.clone(), created_at: 1, generation: 1, our_leaf: 0 };
 
         // Synthesize a Supersede via on_coord_msg.
         // We can't easily call on_coord_msg without a MoatSession; exercise the
@@ -2625,7 +2759,7 @@ mod tests {
     fn supersede_wrong_id_no_op() {
         let mut s = DeviceRingState::new();
         let ring = vec![1u8; 32];
-        s.ring = RingMembership::InRing { ring_id: ring, created_at: 1, our_leaf: 0 };
+        s.ring = RingMembership::InRing { ring_id: ring, created_at: 1, generation: 1, our_leaf: 0 };
         // simulate Supersede with wrong id
         let other = vec![2u8; 32];
         if let RingMembership::InRing { ring_id, .. } = &s.ring {
@@ -2636,11 +2770,18 @@ mod tests {
         assert!(matches!(s.ring, RingMembership::InRing { .. }));
     }
 
+    fn ring_ref(id: &[u8], generation: u64, created_at: i64) -> RingRef<'_> {
+        RingRef { ring_id: id, generation, created_at }
+    }
+
     #[test]
     fn reconcile_older_mine_wins() {
         let mine = vec![1u8];
         let theirs = vec![2u8];
-        assert_eq!(reconcile_rings(&mine, 100, &theirs, 200), ReconcileDecision::KeepMine);
+        assert_eq!(
+            reconcile_rings(ring_ref(&mine, 1, 100), ring_ref(&theirs, 1, 200)),
+            ReconcileDecision::KeepMine
+        );
     }
 
     #[test]
@@ -2648,7 +2789,7 @@ mod tests {
         let mine = vec![1u8];
         let theirs = vec![2u8];
         assert_eq!(
-            reconcile_rings(&mine, 200, &theirs, 100),
+            reconcile_rings(ring_ref(&mine, 1, 200), ring_ref(&theirs, 1, 100)),
             ReconcileDecision::SwitchToTheirs
         );
     }
@@ -2657,9 +2798,12 @@ mod tests {
     fn reconcile_tie_smaller_id_wins() {
         let mine = vec![1u8];
         let theirs = vec![2u8];
-        assert_eq!(reconcile_rings(&mine, 100, &theirs, 100), ReconcileDecision::KeepMine);
         assert_eq!(
-            reconcile_rings(&theirs, 100, &mine, 100),
+            reconcile_rings(ring_ref(&mine, 1, 100), ring_ref(&theirs, 1, 100)),
+            ReconcileDecision::KeepMine
+        );
+        assert_eq!(
+            reconcile_rings(ring_ref(&theirs, 1, 100), ring_ref(&mine, 1, 100)),
             ReconcileDecision::SwitchToTheirs
         );
     }
@@ -2668,8 +2812,42 @@ mod tests {
     fn reconcile_same_ring_id() {
         let id = vec![1u8, 2, 3];
         assert_eq!(
-            reconcile_rings(&id, 100, &id, 200),
+            reconcile_rings(ring_ref(&id, 1, 100), ring_ref(&id, 1, 200)),
             ReconcileDecision::AlreadyInTheirs
+        );
+    }
+
+    /// Generation beats `created_at`, in both directions. This is the rule
+    /// that makes joiner-created rings viable: a ring created by a device
+    /// onboarding into an established device-set is necessarily the newest
+    /// by `created_at`, and under the old oldest-wins rule would always have
+    /// been superseded straight back to the ring it was replacing.
+    #[test]
+    fn reconcile_higher_generation_wins_over_older_created_at() {
+        let mine = vec![1u8];
+        let theirs = vec![2u8];
+        // Theirs is newer by wall clock but a later generation → theirs wins.
+        assert_eq!(
+            reconcile_rings(ring_ref(&mine, 1, 100), ring_ref(&theirs, 2, 999)),
+            ReconcileDecision::SwitchToTheirs
+        );
+        // And symmetrically, an older-by-clock ring at a lower generation loses.
+        assert_eq!(
+            reconcile_rings(ring_ref(&mine, 2, 999), ring_ref(&theirs, 1, 100)),
+            ReconcileDecision::KeepMine
+        );
+    }
+
+    /// Same generation falls through to the original oldest-wins tiebreak —
+    /// the case this rule was written for, two devices independently forming
+    /// a first ring after a partition.
+    #[test]
+    fn reconcile_same_generation_falls_back_to_created_at() {
+        let mine = vec![9u8];
+        let theirs = vec![2u8];
+        assert_eq!(
+            reconcile_rings(ring_ref(&mine, 3, 100), ring_ref(&theirs, 3, 200)),
+            ReconcileDecision::KeepMine
         );
     }
 
@@ -2685,10 +2863,10 @@ mod tests {
 
     #[test]
     fn coord_msg_roundtrip_ring_info() {
-        let msg = CoordMsg::RingInfo { ring_id: vec![5u8; 32], created_at: 42 };
+        let msg = CoordMsg::RingInfo { ring_id: vec![5u8; 32], generation: 1, created_at: 42 };
         let bytes = encode_coord_msg(&msg);
         match decode_coord_msg(&bytes).unwrap() {
-            CoordMsg::RingInfo { ring_id, created_at } => {
+            CoordMsg::RingInfo { ring_id, generation: _, created_at } => {
                 assert_eq!(ring_id, vec![5u8; 32]);
                 assert_eq!(created_at, 42);
             }
@@ -2726,7 +2904,7 @@ mod tests {
     fn coord_msg_fits_in_small_bucket() {
         let cases = vec![
             CoordMsg::Hello { sender_device_id: vec![1u8; 16] },
-            CoordMsg::RingInfo { ring_id: vec![5u8; 32], created_at: i64::MAX },
+            CoordMsg::RingInfo { ring_id: vec![5u8; 32], generation: 1, created_at: i64::MAX },
             CoordMsg::Supersede { old_ring_id: vec![5u8; 32] },
             CoordMsg::SyncOffer { token: vec![0u8; 32], target_device_id: Some(vec![1u8; 16]) },
         ];
@@ -2941,7 +3119,7 @@ mod tests {
         // the guard recomputes it fresh via `find_own_leaf` rather than
         // trusting this stored value, so its exact number doesn't matter
         // for this test beyond being `RingMembership::InRing`.
-        s3.ring = RingMembership::InRing { ring_id: ring_id.clone(), created_at: 1, our_leaf: 2 };
+        s3.ring = RingMembership::InRing { ring_id: ring_id.clone(), created_at: 1, generation: 1, our_leaf: 2 };
         s3.peers.insert(
             hex::encode(d2_id),
             PeerState::CoordReady {
@@ -2991,7 +3169,7 @@ mod tests {
     #[test]
     fn invariant_multiple_offers_caught() {
         let mut s = DeviceRingState::new();
-        s.ring = RingMembership::InRing { ring_id: vec![1u8], created_at: 0, our_leaf: 0 };
+        s.ring = RingMembership::InRing { ring_id: vec![1u8], created_at: 0, generation: 1, our_leaf: 0 };
         s.peers.insert(
             hex::encode([1u8; 16]),
             PeerState::CoordReady {
@@ -3027,7 +3205,7 @@ mod tests {
         let dev = make_stealth_device("did:plc:user", "offerer");
         let env = env_for(&dev, &[]);
         let mut s = DeviceRingState::new();
-        s.ring = RingMembership::InRing { ring_id: vec![1u8], created_at: 0, our_leaf: 0 };
+        s.ring = RingMembership::InRing { ring_id: vec![1u8], created_at: 0, generation: 1, our_leaf: 0 };
         // Peer 1: offer already in flight.  Peer 2: owes an offer.
         s.peers.insert(
             hex::encode([1u8; 16]),
@@ -3412,7 +3590,7 @@ mod tests {
     }
 
     fn mark_in_ring(s: &mut DeviceRingState) {
-        s.ring = RingMembership::InRing { ring_id: vec![0xEE; 32], created_at: 1, our_leaf: 0 };
+        s.ring = RingMembership::InRing { ring_id: vec![0xEE; 32], created_at: 1, generation: 1, our_leaf: 0 };
     }
 
     fn mark_joined_peer(s: &mut DeviceRingState, peer: DeviceId) {
@@ -3716,6 +3894,13 @@ mod tests {
         /// registered a matching tag yet and tries again next poll; it
         /// doesn't miss the message forever.
         broadcasts: Vec<(usize, Vec<u8>)>,
+        /// Which devices are currently running. An offline device is not
+        /// ticked and receives no deliveries, but everything it published
+        /// while online stays in `kp_pool` / `own_events` / `broadcasts` —
+        /// matching a real lost or sleeping device, whose PDS records
+        /// persist and remain fetchable by everyone else. Its read cursor
+        /// also stays put, so if it ever returns it sees the full backlog.
+        online: [bool; 3],
     }
 
     /// Run one simulation round: gather fresh `TickInputs` per device from
@@ -3734,7 +3919,21 @@ mod tests {
             RingCommand::PublishStealthEvent { ciphertext, .. }
             | RingCommand::StealthPublishWelcome { ciphertext, .. } => net.own_events.push(ciphertext),
             RingCommand::ReplenishKeyPackage => {
-                let (kp, _bundle) = devices[i].mls.generate_key_package(&devices[i].cred).expect("replenish kp");
+                // MUST mirror the host (`app.rs::replenish_key_package`) and
+                // use `replenish_key_package`, not `generate_key_package`.
+                // The latter mints a *fresh* Ed25519 signature keypair per
+                // call, so a sibling that consumes such a KeyPackage joins
+                // with a leaf it cannot sign for: the Welcome processes, but
+                // every later `encrypt_event` into that group fails with
+                // "Own member not found in group". `replenish_key_package`
+                // keeps the device's one identity signing key while still
+                // giving each KeyPackage a fresh single-use init key — see
+                // `fanned-in-device-signing-key-bug.md` for the same defect
+                // in three production sites.
+                let kp = devices[i]
+                    .mls
+                    .replenish_key_package(&devices[i].cred, &devices[i].key_bundle)
+                    .expect("replenish kp");
                 net.kp_pool.push(kp);
             }
             RingCommand::RegisterGroup { group_id, .. } => {
@@ -3772,6 +3971,9 @@ mod tests {
             net.kp_pool.iter().map(|kp| KeyPackageInput { key_package: kp.clone() }).collect();
 
         for i in 0..3 {
+            if !net.online[i] {
+                continue; // not running: no poll, no tick, cursor unchanged
+            }
             let unseen: Vec<OwnEventInput> = net.own_events[net.own_cursor[i]..]
                 .iter()
                 .enumerate()
@@ -3820,6 +4022,9 @@ mod tests {
             for j in 0..3 {
                 if j == sender_idx {
                     continue; // MLS forbids self-decryption; mirrors mark_own
+                }
+                if !net.online[j] {
+                    continue; // not polling, so nothing is delivered to it
                 }
                 for gid in net.known_groups[j].clone() {
                     let outcome = match devices[j].mls.decrypt_event(&gid, &ciphertext) {
@@ -3912,11 +4117,21 @@ mod tests {
             own_cursor: [0; 3],
             known_groups: [Vec::new(), Vec::new(), Vec::new()],
             broadcasts: Vec::new(),
+            // D3 is offline until it "logs in" below. An earlier version of
+            // this test left it ticking throughout, on the reasoning that its
+            // KeyPackage wasn't in the pool yet so it was undiscoverable and
+            // therefore harmless. It is not harmless: discovery runs in the
+            // other direction too. A ticking D3 observes D1's and D2's
+            // identity KeyPackages in round one and consumes both to build
+            // coord groups, before either sibling has replenished — and
+            // `on_peer_kp_observed`'s dedup makes that choice permanent. The
+            // device ends up poisoned before it has notionally been unboxed.
+            // This test tolerated that only because the elected member drives
+            // the join here; the liveness tests below, where the joiner must
+            // act for itself, did not.
+            online: [true, true, false],
         };
 
-        // D3's KeyPackage isn't in the pool yet, so it's undiscoverable and
-        // ticks harmlessly on its own — no need to special-case it out of
-        // `three_device_sim_round`'s always-3-wide plumbing.
         let mut now_ms = 0i64;
         for _ in 0..D1D2_ROUNDS {
             now_ms += 1;
@@ -3931,8 +4146,9 @@ mod tests {
         );
         assert_eq!(devices[0].state.ring_id(), devices[1].state.ring_id());
 
-        // Now D3 "logs in": publish its identity KP to the pool so D1/D2
-        // can discover it, and let all three devices tick together.
+        // Now D3 "logs in": it comes online and publishes its identity KP to
+        // the pool so D1/D2 can discover it, and all three tick together.
+        net.online[2] = true;
         net.kp_pool.push(d3_identity_kp);
 
         // Convergence means every device (a) has joined the *same* ring_id
@@ -3998,5 +4214,318 @@ mod tests {
                 .encrypt_event(&ring_id, &dev.key_bundle, &ev)
                 .unwrap_or_else(|e| panic!("device {idx} cannot encrypt into its own ring: {e}"));
         }
+    }
+
+    /// The shared `social.moat.keyPackage` pool accumulates: packages are
+    /// published with `createRecord` and never deleted, so a *consumed*
+    /// package stays visible on the PDS next to its replacement. Whoever
+    /// picks one has no way to tell the difference — and a Welcome built
+    /// against a consumed init key is silently undeliverable forever.
+    ///
+    /// This is the mechanism behind
+    /// `new_device_joins_when_smallest_leaf_never_returns`: a third device
+    /// picks the *first* (oldest) pool entry for each sibling, which after
+    /// those siblings have bootstrapped with each other is exactly the pair
+    /// of already-consumed identity KeyPackages.
+    #[test]
+    fn welcome_built_from_a_consumed_key_package_is_undeliverable() {
+        let a = MoatSession::new();
+        let a_cred = make_credential("did:plc:u", "a", *a.device_id());
+        let (a_kp_identity, _) = a.generate_key_package(&a_cred).unwrap();
+
+        let b = MoatSession::new();
+        let b_cred = make_credential("did:plc:u", "b", *b.device_id());
+        let (_, b_bundle) = b.generate_key_package(&b_cred).unwrap();
+
+        // B consumes A's identity KP. Baseline: this must work.
+        let r1 = b.create_device_coord_group(&b_cred, &b_bundle, &a_kp_identity).unwrap();
+        a.process_welcome(&r1.welcome).expect("A joins via its identity KP");
+
+        // A replenishes, as `on_group_joined_via_welcome` instructs the host to.
+        // Both KPs are now in the pool; only this one is still usable.
+        let (a_kp_replenished, _) = a.generate_key_package(&a_cred).unwrap();
+
+        let c = MoatSession::new();
+        let c_cred = make_credential("did:plc:u", "c", *c.device_id());
+        let (_, c_bundle) = c.generate_key_package(&c_cred).unwrap();
+
+        // Picking the stale entry produces a Welcome A can never process.
+        let stale = c.create_device_coord_group(&c_cred, &c_bundle, &a_kp_identity).unwrap();
+        let err = a
+            .process_welcome(&stale.welcome)
+            .expect_err("a consumed init key must not be reusable");
+        assert!(
+            err.to_string().contains("No matching key package"),
+            "expected a key-store miss, got: {err}"
+        );
+
+        // Picking the replenished entry works — so selection, not the pool
+        // itself, is what decides whether onboarding succeeds.
+        let c2 = MoatSession::new();
+        let c2_cred = make_credential("did:plc:u", "c2", *c2.device_id());
+        let (_, c2_bundle) = c2.generate_key_package(&c2_cred).unwrap();
+        let fresh = c2.create_device_coord_group(&c2_cred, &c2_bundle, &a_kp_replenished).unwrap();
+        a.process_welcome(&fresh.welcome)
+            .expect("the replenished KP must still be usable");
+    }
+
+    // ── Liveness: onboarding must not depend on one specific device ────────
+    //
+    // See `ring-inversion.md`. The adder-elected model gates ring joins on
+    // the smallest-leaf ring member. Nothing re-elects when that device is
+    // gone, so a user who loses the phone that happens to hold leaf 0 can
+    // never onboard a replacement — the state machine has no path to it,
+    // with or without a timeout.
+    //
+    // These tests describe the behaviour we want, not the behaviour we
+    // have. They are expected to FAIL until the joiner-created-ring change
+    // lands, and the failure mode matters: D3 stuck in `Discovering` with
+    // `known_ring` set is the diagnosis in `ring-inversion.md`. Any other
+    // failure means that diagnosis is wrong.
+
+    /// Bootstrap D1+D2 into a shared ring and return its id. Shared setup
+    /// for the liveness tests below.
+    ///
+    /// D3 must be **offline** for this (`online[2] == false`). A replacement
+    /// device does not exist while its siblings are bootstrapping, and
+    /// simulating it as merely "undiscoverable but ticking" is not the same
+    /// thing: it would observe D1's and D2's identity key packages in round
+    /// one and consume both to build coord groups, before either sibling has
+    /// replenished. `on_peer_kp_observed`'s dedup then makes that permanent,
+    /// so the device is poisoned before it has notionally been unboxed.
+    fn bootstrap_d1_d2_ring(
+        devices: &mut [SimDevice; 3],
+        net: &mut SimNetwork,
+        now_ms: &mut i64,
+    ) -> Vec<u8> {
+        assert!(!net.online[2], "D3 must be offline until it logs in");
+        for _ in 0..12 {
+            *now_ms += 1;
+            three_device_sim_round(devices, net, *now_ms);
+            if devices[0].state.ring_id().is_some() && devices[1].state.ring_id().is_some() {
+                break;
+            }
+        }
+        assert_eq!(
+            devices[0].state.ring_id(),
+            devices[1].state.ring_id(),
+            "D1+D2 must share a ring before the test begins"
+        );
+        devices[0].state.ring_id().expect("D1+D2 ring").to_vec()
+    }
+
+    /// Index of whichever of D1/D2 holds the smallest ring leaf — the device
+    /// the current design elects for every ring-mutating operation, and
+    /// therefore the single point of failure this test removes.
+    fn smallest_leaf_index(devices: &[SimDevice; 3], ring_id: &[u8]) -> usize {
+        let d1 = find_own_leaf(&devices[0].mls, ring_id).expect("D1 leaf");
+        let d2 = find_own_leaf(&devices[1].mls, ring_id).expect("D2 leaf");
+        if d1 <= d2 {
+            0
+        } else {
+            1
+        }
+    }
+
+    /// True once `a` and `b` share a ring and each sees the other in it.
+    fn share_a_working_ring(devices: &[SimDevice; 3], a: usize, b: usize) -> bool {
+        let (Some(ring_a), Some(ring_b)) = (devices[a].state.ring_id(), devices[b].state.ring_id())
+        else {
+            return false;
+        };
+        if ring_a != ring_b {
+            return false;
+        }
+        let sees = |from: usize, other: usize| {
+            devices[from]
+                .mls
+                .get_group_members(ring_a)
+                .map(|m| {
+                    m.iter().any(|(_, c)| {
+                        c.as_ref().map(|c| *c.device_id() == devices[other].device_id()).unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false)
+        };
+        sees(a, b) && sees(b, a)
+    }
+
+    /// Diagnostic dump used by the assertion messages below. Deliberately
+    /// prints `ring` membership and `known_ring` as well as the outward
+    /// symptom: `ring-inversion.md` predicts a *specific* stuck state for
+    /// the new device (`Discovering` with `known_ring` set, peer entries
+    /// left at `Discovered`), and a failure in some other shape would mean
+    /// that diagnosis — and the design built on it — is wrong.
+    fn liveness_debug(devices: &[SimDevice; 3], survivor: usize) -> String {
+        let ring_of = |i: usize| {
+            devices[i].state.ring_id().map(hex::encode).unwrap_or_else(|| "<none>".into())
+        };
+        let joined_of = |i: usize| {
+            devices[i].state.ring_joined_siblings().iter().map(hex::encode).collect::<Vec<_>>()
+        };
+        let d3_id = hex::encode(devices[2].device_id());
+        format!(
+            "\n  D3 device_id={d3_id}\
+             \n  survivor(D{surv}): ring={} joined_siblings={:?}\n    membership={:?}\n    peers={:?}\
+             \n  D3: ring={} joined_siblings={:?}\n    membership={:?}\n    known_ring={:?}\n    peers={:?}",
+            ring_of(survivor),
+            joined_of(survivor),
+            devices[survivor].state.ring,
+            devices[survivor].state.peers,
+            ring_of(2),
+            joined_of(2),
+            devices[2].state.ring,
+            devices[2].state.known_ring.as_ref().map(|(id, gen, at)| (hex::encode(id), gen, at)),
+            devices[2].state.peers,
+            surv = survivor + 1,
+        )
+    }
+
+    /// **The headline liveness test.** The user loses the device holding the
+    /// smallest ring leaf and buys a replacement. The surviving sibling is
+    /// online and fully capable throughout, so onboarding must complete
+    /// without the lost device ever returning.
+    ///
+    /// Today this fails: the survivor defers every ring-mutating step to the
+    /// elected member (`on_peer_kp_observed`, `do_ring_add`), which never
+    /// runs again, while `RingInfo` tells D3 a ring exists and suppresses
+    /// its own ring creation — so D3 waits in `Discovering` forever.
+    #[test]
+    fn new_device_joins_when_smallest_leaf_never_returns() {
+        const ROUND_BUDGET: usize = 60;
+
+        let (d1, d1_kp) = SimDevice::new("did:plc:user", "d1");
+        let (d2, d2_kp) = SimDevice::new("did:plc:user", "d2");
+        let (d3, d3_kp) = SimDevice::new("did:plc:user", "d3");
+        let mut devices = [d1, d2, d3];
+        let mut net = SimNetwork {
+            kp_pool: vec![d1_kp, d2_kp],
+            own_events: Vec::new(),
+            own_cursor: [0; 3],
+            known_groups: [Vec::new(), Vec::new(), Vec::new()],
+            broadcasts: Vec::new(),
+            online: [true, true, false], // D3 is still in its box
+        };
+
+        let mut now_ms = 0i64;
+        let ring_id = bootstrap_d1_d2_ring(&mut devices, &mut net, &mut now_ms);
+
+        // The phone is lost: the elected device stops running, permanently.
+        // Its PDS records stay published, exactly as a real lost device's do.
+        let lost = smallest_leaf_index(&devices, &ring_id);
+        let survivor = 1 - lost;
+        net.online[lost] = false;
+
+        // The replacement is unboxed: it comes online and publishes its
+        // identity key package.
+        net.online[2] = true;
+        net.kp_pool.push(d3_kp);
+
+        let mut converged_at = None;
+        for round in 0..ROUND_BUDGET {
+            now_ms += 1;
+            three_device_sim_round(&mut devices, &mut net, now_ms);
+            if share_a_working_ring(&devices, survivor, 2) {
+                converged_at = Some(round);
+                break;
+            }
+        }
+
+        assert!(
+            converged_at.is_some(),
+            "replacement device never joined a ring with the surviving sibling within \
+             {ROUND_BUDGET} rounds, though that sibling was online the whole time. {}",
+            liveness_debug(&devices, survivor)
+        );
+
+        // Ring membership alone isn't the user-visible outcome — same-user
+        // conversation fan-out reads `ring_joined_siblings()`, so a peer
+        // stuck in `Discovered` never gets added to any conversation.
+        assert!(
+            devices[survivor].state.ring_joined_siblings().contains(&devices[2].device_id()),
+            "survivor does not list the new device as a joined ring sibling, so it will \
+             never fan it into conversations. {}",
+            liveness_debug(&devices, survivor)
+        );
+
+        // Both must be able to author into the shared ring, or sync can't run.
+        let ring = devices[2].state.ring_id().expect("D3 ring").to_vec();
+        for idx in [survivor, 2] {
+            let ev = Event::sibling_msg(devices[idx].mls.device_id().to_vec(), b"hi".to_vec());
+            devices[idx]
+                .mls
+                .encrypt_event(&ring, &devices[idx].key_bundle, &ev)
+                .unwrap_or_else(|e| panic!("device {idx} cannot author into the shared ring: {e}"));
+        }
+    }
+
+    /// The same shape, but the elected device is merely asleep rather than
+    /// lost. Onboarding must not *depend* on it waking — a backgrounded
+    /// phone or a closed laptop is the common case, not the exception —
+    /// and when it does return it must rejoin the ring the others are
+    /// already using rather than forking a competing one.
+    #[test]
+    fn new_device_joins_when_smallest_leaf_is_merely_slow() {
+        const JOIN_BUDGET: usize = 60;
+        const REJOIN_BUDGET: usize = 40;
+
+        let (d1, d1_kp) = SimDevice::new("did:plc:user", "d1");
+        let (d2, d2_kp) = SimDevice::new("did:plc:user", "d2");
+        let (d3, d3_kp) = SimDevice::new("did:plc:user", "d3");
+        let mut devices = [d1, d2, d3];
+        let mut net = SimNetwork {
+            kp_pool: vec![d1_kp, d2_kp],
+            own_events: Vec::new(),
+            own_cursor: [0; 3],
+            known_groups: [Vec::new(), Vec::new(), Vec::new()],
+            broadcasts: Vec::new(),
+            online: [true, true, false], // D3 is still in its box
+        };
+
+        let mut now_ms = 0i64;
+        let ring_id = bootstrap_d1_d2_ring(&mut devices, &mut net, &mut now_ms);
+
+        let asleep = smallest_leaf_index(&devices, &ring_id);
+        let survivor = 1 - asleep;
+        net.online[asleep] = false;
+        net.online[2] = true;
+        net.kp_pool.push(d3_kp);
+
+        let mut joined = false;
+        for _ in 0..JOIN_BUDGET {
+            now_ms += 1;
+            three_device_sim_round(&mut devices, &mut net, now_ms);
+            if share_a_working_ring(&devices, survivor, 2) {
+                joined = true;
+                break;
+            }
+        }
+        assert!(
+            joined,
+            "onboarding stalled while the elected device slept; it must not be on the \
+             critical path. {}",
+            liveness_debug(&devices, survivor)
+        );
+
+        // The laptop lid opens.
+        net.online[asleep] = true;
+        let mut all_together = false;
+        for _ in 0..REJOIN_BUDGET {
+            now_ms += 1;
+            three_device_sim_round(&mut devices, &mut net, now_ms);
+            if share_a_working_ring(&devices, survivor, 2)
+                && share_a_working_ring(&devices, asleep, 2)
+                && share_a_working_ring(&devices, asleep, survivor)
+            {
+                all_together = true;
+                break;
+            }
+        }
+        assert!(
+            all_together,
+            "the returning device did not converge onto the ring the others were using \
+             (competing ring / fork). ring ids: {:?}",
+            devices.iter().map(|d| d.state.ring_id().map(hex::encode)).collect::<Vec<_>>()
+        );
     }
 }
