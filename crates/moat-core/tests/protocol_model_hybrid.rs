@@ -22,9 +22,11 @@
 //!   the first draw killed.
 //! - Neither rule makes concurrent draws safe, and they cannot: two
 //!   readers see the identical list and pick the identical record. That
-//!   is why exactly one device is elected to perform a given add. The
-//!   model records this as an observed property rather than a fixed one —
-//!   see `hybrid_concurrent_consumers_race_for_the_same_pool_record`.
+//!   is why draws are serialised — by electing the smallest-leaf member
+//!   for ring adds, and by letting only the onboarding device initiate
+//!   coord groups. The model records the collision as an observed
+//!   property rather than a fixed one — see
+//!   `hybrid_concurrent_consumers_race_for_the_same_pool_record`.
 //! - Everything after the ring exists (user-conversation fan-out,
 //!   subsequent device joins of *other* siblings, sync sessions) flows
 //!   over the ring, where `protocol_model_ring_transport.rs` already
@@ -477,10 +479,11 @@ fn hybrid_replaying_a_burned_record_produces_an_orphan() {
 /// and pick the identical newest record, so only one of the two Welcomes
 /// can ever be processed and the other is silently undeliverable.
 ///
-/// No local rule fixes this — both consumers are behaving correctly. It
-/// is why exactly one device is elected to perform a given add
-/// (`do_ring_add`'s smallest-leaf gate, and `on_peer_kp_observed`'s for
-/// coord groups). This test pins the cost of losing that election.
+/// No local rule fixes this — both consumers are behaving correctly. Two
+/// different mechanisms serialise the draws: `do_ring_add` elects the
+/// smallest-leaf member, while coord-group creation avoids the race
+/// entirely by letting only the onboarding device initiate. This test
+/// pins the cost of getting either wrong.
 #[test]
 fn hybrid_concurrent_consumers_race_for_the_same_pool_record() {
     let mut m = HybridModel::default();

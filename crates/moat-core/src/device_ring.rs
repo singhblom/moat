@@ -1178,37 +1178,33 @@ impl DeviceRingState {
             return Vec::new();
         }
 
-        // Once a ring exists, only the elected (smallest-leaf) ring member
-        // discovers-and-creates a coord group from the shared cross-user
-        // KeyPackage pool. Without this gate, every existing ring member
-        // independently observes a brand-new sibling's *same* pool KP (the
-        // pool snapshot is identical for everyone) and each tries to
-        // `create_device_coord_group` using it. Only one Welcome can ever
-        // be successfully processed by the new sibling — its init secret
-        // is consumed on first success — so every other ring member's
-        // attempt is permanently stuck ("No matching key package was
-        // found in the key store"), with no retry, since `peer_get`'s
-        // dedup above prevents ever trying again. This is the exact
-        // same-KP race `same-user-key-distribution.md` fixed for ring-join
-        // and user-conversation fan-out, just never applied to this
-        // earlier coord-group-bootstrap step. Deferring to the elected
-        // member is safe: the elected member's coord group with the new
-        // sibling carries Hello/RingInfo/RingWelcome, which is all any
-        // *other* ring member needs — once the new sibling is a ring
-        // member, the ring itself is their shared channel for anything
-        // else (the same-user KP lane is stealth-addressed and doesn't
-        // need a coord group at all). Doesn't apply before any ring
-        // exists (Solo/Discovering) — the original two-device bootstrap
-        // symmetric-race-then-converge dance is unaffected.
-        if let RingMembership::InRing { ring_id, .. } = &self.ring {
-            let ring_id = ring_id.clone();
-            let members = mls.get_group_members(&ring_id).unwrap_or_default();
-            let my_leaf = find_own_leaf(mls, &ring_id);
-            let smallest_leaf = members.iter().map(|(idx, _)| *idx).min();
-            if my_leaf.is_none() || my_leaf != smallest_leaf {
-                self.peer_insert(sibling_id, PeerState::Discovered);
-                return Vec::new();
-            }
+        // Once a ring exists, no ring member initiates a coord group with a
+        // newly-observed sibling — the onboarding device does it.
+        //
+        // Every existing ring member sees the identical pool snapshot, so
+        // each would reach for the *same* newest KeyPackage and call
+        // `create_device_coord_group` with it. Only one Welcome can ever be
+        // processed — the init secret is consumed on first success — so
+        // every other member is permanently stuck ("No matching key package
+        // was found in the key store"), with no retry, since `peer_get`'s
+        // dedup above prevents trying again. That is the same-KP race
+        // `same-user-key-distribution.md` fixed for ring-join and
+        // conversation fan-out.
+        //
+        // It was originally fixed by *electing* the smallest-leaf member to
+        // create the group. Under joiner-created rings (`ring-inversion.md`)
+        // that election is unnecessary: the joiner is `Solo`/`Discovering`,
+        // so this gate never applies to it, and it creates a coord group
+        // with every sibling itself. Not racing at all beats electing a
+        // winner for a race. The incoming Welcome lands via
+        // `on_group_joined_via_welcome`, which promotes this `Discovered`
+        // peer and replies with Hello + RingInfo — all the joiner needs.
+        //
+        // Doesn't apply before any ring exists: the two-device
+        // symmetric-race-then-converge bootstrap is unaffected.
+        if matches!(self.ring, RingMembership::InRing { .. }) {
+            self.peer_insert(sibling_id, PeerState::Discovered);
+            return Vec::new();
         }
 
         // First sighting: create coord group, transition to AwaitingTheirHello.

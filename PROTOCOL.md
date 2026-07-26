@@ -470,7 +470,7 @@ For every pair of sibling devices, a hidden pairwise MLS group (`GroupKind::Devi
 
 1. Device `D_new` publishes a key package on its PDS.
 2. On the next `ring_tick`, `D_new` fetches all key packages under its DID and discovers sibling devices `D1, D2, …` it has no coord group with yet.
-3. For each new sibling, `D_new` draws that sibling's newest unburned pool record (see [Bootstrap: drawing from the public pool](#bootstrap-drawing-from-the-public-pool)), calls `create_device_coord_group`, stealth-encrypts the Welcome (same stealth scheme as regular conversation invites), and publishes it to its own PDS with a random tag. This is the first of the two draws `D_new` makes against each sibling; the ring `add_device` is the second. Once a ring exists, only the elected (smallest-leaf) ring member creates coord groups — the pool is identical for every member, so an unelected creator would race for the same record. Non-elected members record the sibling as discovered and wait.
+3. For each new sibling, `D_new` draws that sibling's newest unburned pool record (see [Bootstrap: drawing from the public pool](#bootstrap-drawing-from-the-public-pool)), calls `create_device_coord_group`, stealth-encrypts the Welcome (same stealth scheme as regular conversation invites), and publishes it to its own PDS with a random tag. This is the first of the two draws `D_new` makes against each sibling; the ring `add_device` is the second. Coord-group creation is always driven by the onboarding device: a device already in a ring never initiates one, because every member sees the identical pool and would race for the same record. Members record the new sibling as discovered and wait for its Welcome, then reply with `Hello` + `RingInfo`.
 4. `D_new` sends `CoordMsg::Hello` as an MLS application message in each new coord group (queued until the sibling joins).
 5. When the sibling polls its own PDS (`ring_tick` always includes the device's own DID in the polling set), it stealth-decrypts the coord Welcome, joins the coord group, sends its own `CoordMsg::Hello` back, and replenishes its key package.
 6. On the creator's next `ring_tick`, it processes the sibling's commit (joining the group) and the Hello, making the sibling "exchanged" in the driver's state.
@@ -507,7 +507,8 @@ Three further `CoordMsg` variants — `kp_batch`, `kp_request`, and `user_conv_w
 **Choosing which device acts.** Two rules, each scoped to a single pair:
 
 - **Sync offers**: within a pair, the device with the smaller `device_id` issues the offer. Both sides mark each other as owing one, so the tiebreak keeps a pair to a single session.
-- **First-ring formation**: when no ring exists for the DID, the device with the smallest `device_id` among those that have exchanged `Hello` creates it. Once a ring exists, an onboarding device creates the next generation itself.
+- **First-ring formation**: when no ring exists for the DID, the device with the smallest `device_id` among those that have exchanged `Hello` creates it.
+- **Joining an existing ring**: the smallest-leaf member of the current ring adds the joiner to that ring; other members stand down. Only if no member acts does the onboarding device create the next generation itself.
 
 **Commit tags are derived at the pre-add epoch.** Receivers scan for tags at the epoch they are currently on, and candidate tags cover the current and prior epochs. Deriving the tag before the MLS add is what keeps the resulting commit findable by the members who still need to process it.
 
@@ -542,7 +543,12 @@ When a device first comes online and discovers siblings, it reads the public `so
 
 A draw that finds nothing usable is an ordinary wait, not an error: the owner replenishes on every consumption, including on processing the coord Welcome, so a fresh record normally lands within a tick or two and the caller retries.
 
-Neither rule makes **concurrent** draws by different devices safe, and no local rule can: two readers see the identical pool and select the identical record, so only one of the resulting Welcomes is processable and the other fails permanently and silently. Exactly one device is therefore elected to perform a given add — the smallest-leaf ring member for a ring `add_device`, and likewise for coord-group creation once a ring exists. Before any ring exists there is no election and the symmetric two-device race resolves by ring reconciliation instead.
+Neither rule makes **concurrent** draws by different devices safe, and no local rule can: two readers see the identical pool and select the identical record, so only one of the resulting Welcomes is processable and the other fails permanently and silently. Two different mechanisms keep draws serialised:
+
+- **Coord-group creation**: only the onboarding device draws. A device already in a ring never initiates a coord group with a new sibling, so there is no race to arbitrate.
+- **Ring `add_device`**: the smallest-leaf ring member is elected. Here the race cannot be designed away — an established member reaches the add path for an onboarding peer over the coord group that peer created, and a ring creator legitimately adds late-arriving peers — so multiple potential adders genuinely coexist and one is chosen.
+
+Before any ring exists neither applies, and the symmetric two-device race resolves by ring reconciliation instead.
 
 #### Steady state
 
@@ -593,7 +599,7 @@ Once a sibling is in the ring, key packages flow as `sibling.msg` events carryin
 
 ### Ring Generations and Reconciliation
 
-Rings carry a monotonic `generation`. A device joining a DID that already has a ring creates generation `N+1` containing every sibling it knows of, and invites them; a device forming the first ring for a DID uses generation 1. The onboarding device drives its own join because it is the only participant guaranteed to be online, which is what lets onboarding complete while an existing device is asleep or permanently lost.
+Rings carry a monotonic `generation`. A device forming the first ring for a DID uses generation 1. A device joining a DID that already has a ring *can* create generation `N+1` containing every sibling it knows of and invite them — it is the only participant guaranteed to be online, which is what lets onboarding complete while an existing device is asleep or permanently lost. It does so only after waiting for an established member to add it first (see [Ring Generations and Reconciliation](#ring-generations-and-reconciliation) on which path is normal).
 
 Reconciliation, whether from a `RingInfo` exchange or an incoming `RingWelcome`, applies the same ordering:
 
@@ -602,7 +608,9 @@ Reconciliation, whether from a `RingInfo` exchange or an incoming `RingWelcome`,
 - **`Supersede`**: a device on a losing ring receives `CoordMsg::Supersede { old_ring_id }`, drops that ring's MLS state locally, and joins the winning ring. A `RingWelcome` for a superseding generation displaces the current ring directly; one for a lower generation is ignored.
 - **`generation` / `created_at` propagation**: set at ring-creation time, persisted alongside `ring_group_id`, and carried in both `CoordMsg::RingInfo` and `CoordMsg::RingWelcome`.
 
-Supersession is the normal onboarding mechanism: every device added after the first ring forms one. A device that stops responding leaves its leaf in an abandoned ring, and the next generation forms without it.
+Supersession is the **recovery** path, not the normal one. In the ordinary case — an existing ring member online and responsive — that member adds the joiner to the current generation and no new generation is formed at all; the joiner waits. Generation N+1 is created by the joiner only when no established member acts, which is exactly the case where the device that would have added it is asleep or permanently gone. If the member is merely slow, both can happen and the two rings are reconciled by the ordering above.
+
+A device that stops responding leaves its leaf in an abandoned ring, and the next generation forms without it.
 
 ### Own-PDS Stealth Scan
 
