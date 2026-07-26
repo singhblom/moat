@@ -4350,7 +4350,7 @@ impl App {
                     self.debug_log.log("poll_devices: published commit");
                 }
 
-                // Stealth-addressed Welcome, same lane as bootstrap KPs.
+                // Stealth-addressed Welcome, same lane as sibling messages.
                 // Other users in this group see the Commit via the PDS as
                 // before; only the same-user delivery channel changes.
                 let msg = CoordMsg::UserConvWelcome {
@@ -4500,7 +4500,7 @@ impl App {
             .unwrap_or_default();
         let stealth_pubkeys: Vec<[u8; 32]> =
             stealth_records.iter().map(|r| r.scan_pubkey).collect();
-        // Per-sibling addressing for BootstrapKp publication: drop our own device
+        // Per-sibling addressing for the same-user KP lane: drop our own device
         let my_device_id = *self.mls.device_id();
         let sibling_stealth: Vec<moat_core::SiblingStealth> = stealth_records
             .iter()
@@ -4569,7 +4569,7 @@ impl App {
                 RingCommand::PublishStealthEvent { tag, ciphertext } => {
                     if let Err(e) = client.publish_event(&tag, &ciphertext, None).await {
                         self.debug_log
-                            .log(&format!("ring: failed to publish bootstrap kp: {e}"));
+                            .log(&format!("ring: failed to publish stealth event: {e}"));
                     }
                 }
                 RingCommand::RegisterGroup { group_id, kind } => {

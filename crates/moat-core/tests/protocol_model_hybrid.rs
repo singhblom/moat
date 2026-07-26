@@ -1,24 +1,30 @@
-//! Hybrid protocol model: **PDS slot for bootstrap, ring transport
-//! thereafter**.
+//! Hybrid protocol model: **public key-package pool for bootstrap, ring
+//! transport thereafter**.
 //!
 //! Composes the two designs modelled in `protocol_model.rs` and
 //! `protocol_model_ring_transport.rs`.
 //!
 //! Why the composition is sound:
 //!
-//! - The orphan-within-slot failure of the PDS-slot scheme only arises
-//!   under *multi-use of a slot* — the same consumer reaching for the
-//!   same mailbox more than once with a lag between consumption and clear.
-//! - **Bootstrap is single-use via a consumer-side flag.** When a new
-//!   device logs in, each `(new device → existing sibling)` slot is
-//!   addressed to exactly one sibling (stealth-encrypted in the real
-//!   protocol). The slot is **not** deleted after use — a `deleteRecord`
-//!   shortly after `putRecord` would be a distinctive firehose pattern
-//!   that re-introduces the metadata leak the stealth-event bootstrap
-//!   is designed to close. Instead, the consumer records the
-//!   consumption locally and refuses to act on the same slot a second
-//!   time. The orphan window is closed regardless of how long the slot
-//!   sits on the PDS.
+//! - Before a ring exists between two sibling devices there is no
+//!   authenticated channel between them, so the only KeyPackage source is
+//!   the public `social.moat.keyPackage` pool that cross-user inviters
+//!   already read. That pool **accumulates**: records are created with
+//!   `createRecord` and never deleted, because a `deleteRecord` shortly
+//!   after `createRecord` would be a distinctive firehose pattern. So a
+//!   spent record stays visible next to its replacement and nothing on
+//!   the wire tells them apart.
+//! - Two rules make drawing from it safe. Publicly: take the **newest**
+//!   record for the owner, since older ones are the likely-spent ones.
+//!   Locally: skip records **we** have already burned, because a device
+//!   needing both a coord group and a ring add for the same sibling draws
+//!   twice and the newest-record rule alone would hand back the record
+//!   the first draw killed.
+//! - Neither rule makes concurrent draws safe, and they cannot: two
+//!   readers see the identical list and pick the identical record. That
+//!   is why exactly one device is elected to perform a given add. The
+//!   model records this as an observed property rather than a fixed one —
+//!   see `hybrid_concurrent_consumers_race_for_the_same_pool_record`.
 //! - Everything after the ring exists (user-conversation fan-out,
 //!   subsequent device joins of *other* siblings, sync sessions) flows
 //!   over the ring, where `protocol_model_ring_transport.rs` already
@@ -26,14 +32,15 @@
 //!
 //! Properties checked here:
 //!
-//! 1. The bootstrap PDS slot is genuinely single-use and race-free, even
-//!    when two existing ring members attempt the ring add concurrently.
-//! 2. The handover is clean: one final PDS-slot add per sibling, then
-//!    every subsequent KP exchange happens through the ring with the
+//! 1. A consumer's repeated draws against one owner never return a record
+//!    that consumer has already burned.
+//! 2. Concurrent draws by *different* consumers do collide, and the
+//!    losing Welcome is undeliverable — the cost the election avoids.
+//! 3. The handover is clean: pool draws while bootstrapping, then every
+//!    subsequent KP exchange happens through the ring with the
 //!    consumer-side `used_kps` tracking from the ring-transport model.
-//! 3. A new device that arrives *after* a ring already exists composes
-//!    with the existing members through the same path: bootstrap via PDS
-//!    slot once, then participate over the ring.
+//! 4. A new device that arrives *after* a ring already exists composes
+//!    with the existing members through the same path.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -94,18 +101,16 @@ struct HybridModel {
     /// Init keys currently in each device's keystore.
     keystore: BTreeMap<DeviceId, BTreeSet<Rkey>>,
 
-    // ── Bootstrap-phase PDS slots ─────────────────────────────────────────────
-    /// `(owner, intended_for) → Option<bootstrap KP>`. The slot is
-    /// **not** cleared after consumption — the bootstrap event stays
-    /// on the PDS to avoid the firehose-visible put/delete pattern.
-    /// Single-use is enforced by the consumer-side
-    /// `consumed_bootstrap_for` flag below.
-    pds_slots: BTreeMap<(DeviceId, DeviceId), Option<Rkey>>,
-    /// Consumer-side: `(consumer, owner)` pairs for which the consumer
-    /// has already consumed the bootstrap event. A re-fetch returns
-    /// `None` once this flag is set, even though the PDS still holds
-    /// the slot.
-    consumed_bootstrap_for: BTreeSet<(DeviceId, DeviceId)>,
+    // ── Bootstrap-phase public key-package pool ──────────────────────────────
+    /// `owner → published key packages, oldest first`. The public
+    /// `social.moat.keyPackage` collection: append-only, never deleted,
+    /// and every reader sees the identical list.
+    pds_pool: BTreeMap<DeviceId, Vec<Rkey>>,
+    /// Consumer-side: pool records this consumer has already burned.
+    /// Keyed by consumer alone, not `(consumer, owner)` — a record
+    /// belongs to exactly one owner, and the consumer's obligation is
+    /// simply never to reuse bytes whose init key it already spent.
+    used_pool_kps: BTreeMap<DeviceId, BTreeSet<Rkey>>,
 
     // ── Ring transport ────────────────────────────────────────────────────────
     /// FIFO message queue on the ring.
@@ -140,59 +145,58 @@ impl HybridModel {
         WelcomeId(self.next_welcome_id)
     }
 
-    // ── Bootstrap-phase: PDS slots ────────────────────────────────────────────
+    // ── Bootstrap-phase: the public key-package pool ─────────────────────────
 
-    /// Owner publishes its one-shot bootstrap KP into the slot intended for
-    /// `consumer`. Used at first-contact only; after the consumer is in the
-    /// ring this slot is no longer maintained.
-    fn publish_bootstrap_slot(&mut self, owner: DeviceId, consumer: DeviceId) -> Rkey {
+    /// Owner publishes a key package into its public pool. Appends;
+    /// never replaces. Mirrors `createRecord` on `social.moat.keyPackage`.
+    fn publish_pool_kp(&mut self, owner: DeviceId) -> Rkey {
         let rkey = self.fresh_rkey();
-        self.pds_slots.insert((owner, consumer), Some(rkey));
+        self.pds_pool.entry(owner).or_default().push(rkey);
         self.keystore.entry(owner).or_default().insert(rkey);
         rkey
     }
 
-    /// Consumer fetches its dedicated bootstrap slot. Returns `None` if
-    /// the slot has never been published *or* the consumer has already
-    /// consumed it once (consumer-side flag, since the slot itself is
-    /// never deleted from the PDS).
-    fn fetch_bootstrap_slot(&self, owner: DeviceId, consumer: DeviceId) -> Option<Rkey> {
-        if self.consumed_bootstrap_for.contains(&(consumer, owner)) {
-            return None;
-        }
-        *self.pds_slots.get(&(owner, consumer))?
+    /// Consumer selects the newest package `owner` has published that this
+    /// consumer has not already burned.
+    ///
+    /// `None` means the owner has not replenished since we last drew — an
+    /// ordinary wait, not a failure. The real driver defers to a later
+    /// tick, and the owner replenishes on every consumption (including on
+    /// processing our coord Welcome), so a record normally appears within
+    /// a tick or two.
+    fn fetch_newest_unused_pool_kp(&self, consumer: DeviceId, owner: DeviceId) -> Option<Rkey> {
+        let used = self.used_pool_kps.get(&consumer);
+        self.pds_pool
+            .get(&owner)?
+            .iter()
+            .rev()
+            .find(|rkey| !used.map(|u| u.contains(rkey)).unwrap_or(false))
+            .copied()
     }
 
-    /// Consumer uses the bootstrap KP to construct an MLS Welcome that
-    /// admits the owner into the ring. The Welcome is delivered via the
-    /// owner's normal poll path; here we represent that by enqueueing it
-    /// onto the consumer→owner ring queue, which is the same queue the
-    /// ring uses once it exists.
-    fn bootstrap_add_to_ring(
-        &mut self,
-        consumer: DeviceId,
-        owner: DeviceId,
-        kp: Rkey,
-    ) {
+    /// Consumer uses a pool KP to build an MLS Welcome admitting `owner`
+    /// to the ring, and records the burn. The Welcome is delivered via
+    /// the owner's normal poll path; here we enqueue it onto the
+    /// consumer→owner ring queue, the same queue the ring uses once it
+    /// exists.
+    fn bootstrap_add_to_ring(&mut self, consumer: DeviceId, owner: DeviceId, kp: Rkey) {
         let id = self.fresh_welcome_id();
-        let w = WelcomeMsg {
-            id,
-            init_kp: kp,
-            group: RING,
-        };
+        let w = WelcomeMsg { id, init_kp: kp, group: RING };
         self.ring
             .entry((consumer, owner))
             .or_default()
             .push_back(RingMessage::Welcome(w));
-        // Bootstrap event is NOT deleted from the PDS — a put/delete
-        // pattern on `social.moat.event` would itself be a distinctive
-        // firehose signal that re-introduces the metadata leak the
-        // stealth-event bootstrap is intended to close. Single-use is
-        // enforced by the consumer recording its own consumption; the
-        // slot bytes sit on the PDS indefinitely, encrypted to the
-        // sibling's scan key and useless to any other reader.
-        self.consumed_bootstrap_for.insert((consumer, owner));
+        self.used_pool_kps.entry(consumer).or_default().insert(kp);
     }
+
+    /// Draw-and-add in one step, the shape the driver actually uses.
+    /// Returns the record drawn, or `None` if nothing usable is published.
+    fn try_bootstrap_add(&mut self, consumer: DeviceId, owner: DeviceId) -> Option<Rkey> {
+        let kp = self.fetch_newest_unused_pool_kp(consumer, owner)?;
+        self.bootstrap_add_to_ring(consumer, owner, kp);
+        Some(kp)
+    }
+
 
     // ── Ring transport ────────────────────────────────────────────────────────
 
@@ -328,16 +332,18 @@ impl HybridModel {
 
 /// **The full life of a new device, end-to-end.**
 ///
-/// D3 logs in. D1 and D2 are already in the ring with one another. The flow:
+/// D3 logs in. D1 and D2 are already in the ring with one another, and
+/// each has a key package sitting in its public pool. The flow:
 ///
-///   1. Bootstrap: D3 publishes one-shot PDS slots for D1 and D2.
-///   2. D1 fetches `(D3 → D1)`, uses it to add D3 to the ring.
-///   3. D3 processes the ring Welcome.
-///   4. The bootstrap slots are no longer needed; D3 starts shipping ring
-///      KP batches to D1 (and would to D2 in the real protocol; we
-///      exercise D1 here for brevity).
-///   5. D1 fans D3 out to four user conversations in one tick.
-///   6. D3 processes all four Welcomes in one drain.
+///   1. D3 draws D1's newest pool record to open a coord group with D1.
+///   2. D1 processes that Welcome and replenishes — the replenishment is
+///      what makes step 3 possible.
+///   3. D3 draws again for the ring add. It must get a *different*
+///      record; the first is spent.
+///   4. D1 processes the ring Welcome and joins D3's ring.
+///   5. Steady state: D3 ships ring KP batches to D1.
+///   6. D1 fans D3 out to four user conversations in one tick.
+///   7. D3 processes all four Welcomes in one drain.
 ///
 /// Invariant: zero failures.
 #[test]
@@ -345,284 +351,265 @@ fn hybrid_new_device_end_to_end() {
     let mut m = HybridModel::default();
     m.ring_members_of.insert(RING, [D1, D2].into());
 
-    // 1. Bootstrap: D3 publishes one-shot slots.
-    m.publish_bootstrap_slot(D3, D1);
-    m.publish_bootstrap_slot(D3, D2);
+    // 1. D1 and D2 each have one package published. D3 draws D1's for the
+    //    coord group. (The coord group and the ring add are two different
+    //    MLS groups; the model only distinguishes them by which record
+    //    gets burned, which is the part that can go wrong.)
+    m.publish_pool_kp(D1);
+    m.publish_pool_kp(D2);
+    let coord_kp = m.try_bootstrap_add(D3, D1).expect("D1 has a package published");
+    m.owner_drain_inbound(D1, D3);
+    assert!(m.ok());
 
-    // 2. D1 fetches and uses its slot to add D3 to the ring.
-    let bootstrap_kp = m.fetch_bootstrap_slot(D3, D1).unwrap();
-    m.bootstrap_add_to_ring(D1, D3, bootstrap_kp);
+    // 2. D1 replenishes on consuming its init key.
+    let replenished = m.publish_pool_kp(D1);
 
-    // The PDS slot still exists, but D1's consumer-side flag now
-    // refuses to act on it — a stale poll returns None.
-    assert!(m.fetch_bootstrap_slot(D3, D1).is_none());
-    assert!(m.pds_slots.get(&(D3, D1)).copied().flatten().is_some());
+    // 3. The ring add draws again and must not re-pick the spent record.
+    let ring_kp = m.try_bootstrap_add(D3, D1).expect("D1 replenished");
+    assert_ne!(ring_kp, coord_kp, "second draw must skip the record we burned");
+    assert_eq!(ring_kp, replenished);
 
-    // 3. D3 processes the ring Welcome.
-    m.owner_drain_inbound(D3, D1);
+    // 4. D1 processes the ring Welcome.
+    m.owner_drain_inbound(D1, D3);
     assert!(m.ok());
     m.ring_members_of.get_mut(&RING).unwrap().insert(D3);
 
-    // 4. Now in steady state. D3 ships a KP batch to D1 via the ring.
+    // Both records are still on the PDS — nothing is ever deleted.
+    assert_eq!(m.pds_pool.get(&D1).unwrap().len(), 2);
+
+    // 5. Steady state. D3 ships a KP batch to D1 via the ring.
     m.publish_and_offer(D3, D1, 8);
     m.consumer_drain_inbound(D1, D3);
     assert_eq!(m.pool_size(D1, D3), 8);
 
-    // 5. Fan-out in one tick.
+    // 6. Fan-out in one tick.
     for g in [ALICE_BOB, ALICE_CHARLIE, ALICE_DAVE, ALICE_BOOKCLUB] {
         let kp = m.claim_kp(D1, D3).unwrap();
         m.consume_and_send_welcome(D1, D3, kp, g);
     }
     assert_eq!(m.ring_pending(D1, D3), 4);
 
-    // 6. D3 drains all four in one go.
+    // 7. D3 drains all four in one go.
     m.owner_drain_inbound(D3, D1);
     assert!(m.ok());
     assert_eq!(m.ring_pending(D1, D3), 0);
 }
 
-/// **Bootstrap slot is single-use via the consumer-side flag.**
+/// **A consumer's repeated draws never return a record it already burned.**
 ///
-/// Confirm that the orphan-within-slot bug from `protocol_model.rs` cannot
-/// arise here even though the PDS slot is never deleted. D1 uses the
-/// bootstrap slot; the consumer-side flag is set; a second fetch returns
-/// None despite the slot still sitting on the PDS. The bootstrap path
-/// never runs twice for this `(consumer, owner)` pair.
+/// This is the property the shared pool needs and the dedicated-slot
+/// design got for free. One device legitimately draws twice against the
+/// same sibling — once for the coord group, once for the ring add — and
+/// the newest-record rule alone would hand back the spent one.
 #[test]
-fn hybrid_bootstrap_slot_is_single_use_by_construction() {
+fn hybrid_repeated_draws_skip_records_we_burned() {
     let mut m = HybridModel::default();
 
-    let kp1 = m.publish_bootstrap_slot(D3, D1);
-    let fetched = m.fetch_bootstrap_slot(D3, D1).unwrap();
-    assert_eq!(fetched, kp1);
-    m.bootstrap_add_to_ring(D1, D3, fetched);
+    let kp1 = m.publish_pool_kp(D1);
+    assert_eq!(m.fetch_newest_unused_pool_kp(D3, D1), Some(kp1));
+    m.bootstrap_add_to_ring(D3, D1, kp1);
 
-    // PDS still holds the slot. Consumer-side flag blocks re-use.
-    assert!(m.pds_slots.get(&(D3, D1)).copied().flatten().is_some());
-    assert!(m.fetch_bootstrap_slot(D3, D1).is_none());
+    // Nothing new published yet: the pool still holds exactly the record
+    // we just spent, so there is nothing to draw.
+    assert_eq!(m.pds_pool.get(&D1).unwrap().len(), 1);
+    assert_eq!(
+        m.fetch_newest_unused_pool_kp(D3, D1),
+        None,
+        "the only record is spent — defer rather than hand it back",
+    );
 
-    // Even if a buggy or adversarial caller tries to use the KP a second
-    // time, the *next time* D3 is added to anything it will be over the
-    // ring with a fresh KP from a different mechanism. The bootstrap path
-    // never runs twice.
-    m.owner_drain_inbound(D3, D1);
+    // Owner replenishes; the draw resumes and picks the new record.
+    let kp2 = m.publish_pool_kp(D1);
+    assert_eq!(m.fetch_newest_unused_pool_kp(D3, D1), Some(kp2));
+
+    // Older records are never resurrected even once newer ones exist.
+    let kp3 = m.publish_pool_kp(D1);
+    m.bootstrap_add_to_ring(D3, D1, kp3);
+    assert_eq!(
+        m.fetch_newest_unused_pool_kp(D3, D1),
+        Some(kp2),
+        "newest-unused, so the untouched middle record is next",
+    );
+
+    m.owner_drain_inbound(D1, D3);
     assert!(m.ok());
 }
 
-/// **Bootstrap event survives on the PDS; consumer-side flag is the
-/// only defence.**
+/// **The burn record is the only defence against replay.**
 ///
-/// Models the "don't delete" rule explicitly. D3 publishes a bootstrap
-/// slot for D1. D1 consumes it. D1 then performs several more poll
-/// cycles — each one would re-fetch the slot if the consumer-side flag
-/// didn't intervene. The flag returns `None` from every subsequent
-/// `fetch_bootstrap_slot`, so no second Welcome is built.
-///
-/// The lower half of the test confirms that the flag is genuinely
-/// load-bearing: a buggy caller that bypassed the flag and called
-/// `bootstrap_add_to_ring` a second time with the same KP *would*
-/// produce an undeliverable Welcome (the init key is already gone from
-/// D3's keystore), and the model's `failed_receives` counter would
-/// fire. This is the orphan failure mode the flag closes.
+/// The pool record is never deleted, so a consumer that bypassed its own
+/// `used_pool_kps` set and reused a cached rkey would build a Welcome
+/// whose init key is already gone from the owner's keystore. Shows the
+/// orphan failure the set closes.
 #[test]
-fn hybrid_bootstrap_event_replay_blocked_by_consumer_flag() {
+fn hybrid_replaying_a_burned_record_produces_an_orphan() {
     let mut m = HybridModel::default();
 
-    let kp = m.publish_bootstrap_slot(D3, D1);
-
-    // First poll: slot is fresh, consumer fetches, builds Welcome.
-    let fetched = m.fetch_bootstrap_slot(D3, D1).unwrap();
-    assert_eq!(fetched, kp);
-    m.bootstrap_add_to_ring(D1, D3, fetched);
-    m.owner_drain_inbound(D3, D1);
+    let kp = m.publish_pool_kp(D1);
+    let drawn = m.try_bootstrap_add(D3, D1).unwrap();
+    assert_eq!(drawn, kp);
+    m.owner_drain_inbound(D1, D3);
     assert!(m.ok());
 
-    // Subsequent polls: the slot bytes still sit on the PDS, but
-    // fetch_bootstrap_slot returns None because the consumer flag is
-    // set. We poll several times to make the point that there is no
-    // implicit "first poll after consumption is special" — every poll
-    // is gated by the same flag.
+    // Poll repeatedly: the record still sits on the PDS, and the draw
+    // keeps declining it. There is no "first poll after consumption is
+    // special" — every poll is gated by the same set.
     for _ in 0..5 {
-        assert!(m.fetch_bootstrap_slot(D3, D1).is_none());
-        // PDS still has the record.
-        assert!(m.pds_slots.get(&(D3, D1)).copied().flatten().is_some());
+        assert!(m.fetch_newest_unused_pool_kp(D3, D1).is_none());
+        assert!(m.pds_pool.get(&D1).unwrap().contains(&kp));
     }
 
-    // Now simulate a buggy caller that bypasses the flag. It has cached
-    // the rkey from its first fetch and naively calls
-    // bootstrap_add_to_ring a second time. The owner drains and sees a
-    // Welcome whose init key is no longer in its keystore — the orphan
-    // failure the flag is designed to prevent.
-    m.bootstrap_add_to_ring(D1, D3, kp);
-    m.owner_drain_inbound(D3, D1);
+    // A buggy consumer that cached the rkey and bypassed the set.
+    m.bootstrap_add_to_ring(D3, D1, kp);
+    m.owner_drain_inbound(D1, D3);
     assert!(
         !m.ok(),
-        "bypassing the consumer flag must surface as a failed_receive — \
-         the flag is the only defence against bootstrap replay under \
-         the don't-delete rule",
+        "bypassing the burn record must surface as a failed receive — it \
+         is the only defence against replay under the don't-delete rule",
     );
 }
 
-/// **Concurrent ring-add attempts during bootstrap.**
+/// **Concurrent consumers race for the same pool record.**
 ///
-/// Both D1 and D2 try to be the one to add D3 to the ring. D3 published
-/// distinct bootstrap slots for each, so each uses a different KP — no
-/// shared-pool race. The MLS commit layer (not modelled here) decides
-/// which of the two adds wins; the loser's Welcome is discarded (we
-/// represent that by *not* draining the loser's queue). The winner's
-/// Welcome processes cleanly. D3's keystore has one init key consumed,
-/// the other is intact.
+/// The inversion the shared pool forces, recorded deliberately: with a
+/// dedicated per-consumer slot D1 and D2 held *different* KPs for D3 and
+/// could both act. Reading one public pool they see the identical list
+/// and pick the identical newest record, so only one of the two Welcomes
+/// can ever be processed and the other is silently undeliverable.
+///
+/// No local rule fixes this — both consumers are behaving correctly. It
+/// is why exactly one device is elected to perform a given add
+/// (`do_ring_add`'s smallest-leaf gate, and `on_peer_kp_observed`'s for
+/// coord groups). This test pins the cost of losing that election.
 #[test]
-fn hybrid_concurrent_ring_add_uses_distinct_bootstrap_kps() {
+fn hybrid_concurrent_consumers_race_for_the_same_pool_record() {
     let mut m = HybridModel::default();
 
-    let kp_for_d1 = m.publish_bootstrap_slot(D3, D1);
-    let kp_for_d2 = m.publish_bootstrap_slot(D3, D2);
-    assert_ne!(kp_for_d1, kp_for_d2);
+    m.publish_pool_kp(D3);
 
-    // Both fetch and build add-to-ring Welcomes.
-    m.bootstrap_add_to_ring(D1, D3, kp_for_d1);
-    m.bootstrap_add_to_ring(D2, D3, kp_for_d2);
+    // Both draw in the same tick, before either burn is visible to the
+    // other — burns are local, and the pool has no shared claim.
+    let d1_pick = m.fetch_newest_unused_pool_kp(D1, D3).unwrap();
+    let d2_pick = m.fetch_newest_unused_pool_kp(D2, D3).unwrap();
+    assert_eq!(
+        d1_pick, d2_pick,
+        "identical list, identical rule → identical record",
+    );
 
-    // MLS layer: D1's commit lands first. D2's commit is rejected; D2 will
-    // never have its Welcome processed by D3. Model this by only draining
-    // D1's queue.
+    m.bootstrap_add_to_ring(D1, D3, d1_pick);
+    m.bootstrap_add_to_ring(D2, D3, d2_pick);
+
+    // D3 drains D1's Welcome first and consumes the init key.
     m.owner_drain_inbound(D3, D1);
     assert!(m.ok());
 
-    // D2's Welcome is still pending; D3 must NOT drain it under the
-    // assumption it's rejected. In production the MLS layer enforces this;
-    // here we just confirm the init key for D2's KP is still in D3's
-    // keystore (i.e. could be reused if needed).
-    assert!(m.keystore.get(&D3).unwrap().contains(&kp_for_d2));
-    assert_eq!(m.ring_pending(D2, D3), 1);
+    // D2's Welcome targets the same, now-spent init key. Draining it
+    // surfaces the orphan.
+    m.owner_drain_inbound(D3, D2);
+    assert!(
+        !m.ok(),
+        "the losing consumer's Welcome is undeliverable — this is what \
+         the add election exists to prevent",
+    );
 }
 
 /// **A second new device joins after the ring is up.**
 ///
-/// D4 logs in later. The hybrid path reruns the bootstrap dance for D4,
-/// independently of the ring traffic that's already established for D3.
-/// No mailbox is shared with D3's bootstrap; no ring batches are
-/// disturbed.
+/// D4 logs in later and draws from the same pools, independently of the
+/// ring traffic already established for D3. Distinct records, no
+/// disturbance to D3's ring pool.
 #[test]
-fn hybrid_second_new_device_reuses_the_bootstrap_path_independently() {
+fn hybrid_second_new_device_draws_independently() {
     let mut m = HybridModel::default();
 
-    // Initial state: D3 is in the ring with D1 and D2 (modelled by skipping
-    // the bootstrap and just establishing a ring KP batch).
+    // D3 is already in the ring with D1 and D2 (modelled by skipping the
+    // bootstrap and just establishing a ring KP batch).
     m.publish_and_offer(D3, D1, 4);
     m.consumer_drain_inbound(D1, D3);
 
-    // D4 logs in. Publishes bootstrap slots for D1, D2, AND D3 (since D3
-    // is now a sibling).
-    m.publish_bootstrap_slot(D4, D1);
-    m.publish_bootstrap_slot(D4, D2);
-    m.publish_bootstrap_slot(D4, D3);
+    // D4 logs in. D1, D2 and D3 are all siblings with published packages.
+    for owner in [D1, D2, D3] {
+        m.publish_pool_kp(owner);
+    }
 
-    // D1 adds D4 to the ring.
-    let kp = m.fetch_bootstrap_slot(D4, D1).unwrap();
-    m.bootstrap_add_to_ring(D1, D4, kp);
-    m.owner_drain_inbound(D4, D1);
+    let from_d1 = m.try_bootstrap_add(D4, D1).unwrap();
+    m.owner_drain_inbound(D1, D4);
     assert!(m.ok());
 
-    // D3's pool from earlier is undisturbed: it still has 4 KPs from D3.
+    // D3's ring pool from earlier is undisturbed.
     assert_eq!(m.pool_size(D1, D3), 4);
 
-    // The (D4 → D2) and (D4 → D3) slots are intact and could be used later
-    // if D2 or D3 wants to add D4 to something, though in practice D1 will
-    // be the ring-leader by leaf order and the others won't try.
-    assert!(m.fetch_bootstrap_slot(D4, D2).is_some());
-    assert!(m.fetch_bootstrap_slot(D4, D3).is_some());
-    // The two surviving slots hold distinct KPs — each is a separate
-    // single-use credential.
-    assert_ne!(
-        m.fetch_bootstrap_slot(D4, D2),
-        m.fetch_bootstrap_slot(D4, D3),
-    );
+    // D2's and D3's packages are untouched and distinct from D1's.
+    let from_d2 = m.fetch_newest_unused_pool_kp(D4, D2).unwrap();
+    let from_d3 = m.fetch_newest_unused_pool_kp(D4, D3).unwrap();
+    assert_ne!(from_d2, from_d3);
+    assert_ne!(from_d1, from_d2);
 }
 
 /// **Two new devices joining concurrently.**
 ///
-/// D1 and D2 are already in the ring. D3 and D4 both come online and
-/// publish their bootstrap slots at the same time (concurrent puts on
-/// the firehose). D1 serialises the ring adds — MLS only allows one
-/// commit per epoch — so it fetches D3's slot, adds D3 to the ring,
-/// then fetches D4's slot, adds D4. The two new-device flows must be
-/// completely independent: no shared KP, no cross-contamination of
-/// consumer flags, no orphan Welcomes.
+/// D1 and D2 are already in the ring. D3 and D4 both come online. Each
+/// draws from D1's pool to add D1 to its own ring; MLS serialises the
+/// commits but the *draws* are independent, so D1 must have replenished
+/// between them. The two flows must not cross-contaminate: no shared
+/// record, no orphan Welcomes.
 #[test]
 fn hybrid_two_new_devices_join_concurrently_independent_flows() {
     let mut m = HybridModel::default();
     m.ring_members_of.insert(RING, [D1, D2].into());
 
-    // D3 and D4 both publish bootstrap slots for each existing sibling.
-    let d3_for_d1 = m.publish_bootstrap_slot(D3, D1);
-    let d3_for_d2 = m.publish_bootstrap_slot(D3, D2);
-    let d4_for_d1 = m.publish_bootstrap_slot(D4, D1);
-    let d4_for_d2 = m.publish_bootstrap_slot(D4, D2);
+    let d1_first = m.publish_pool_kp(D1);
+    let d2_first = m.publish_pool_kp(D2);
+    assert_ne!(d1_first, d2_first);
 
-    // Every bootstrap KP is distinct — the four init keys are four
-    // different entries in their respective keystores.
-    let all_kps: BTreeSet<Rkey> = [d3_for_d1, d3_for_d2, d4_for_d1, d4_for_d2]
-        .into_iter()
-        .collect();
-    assert_eq!(all_kps.len(), 4);
-    assert_eq!(m.keystore.get(&D3).unwrap().len(), 2);
-    assert_eq!(m.keystore.get(&D4).unwrap().len(), 2);
-
-    // D1 adds D3 to the ring (epoch N).
-    let kp = m.fetch_bootstrap_slot(D3, D1).unwrap();
-    assert_eq!(kp, d3_for_d1);
-    m.bootstrap_add_to_ring(D1, D3, kp);
-    m.owner_drain_inbound(D3, D1);
+    // D3 draws D1's record and adds D1 (epoch N).
+    let d3_pick = m.try_bootstrap_add(D3, D1).unwrap();
+    assert_eq!(d3_pick, d1_first);
+    m.owner_drain_inbound(D1, D3);
     assert!(m.ok());
     m.ring_members_of.get_mut(&RING).unwrap().insert(D3);
 
-    // D1's consumer flag for D3 is now set; its flag for D4 is not.
-    assert!(m.consumed_bootstrap_for.contains(&(D1, D3)));
-    assert!(!m.consumed_bootstrap_for.contains(&(D1, D4)));
+    // D1 replenishes on consuming the init key. Without this, D4's draw
+    // returns None and D4 defers — correct, but nothing to assert about.
+    let d1_second = m.publish_pool_kp(D1);
 
-    // D1 adds D4 to the ring (epoch N+1). The flow uses D4's own KP,
-    // not D3's, and the two flows have not interfered.
-    let kp = m.fetch_bootstrap_slot(D4, D1).unwrap();
-    assert_eq!(kp, d4_for_d1);
-    m.bootstrap_add_to_ring(D1, D4, kp);
-    m.owner_drain_inbound(D4, D1);
+    // D4 draws (epoch N+1). It gets D1's *replenished* record, not D3's.
+    let d4_pick = m.try_bootstrap_add(D4, D1).unwrap();
+    assert_eq!(d4_pick, d1_second);
+    assert_ne!(d4_pick, d3_pick);
+    m.owner_drain_inbound(D1, D4);
     assert!(m.ok());
     m.ring_members_of.get_mut(&RING).unwrap().insert(D4);
 
-    // Final state: ring has all four devices; D3's and D4's keystores
-    // each have one init key consumed (the one D1 used), one remaining
-    // (the one for D2, untouched). The (D3 → D2) and (D4 → D2) slots
-    // are still available on the PDS, ready for D2's tick.
+    // Final state: ring has all four devices. D1 has burned both of its
+    // published init keys; both records remain on the PDS.
     assert_eq!(m.ring_members_of.get(&RING).unwrap().len(), 4);
-    assert_eq!(m.keystore.get(&D3).unwrap().len(), 1);
-    assert_eq!(m.keystore.get(&D4).unwrap().len(), 1);
-    assert!(m.fetch_bootstrap_slot(D3, D2).is_some());
-    assert!(m.fetch_bootstrap_slot(D4, D2).is_some());
+    assert!(m.keystore.get(&D1).unwrap().is_empty());
+    assert_eq!(m.pds_pool.get(&D1).unwrap().len(), 2);
 
-    // D1's consumer flags are set independently for D3 and D4.
-    assert!(m.consumed_bootstrap_for.contains(&(D1, D3)));
-    assert!(m.consumed_bootstrap_for.contains(&(D1, D4)));
-    // D2 hasn't consumed anything yet.
-    assert!(!m.consumed_bootstrap_for.contains(&(D2, D3)));
-    assert!(!m.consumed_bootstrap_for.contains(&(D2, D4)));
+    // Burn sets are per-consumer and independent.
+    assert!(m.used_pool_kps.get(&D3).unwrap().contains(&d3_pick));
+    assert!(!m.used_pool_kps.get(&D3).unwrap().contains(&d4_pick));
+    assert!(m.used_pool_kps.get(&D4).unwrap().contains(&d4_pick));
+    assert!(!m.used_pool_kps.get(&D4).unwrap().contains(&d3_pick));
+
+    // D2's package is untouched — D2 has not been added to anything yet.
+    assert_eq!(m.fetch_newest_unused_pool_kp(D3, D2), Some(d2_first));
 }
 
 /// **Mixed trace: bootstrap + ring-transport + replay + refill.**
 ///
-/// Interleaves bootstrap and ring-transport actions, replays a KP batch,
-/// runs the pool to empty, refills via `KpRequest`, and fans out one
-/// more add. Confirms zero failures across the whole sequence.
+/// Interleaves pool draws and ring-transport actions, replays a KP batch,
+/// runs the pool to empty, refills via `KpRequest`, and fans out one more
+/// add. Confirms zero failures across the whole sequence.
 #[test]
 fn hybrid_mixed_trace_holds_invariant() {
     let mut m = HybridModel::default();
 
-    // D3 bootstrap.
-    m.publish_bootstrap_slot(D3, D1);
-    let kp = m.fetch_bootstrap_slot(D3, D1).unwrap();
-    m.bootstrap_add_to_ring(D1, D3, kp);
-    m.owner_drain_inbound(D3, D1);
+    // D3 bootstraps against D1 via the public pool.
+    m.publish_pool_kp(D1);
+    m.try_bootstrap_add(D3, D1).unwrap();
+    m.owner_drain_inbound(D1, D3);
 
     // Ring KP supply, with a replay of the first batch midway.
     m.publish_and_offer(D3, D1, 3);
@@ -657,76 +644,49 @@ fn hybrid_mixed_trace_holds_invariant() {
     assert!(m.ok());
 }
 
-/// **Cross-user adds still use the PDS pool path.**
+/// **Cross-user adds use the very same pool.**
 ///
 /// When bob wants to start a conversation with alice, bob doesn't share a
-/// ring with alice — there's no ring transport between them. bob fetches
-/// alice's PDS keyPackage record through the unchanged cross-user path.
-/// Since each cross-user interaction is one-shot from bob's perspective
-/// (he adds alice to *his* conversation), there's no multi-use of
-/// alice's KP by bob, and the orphan-within-slot failure does not apply
-/// in this direction.
+/// ring with alice — there's no ring transport between them. bob reads
+/// alice's public `keyPackage` pool, which since the bootstrap KP lane
+/// was removed is the *identical* mechanism siblings use. The single
+/// difference is that a cross-user sender draws once per conversation
+/// rather than twice per sibling, so it never hits the repeat-draw case.
 ///
-/// Modelled by alice publishing a generic PDS KP (not a per-consumer
-/// slot, because the consumer's identity is not known in advance) and
-/// each cross-user sender claiming one. If two cross-user senders race
-/// for the same alice KP, the MLS layer accepts the first commit and
-/// the loser retries with a fresh KP. The scenario uses a small generic
-/// pool with claim semantics to represent this.
+/// Two senders racing for alice's newest record collide exactly as two
+/// siblings would; the MLS layer accepts the first commit and the loser
+/// retries after alice replenishes.
 #[test]
-fn hybrid_cross_user_is_unaffected_and_still_safe() {
+fn hybrid_cross_user_uses_the_same_pool_and_is_still_safe() {
     let mut m = HybridModel::default();
 
-    // Alice (modelled as D1 here) publishes 4 generic KPs for any
-    // cross-user sender to consume. These are NOT per-consumer slots;
-    // they're the cross-user KP pool, the unchanged half of the design.
-    fn alice_publish_generic(m: &mut HybridModel, count: usize) -> Vec<Rkey> {
-        let mut out = Vec::with_capacity(count);
-        for _ in 0..count {
-            let rkey = m.fresh_rkey();
-            m.keystore.entry(D1).or_default().insert(rkey);
-            // Generic pool modelled as (D1, _) slot keyed by some unique
-            // intended_for placeholder; we use Rkey(0..N) as a stand-in
-            // since cross-user senders don't carry a stable id.
-            m.pds_slots
-                .insert((D1, DeviceId(100 + out.len() as u8)), Some(rkey));
-            out.push(rkey);
-        }
-        out
+    // Alice (D1) keeps four packages published.
+    for _ in 0..4 {
+        m.publish_pool_kp(D1);
     }
+    assert_eq!(m.pds_pool.get(&D1).unwrap().len(), 4);
 
-    let pool = alice_publish_generic(&mut m, 4);
-    assert_eq!(pool.len(), 4);
-
-    // Two cross-user senders each claim distinct KPs (model claim semantics
-    // by deleting from the slot).
+    // Four cross-user senders, modelled as distinct consumers, each draw
+    // and add. Alice replenishes after each consumption, so each sender
+    // gets a live record.
     let mut claimed = Vec::new();
-    for (i, _) in pool.iter().enumerate() {
-        let key = (D1, DeviceId(100 + i as u8));
-        let kp = m.pds_slots.get(&key).copied().flatten();
-        if let Some(kp) = kp {
-            m.pds_slots.insert(key, None);
-            claimed.push(kp);
-        }
-    }
-    assert_eq!(claimed.len(), 4);
+    for i in 0..4u8 {
+        let sender = DeviceId(100 + i);
+        let kp = m.fetch_newest_unused_pool_kp(sender, D1).unwrap();
+        claimed.push(kp);
 
-    // Each cross-user sender uses its claimed KP for an add. The model
-    // enqueues the Welcome on the alice-direct ring queue (cross-user
-    // would use stealth-encrypted PDS events, but the per-KP
-    // consumption is the same).
-    for kp in &claimed {
         let id = m.fresh_welcome_id();
-        let w = WelcomeMsg {
-            id,
-            init_kp: *kp,
-            group: GroupId(900 + kp.0),
-        };
-        m.ring
-            .entry((D2, D1))
-            .or_default()
-            .push_back(RingMessage::Welcome(w));
+        let w = WelcomeMsg { id, init_kp: kp, group: GroupId(900 + kp.0) };
+        m.ring.entry((D2, D1)).or_default().push_back(RingMessage::Welcome(w));
+        m.used_pool_kps.entry(sender).or_default().insert(kp);
+
+        // Alice processes it and replenishes, which is what frees the
+        // next sender to draw a distinct record.
+        m.owner_drain_inbound(D1, D2);
+        m.publish_pool_kp(D1);
     }
-    m.owner_drain_inbound(D1, D2);
+
     assert!(m.ok());
+    let distinct: BTreeSet<Rkey> = claimed.iter().copied().collect();
+    assert_eq!(distinct.len(), 4, "each sender drew a live, distinct record");
 }

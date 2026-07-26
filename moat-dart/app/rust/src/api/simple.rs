@@ -508,11 +508,10 @@ impl EventDto {
                 EventKind::Modifier(ModifierKind::Reaction) => EventKindDto::Reaction,
                 EventKind::Coord => EventKindDto::Coord,
                 EventKind::SyncApp => EventKindDto::SyncApp,
-                // Ring-lane events (BootstrapKp, SiblingMsg) are consumed by
-                // the ring driver, not by Dart's event surface — no DTO.
+                // Ring-lane events (SiblingMsg) are consumed by the ring
+                // driver, not by Dart's event surface — no DTO.
                 EventKind::Modifier(_)
                 | EventKind::Control(_)
-                | EventKind::BootstrapKp
                 | EventKind::SiblingMsg
                 | EventKind::Unknown(_) => EventKindDto::Unknown,
             },

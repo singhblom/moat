@@ -14,8 +14,8 @@
 //!
 //! # Signing-key identity
 //!
-//! Every KeyPackage a device offers — cross-user pool, bootstrap KP, same-user
-//! KP lane — must carry that device's *identity* signing key (`env.key_bundle`),
+//! Every KeyPackage a device offers — public pool and same-user KP lane
+//! alike — must carry that device's *identity* signing key (`env.key_bundle`),
 //! so KPs are minted with [`MoatSession::replenish_key_package`], never
 //! `generate_key_package`, which would mint a fresh throwaway keypair.
 //!
@@ -463,27 +463,21 @@ pub struct DeviceRingState {
     /// conversation.  Key is the owner's hex-encoded `device_id`.
     kp_pools: HashMap<String, KpPool>,
 
-    /// Hex-encoded sibling `device_id`s whose bootstrap event we have
-    /// already consumed.  Because the bootstrap event is *not* deleted
-    /// from the PDS, this flag is the only thing preventing the
-    /// consumer from acting on a re-fetch of the same event.  See
-    /// `protocol_model_hybrid.rs::hybrid_bootstrap_event_replay_blocked_by_consumer_flag`.
-    consumed_bootstrap_for: HashSet<String>,
-
-    /// Hex-encoded sibling `device_id`s for which we (D_new) have
-    /// already published a bootstrap KP event.  Prevents re-publishing
-    /// on every tick once the event is on the PDS — its consumer will
-    /// pick it up via stealth scan and our `consumed_bootstrap_for`
-    /// flag on the other side closes the single-use loop.
-    published_bootstrap_for: HashSet<String>,
-
-    /// Hex-encoded sender `device_id` → MLS KeyPackage bytes received
-    /// from that sibling via a stealth-decoded `EventKind::BootstrapKp`
-    /// event but not yet used in a ring `add_device`.  The on-tick
-    /// ring-add loop drains this map: every entry produces one Welcome
-    /// over the ring, after which the sibling's flag is moved to
-    /// `consumed_bootstrap_for`.
-    pending_bootstrap_kps: HashMap<String, Vec<u8>>,
+    /// Fingerprints (hex SHA-256 of the raw bytes) of public-pool
+    /// `social.moat.keyPackage` records whose init key we have already
+    /// burned — either building a coord-group Welcome
+    /// (`on_peer_kp_observed`) or a ring Add (`do_ring_add`).
+    ///
+    /// The pool accumulates: records are published with `createRecord`
+    /// and never deleted, so a consumed package stays visible next to its
+    /// replacement and nothing on the wire distinguishes them.  Picking
+    /// the newest per device is a good filter but not sufficient on its
+    /// own — *we* need both a coord group and a ring Add for the same
+    /// sibling, so without this set the second draw would re-pick the
+    /// package the first one burned and produce a Welcome the sibling
+    /// cannot process.  Persisted: consumption is irreversible, so
+    /// forgetting across a restart would reintroduce exactly that.
+    used_pool_kps: HashSet<String>,
 
     /// Set when a `CoordMsg::RingInfo` arrives while we are not yet
     /// `InRing`: `(ring_id, created_at)` of a ring a Hello-exchanged
@@ -747,15 +741,6 @@ pub enum RingEvent<'a> {
         plaintext: &'a [u8],
     },
 
-    /// A stealth-decrypted bootstrap KP event was received from a sibling.
-    /// `from_device_id` is the sender's device id (extracted from the
-    /// embedded KP credential); `key_package` is the raw MLS KeyPackage
-    /// bytes the sender is offering us to add them to the ring.
-    BootstrapKpReceived {
-        from_device_id: DeviceId,
-        key_package: &'a [u8],
-    },
-
     /// The host already processed an MLS Welcome out-of-band (e.g. the Dart
     /// PollingService) and joined a group whose membership identifies it as
     /// a coord group.  Records the coord group and emits a Hello.
@@ -795,10 +780,9 @@ pub struct KeyPackageInput {
 
 /// Per-sibling stealth address record fed into [`DeviceRingState::tick`].
 ///
-/// Used by the bootstrap-publishing path: the ring driver needs each
-/// sibling's `scan_pubkey` (to stealth-encrypt the bootstrap KP) and
-/// their stable `device_id` (to mark "we've already published for this
-/// sibling" without re-fetching).
+/// Used by the same-user KP lane: the ring driver needs each sibling's
+/// `scan_pubkey` to stealth-encrypt `EventKind::SiblingMsg` payloads to
+/// them, keyed by their stable `device_id`.
 ///
 /// The host populates this list by fetching `social.moat.stealthAddress`
 /// records under our own DID and filtering out our own device.
@@ -821,8 +805,8 @@ pub struct OwnEventInput {
 pub struct TickInputs<'a> {
     pub key_packages: &'a [KeyPackageInput],
     pub stealth_pubkeys: &'a [[u8; 32]],
-    /// Per-sibling stealth address records, used to address bootstrap KPs.
-    /// Should exclude our own device.
+    /// Per-sibling stealth address records, used to address same-user KP
+    /// lane messages. Should exclude our own device.
     pub sibling_stealth: &'a [SiblingStealth],
     pub own_events: &'a [OwnEventInput],
     pub stealth_privkey: &'a [u8; 32],
@@ -856,9 +840,8 @@ pub enum RingCommand {
     },
     /// Publish a stealth-encrypted sibling event for a specific sibling.
     /// Same wire shape as [`StealthPublishWelcome`] — the host just publishes
-    /// the ciphertext under the supplied tag.  The payload inside is either an
-    /// `EventKind::BootstrapKp` event (MLS KeyPackage bytes for the ring
-    /// bootstrap) or an `EventKind::SiblingMsg` event (steady-state
+    /// the ciphertext under the supplied tag.  The payload inside is an
+    /// `EventKind::SiblingMsg` event (steady-state
     /// `KpBatch` / `KpRequest` / `UserConvWelcome` CoordMsg JSON); the
     /// recipient's own-PDS stealth scan picks it up.  Stealth delivery is
     /// epoch-free and order-insensitive.
@@ -1042,14 +1025,10 @@ impl DeviceRingState {
         }
     }
 
-    /// Record that we have consumed `peer`'s bootstrap event.  Subsequent
-    /// fetches of the same event are ignored.
-    pub fn mark_bootstrap_consumed(&mut self, peer: &DeviceId) {
-        self.consumed_bootstrap_for.insert(hex::encode(peer));
-    }
-
-    pub fn is_bootstrap_consumed(&self, peer: &DeviceId) -> bool {
-        self.consumed_bootstrap_for.contains(&hex::encode(peer))
+    /// Record that we have burned the init key of a public-pool key
+    /// package.  Idempotent.
+    fn mark_pool_kp_used(&mut self, key_package: &[u8]) {
+        self.used_pool_kps.insert(kp_fingerprint(key_package));
     }
 
     /// Verify structural invariants.  Cheap; intended for debug-build asserts
@@ -1138,9 +1117,6 @@ impl DeviceRingState {
             RingEvent::OwnEventsCursorAdvanced { rkey } => {
                 self.own_events_cursor = Some(rkey);
                 Vec::new()
-            }
-            RingEvent::BootstrapKpReceived { from_device_id, key_package } => {
-                self.on_bootstrap_kp_received(from_device_id, key_package)
             }
         };
         debug_assert!(self.check_invariants().is_ok(), "ring invariant: {:?}", self.check_invariants());
@@ -1247,6 +1223,9 @@ impl DeviceRingState {
                     return Vec::new();
                 }
             };
+        // Init key burned; the ring Add for this same sibling must draw a
+        // different package (see `used_pool_kps`).
+        self.mark_pool_kp_used(key_package);
 
         let mut cmds = Vec::new();
         cmds.push(RingCommand::RegisterGroup {
@@ -1300,37 +1279,15 @@ impl DeviceRingState {
         cmds
     }
 
-    /// Stash an incoming bootstrap KP unless we have already consumed
-    /// one from this sender.  The `on_tick` ring-add loop drains the
-    /// pending map and produces the actual Welcome.  No commands fire
-    /// from this arm — keeping ring-add side effects in a single place
-    /// makes the "consumed exactly once" property local and auditable.
-    fn on_bootstrap_kp_received(
-        &mut self,
-        from_device_id: DeviceId,
-        key_package: &[u8],
-    ) -> Vec<RingCommand> {
-        let key = hex::encode(from_device_id);
-        if self.consumed_bootstrap_for.contains(&key) {
-            // Replay defence: already added this sibling to our ring.
-            return Vec::new();
-        }
-        // Overwrite-on-duplicate is fine; the latest KP is as good as
-        // any other.  pending_bootstrap_kps is keyed by sender, so a
-        // re-publication from D_new before consumption just replaces.
-        self.pending_bootstrap_kps.insert(key, key_package.to_vec());
-        Vec::new()
-    }
-
     fn on_stealth_payload(
         &mut self,
         mls: &MoatSession,
         env: &StepEnv<'_>,
         plaintext: &[u8],
     ) -> Vec<RingCommand> {
-        // BootstrapKp events arrive as padded Event JSON (Phase C). Try
-        // unpadding first; if the result starts with '{' and parses as an
-        // Event with `kind == BootstrapKp`, route it to the bootstrap arm.
+        // Sibling KP-lane events arrive as padded Event JSON. Try unpadding
+        // first; if the result starts with '{' and parses as an Event,
+        // route it by kind.
         //
         // `unpad` is forgiving about non-padded inputs (returns Vec::new()
         // when the leading length prefix is implausible), so passing an
@@ -1339,17 +1296,6 @@ impl DeviceRingState {
         let unpadded = crate::padding::unpad(plaintext);
         if unpadded.first() == Some(&b'{') {
             if let Ok(ev) = Event::from_bytes(&unpadded) {
-                if matches!(ev.kind, crate::EventKind::BootstrapKp) {
-                    let from_device_id = match mls
-                        .extract_credential_from_key_package(&ev.payload)
-                        .ok()
-                        .flatten()
-                    {
-                        Some(cred) => *cred.device_id(),
-                        None => return Vec::new(),
-                    };
-                    return self.on_bootstrap_kp_received(from_device_id, &ev.payload);
-                }
                 // Steady-state sibling coordination (KP lane) — see
                 // `on_sibling_msg` for the authenticity model.
                 if matches!(ev.kind, crate::EventKind::SiblingMsg) {
@@ -1871,8 +1817,7 @@ impl DeviceRingState {
             // competing ring.  We don't adopt `theirs_ring_id` directly —
             // `RingInfo` carries no Welcome, so we hold no MLS state for
             // that group yet; real membership still arrives via the
-            // normal Add/Welcome path once an existing member processes
-            // our bootstrap KP.
+            // normal Add/Welcome path.
             self.known_ring = Some((theirs_ring_id.to_vec(), theirs_generation, theirs_created_at));
         }
     }
@@ -2068,64 +2013,15 @@ impl DeviceRingState {
         cmds
     }
 
-    /// Publish a bootstrap KP event for each known sibling we have not
-    /// yet published one to.  Symmetric — any device, regardless of ring
-    /// membership, publishes one of these per newly-observed sibling.
-    /// The receiver picks the event up via its own-PDS stealth scan and
-    /// uses the embedded KP to add us to the ring.  Once `published_bootstrap_for`
-    /// has marked a sibling, we never republish for them — the original
-    /// event sits on the PDS indefinitely (see `same-user-key-distribution.md`).
-    fn publish_bootstrap_kps(
-        &mut self,
-        mls: &MoatSession,
-        env: &StepEnv<'_>,
-    ) -> Vec<RingCommand> {
-        let mut cmds = Vec::new();
-        let my_device_id = *mls.device_id();
-        for sib in env.sibling_stealth {
-            if sib.device_id == my_device_id {
-                continue;
-            }
-            let key = hex::encode(sib.device_id);
-            if self.published_bootstrap_for.contains(&key) {
-                continue;
-            }
-            // Fresh init key, kept in our local keystore; never written to the
-            // cross-user PDS pool — bootstrap KPs are exclusive to this lane.
-            // Signing key is our identity key (see the module note).
-            let kp_bytes = match mls.replenish_key_package(env.credential, env.key_bundle) {
-                Ok(p) => p,
-                Err(_) => continue, // try again next tick
-            };
-            let event = Event::bootstrap_kp(kp_bytes);
-            let event_bytes = match event.to_bytes() {
-                Ok(b) => b,
-                Err(_) => continue,
-            };
-            let padded = crate::padding::pad_to_bucket(&event_bytes);
-            let ciphertext = match encrypt_for_stealth(&[sib.scan_pubkey], &padded) {
-                Ok(ct) => ct,
-                Err(_) => continue,
-            };
-            let tag: [u8; 16] = rand::random();
-            cmds.push(RingCommand::PublishStealthEvent { tag, ciphertext });
-            self.published_bootstrap_for.insert(key);
-        }
-        cmds
-    }
-
     fn on_tick(
         &mut self,
         mls: &MoatSession,
         env: &StepEnv<'_>,
-        _key_packages: &[KeyPackageInput],
+        key_packages: &[KeyPackageInput],
     ) -> Vec<RingCommand> {
         let mut cmds = Vec::new();
 
-        // ── Pre-A. Publish bootstrap KP for each newly-observed sibling ──
-        cmds.extend(self.publish_bootstrap_kps(mls, env));
-
-        // ── Pre-A bis. Top up pools that are at-or-below low-water ───────
+        // ── Pre-A. Top up pools that are at-or-below low-water ───────────
         cmds.extend(self.emit_low_water_kp_requests(mls, env));
 
         // ── A. Detect ring members added by someone else ─────────────────
@@ -2226,7 +2122,7 @@ impl DeviceRingState {
         }
 
         // ── D. Bootstrap ring or MLS Add CoordReady peers ────────────────
-        cmds.extend(self.try_advance_ring_membership(mls, env));
+        cmds.extend(self.try_advance_ring_membership(mls, env, key_packages));
 
         cmds
     }
@@ -2393,6 +2289,7 @@ impl DeviceRingState {
         &mut self,
         mls: &MoatSession,
         env: &StepEnv<'_>,
+        key_packages: &[KeyPackageInput],
     ) -> Vec<RingCommand> {
         let mut cmds = Vec::new();
         let my_device_id = *mls.device_id();
@@ -2424,7 +2321,7 @@ impl DeviceRingState {
                 // `add_device` mutation itself is restricted to one device).
                 for sib in &pending {
                     if let Some(cmds_for_add) =
-                        self.do_ring_add(mls, env, &ring_id, *sib)
+                        self.do_ring_add(mls, env, &ring_id, *sib, key_packages)
                     {
                         cmds.extend(cmds_for_add);
                     }
@@ -2499,7 +2396,7 @@ impl DeviceRingState {
                 });
                 for sib in &pending {
                     if let Some(cmds_for_add) =
-                        self.do_ring_add(mls, env, &ring_id, *sib)
+                        self.do_ring_add(mls, env, &ring_id, *sib, key_packages)
                     {
                         cmds.extend(cmds_for_add);
                     }
@@ -2520,6 +2417,7 @@ impl DeviceRingState {
         env: &StepEnv<'_>,
         ring_id: &[u8],
         sibling_id: DeviceId,
+        key_packages: &[KeyPackageInput],
     ) -> Option<Vec<RingCommand>> {
         // Already a ring member?  Mark Joined and exit.  This check runs
         // for every device regardless of election status below — every
@@ -2553,12 +2451,14 @@ impl DeviceRingState {
             return None; // not our turn to add — the elected member will
         }
 
-        // Phase C: use the bootstrap KP this sibling delivered to us
-        // (single-use, race-free).  If none is pending, defer to a
-        // later tick — D_new will publish (or has published) and
-        // their event will arrive via own-PDS stealth scan.
-        let sib_kp_key = hex::encode(sibling_id);
-        let sib_kp_bytes = self.pending_bootstrap_kps.get(&sib_kp_key).cloned()?;
+        // Draw the sibling's KeyPackage from the public pool, skipping any
+        // we have already burned — most importantly the one this device
+        // spent building its coord group with this same sibling.  If the
+        // sibling has not replenished since, there is nothing usable yet
+        // and we defer to a later tick; they replenish on processing our
+        // coord Welcome, so a package normally lands within a tick or two.
+        let sib_kp_bytes =
+            newest_unused_kp_for(mls, key_packages, &sibling_id, &self.used_pool_kps)?.to_vec();
 
         // Derive the commit tag at the current epoch, BEFORE `add_device`
         // advances it. Receivers scan for tags at the epoch they are on and
@@ -2572,11 +2472,10 @@ impl DeviceRingState {
             Ok(w) => w,
             Err(_) => return None,
         };
-        // Bootstrap KP is consumed by the add_device call (init key
-        // burned).  Move from pending to consumed so a re-fetched
-        // BootstrapKp event won't try to use the same init key again.
-        self.pending_bootstrap_kps.remove(&sib_kp_key);
-        self.consumed_bootstrap_for.insert(sib_kp_key);
+        // `add_device` burned this package's init key.  Record it so no
+        // later draw — for this sibling or any other purpose — re-picks a
+        // package that can no longer produce a processable Welcome.
+        self.mark_pool_kp_used(&sib_kp_bytes);
 
         let mut cmds = Vec::new();
         cmds.push(RingCommand::PublishEvent {
@@ -2727,6 +2626,51 @@ fn newest_key_package_per_device<'a>(
         }
     }
     newest.into_iter().map(|(_, kp)| kp).collect()
+}
+
+/// Stable identity for a public-pool key package: hex SHA-256 of the raw
+/// TLS-serialised bytes.  The pool exposes no per-record identifier the
+/// driver can see (`KeyPackageInput` carries bytes only, and rkeys are a
+/// host concern), and the bytes are what actually determine which init
+/// key gets burned, so hashing them is both sufficient and exact.
+fn kp_fingerprint(key_package: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(key_package);
+    hex::encode(h.finalize())
+}
+
+/// Newest key package in `pool` belonging to `device_id` that we have not
+/// already burned.
+///
+/// Scans from the end because `fetch_key_packages` returns ascending rkey
+/// order, so later entries are more recently published and less likely to
+/// have been consumed by a concurrent cross-user inviter.
+///
+/// Returns `None` when the sibling has published nothing we can still use.
+/// That is an ordinary, self-healing state rather than an error: the
+/// sibling replenishes after every consumption (including on joining our
+/// coord group), so a fresh package normally appears within a tick or two
+/// and the caller simply retries.
+fn newest_unused_kp_for<'a>(
+    mls: &MoatSession,
+    pool: &'a [KeyPackageInput],
+    device_id: &DeviceId,
+    used: &HashSet<String>,
+) -> Option<&'a [u8]> {
+    pool.iter().rev().find_map(|kp| {
+        let cred = mls
+            .extract_credential_from_key_package(&kp.key_package)
+            .ok()
+            .flatten()?;
+        if *cred.device_id() != *device_id {
+            return None;
+        }
+        if used.contains(&kp_fingerprint(&kp.key_package)) {
+            return None;
+        }
+        Some(kp.key_package.as_slice())
+    })
 }
 
 fn find_own_leaf(mls: &MoatSession, ring_id: &[u8]) -> Option<u32> {
@@ -3747,72 +3691,72 @@ mod tests {
         assert!(s.kp_pools[&key].used_kps.contains(&3));
     }
 
-    #[test]
-    fn bootstrap_consumed_flag_roundtrips() {
-        let mut s = DeviceRingState::new();
-        let peer: DeviceId = [7u8; 16];
-
-        assert!(!s.is_bootstrap_consumed(&peer));
-        s.mark_bootstrap_consumed(&peer);
-        assert!(s.is_bootstrap_consumed(&peer));
-
-        // Different peer is independent.
-        let other: DeviceId = [8u8; 16];
-        assert!(!s.is_bootstrap_consumed(&other));
-    }
-
-    // ── Bootstrap KP receive arm ───────────────────────────────────────────
+    // ── Public-pool KP selection ───────────────────────────────────────────
 
     #[test]
-    fn bootstrap_kp_received_stashes_in_pending() {
-        let mut s = DeviceRingState::new();
-        let sender: DeviceId = [7u8; 16];
-        let kp = vec![0xAB; 32];
+    fn newest_unused_kp_for_picks_newest_and_skips_burned() {
+        // Pool order mirrors `fetch_key_packages`: ascending rkey, so later
+        // entries are newer publications.
+        let owner = MoatSession::new();
+        let owner_cred = make_credential("did:plc:owner", "owner", [1u8; 16]);
+        let other = MoatSession::new();
+        let other_cred = make_credential("did:plc:owner", "other", [2u8; 16]);
 
-        let cmds = s.on_bootstrap_kp_received(sender, &kp);
-        assert!(cmds.is_empty(), "stash-only; no commands fire from this arm");
+        let (kp1, kb) = owner.generate_key_package(&owner_cred).expect("kp1");
+        let kp2 = owner.replenish_key_package(&owner_cred, &kb).expect("kp2");
+        let (other_kp, _) = other.generate_key_package(&other_cred).expect("other kp");
 
-        let key = hex::encode(sender);
-        assert_eq!(s.pending_bootstrap_kps.get(&key), Some(&kp));
-        assert!(!s.is_bootstrap_consumed(&sender));
-    }
+        // Any session can read credentials off a key package.
+        let reader = MoatSession::new();
+        let pool: Vec<KeyPackageInput> = [kp1.clone(), other_kp, kp2.clone()]
+            .into_iter()
+            .map(|key_package| KeyPackageInput { key_package })
+            .collect();
 
-    #[test]
-    fn bootstrap_kp_received_is_dropped_once_consumed() {
-        let mut s = DeviceRingState::new();
-        let sender: DeviceId = [7u8; 16];
-        let kp_original = vec![0x11; 32];
-        let kp_replay = vec![0x22; 32];
+        let mut used = HashSet::new();
+        assert_eq!(
+            newest_unused_kp_for(&reader, &pool, &[1u8; 16], &used),
+            Some(kp2.as_slice()),
+            "newest package for the owner, not the other device's"
+        );
 
-        // First arrival → stashed.
-        s.on_bootstrap_kp_received(sender, &kp_original);
-        // Simulate do_ring_add consuming it: remove from pending, mark consumed.
-        let key = hex::encode(sender);
-        s.pending_bootstrap_kps.remove(&key);
-        s.mark_bootstrap_consumed(&sender);
+        // Burning the newest falls back to the older one rather than
+        // handing out a package whose init key is already gone.
+        used.insert(kp_fingerprint(&kp2));
+        assert_eq!(
+            newest_unused_kp_for(&reader, &pool, &[1u8; 16], &used),
+            Some(kp1.as_slice())
+        );
 
-        // Second arrival from the same sender after consume must not
-        // re-stash — this is the replay defence verified in
-        // `hybrid_bootstrap_event_replay_blocked_by_consumer_flag`.
-        let cmds = s.on_bootstrap_kp_received(sender, &kp_replay);
-        assert!(cmds.is_empty());
-        assert!(
-            s.pending_bootstrap_kps.get(&key).is_none(),
-            "replayed KP after consume must not be re-stashed"
+        used.insert(kp_fingerprint(&kp1));
+        assert_eq!(
+            newest_unused_kp_for(&reader, &pool, &[1u8; 16], &used),
+            None,
+            "nothing usable left — caller defers until the owner replenishes"
         );
     }
 
     #[test]
-    fn bootstrap_kp_received_overwrites_pending_until_consumed() {
-        // Owner re-publishes (e.g. after restart) before we've consumed.
-        // The newer KP replaces the older entry in pending_bootstrap_kps.
-        let mut s = DeviceRingState::new();
-        let sender: DeviceId = [7u8; 16];
-        s.on_bootstrap_kp_received(sender, &[0x11; 32]);
-        s.on_bootstrap_kp_received(sender, &[0x22; 32]);
+    fn newest_unused_kp_for_returns_none_for_unknown_device() {
+        let reader = MoatSession::new();
+        assert_eq!(
+            newest_unused_kp_for(&reader, &[], &[9u8; 16], &HashSet::new()),
+            None
+        );
+    }
 
-        let key = hex::encode(sender);
-        assert_eq!(s.pending_bootstrap_kps.get(&key), Some(&vec![0x22; 32]));
+    #[test]
+    fn used_pool_kps_survive_persistence() {
+        // Consumption is irreversible, so the set must round-trip: a
+        // restart that forgot it would re-pick a burned package and emit a
+        // Welcome the sibling cannot process.
+        let mut s = DeviceRingState::new();
+        s.mark_pool_kp_used(&[0xAB; 32]);
+
+        let json = serde_json::to_string(&s).unwrap();
+        let parsed: DeviceRingState = serde_json::from_str(&json).unwrap();
+        assert!(parsed.used_pool_kps.contains(&kp_fingerprint(&[0xAB; 32])));
+        assert!(!parsed.used_pool_kps.contains(&kp_fingerprint(&[0xCD; 32])));
     }
 
     // ── Phase D: low-water + emit gating ──────────────────────────────────
@@ -3877,20 +3821,11 @@ mod tests {
         let _ = s.allocate_kp_seqs(3);
         s.ingest_kp_batch(&owner, vec![kp(10), kp(11)]);
         let _ = s.claim_kp(&owner);
-        s.mark_bootstrap_consumed(&[7u8; 16]);
-        s.on_bootstrap_kp_received([4u8; 16], &[0xDE; 16]);
-        s.published_bootstrap_for.insert(hex::encode([5u8; 16]));
 
         let json = serde_json::to_string(&s).unwrap();
         let parsed: DeviceRingState = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.highest_issued_kp_seq(), 3);
         assert_eq!(parsed.kp_pool_size(&owner), 1); // one claimed, one left
-        assert!(parsed.is_bootstrap_consumed(&[7u8; 16]));
-        assert_eq!(
-            parsed.pending_bootstrap_kps.get(&hex::encode([4u8; 16])),
-            Some(&vec![0xDE; 16])
-        );
-        assert!(parsed.published_bootstrap_for.contains(&hex::encode([5u8; 16])));
     }
 
     // ── Phase E′: stealth carrier for the KP lane ──────────────────────────
