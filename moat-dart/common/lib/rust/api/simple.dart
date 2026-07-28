@@ -253,6 +253,11 @@ abstract class RingDriverHandle implements RustOpaqueInterface {
   /// pool.
   OfferedKpDto? claimKp({required List<int> ownerDeviceId});
 
+  /// One-line snapshot of ring membership and peer states, for the Dart
+  /// host's debug log. Same renderer as `moat-cli` uses, so a mixed-runtime
+  /// beacon failure produces comparable lines from both sides.
+  String debugSummary();
+
   /// Emit a `KpRequest` to `owner` asking it to top up our pool.  The host
   /// publishes the returned commands.  Empty if not in a ring or if the
   /// sibling's stealth record is not yet known (self-healing: the next poll

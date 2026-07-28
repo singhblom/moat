@@ -143,6 +143,30 @@ impl MlsStorage {
         Ok(())
     }
 
+    /// Number of key package bundles whose private init key we still hold.
+    ///
+    /// OpenMLS deletes the bundle when a Welcome built against it is
+    /// processed, so this is exactly the count of our published key packages
+    /// that a peer could still successfully invite us with. Used to drive
+    /// proactive replenishment — see `DeviceRingState::on_tick`.
+    pub(crate) fn count_key_packages(&self) -> usize {
+        let values = self.values.read().unwrap();
+        values
+            .keys()
+            .filter(|k| k.starts_with(KEY_PACKAGE_LABEL))
+            .count()
+    }
+
+    /// Whether a key package bundle with this hash reference is still in the
+    /// store, i.e. whether we still hold its private init key.
+    pub(crate) fn contains_key_package<H: Serialize>(&self, hash_ref: &H) -> bool {
+        let Ok(key) = serde_json::to_vec(hash_ref) else {
+            return false;
+        };
+        let storage_key = build_key_from_vec::<CURRENT_VERSION>(KEY_PACKAGE_LABEL, key);
+        self.values.read().unwrap().contains_key(&storage_key)
+    }
+
     /// Internal helper to append to a list value
     fn append_value(
         &self,

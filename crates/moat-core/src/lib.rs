@@ -55,8 +55,8 @@ pub use crate::device_ring::{
     classify_group_kind, decode_coord_msg, decode_welcome_envelope, encode_coord_msg,
     encode_welcome_envelope, reconcile_rings, AddedBy, CoordGroupResult, CoordMsg, DeviceId,
     DeviceRingState, GroupKind, InvariantViolation, KeyPackageInput, OfferedKp, OwnEventInput,
-    PeerState, ReconcileDecision, RingCommand, RingEvent, RingLink, RingMembership,
-    SiblingStealth, StepEnv, SyncStatus, TickInputs,
+    summarize_ring_commands, PeerState, ReconcileDecision, RingCommand, RingEvent, RingLink,
+    RingMembership, SiblingStealth, StepEnv, SyncStatus, TickInputs,
 };
 pub use crate::event::{
     ControlKind, DecryptOutcome, Event, EventKind, MessageKind, ModifierKind, ReactionPayload,
@@ -315,6 +315,23 @@ impl MoatSession {
         use rand::RngCore;
         let mut device_id = [0u8; 16];
         rand::thread_rng().fill_bytes(&mut device_id);
+        Self::with_device_id(device_id)
+    }
+
+    /// Create a session with a caller-supplied device ID.
+    ///
+    /// For deterministic simulations. `device_id` decides leaf ordering,
+    /// every `smallest device_id` tiebreak, and which device is elected to
+    /// perform an add — so with a random id each run of a scenario is a
+    /// different draw, and a single failure or success says very little. That
+    /// is not academic: it invalidated a Mode-2 "reproduction" (see
+    /// `ring-inversion.md`), and it applies to every offline / lost-device
+    /// scenario, which is exactly where reproducibility matters most.
+    ///
+    /// Callers should sweep a range of ids rather than pin one, so a scenario
+    /// is exercised across every ordering rather than whichever the machine
+    /// happened to pick.
+    pub fn with_device_id(device_id: [u8; 16]) -> Self {
         Self {
             provider: MoatProvider::new(),
             device_id,
@@ -621,6 +638,41 @@ impl MoatSession {
     /// so the member can be re-invited to a group.
     ///
     /// Returns the new key package bytes (suitable for publishing to the PDS).
+    /// How many of our published key packages still have a usable init key.
+    ///
+    /// A key package is single-use: OpenMLS deletes the private init key the
+    /// moment a Welcome built against it is processed, so this count is
+    /// exactly how many outstanding invitations to us could still succeed.
+    /// When it reaches zero we are **un-invitable** — every package left on
+    /// the PDS is spent, and nothing on the wire distinguishes those from
+    /// live ones, so peers keep building Welcomes we cannot process.
+    ///
+    /// Drives proactive replenishment; see `KP_SELF_POOL_TARGET`.
+    /// Whether we still hold the private init key for this key package.
+    ///
+    /// The pool on the PDS accumulates and never deletes, so a published
+    /// package tells you nothing about whether it is still usable. This is the
+    /// only way to tell a live one from a spent one, and it works only for our
+    /// own packages — which is the point: it lets a device count how many
+    /// outstanding invitations to it could actually succeed, by intersecting
+    /// what is published with what it can still open.
+    pub fn holds_init_key(&self, key_package_bytes: &[u8]) -> bool {
+        let Ok(kp_in) = KeyPackageIn::tls_deserialize_exact(key_package_bytes) else {
+            return false;
+        };
+        let Ok(kp) = kp_in.validate(self.provider.crypto(), ProtocolVersion::Mls10) else {
+            return false;
+        };
+        let Ok(hash_ref) = kp.hash_ref(self.provider.crypto()) else {
+            return false;
+        };
+        self.provider.storage().contains_key_package(&hash_ref)
+    }
+
+    pub fn live_key_package_count(&self) -> usize {
+        self.provider.storage().count_key_packages()
+    }
+
     pub fn replenish_key_package(
         &self,
         credential: &MoatCredential,

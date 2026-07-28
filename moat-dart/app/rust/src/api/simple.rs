@@ -997,6 +997,14 @@ impl RingDriverHandle {
         self.inner.lock().unwrap().ring_id().map(<[u8]>::to_vec)
     }
 
+    /// One-line snapshot of ring membership and peer states, for the Dart
+    /// host's debug log. Same renderer as `moat-cli` uses, so a mixed-runtime
+    /// beacon failure produces comparable lines from both sides.
+    #[frb(sync)]
+    pub fn debug_summary(&self) -> String {
+        self.inner.lock().unwrap().debug_summary()
+    }
+
     /// Cursor (rkey) for incremental own-PDS stealth scan.
     #[frb(sync)]
     pub fn own_events_cursor(&self) -> Option<String> {

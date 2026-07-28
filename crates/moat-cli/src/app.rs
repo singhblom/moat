@@ -95,9 +95,21 @@ struct DebugLog {
 
 impl DebugLog {
     fn new(storage_dir: &std::path::Path) -> Self {
-        Self {
+        let log = Self {
             path: storage_dir.join("debug.log"),
-        }
+        };
+        // A storage root can be reused across process restarts (the beacon
+        // restart scenarios do exactly that), so without a marker the log of
+        // one run runs straight into the next with only wall-clock times to
+        // separate them. Line timestamps carry no date, which makes that
+        // ambiguous across midnight and useless for correlating with a test
+        // run.
+        log.log(&format!(
+            "=== run start {} pid={} ===",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+            std::process::id(),
+        ));
+        log
     }
 
     fn log(&self, msg: &str) {
@@ -4494,6 +4506,40 @@ impl App {
             .map(|kp| KeyPackageInput { key_package: kp.key_package })
             .collect();
 
+        // Classify the pool exactly as `DeviceRingState::tick` will, so the
+        // log answers "did the driver see any siblings at all?" directly.
+        // A ring that never forms because the pool held nothing but our own
+        // packages looks identical, from the outside, to one that fails for
+        // a state-machine reason — and telling those apart from artifacts
+        // alone is what this instrumentation exists for.
+        let (mut kp_mine, mut kp_siblings, mut kp_unreadable, mut kp_foreign) = (0, 0, 0, 0);
+        let mut kp_mine_live = 0;
+        let mut sibling_ids: Vec<String> = Vec::new();
+        for kp in &key_packages {
+            match self.mls.extract_credential_from_key_package(&kp.key_package) {
+                Ok(Some(cred)) => {
+                    if cred.did() != my_did {
+                        kp_foreign += 1;
+                    } else if *cred.device_id() == *self.mls.device_id() {
+                        kp_mine += 1;
+                        // Published *and* still openable by us — the number of
+                        // outstanding invitations to this device that could
+                        // actually succeed. Zero means un-invitable.
+                        if self.mls.holds_init_key(&kp.key_package) {
+                            kp_mine_live += 1;
+                        }
+                    } else {
+                        kp_siblings += 1;
+                        let id = hex::encode(&cred.device_id()[..4]);
+                        if !sibling_ids.contains(&id) {
+                            sibling_ids.push(id);
+                        }
+                    }
+                }
+                _ => kp_unreadable += 1,
+            }
+        }
+
         let stealth_records = client
             .fetch_stealth_addresses(&my_did)
             .await
@@ -4528,6 +4574,20 @@ impl App {
         let drawbridge_has_own_connection = self.drawbridge.has_own_connection();
         let sync_session_active = self.sync_session.is_some();
 
+        self.debug_log.log(&format!(
+            "ring: tick in  {} sibling_ids=[{}] stealth={} sibling_stealth={} own_events={} | {}",
+            format!(
+                "kp={} (mine={kp_mine} mine_live={kp_mine_live} siblings={kp_siblings} \
+                 foreign={kp_foreign} unreadable={kp_unreadable})",
+                key_packages.len()
+            ),
+            sibling_ids.join(","),
+            stealth_pubkeys.len(),
+            sibling_stealth.len(),
+            own_events.len(),
+            self.ring_driver.debug_summary(),
+        ));
+
         // ── Drive the ring state machine ─────────────────────────────────────
         let cmds = self.ring_driver.tick(
             &self.mls,
@@ -4547,6 +4607,19 @@ impl App {
         );
 
         let _ = self.save_mls_state();
+
+        self.debug_log.log(&format!(
+            "ring: tick out cmds=[{}] | {}",
+            moat_core::summarize_ring_commands(&cmds),
+            self.ring_driver.debug_summary(),
+        ));
+        // Persist the driver state now, not only on the periodic save. The
+        // last on-disk snapshot is the primary post-mortem artifact for a
+        // beacon failure, and if it lags the failure it reports peer state
+        // that never caused anything.
+        if let Err(e) = self.keys.save_ring_state(&self.ring_driver) {
+            self.debug_log.log(&format!("ring: failed to persist ring state: {e}"));
+        }
 
         // ── Interpret commands ───────────────────────────────────────────────
         let mut needs_poll_for_new_devices = false;

@@ -402,6 +402,26 @@ pub const KP_POOL_LOW_WATER: usize = 2;
 /// messages so each fits inside the 4 KB padding bucket.
 pub const KP_BATCH_CAP: usize = 4;
 
+/// Target number of *our own* published key packages that still have a live
+/// init key, maintained on the public `social.moat.keyPackage` pool.
+///
+/// Distinct from [`KP_POOL_TARGET`], which is the consumer-side pool of a
+/// *sibling's* packages received over the same-user stealth lane. This one is
+/// about staying invitable at all.
+pub const KP_SELF_POOL_TARGET: usize = 4;
+
+/// Low-water mark for our own live published packages. Dropping to or below
+/// this triggers replenishment on the next tick, independently of whether we
+/// have processed a Welcome.
+///
+/// The independence is the point. Every other replenishment site fires only
+/// *after* a successful `process_welcome`, which makes an exhausted pool
+/// terminal: a device with no live package cannot be invited to anything, so
+/// it never processes a Welcome, so it never republishes. Peers keep drawing
+/// its spent packages — indistinguishable on the PDS from live ones — and
+/// building Welcomes it cannot process. See `pooled-invite-keys.md`.
+pub const KP_SELF_LOW_WATER: usize = 2;
+
 /// Consumer-side pool of one owner's KPs, plus the dedupe / single-use
 /// state needed to defend against replay, out-of-order delivery, and
 /// adversarial pool reinsertion.
@@ -451,6 +471,21 @@ pub struct DeviceRingState {
     /// that have never been offered to. Not persisted.
     #[serde(skip)]
     offer_attempts: HashMap<String, u32>,
+    /// Peers for which we may create a coord group even though we are already
+    /// `InRing` — the escape hatch from the "only the onboarding device
+    /// initiates" rule.
+    ///
+    /// That rule assumes the peer who needs a coord group is `Solo` or
+    /// `Discovering`, and so will initiate. Two devices that are each `InRing`
+    /// on *different* rings break the assumption: neither will act and both
+    /// wait forever. It happens after a failed join — the joiner's Welcome was
+    /// built against a spent key package, `recover_stalled_peers` dropped the
+    /// peer, and by the time it is rediscovered the joiner has formed a ring
+    /// of its own. Populated by `recover_stalled_peers` after
+    /// `STALL_RETRY_TICKS`, so the ordinary path still wins the race and this
+    /// stays a fallback. Not persisted: a restart re-derives it.
+    #[serde(skip)]
+    force_coord_init: HashSet<String>,
 
     /// Owner-global monotonic counter for `OfferedKp.seq`.  Incremented
     /// every time we publish a KP into a `KpBatch` (any recipient).  See
@@ -867,6 +902,41 @@ pub enum RingCommand {
     PollForNewDevices,
 }
 
+impl RingCommand {
+    /// Short stable name for this command, for host debug logs and metrics.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            RingCommand::PublishEvent { .. } => "publish_event",
+            RingCommand::StealthPublishWelcome { .. } => "stealth_publish_welcome",
+            RingCommand::PublishStealthEvent { .. } => "publish_stealth_event",
+            RingCommand::ReplenishKeyPackage => "replenish_key_package",
+            RingCommand::RegisterGroup { .. } => "register_group",
+            RingCommand::SendDrawbridgePairOffer { .. } => "send_pair_offer",
+            RingCommand::SendDrawbridgePairJoin { .. } => "send_pair_join",
+            RingCommand::PollForNewDevices => "poll_for_new_devices",
+        }
+    }
+}
+
+/// Render a command list as `name xN, name xM` for a one-line log.
+pub fn summarize_ring_commands(cmds: &[RingCommand]) -> String {
+    if cmds.is_empty() {
+        return "none".to_string();
+    }
+    let mut counts: Vec<(&'static str, usize)> = Vec::new();
+    for c in cmds {
+        match counts.iter_mut().find(|(k, _)| *k == c.kind()) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((c.kind(), 1)),
+        }
+    }
+    counts
+        .into_iter()
+        .map(|(k, n)| if n == 1 { k.to_string() } else { format!("{k} x{n}") })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 // ─── Invariant violations ──────────────────────────────────────────────────
 
 /// A predicate on [`DeviceRingState`] that should hold after every step.
@@ -918,11 +988,81 @@ impl DeviceRingState {
         }
     }
 
+    /// One-line, human-readable snapshot of ring membership and every peer's
+    /// state, for host debug logs.
+    ///
+    /// Deliberately lives here rather than in each host: `moat-cli` and the
+    /// Dart `DeviceRingService` both need it, and a hand-rolled match in each
+    /// would drift the moment a variant is added. Format is for humans and is
+    /// not stable — do not parse it.
+    ///
+    /// Example:
+    /// `ring=in_ring(gen=2,leaf=0,id=a1b2c3d4) peers=[9f3a..=coord_ready/joined/owe_offer, 22c1..=discovered] cursor=Some("000…07")`
+    pub fn debug_summary(&self) -> String {
+        let ring = match &self.ring {
+            RingMembership::Solo => "solo".to_string(),
+            RingMembership::Discovering { defer_ticks } => {
+                let known = self
+                    .known_ring
+                    .as_ref()
+                    .map(|(id, gen, _)| format!(",known=gen{gen}/{}", hex::encode(&id[..4.min(id.len())])))
+                    .unwrap_or_default();
+                format!("discovering(defer={defer_ticks}{known})")
+            }
+            RingMembership::InRing { ring_id, generation, our_leaf, .. } => format!(
+                "in_ring(gen={generation},leaf={our_leaf},id={})",
+                hex::encode(&ring_id[..4.min(ring_id.len())])
+            ),
+        };
+
+        let mut peers: Vec<String> = self
+            .peers
+            .iter()
+            .map(|(id, ps)| {
+                let short = &id[..8.min(id.len())];
+                let st = match ps {
+                    PeerState::Discovered => "discovered".to_string(),
+                    PeerState::AwaitingTheirHello { .. } => "awaiting_their_hello".to_string(),
+                    PeerState::CoordReady { ring_link, .. } => match ring_link {
+                        RingLink::PendingAdd => "coord_ready/pending_add".to_string(),
+                        RingLink::Joined { added_by, sync } => {
+                            let by = match added_by {
+                                AddedBy::Us => "us",
+                                AddedBy::Them => "them",
+                                AddedBy::OtherSibling(_) => "other",
+                            };
+                            let sy = match sync {
+                                SyncStatus::OweOffer => "owe_offer",
+                                SyncStatus::OfferEmitted { .. } => "offer_emitted",
+                                SyncStatus::Done => "done",
+                            };
+                            format!("coord_ready/joined[{by}]/{sy}")
+                        }
+                    },
+                };
+                format!("{short}..={st}")
+            })
+            .collect();
+        peers.sort();
+
+        format!(
+            "ring={ring} peers=[{}] cursor={:?}",
+            peers.join(", "),
+            self.own_events_cursor()
+        )
+    }
+
     pub fn own_events_cursor(&self) -> Option<&str> {
         self.own_events_cursor.as_deref()
     }
 
     /// Number of coord groups we currently hold (peers with a coord_group_id).
+    /// Every tracked peer and its state, for host diagnostics and test
+    /// invariants. Ordering is unspecified.
+    pub fn peer_snapshot(&self) -> Vec<(DeviceId, PeerState)> {
+        self.peer_iter().map(|(id, ps)| (id, ps.clone())).collect()
+    }
+
     pub fn coord_group_count(&self) -> usize {
         self.peers
             .values()
@@ -1202,7 +1342,8 @@ impl DeviceRingState {
         //
         // Doesn't apply before any ring exists: the two-device
         // symmetric-race-then-converge bootstrap is unaffected.
-        if matches!(self.ring, RingMembership::InRing { .. }) {
+        let forced = self.force_coord_init.remove(&hex::encode(sibling_id));
+        if matches!(self.ring, RingMembership::InRing { .. }) && !forced {
             self.peer_insert(sibling_id, PeerState::Discovered);
             return Vec::new();
         }
@@ -1799,6 +1940,7 @@ impl DeviceRingState {
             match reconcile_rings(mine, theirs) {
                 ReconcileDecision::AlreadyInTheirs | ReconcileDecision::KeepMine => {}
                 ReconcileDecision::SwitchToTheirs => {
+                    // PROBE-OFF
                     self.ring = if self.peers.is_empty() {
                         RingMembership::Solo
                     } else {
@@ -2009,6 +2151,60 @@ impl DeviceRingState {
         cmds
     }
 
+    /// Publish fresh key packages when the number of *published* packages we
+    /// can still be invited with runs low.
+    ///
+    /// The only replenishment path that does not depend on having processed a
+    /// Welcome, and therefore the only one that can rescue a device whose pool
+    /// is already exhausted. See [`KP_SELF_LOW_WATER`].
+    ///
+    /// Counts the intersection of two things, which is what makes it
+    /// trustworthy: the package must be **on the PDS** (it comes from the
+    /// tick's own-DID fetch, the same one used for sibling discovery, so it is
+    /// free) *and* we must still hold its init key
+    /// ([`MoatSession::holds_init_key`]). Counting only local bundles would
+    /// miss a package that was minted but never published — a failed PDS write
+    /// would leave the device believing it was invitable when nothing usable
+    /// was actually reachable. Counting only published records is worse still,
+    /// since spent and live records are indistinguishable on the PDS.
+    ///
+    /// Emits one [`RingCommand::ReplenishKeyPackage`] per package needed; the
+    /// host mints and publishes each. Runs on every tick regardless of ring
+    /// membership — a device with no siblings at all still has to stay
+    /// invitable by cross-user contacts.
+    ///
+    /// Transient over-publication is possible and deliberate: freshly
+    /// published packages take a tick or two to appear in the fetch, so a
+    /// device may top up twice. That deepens the pool, which is the direction
+    /// `pooled-invite-keys.md` wants anyway, and it is self-limiting once the
+    /// writes land.
+    fn replenish_own_key_packages(
+        &mut self,
+        mls: &MoatSession,
+        env: &StepEnv<'_>,
+        key_packages: &[KeyPackageInput],
+    ) -> Vec<RingCommand> {
+        let my_device_id = *mls.device_id();
+        let usable = key_packages
+            .iter()
+            .filter(|kp| {
+                mls.extract_credential_from_key_package(&kp.key_package)
+                    .ok()
+                    .flatten()
+                    .map(|c| c.did() == env.my_did && *c.device_id() == my_device_id)
+                    .unwrap_or(false)
+            })
+            .filter(|kp| mls.holds_init_key(&kp.key_package))
+            .count();
+
+        if usable > KP_SELF_LOW_WATER {
+            return Vec::new();
+        }
+        (usable..KP_SELF_POOL_TARGET)
+            .map(|_| RingCommand::ReplenishKeyPackage)
+            .collect()
+    }
+
     fn on_tick(
         &mut self,
         mls: &MoatSession,
@@ -2017,7 +2213,10 @@ impl DeviceRingState {
     ) -> Vec<RingCommand> {
         let mut cmds = Vec::new();
 
-        // ── Pre-A. Top up pools that are at-or-below low-water ───────────
+        // ── Pre-A. Keep ourselves invitable ──────────────────────────────
+        cmds.extend(self.replenish_own_key_packages(mls, env, key_packages));
+
+        // ── Pre-A bis. Top up pools that are at-or-below low-water ────────
         cmds.extend(self.emit_low_water_kp_requests(mls, env));
 
         // ── A. Detect ring members added by someone else ─────────────────
@@ -2145,7 +2344,8 @@ impl DeviceRingState {
             .filter(|(_, ps)| {
                 matches!(
                     ps,
-                    PeerState::AwaitingTheirHello { .. }
+                    PeerState::Discovered
+                        | PeerState::AwaitingTheirHello { .. }
                         | PeerState::CoordReady {
                             ring_link: RingLink::Joined { sync: SyncStatus::OfferEmitted { .. }, .. },
                             ..
@@ -2172,6 +2372,14 @@ impl DeviceRingState {
                 }) => *sync = SyncStatus::OweOffer,
                 Some(PeerState::AwaitingTheirHello { .. }) => {
                     self.peers.remove(&key);
+                }
+                // Nobody initiated a coord group with us and we did not
+                // initiate one either (the `InRing` gate). Drop the peer so
+                // the next key-package sighting rediscovers it, and mark it
+                // exempt from the gate so that sighting actually acts.
+                Some(PeerState::Discovered) => {
+                    self.peers.remove(&key);
+                    self.force_coord_init.insert(key.clone());
                 }
                 _ => {}
             }
@@ -2281,6 +2489,21 @@ impl DeviceRingState {
         cmds
     }
 
+    /// Drive ring membership toward "everyone I know is in one ring".
+    ///
+    /// Two paths coexist, deliberately, and attempts to collapse them into one
+    /// have been reverted twice — see `ring-inversion.md` Phase 7 for the
+    /// measurements:
+    ///
+    /// * An established member adds an onboarding peer to the *current*
+    ///   generation. Multiple members can reach this simultaneously, which is
+    ///   why `do_ring_add` elects one.
+    /// * A device that is not in a ring but knows one exists creates the next
+    ///   generation itself and invites everyone. This is the path that makes
+    ///   onboarding complete when no established member acts — a lost or
+    ///   sleeping device must not be able to block it.
+    ///
+    /// The redundancy is the point: each path covers the other's failure mode.
     fn try_advance_ring_membership(
         &mut self,
         mls: &MoatSession,
@@ -2430,17 +2653,15 @@ impl DeviceRingState {
         // Only the smallest-leaf-index ring member actually performs the
         // Add — mirrors the pairing-offer tiebreak in `try_emit_sync_offer`
         // ("the *only* device that issues pair_offer is the member whose
-        // leaf index is the smallest") and closes a genuine concurrent-add
-        // race: without a single elected adder, two existing ring members
-        // can each independently see the same new sibling as `PendingAdd`
-        // and both call `add_device` from the same base epoch. Only one of
-        // the resulting commits can be the real successor; the new sibling
-        // processes whichever Welcome arrives first and the other fails
-        // outright ("Invalid node signature") or leaves the adders' local
-        // states silently diverged. Uses `find_own_leaf` (device_id-based),
-        // not the stored `our_leaf` or `MoatSession::get_own_leaf_index`
-        // (signature-key-based) — see `find_own_leaf`'s doc comment for why
-        // signature-key matching is unreliable here.
+        // leaf index is the smallest").
+        //
+        // Deleting this along with `on_peer_kp_observed`'s election, so that
+        // onboarding is purely joiner-created, has been attempted twice and
+        // reverted twice — see `ring-inversion.md` Phase 7. A single ring
+        // *creator* does not imply a single *adder*: an established member
+        // still reaches this path for an onboarding peer, over the coord group
+        // that peer created, and the creator itself adds late-arriving peers
+        // here after its own ring creation.
         let my_leaf = find_own_leaf(mls, ring_id);
         let smallest_leaf = members.iter().map(|(idx, _)| *idx).min();
         if my_leaf.is_none() || my_leaf != smallest_leaf {
@@ -3687,6 +3908,72 @@ mod tests {
         assert!(s.kp_pools[&key].used_kps.contains(&3));
     }
 
+    #[test]
+    fn exhausted_key_package_pool_triggers_replenishment() {
+        // The unit-level statement of the deadlock: a device whose live count
+        // has hit zero must ask for more without needing to receive anything
+        // first. `generate_key_package` mints one, so burn it to get to zero.
+        let mls = MoatSession::new();
+        // Device id must come from the session, not be invented: the driver
+        // filters the pool on `mls.device_id()`, and the host builds its
+        // credential the same way (`app.rs::ring_tick_inner`).
+        let cred = make_credential("did:plc:user", "d1", *mls.device_id());
+        let (kp, _bundle) = mls.generate_key_package(&cred).expect("kp");
+        assert_eq!(mls.live_key_package_count(), 1);
+
+        let outsider = MoatSession::new();
+        let out_cred = make_credential("did:plc:other", "out", [2u8; 16]);
+        let (_okp, out_bundle) = outsider.generate_key_package(&out_cred).expect("outsider kp");
+        let res = outsider
+            .create_device_coord_group(&out_cred, &out_bundle, &kp)
+            .expect("group");
+        mls.process_welcome(&res.welcome).expect("burn our init key");
+        assert_eq!(mls.live_key_package_count(), 0, "pool is now exhausted");
+
+        let mut state = DeviceRingState::new();
+        let env = StepEnv {
+            my_did: "did:plc:user",
+            credential: &cred,
+            key_bundle: &_bundle,
+            now_ms: 0,
+            drawbridge_connected: false,
+            sync_session_active: false,
+            stealth_pubkeys: &[],
+            sibling_stealth: &[],
+        };
+
+        // The spent package is still "published" — it is in the pool snapshot
+        // and indistinguishable there from a live one. It must not count.
+        let published = vec![KeyPackageInput { key_package: kp.clone() }];
+        let cmds = state.replenish_own_key_packages(&mls, &env, &published);
+        assert_eq!(
+            cmds.len(),
+            KP_SELF_POOL_TARGET,
+            "an exhausted pool must refill to target, not to one"
+        );
+        assert!(cmds.iter().all(|c| matches!(c, RingCommand::ReplenishKeyPackage)));
+
+        // Mint and publish enough live ones, and it goes quiet — this runs
+        // every tick, so a false positive would republish forever.
+        let mut pool = vec![KeyPackageInput { key_package: kp }];
+        for _ in 0..KP_SELF_POOL_TARGET {
+            let fresh = mls.replenish_key_package(&cred, &_bundle).expect("mint");
+            pool.push(KeyPackageInput { key_package: fresh });
+        }
+        assert!(state.replenish_own_key_packages(&mls, &env, &pool).is_empty());
+
+        // Minted but *not* published must not count: a failed PDS write has to
+        // keep looking like an empty pool, which is why the count intersects
+        // the fetch rather than reading local storage.
+        let unpublished_only = vec![KeyPackageInput { key_package: vec![0u8; 4] }];
+        assert_eq!(
+            state
+                .replenish_own_key_packages(&mls, &env, &unpublished_only)
+                .len(),
+            KP_SELF_POOL_TARGET,
+        );
+    }
+
     // ── Public-pool KP selection ───────────────────────────────────────────
 
     #[test]
@@ -4115,7 +4402,23 @@ mod tests {
         /// here would give the joiner a leaf it can't sign for — see the
         /// module note on signing-key identity.
         fn new(did: &str, name: &str) -> (Self, Vec<u8>) {
-            let mls = MoatSession::new();
+            Self::with_device_id(did, name, {
+                use rand::RngCore;
+                let mut id = [0u8; 16];
+                rand::thread_rng().fill_bytes(&mut id);
+                id
+            })
+        }
+
+        /// Deterministic counterpart to [`Self::new`].
+        ///
+        /// `device_id` drives leaf ordering and every smallest-id tiebreak, so
+        /// a scenario built on random ids is a different experiment each run.
+        /// Prefer this in any test whose conclusion depends on *which* device
+        /// does something — which is most of the offline and lost-device
+        /// scenarios.
+        fn with_device_id(did: &str, name: &str, device_id: DeviceId) -> (Self, Vec<u8>) {
+            let mls = MoatSession::with_device_id(device_id);
             let cred = make_credential(did, name, *mls.device_id());
             let (identity_kp, key_bundle) = mls.generate_key_package(&cred).expect("kp");
             let (stealth_priv, stealth_pub) = crate::generate_stealth_keypair();
@@ -4162,6 +4465,30 @@ mod tests {
         /// registered a matching tag yet and tries again next poll; it
         /// doesn't miss the message forever.
         broadcasts: Vec<(usize, Vec<u8>)>,
+        /// Rounds a replenished KeyPackage waits before it is visible in
+        /// `kp_pool`.
+        ///
+        /// The harness previously applied `ReplenishKeyPackage` synchronously
+        /// inside the same round, so the window in which a device's newest
+        /// published package is already consumed was ~0. In reality that
+        /// window is an HTTP round trip plus a PDS write plus the next poll,
+        /// and it is when stale picks happen. 0 preserves the old behaviour.
+        replenish_delay_rounds: usize,
+        /// KPs waiting on `replenish_delay_rounds`: (round_available, bytes).
+        pending_kps: Vec<(usize, Vec<u8>)>,
+        /// Device `i` ticks only on rounds where `round % tick_schedule[i] == 0`.
+        ///
+        /// Lockstep ticking is the harness's least realistic property: the
+        /// real participants are independent processes on independent timers,
+        /// and Dart's ring tick defaults to a far coarser interval than the
+        /// Rust CLI's. `[1, 1, 1]` preserves the old behaviour.
+        tick_schedule: [usize; 3],
+        /// Rounds elapsed, and per-peer stall accounting. Asserted at the end
+        /// of every round by `StallWatch::observe` — see its doc for why a
+        /// per-round liveness check matters more than the end-state asserts
+        /// the scenarios carry.
+        round: usize,
+        stall: StallWatch,
         /// Which devices are currently running. An offline device is not
         /// ticked and receives no deliveries, but everything it published
         /// while online stays in `kp_pool` / `own_events` / `broadcasts` —
@@ -4197,7 +4524,12 @@ mod tests {
                     .mls
                     .replenish_key_package(&devices[i].cred, &devices[i].key_bundle)
                     .expect("replenish kp");
-                net.kp_pool.push(kp);
+                if net.replenish_delay_rounds == 0 {
+                    net.kp_pool.push(kp);
+                } else {
+                    let at = net.round + net.replenish_delay_rounds;
+                    net.pending_kps.push((at, kp));
+                }
             }
             RingCommand::RegisterGroup { group_id, .. } => {
                 if !net.known_groups[i].contains(&group_id) {
@@ -4216,7 +4548,89 @@ mod tests {
         }
     }
 
+    /// Burn the init key of `victim`'s newest published KeyPackage, as a
+    /// competing consumer would.
+    ///
+    /// Models the third party the harness never had: a cross-user inviter, or
+    /// a sibling's `poll_for_new_devices` fan-out into a user conversation.
+    /// Both draw from the same public pool with the same newest-first rule, so
+    /// they routinely take the package a joiner is about to pick.
+    ///
+    /// The burn is real, not simulated: an outsider session builds a group
+    /// against the victim's newest package and the victim processes the
+    /// resulting Welcome, consuming the init key exactly as MLS would. Any
+    /// later Welcome built against that same package is then undeliverable to
+    /// the victim — note the failure surfaces on the *recipient*, not on the
+    /// builder, which is why a stale pick is invisible to the device making it.
+    fn burn_newest_kp(devices: &mut [SimDevice; 3], net: &SimNetwork, victim: usize) {
+        let victim_id = devices[victim].device_id();
+        let candidates: Vec<Vec<u8>> = net
+            .kp_pool
+            .iter()
+            .rev()
+            .filter(|kp| {
+                devices[victim]
+                    .mls
+                    .extract_credential_from_key_package(kp)
+                    .ok()
+                    .flatten()
+                    .map(|c| *c.device_id() == victim_id)
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect();
+        assert!(
+            !candidates.is_empty(),
+            "victim {victim} has published no key package to burn"
+        );
+
+        // Newest first, skipping any already spent. The pool accumulates and
+        // spent entries are indistinguishable from live ones, so "the newest"
+        // is frequently already gone — a real competing consumer would move on
+        // to the next, and so must this.
+        for kp in &candidates {
+            let outsider = MoatSession::new();
+            let out_cred = MoatCredential::new("did:plc:outsider", "outsider", [0xEE; 16]);
+            let (_out_kp, out_bundle) =
+                outsider.generate_key_package(&out_cred).expect("outsider kp");
+            let Ok(res) = outsider.create_device_coord_group(&out_cred, &out_bundle, kp) else {
+                continue;
+            };
+            if devices[victim].mls.process_welcome(&res.welcome).is_ok() {
+                return; // init key consumed
+            }
+        }
+        panic!("victim {victim} had no live key package left to burn");
+    }
+
+    /// Bring a device back online the way the real world does: as a **process
+    /// restart**, not an unpause.
+    ///
+    /// `DeviceRingState` has `#[serde(skip)]` fields that are deliberately
+    /// transient (`SyncStatus`, `announced_ring_this_run`, stall counters).
+    /// Flipping `online` back to true without round-tripping the state models
+    /// a device that was frozen mid-execution and resumed with its RAM intact,
+    /// which is not a thing that happens — beacon kills and respawns the
+    /// process, and a real device is closed and reopened. The distinction is
+    /// load-bearing for anything that keys off "first tick of this run".
+    fn bring_online(devices: &mut [SimDevice; 3], net: &mut SimNetwork, i: usize) {
+        let json = serde_json::to_string(&devices[i].state).expect("persist ring state");
+        devices[i].state = serde_json::from_str(&json).expect("reload ring state");
+        net.online[i] = true;
+    }
+
     fn three_device_sim_round(devices: &mut [SimDevice; 3], net: &mut SimNetwork, now_ms: i64) {
+        // Release replenished packages whose delay has elapsed.
+        let now_round = net.round;
+        let (ready, still_pending): (Vec<(usize, Vec<u8>)>, Vec<(usize, Vec<u8>)>) = net
+            .pending_kps
+            .drain(..)
+            .partition(|(at, _)| *at <= now_round);
+        net.pending_kps = still_pending;
+        for (_, kp) in ready {
+            net.kp_pool.push(kp);
+        }
+
         let sibling_stealth: Vec<Vec<SiblingStealth>> = (0..3)
             .map(|i| {
                 (0..3)
@@ -4236,6 +4650,9 @@ mod tests {
         for i in 0..3 {
             if !net.online[i] {
                 continue; // not running: no poll, no tick, cursor unchanged
+            }
+            if net.round % net.tick_schedule[i] != 0 {
+                continue; // this device's timer has not fired yet
             }
             let unseen: Vec<OwnEventInput> = net.own_events[net.own_cursor[i]..]
                 .iter()
@@ -4347,6 +4764,10 @@ mod tests {
                 }
             }
         }
+
+        net.round += 1;
+        let online = net.online;
+        net.stall.observe(devices, online, net.round);
     }
 
     /// The three-device bootstrap race, driven deterministically: D1 and D2
@@ -4380,6 +4801,11 @@ mod tests {
             own_cursor: [0; 3],
             known_groups: [Vec::new(), Vec::new(), Vec::new()],
             broadcasts: Vec::new(),
+            replenish_delay_rounds: 0,
+            pending_kps: Vec::new(),
+            tick_schedule: [1, 1, 1],
+            round: 0,
+            stall: StallWatch::default(),
             // D3 is offline until it "logs in" below. Leaving it ticking is
             // not equivalent to being undiscoverable: discovery runs in the
             // other direction too, so a ticking D3 would consume D1's and
@@ -4530,6 +4956,87 @@ mod tests {
     ///
     /// D3 must be offline for this (`online[2] == false`) — a replacement
     /// device does not exist while its siblings are bootstrapping.
+    /// How many consecutive rounds a peer may sit in a state that is waiting
+    /// on someone else before we call it a stall.  Generous: a healthy
+    /// three-device bootstrap moves a peer out of `AwaitingTheirHello` within
+    /// a handful of rounds.
+    const STALL_BUDGET: usize = 25;
+
+    /// Rounds each (device, peer) pair has spent in a non-progressing state.
+    #[derive(Default)]
+    struct StallWatch {
+        counts: std::collections::BTreeMap<(usize, String), usize>,
+    }
+
+    impl StallWatch {
+        /// Assert no peer is stuck. Call every round.
+        ///
+        /// This exists because every simulation here asserts only on *final*
+        /// state after a fixed round budget. A device that stops making
+        /// progress on round 3 looks identical, until the budget runs out, to
+        /// one that is simply slow — and when the budget does run out the
+        /// failure names the end state, not the round things stopped. That is
+        /// exactly the shape of the beacon failure this harness missed
+        /// (`ring=discovering peers=0`, silent for the whole run).
+        ///
+        /// `Discovered` and `AwaitingTheirHello` are the two states with no
+        /// acknowledgement path: nothing tells us the coord Welcome we sent
+        /// was undeliverable, or that the sibling we recorded never got a
+        /// group from us. `recover_stalled_peers` covers the second; the
+        /// first is uncovered, which is the known gap this is meant to catch.
+        fn observe(&mut self, devices: &[SimDevice; 3], online: [bool; 3], round: usize) {
+            for (i, dev) in devices.iter().enumerate() {
+                if !online[i] {
+                    continue; // an offline device is not failing to progress
+                }
+                for (peer_id, ps) in dev.state.peer_snapshot() {
+                    // Waiting on a device that is not running is not a stall —
+                    // it cannot answer. Without this the watch fires on every
+                    // scenario that takes a device offline, which is a false
+                    // positive precisely where the interesting behaviour is.
+                    let peer_online = devices
+                        .iter()
+                        .position(|d| d.device_id() == peer_id)
+                        .map(|idx| online[idx])
+                        .unwrap_or(true);
+                    if !peer_online {
+                        continue;
+                    }
+                    let key = (i, hex::encode(peer_id));
+                    // All three of these wait on something with no
+                    // acknowledgement path, and all three are now covered by
+                    // `recover_stalled_peers` at `STALL_RETRY_TICKS` — well
+                    // inside `STALL_BUDGET`. So a peer still sitting here at
+                    // the budget means recovery itself is not firing.
+                    //
+                    // `Discovered` was previously exempted on in-ring devices,
+                    // on the grounds that waiting for the onboarding device to
+                    // initiate is the intended Phase 7 resting state. It is —
+                    // but the exemption also hid the case where *both* sides
+                    // are in-ring on different rings and neither ever
+                    // initiates. That is what `force_coord_init` now breaks.
+                    let waiting = matches!(
+                        ps,
+                        PeerState::Discovered | PeerState::AwaitingTheirHello { .. }
+                    );
+                    if !waiting {
+                        self.counts.remove(&key);
+                        continue;
+                    }
+                    let n = self.counts.entry(key.clone()).or_insert(0);
+                    *n += 1;
+                    assert!(
+                        *n <= STALL_BUDGET,
+                        "device {i} has held peer {} in {:?} for {n} rounds (round {round});                          it is waiting on something with no acknowledgement path and no retry.                          Full state: {}",
+                        &key.1[..8],
+                        ps,
+                        dev.state.debug_summary(),
+                    );
+                }
+            }
+        }
+    }
+
     fn bootstrap_d1_d2_ring(
         devices: &mut [SimDevice; 3],
         net: &mut SimNetwork,
@@ -4617,19 +5124,148 @@ mod tests {
     /// replacement. The surviving sibling is online throughout, so onboarding
     /// must complete without the lost device ever returning.
     #[test]
-    fn new_device_joins_when_smallest_leaf_never_returns() {
-        const ROUND_BUDGET: usize = 60;
+    /// A joiner whose chosen KeyPackage was burned by a competing consumer
+    /// still converges.
+    ///
+    /// This is the shape the harness could not previously produce at all, and
+    /// it is the one that matters: the joiner picks an existing device's
+    /// newest published package, but a third party — a cross-user inviter, or
+    /// a sibling fanning it into a user conversation — consumed that package
+    /// first. Nothing tells the joiner. Its coord-group Welcome is built
+    /// successfully and is simply undeliverable to the recipient.
+    ///
+    /// Realistic timing throughout: replenishment lands two rounds late, and
+    /// the three devices tick on different schedules, so recovery cannot lean
+    /// on lockstep rounds.
+    ///
+    /// Regression test for the **replenishment deadlock**.
+    ///
+    /// Before proactive replenishment landed this failed, and the end state is
+    /// worth recording because it is not the failure the scenario is named
+    /// after:
+    ///
+    /// ```text
+    /// d1: ring=in_ring(gen=1,...) peers=[..=discovered, ..=coord_ready/joined]
+    /// d2: ring=in_ring(gen=2,...)
+    /// d3: ring=in_ring(gen=2,...)
+    /// d1 live key packages: 0
+    /// ```
+    ///
+    /// D2 and D3 converged; **D1 was permanently excluded**. Every one of D1's
+    /// published packages was spent, so D3's ring Add targeted a dead init key
+    /// and D1 could not process the Welcome — and D1 could not escape, because
+    /// every other replenishment site in both hosts fires only *after*
+    /// successfully processing a Welcome. An exhausted pool was terminal.
+    ///
+    /// `replenish_own_key_packages` breaks that cycle: it is driven by our own
+    /// live-package count on every tick, with no dependency on having received
+    /// anything. Peer-state recovery was never the problem — it worked
+    /// throughout, and `StallWatch` stayed quiet; the retry simply had nothing
+    /// live left to draw.
+    #[test]
+    fn joiner_converges_when_its_chosen_key_package_was_burned() {
+        const JOIN_BUDGET: usize = 120;
 
         let (d1, d1_kp) = SimDevice::new("did:plc:user", "d1");
         let (d2, d2_kp) = SimDevice::new("did:plc:user", "d2");
         let (d3, d3_kp) = SimDevice::new("did:plc:user", "d3");
         let mut devices = [d1, d2, d3];
+
         let mut net = SimNetwork {
             kp_pool: vec![d1_kp, d2_kp],
             own_events: Vec::new(),
             own_cursor: [0; 3],
             known_groups: [Vec::new(), Vec::new(), Vec::new()],
             broadcasts: Vec::new(),
+            replenish_delay_rounds: 2,
+            pending_kps: Vec::new(),
+            tick_schedule: [1, 2, 3],
+            round: 0,
+            stall: StallWatch::default(),
+            online: [true, true, false],
+        };
+
+        let mut now_ms = 0i64;
+        bootstrap_d1_d2_ring(&mut devices, &mut net, &mut now_ms);
+
+        // D3 comes online and publishes. Before it can act, a competing
+        // consumer takes D1's newest package — the one D3 is about to pick.
+        net.online[2] = true;
+        net.kp_pool.push(d3_kp);
+        burn_newest_kp(&mut devices, &net, 0);
+
+        let mut joined = false;
+        for _ in 0..JOIN_BUDGET {
+            now_ms += 1;
+            three_device_sim_round(&mut devices, &mut net, now_ms);
+            if share_a_working_ring(&devices, 0, 2) && share_a_working_ring(&devices, 1, 2) {
+                joined = true;
+                break;
+            }
+        }
+        assert!(
+            joined,
+            "all three devices must converge after a burned key package.\n               d1: {}\n  d2: {}\n  d3: {}",
+            devices[0].state.debug_summary(),
+            devices[1].state.debug_summary(),
+            devices[2].state.debug_summary(),
+        );
+    }
+
+    /// The six distinct orderings of three device ids.
+    ///
+    /// `device_id` decides leaf order and every smallest-id tiebreak, so a
+    /// scenario run against one random assignment exercises one of these six
+    /// and says nothing about the other five. Sweeping is cheap and turns a
+    /// single draw into a statement about the scenario.
+    const ID_ORDERINGS: [[u8; 3]; 6] = [
+        [1, 2, 3],
+        [1, 3, 2],
+        [2, 1, 3],
+        [2, 3, 1],
+        [3, 1, 2],
+        [3, 2, 1],
+    ];
+
+    fn sim_devices_with_order(order: [u8; 3]) -> ([SimDevice; 3], [Vec<u8>; 3]) {
+        let (d1, k1) = SimDevice::with_device_id("did:plc:user", "d1", [order[0]; 16]);
+        let (d2, k2) = SimDevice::with_device_id("did:plc:user", "d2", [order[1]; 16]);
+        let (d3, k3) = SimDevice::with_device_id("did:plc:user", "d3", [order[2]; 16]);
+        ([d1, d2, d3], [k1, k2, k3])
+    }
+
+    /// A permanently lost device must not block onboarding — for **every**
+    /// device-id ordering, not just whichever one the machine drew.
+    ///
+    /// The sweep is the point. `device_id` decides leaf order and every
+    /// smallest-id tiebreak, so which device is "the lost elected one" changes
+    /// with the draw. A single random run exercises one of six orderings and
+    /// is silent about the rest, which is how a real defect can sit green for
+    /// weeks and how one apparent reproduction misled this investigation.
+    #[test]
+    fn new_device_joins_when_smallest_leaf_never_returns() {
+        for order in ID_ORDERINGS {
+            lost_device_scenario(order);
+        }
+    }
+
+    fn lost_device_scenario(order: [u8; 3]) {
+        const ROUND_BUDGET: usize = 60;
+
+        let (devices, kps) = sim_devices_with_order(order);
+        let [d1_kp, d2_kp, d3_kp] = kps;
+        let mut devices = devices;
+        let mut net = SimNetwork {
+            kp_pool: vec![d1_kp, d2_kp],
+            own_events: Vec::new(),
+            own_cursor: [0; 3],
+            known_groups: [Vec::new(), Vec::new(), Vec::new()],
+            broadcasts: Vec::new(),
+            replenish_delay_rounds: 0,
+            pending_kps: Vec::new(),
+            tick_schedule: [1, 1, 1],
+            round: 0,
+            stall: StallWatch::default(),
             online: [true, true, false], // D3 is still in its box
         };
 
@@ -4690,21 +5326,176 @@ mod tests {
     /// phone or a closed laptop is the common case, not the exception —
     /// and when it does return it must rejoin the ring the others are
     /// already using rather than forking a competing one.
+    /// A device that sleeps through a supersede must still converge.
+    ///
+    /// **Currently failing — reproduces beacon's "Mode 2"
+    /// (`three_device_bootstrap_rdd`, "d1 and d2 must share the ring").**
+    /// Deterministic: sweeping [`ID_ORDERINGS`] rather than drawing a random
+    /// device id is what made it reliable, and is why an earlier attempt to
+    /// pin this down failed — a single random draw is a different experiment
+    /// each run and cannot distinguish a fix from luck.
+    ///
+    /// Observed end state (ids `01`/`02`/`03`):
+    ///
+    /// ```text
+    /// d1: in_ring(gen=2, ...)   joined the new generation
+    /// d2: in_ring(gen=1, ...)   still on the ORIGINAL ring
+    /// d3: in_ring(gen=2, ...)   creator
+    /// ```
+    ///
+    /// with every device's peer map reading `joined` — all three confidently
+    /// wrong. `do_ring_add` marks a peer `Joined` when it *publishes* the
+    /// Welcome, with no confirmation it was processed, so a device offline at
+    /// that moment stays on the old generation while its siblings' MLS groups
+    /// list it as a member. Nothing re-checks.
+    ///
+    /// **Attempted fix, insufficient, not landed**: announce-our-ring once per
+    /// process run + reply-with-ours on divergence + demote `Joined` peers to
+    /// `PendingAdd` on leaving a ring. That combination passes all six
+    /// orderings *if* the sleeper returns late (a fixed 60-round offline
+    /// phase), and fails once the sleeper returns as soon as the joiner has
+    /// formed its ring — which is the more realistic timing and what this test
+    /// now does. A fix must not depend on the returning device being late.
+    ///
+    /// Note for whoever picks this up: a periodic `RingInfo` heartbeat is the
+    /// obvious mechanism and is ruled out on cost — every `RingInfo` is a
+    /// permanent PDS record, ticks are 30 s, and N−1 records per device per
+    /// announce is ~95k records/day for a 12-device account while idle,
+    /// besides leaking device count and online status.
+    ///
+    /// Run under realistic timing rather than the harness's lockstep default:
+    /// the three devices tick on different schedules and replenishment lands
+    /// two rounds late, so a device can miss the round its Welcome arrives in.
+    ///
+    /// **This was written as a probe for beacon's "Mode 2"
+    /// (`three_device_bootstrap_rdd`, assertion "d1 and d2 must share the
+    /// ring") and does *not* reproduce it.** Two reasons, both worth keeping
+    /// so the next attempt does not repeat them:
+    ///
+    /// 1. The scenarios differ. Beacon's `rdd` never takes a device offline —
+    ///    d1 and d2 are up throughout. This test's whole shape is a device
+    ///    that sleeps and returns, which is a different situation.
+    /// 2. It is **nondeterministic**. `MoatSession::new` randomises the device
+    ///    id, and `smallest_leaf_index` picks the sleeper from it, so each run
+    ///    is a different draw. An early run of this test failed with the two
+    ///    established devices on different rings; later runs of the same code
+    ///    passed. One draw is not a reproduction.
+    ///
+    /// It is retained because the scenario is worth covering on its own
+    /// merits, but a real Mode 2 repro needs a fixed device-id assignment (so
+    /// draws are comparable) and a shape that matches beacon's — no offline
+    /// device.
     #[test]
-    fn new_device_joins_when_smallest_leaf_is_merely_slow() {
-        const JOIN_BUDGET: usize = 60;
-        const REJOIN_BUDGET: usize = 40;
+    #[ignore = "reproduces beacon Mode 2 (three_device_bootstrap_rdd): a device \
+                that sleeps through a ring supersede is stranded on the old \
+                generation while every party believes it joined. See doc comment."]
+    fn established_devices_do_not_diverge_when_a_joiner_supersedes() {
+        for order in ID_ORDERINGS {
+            supersede_scenario(order);
+        }
+    }
 
-        let (d1, d1_kp) = SimDevice::new("did:plc:user", "d1");
-        let (d2, d2_kp) = SimDevice::new("did:plc:user", "d2");
-        let (d3, d3_kp) = SimDevice::new("did:plc:user", "d3");
-        let mut devices = [d1, d2, d3];
+    fn supersede_scenario(order: [u8; 3]) {
+        const BUDGET: usize = 60;
+
+        let (devices, kps) = sim_devices_with_order(order);
+        let [d1_kp, d2_kp, d3_kp] = kps;
+        let mut devices = devices;
         let mut net = SimNetwork {
             kp_pool: vec![d1_kp, d2_kp],
             own_events: Vec::new(),
             own_cursor: [0; 3],
             known_groups: [Vec::new(), Vec::new(), Vec::new()],
             broadcasts: Vec::new(),
+            replenish_delay_rounds: 2,
+            pending_kps: Vec::new(),
+            tick_schedule: [1, 3, 2],
+            round: 0,
+            stall: StallWatch::default(),
+            online: [true, true, false],
+        };
+
+        let mut now_ms = 0i64;
+        let ring_id = bootstrap_d1_d2_ring(&mut devices, &mut net, &mut now_ms);
+
+        // Force the joiner-created path: the device that would otherwise add
+        // d3 to the existing generation is asleep, so d3 must supersede.
+        let asleep = smallest_leaf_index(&devices, &ring_id);
+        net.online[asleep] = false;
+        net.online[2] = true;
+        net.kp_pool.push(d3_kp);
+
+        // Run only until the joiner has actually formed its ring. A fixed
+        // round count here is pure waste: every extra round replays the whole
+        // accumulated broadcast log against every device, so the scenario cost
+        // grows quadratically in rounds — 60 unconditional rounds × 6 id
+        // orderings turned this file's test run into minutes.
+        for _ in 0..BUDGET {
+            now_ms += 1;
+            three_device_sim_round(&mut devices, &mut net, now_ms);
+            if devices[2].state.ring_id().is_some() {
+                break;
+            }
+        }
+        bring_online(&mut devices, &mut net, asleep);
+
+        let mut converged = false;
+        for _ in 0..BUDGET {
+            now_ms += 1;
+            three_device_sim_round(&mut devices, &mut net, now_ms);
+            if share_a_working_ring(&devices, 0, 1)
+                && share_a_working_ring(&devices, 0, 2)
+                && share_a_working_ring(&devices, 1, 2)
+            {
+                converged = true;
+                break;
+            }
+        }
+
+        assert!(
+            share_a_working_ring(&devices, 0, 1),
+            "MODE 2: the two established devices are on different rings.\n               d1: {}\n  d2: {}\n  d3: {}",
+            devices[0].state.debug_summary(),
+            devices[1].state.debug_summary(),
+            devices[2].state.debug_summary(),
+        );
+        assert!(
+            converged,
+            "all three must share one ring.\n  d1: {}\n  d2: {}\n  d3: {}",
+            devices[0].state.debug_summary(),
+            devices[1].state.debug_summary(),
+            devices[2].state.debug_summary(),
+        );
+    }
+
+    /// The sleeping-device variant, swept over every device-id ordering for
+    /// the same reason as the lost-device one: which device sleeps is decided
+    /// by the ids.
+    #[test]
+    fn new_device_joins_when_smallest_leaf_is_merely_slow() {
+        for order in ID_ORDERINGS {
+            slow_device_scenario(order);
+        }
+    }
+
+    fn slow_device_scenario(order: [u8; 3]) {
+        const JOIN_BUDGET: usize = 60;
+        const REJOIN_BUDGET: usize = 40;
+
+        let (devices, kps) = sim_devices_with_order(order);
+        let [d1_kp, d2_kp, d3_kp] = kps;
+        let mut devices = devices;
+        let mut net = SimNetwork {
+            kp_pool: vec![d1_kp, d2_kp],
+            own_events: Vec::new(),
+            own_cursor: [0; 3],
+            known_groups: [Vec::new(), Vec::new(), Vec::new()],
+            broadcasts: Vec::new(),
+            replenish_delay_rounds: 0,
+            pending_kps: Vec::new(),
+            tick_schedule: [1, 1, 1],
+            round: 0,
+            stall: StallWatch::default(),
             online: [true, true, false], // D3 is still in its box
         };
 
@@ -4734,7 +5525,7 @@ mod tests {
         );
 
         // The laptop lid opens.
-        net.online[asleep] = true;
+        bring_online(&mut devices, &mut net, asleep);
         let mut all_together = false;
         for _ in 0..REJOIN_BUDGET {
             now_ms += 1;

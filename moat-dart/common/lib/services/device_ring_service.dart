@@ -191,7 +191,40 @@ class DeviceRingService {
         .toList();
     _cachedSiblingStealth = siblingStealth;
 
-    moatLog('DeviceRingService: tick cursor=$cursorBefore ownEvents=${ownEvents.map((e) => e.rkey).toList()} keyPackages=${keyPackages.length} siblingStealth=${siblingStealth.length}');
+    // Classify the pool exactly as the driver will, so the log answers "did
+    // the driver see any siblings at all?" directly. A ring that never forms
+    // because the pool held nothing but our own packages is otherwise
+    // indistinguishable, from artifacts alone, from a state-machine failure.
+    var kpMine = 0, kpSiblings = 0, kpForeign = 0, kpUnreadable = 0;
+    final siblingIds = <String>[];
+    for (final kp in keyPackages) {
+      try {
+        final cred = await session.extractCredentialFromKeyPackage(
+          keyPackage: kp.keyPackage,
+        );
+        if (cred == null) {
+          kpUnreadable++;
+        } else if (cred.did != did) {
+          kpForeign++;
+        } else if (_bytesEqual(cred.deviceId, myDeviceId)) {
+          kpMine++;
+        } else {
+          kpSiblings++;
+          final id = _hex(cred.deviceId.sublist(0, 4));
+          if (!siblingIds.contains(id)) siblingIds.add(id);
+        }
+      } catch (_) {
+        kpUnreadable++;
+      }
+    }
+
+    moatLog(
+      'DeviceRingService: tick in  kp=${keyPackages.length} '
+      '(mine=$kpMine siblings=$kpSiblings foreign=$kpForeign unreadable=$kpUnreadable) '
+      'sibling_ids=[${siblingIds.join(",")}] stealth=${stealthRecords.length} '
+      'sibling_stealth=${siblingStealth.length} own_events=${ownEvents.length} '
+      'host_cursor=$cursorBefore | ${driver.debugSummary()}',
+    );
 
     final inputs = ffi.TickInputsDto(
       keyPackages: keyPackages.map((kp) => kp.keyPackage).toList(),
@@ -213,7 +246,10 @@ class DeviceRingService {
     );
 
     final cmds = await driver.tick(session: session, inputs: inputs);
-    moatLog('DeviceRingService: tick done cursor=${driver.ownEventsCursor()} cmds=${cmds.map((c) => c.runtimeType).toList()}');
+    moatLog(
+      'DeviceRingService: tick out cmds=[${_summarizeCmds(cmds)}] '
+      '| ${driver.debugSummary()}',
+    );
     await _persist();
     await _interpret(cmds, did);
   }
@@ -585,6 +621,29 @@ class DeviceRingService {
       moatLog('DeviceRingService: gather input failed: $e');
       return null;
     }
+  }
+
+  static String _hex(List<int> b) =>
+      b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
+
+  /// `name xN, name xM` — mirrors moat-core's `summarize_ring_commands` so a
+  /// mixed-runtime failure produces comparable lines from both hosts.
+  static String _summarizeCmds(List<ffi.RingCommandDto> cmds) {
+    if (cmds.isEmpty) return 'none';
+    final counts = <String, int>{};
+    for (final c in cmds) {
+      // freezed generates `_$PublishEventImpl` for `RingCommandDto_PublishEvent`;
+      // strip both decorations so the line matches moat-core's rendering.
+      final name = c.runtimeType
+          .toString()
+          .replaceFirst(r'_$', '')
+          .replaceFirst('RingCommandDto_', '')
+          .replaceFirst(RegExp(r'Impl$'), '');
+      counts[name] = (counts[name] ?? 0) + 1;
+    }
+    return counts.entries
+        .map((e) => e.value == 1 ? e.key : '${e.key} x${e.value}')
+        .join(', ');
   }
 
   static bool _bytesEqual(Uint8List a, Uint8List b) {

@@ -21,7 +21,7 @@
 use crate::client::MoatCliClient;
 use crate::config::WorldConfig;
 use crate::drawbridge::DrawbridgeProcess;
-use crate::pgroup::{install_signal_handlers, ProcessGroup};
+use crate::pgroup::{install_signal_handlers, reap_orphaned_children, ProcessGroup};
 use crate::toxiproxy::{ProxyHandle, ToxiproxyManager};
 use anyhow::{Context, Result};
 use moat_postern::{AccountConfig, PosternConfig, PosternHandle};
@@ -290,6 +290,7 @@ impl TestWorld {
         let pgid = toxiproxy.pgid;
         let process_group = ProcessGroup::new(pgid);
         install_signal_handlers();
+        reap_orphaned_children();
 
         let postern_addr = postern_url
             .strip_prefix("http://")
@@ -684,14 +685,56 @@ fn open_participant_log(label: &str) -> Result<(File, PathBuf)> {
 /// Storage is intentionally not cleaned up on drop so that `debug.log` is
 /// available for inspection after a test exits. Clear `/tmp/moat-beacon-data/`
 /// by hand when the accumulation matters; CI runs on fresh machines.
+/// Storage root for one participant, deliberately **not** cleaned up.
+///
+/// `disable_cleanup(true)` is what makes post-mortem debugging possible: after
+/// a failing run the participant's `data/debug.log` (including the `ring: tick
+/// in/out` lines) and `data/keys/ring.json` are still on disk. The path is
+/// printed so a failure can be traced to its directory without guessing —
+/// there are otherwise hundreds of sibling directories and no mapping from
+/// test to storage.
+///
+/// Old roots are pruned on creation; see [`prune_storage_roots`].
 fn make_storage_dir(label: &str) -> Result<TempDir> {
     let base = std::path::Path::new("/tmp/moat-beacon-data");
     std::fs::create_dir_all(base).context("create /tmp/moat-beacon-data")?;
-    tempfile::Builder::new()
+    prune_storage_roots(base);
+    let dir = tempfile::Builder::new()
         .prefix(&format!("moat-beacon-{label}-"))
         .disable_cleanup(true)
         .tempdir_in(base)
-        .context("create persistent storage dir")
+        .context("create persistent storage dir")?;
+    eprintln!("[beacon] storage: {}", dir.path().display());
+    Ok(dir)
+}
+
+/// Cap on retained participant storage roots.  They are never cleaned up
+/// (that is the point — see [`make_storage_dir`]), so without a cap they
+/// accumulate indefinitely; a few thousand had piled up before this existed.
+/// Override with `MOAT_BEACON_KEEP_ROOTS`.
+fn prune_storage_roots(base: &std::path::Path) {
+    let keep: usize = std::env::var("MOAT_BEACON_KEEP_ROOTS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(400);
+
+    let Ok(entries) = std::fs::read_dir(base) else { return };
+    let mut roots: Vec<(std::time::SystemTime, std::path::PathBuf)> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().starts_with("moat-beacon-"))
+        .filter_map(|e| {
+            let t = e.metadata().ok()?.modified().ok()?;
+            Some((t, e.path()))
+        })
+        .collect();
+
+    if roots.len() <= keep {
+        return;
+    }
+    roots.sort_by_key(|(t, _)| *t); // oldest first
+    for (_, path) in roots.iter().take(roots.len() - keep) {
+        let _ = std::fs::remove_dir_all(path);
+    }
 }
 
 /// Find a free TCP port by binding to `127.0.0.1:0`.
