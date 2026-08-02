@@ -79,6 +79,31 @@ pub struct CreateConversationResponse {
     pub group_id: String,
 }
 
+/// Response to `POST /pair/new`. This endpoint does not exist on the
+/// server yet.
+#[derive(Debug, Deserialize)]
+pub struct PairNewResponse {
+    /// The text form of the pairing code (Crockford base32,
+    /// hyphen-grouped). The `moat-pair:` URI / QR form is a client-side
+    /// concern (Dart), not part of this HTTP surface.
+    pub code: String,
+}
+
+/// Response to `GET /pair/status`. This endpoint does not exist on the
+/// server yet.
+#[derive(Debug, Default, Deserialize)]
+pub struct PairStatus {
+    /// `true` once this device has completed pairing (joined the ring, for
+    /// the new device; admitted the peer, for the existing device).
+    #[serde(default)]
+    pub done: bool,
+    /// Ring group id, once known.
+    pub ring_group_id: Option<String>,
+    /// Existing-device only: name of the peer awaiting an approval
+    /// decision, if `Enroll` has been received but not yet approved.
+    pub pending_device_name: Option<String>,
+}
+
 // ── MoatCliClient impl ────────────────────────────────────────────────────────
 
 impl MoatCliClient {
@@ -361,6 +386,57 @@ impl MoatCliClient {
             anyhow::bail!("sync_start failed ({status}): {body}");
         }
         Ok(())
+    }
+
+    /// `POST /pair/new` — new device: generate a fresh pairing code and
+    /// start listening for the existing device's `Enroll`. Not yet
+    /// implemented on the server — calling this today fails with a 404.
+    pub async fn pair_new(&self) -> Result<PairNewResponse> {
+        let resp = self
+            .http
+            .post(format!("{}/pair/new", self.base_url))
+            .send()
+            .await
+            .context("POST /pair/new")?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body: Value = resp.json().await.unwrap_or_default();
+            anyhow::bail!("pair_new failed ({status}): {body}");
+        }
+        resp.json().await.context("parse /pair/new response")
+    }
+
+    /// `POST /pair/confirm` — existing device: enter a pairing code
+    /// (scanned or typed) and approve the peer once its `Enroll` arrives.
+    /// Approval is auto-accepted in `--http` mode — interactive UIs gate
+    /// this on a real user tap instead. Not yet implemented on the server.
+    pub async fn pair_confirm(&self, code: &str) -> Result<()> {
+        let resp = self
+            .http
+            .post(format!("{}/pair/confirm", self.base_url))
+            .json(&json!({ "code": code }))
+            .send()
+            .await
+            .context("POST /pair/confirm")?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body: Value = resp.json().await.unwrap_or_default();
+            anyhow::bail!("pair_confirm failed ({status}): {body}");
+        }
+        Ok(())
+    }
+
+    /// `GET /pair/status` — poll pairing progress. Not yet implemented on
+    /// the server.
+    pub async fn pair_status(&self) -> Result<PairStatus> {
+        self.http
+            .get(format!("{}/pair/status", self.base_url))
+            .send()
+            .await
+            .context("GET /pair/status")?
+            .json()
+            .await
+            .context("parse /pair/status response")
     }
 
     /// `POST /watch`

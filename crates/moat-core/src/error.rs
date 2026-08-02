@@ -43,6 +43,10 @@ pub enum ErrorCode {
     StateDiverged = 202,
     UnknownSender = 203,
     ConflictUnresolved = 204,
+    // Pairing error codes
+    PairingCodec = 300,
+    PairingCrypto = 301,
+    PairingProtocol = 302,
 }
 
 /// Errors that can occur during MLS operations
@@ -128,6 +132,15 @@ pub enum Error {
 
     #[error("blob content hash mismatch: {0}")]
     ContentHashMismatch(String),
+
+    #[error("pairing code invalid: {0}")]
+    PairingCodec(String),
+
+    #[error("pairing channel error: {0}")]
+    PairingCrypto(String),
+
+    #[error("pairing protocol error: {0}")]
+    PairingProtocol(String),
 }
 
 impl Error {
@@ -161,6 +174,9 @@ impl Error {
             Error::CiphertextHashMismatch(_) => ErrorCode::CiphertextHashMismatch,
             Error::BlobDecryptionFailed(_) => ErrorCode::BlobDecryptionFailed,
             Error::ContentHashMismatch(_) => ErrorCode::ContentHashMismatch,
+            Error::PairingCodec(_) => ErrorCode::PairingCodec,
+            Error::PairingCrypto(_) => ErrorCode::PairingCrypto,
+            Error::PairingProtocol(_) => ErrorCode::PairingProtocol,
         }
     }
 
@@ -193,7 +209,10 @@ impl Error {
             | Error::InvalidBlobUri(msg)
             | Error::CiphertextHashMismatch(msg)
             | Error::BlobDecryptionFailed(msg)
-            | Error::ContentHashMismatch(msg) => msg,
+            | Error::ContentHashMismatch(msg)
+            | Error::PairingCodec(msg)
+            | Error::PairingCrypto(msg)
+            | Error::PairingProtocol(msg) => msg,
         }
     }
 }

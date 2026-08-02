@@ -1,9 +1,9 @@
 //! Multi-device random-action scenario.
 //!
-//! Alice has two devices (D1, D2) that bootstrap a device ring and then
-//! receive a random sequence of actions. Bob is a fixed second user present
-//! to provide a real user conversation. The scenario ends with a convergence
-//! drain and invariant checks.
+//! Alice has two devices (D1, D2) that form a device ring via live pairing
+//! (`qr-pairing.md`) and then receive a random sequence of actions. Bob is
+//! a fixed second user present to provide a real user conversation. The
+//! scenario ends with a convergence drain and invariant checks.
 //!
 //! Parametrised over d1_kind × d2_kind so the same logic covers all four
 //! runtime cells (RR, RD, DR, DD).
@@ -79,27 +79,27 @@ pub async fn run(
     d2.login("alice.postern.test", "any-password").await.expect("d2 login");
     tokio::time::sleep(Duration::from_millis(800)).await;
 
-    // Ring bootstrap.
-    for i in 0..6 {
-        vlog!("[bootstrap {i}]");
-        d1.ring_tick().await.expect("d1 ring_tick");
-        d2.ring_tick().await.expect("d2 ring_tick");
-        d1.poll().await.expect("d1 poll");
-        d2.poll().await.expect("d2 poll");
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    // Ring bootstrap: live pairing (`qr-pairing.md`), not the deleted
+    // ring_tick()-driven agreement machinery. `ring_tick` no longer forms a
+    // ring by itself — §4.1's async bootstrap/election machinery is gone —
+    // only the pairing exchange (`PairingSession`, via `/pair/*`) creates
+    // one; `ring_tick` is left doing only its retained job, the
+    // steady-state KP-lane fan-out (see the `poll_for_new_devices` cycles
+    // just below).
+    vlog!("[bootstrap] pairing d1 <- d2...");
+    crate::scenarios::three_device_pairing::pair_devices(&d1, &d2, verbose).await;
 
     {
-        let s1 = d1.ring_status().await.expect("d1 ring_status post-bootstrap");
-        let s2 = d2.ring_status().await.expect("d2 ring_status post-bootstrap");
+        let s1 = d1.ring_status().await.expect("d1 ring_status post-pairing");
+        let s2 = d2.ring_status().await.expect("d2 ring_status post-pairing");
         assert!(
             s1.ring_group_id.is_some(),
-            "d1 must have a ring after bootstrap (coord_count={})",
+            "d1 must have a ring after pairing (coord_count={})",
             s1.coord_group_count
         );
         assert_eq!(
             s1.ring_group_id, s2.ring_group_id,
-            "ring must match after bootstrap"
+            "ring must match after pairing"
         );
     }
 

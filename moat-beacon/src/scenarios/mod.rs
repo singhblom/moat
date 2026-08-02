@@ -18,11 +18,8 @@ use crate::invariants::{ScenarioState, SentMessage};
 use crate::world::TestWorld;
 
 pub mod dart_push_latency;
-pub mod dart_two_device_bootstrap;
-pub mod dart_two_device_history_sync;
 pub mod fcm_dispatch;
-pub mod mixed_two_device_bootstrap;
-pub mod mixed_two_device_history_sync;
+pub mod lost_device_pairing;
 pub mod multi_device_chat;
 pub mod dart_three_party_chat;
 pub mod dart_two_party_chat;
@@ -32,14 +29,13 @@ pub mod mixed_two_party_chat;
 pub mod push_latency;
 pub mod push_latency_restart;
 pub mod same_drawbridge_local;
-pub mod three_device_bootstrap;
-pub mod three_device_history_sync;
-pub mod three_device_staggered;
+pub mod staggered_device_pairing;
+pub mod three_device_pairing;
+pub mod three_device_pairing_history_sync;
 pub mod three_party_chat;
 pub mod three_party_push;
 pub mod three_party_restart;
-pub mod two_device_bootstrap;
-pub mod two_device_history_sync;
+pub mod two_device_pairing;
 pub mod two_party_chat;
 pub mod two_party_fanout;
 pub mod two_party_push;
@@ -749,173 +745,37 @@ pub static SCENARIOS: &[Scenario] = &[
         seed_fn: actions_from_seed_3p,
     },
     Scenario {
-        name: "two-device-bootstrap",
-        description: "One user, two devices — device ring bootstrap via coord groups",
-        run_fn: two_device_bootstrap::run_boxed,
+        name: "two-device-pairing",
+        description: "One user, two devices — live QR/text pairing (currently red: /pair endpoints not implemented)",
+        run_fn: two_device_pairing::run_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
-        name: "two-device-history-sync",
-        description: "One user, two devices — ring bootstrap then backward history sync",
-        run_fn: two_device_history_sync::run_boxed,
+        name: "three-device-pairing",
+        description: "One user, three devices — D1 pairs D2 then D3 into the same ring (currently red)",
+        run_fn: three_device_pairing::run_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
-        name: "dart-two-device-bootstrap",
-        description: "Dart: one user, two Dart devices — ring bootstrap parity test",
-        run_fn: dart_two_device_bootstrap::run_boxed,
+        name: "three-device-pairing-history-sync",
+        description: "D1 has pre-existing history with Bob; D2 then D3 pair in and must sync it (currently red)",
+        run_fn: three_device_pairing_history_sync::run_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
-        name: "dart-two-device-history-sync",
-        description: "Dart: one user, two Dart devices — ring bootstrap then history sync",
-        run_fn: dart_two_device_history_sync::run_boxed,
+        name: "staggered-device-pairing",
+        description: "D2 is offline while D1 pairs D3; D2 must catch up on its own (currently red)",
+        run_fn: staggered_device_pairing::run_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
-        name: "mixed-two-device-bootstrap",
-        description: "Mixed: Rust D1 + Dart D2 ring bootstrap cross-runtime parity",
-        run_fn: mixed_two_device_bootstrap::run_boxed,
-        gen_fn: || vec![],
-        seed_fn: |_| Ok(vec![]),
-    },
-    Scenario {
-        name: "mixed-two-device-bootstrap-dart-first",
-        description: "Mixed: Dart D1 + Rust D2 ring bootstrap cross-runtime parity",
-        run_fn: mixed_two_device_bootstrap::run_dart_first_boxed,
-        gen_fn: || vec![],
-        seed_fn: |_| Ok(vec![]),
-    },
-    Scenario {
-        name: "mixed-two-device-history-sync-rd",
-        description: "Mixed: Rust D1 + Dart D2 ring bootstrap then history sync",
-        run_fn: mixed_two_device_history_sync::run_rd_boxed,
-        gen_fn: || vec![],
-        seed_fn: |_| Ok(vec![]),
-    },
-    Scenario {
-        name: "mixed-two-device-history-sync-dr",
-        description: "Mixed: Dart D1 + Rust D2 ring bootstrap then history sync",
-        run_fn: mixed_two_device_history_sync::run_dr_boxed,
-        gen_fn: || vec![],
-        seed_fn: |_| Ok(vec![]),
-    },
-    // ── Three-device bootstrap (all 8 runtime combos) ─────────────────────────
-    Scenario {
-        name: "three-device-bootstrap-rrr",
-        description: "Three Rust devices — ring bootstrap with late D3 join",
-        run_fn: three_device_bootstrap::run_rrr_boxed,
-        gen_fn: || vec![],
-        seed_fn: |_| Ok(vec![]),
-    },
-    Scenario {
-        name: "three-device-bootstrap-rrd",
-        description: "Rust D1+D2, Dart D3 — ring bootstrap with late D3 join",
-        run_fn: three_device_bootstrap::run_rrd_boxed,
-        gen_fn: || vec![],
-        seed_fn: |_| Ok(vec![]),
-    },
-    Scenario {
-        name: "three-device-bootstrap-rdr",
-        description: "Rust D1+D3, Dart D2 — ring bootstrap with late D3 join",
-        run_fn: three_device_bootstrap::run_rdr_boxed,
-        gen_fn: || vec![],
-        seed_fn: |_| Ok(vec![]),
-    },
-    Scenario {
-        name: "three-device-bootstrap-drr",
-        description: "Dart D1, Rust D2+D3 — ring bootstrap with late D3 join",
-        run_fn: three_device_bootstrap::run_drr_boxed,
-        gen_fn: || vec![],
-        seed_fn: |_| Ok(vec![]),
-    },
-    Scenario {
-        name: "three-device-bootstrap-rdd",
-        description: "Rust D1, Dart D2+D3 — ring bootstrap with late D3 join",
-        run_fn: three_device_bootstrap::run_rdd_boxed,
-        gen_fn: || vec![],
-        seed_fn: |_| Ok(vec![]),
-    },
-    Scenario {
-        name: "three-device-bootstrap-drd",
-        description: "Dart D1+D3, Rust D2 — ring bootstrap with late D3 join",
-        run_fn: three_device_bootstrap::run_drd_boxed,
-        gen_fn: || vec![],
-        seed_fn: |_| Ok(vec![]),
-    },
-    Scenario {
-        name: "three-device-bootstrap-ddr",
-        description: "Dart D1+D2, Rust D3 — ring bootstrap with late D3 join",
-        run_fn: three_device_bootstrap::run_ddr_boxed,
-        gen_fn: || vec![],
-        seed_fn: |_| Ok(vec![]),
-    },
-    Scenario {
-        name: "three-device-bootstrap-ddd",
-        description: "Three Dart devices — ring bootstrap with late D3 join",
-        run_fn: three_device_bootstrap::run_ddd_boxed,
-        gen_fn: || vec![],
-        seed_fn: |_| Ok(vec![]),
-    },
-    // ── Three-device history sync (4 key runtime combos) ─────────────────────
-    Scenario {
-        name: "three-device-history-sync-rrr",
-        description: "Three Rust devices — D1 sends history, D2 syncs, D3 syncs from D1",
-        run_fn: three_device_history_sync::run_rrr_boxed,
-        gen_fn: || vec![],
-        seed_fn: |_| Ok(vec![]),
-    },
-    Scenario {
-        name: "three-device-history-sync-ddd",
-        description: "Three Dart devices — D1 sends history, D2 syncs, D3 syncs from D1",
-        run_fn: three_device_history_sync::run_ddd_boxed,
-        gen_fn: || vec![],
-        seed_fn: |_| Ok(vec![]),
-    },
-    Scenario {
-        name: "three-device-history-sync-drr",
-        description: "Dart D1 (offerer), Rust D2+D3 — history sync cross-runtime",
-        run_fn: three_device_history_sync::run_drr_boxed,
-        gen_fn: || vec![],
-        seed_fn: |_| Ok(vec![]),
-    },
-    Scenario {
-        name: "three-device-history-sync-rrd",
-        description: "Rust D1+D2, Dart D3 (late joiner) — history sync cross-runtime",
-        run_fn: three_device_history_sync::run_rrd_boxed,
-        gen_fn: || vec![],
-        seed_fn: |_| Ok(vec![]),
-    },
-    // ── Three-device staggered arrival (4 key runtime combos) ────────────────
-    Scenario {
-        name: "three-device-staggered-rrr",
-        description: "Three Rust devices — D2 joins + sends, D3 must sync both messages",
-        run_fn: three_device_staggered::run_rrr_boxed,
-        gen_fn: || vec![],
-        seed_fn: |_| Ok(vec![]),
-    },
-    Scenario {
-        name: "three-device-staggered-ddd",
-        description: "Three Dart devices — D2 joins + sends, D3 must sync both messages",
-        run_fn: three_device_staggered::run_ddd_boxed,
-        gen_fn: || vec![],
-        seed_fn: |_| Ok(vec![]),
-    },
-    Scenario {
-        name: "three-device-staggered-drr",
-        description: "Dart D1 (offerer), Rust D2+D3 — staggered arrival cross-runtime",
-        run_fn: three_device_staggered::run_drr_boxed,
-        gen_fn: || vec![],
-        seed_fn: |_| Ok(vec![]),
-    },
-    Scenario {
-        name: "three-device-staggered-rrd",
-        description: "Rust D1+D2, Dart D3 — staggered arrival cross-runtime",
-        run_fn: three_device_staggered::run_rrd_boxed,
+        name: "lost-device-pairing",
+        description: "D1 is permanently lost after pairing D2; D2 alone pairs D3 and history survives (currently red)",
+        run_fn: lost_device_pairing::run_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },

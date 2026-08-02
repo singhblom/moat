@@ -21,6 +21,7 @@ serde_json = { workspace = true }
 serde_with = { version = "3", default-features = false, features = ["base64", "macros"] }
 x25519-dalek = { workspace = true }
 chacha20poly1305 = { workspace = true }
+aes-gcm = "0.10"
 hex = "0.4"
 
 [features]

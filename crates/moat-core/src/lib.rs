@@ -30,6 +30,7 @@ pub(crate) mod error;
 pub(crate) mod event;
 pub mod message;
 pub(crate) mod padding;
+pub mod pairing;
 pub(crate) mod stealth;
 pub(crate) mod storage;
 pub mod sync;
@@ -76,6 +77,14 @@ pub use crate::digest::{diff_anchors, DigestAnchor, DiffRange};
 pub use crate::sync::{
     decode_sync_msg, encode_sync_msg, AnchorDto, ConvState, SyncDirection, SyncMessage, SyncMsg,
     SyncOutput, SyncSession,
+};
+pub use crate::pairing::{
+    crockford_decode, crockford_encode, decode_pairing_msg, derive_pairing_keys,
+    encode_pairing_msg, open_frame, seal_frame, summarize_pairing_commands, Admit, Enroll,
+    PairingChannelKeys, PairingCommand, PairingMsg, PairingPayload, PairingSession, SiblingInfo,
+    CROCKFORD_ALPHABET, PAIRING_FRAME_KEY_LEN, PAIRING_FRAME_NONCE_LEN, PAIRING_HKDF_INFO_N2O,
+    PAIRING_HKDF_INFO_O2N, PAIRING_PAYLOAD_LEN, PAIRING_PAYLOAD_VERSION, PAIRING_SECRET_LEN,
+    PAIRING_TOKEN_LEN, PAIRING_URI_SCHEME,
 };
 
 /// The ciphersuite used by Moat
