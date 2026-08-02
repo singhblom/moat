@@ -331,6 +331,5 @@ class SyncService {
     _session = null;
     _pendingFrames = null;
     _ring.clearPendingPair();
-    await _ring.notifySyncSessionEnded();
   }
 }

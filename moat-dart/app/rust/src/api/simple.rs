@@ -7,10 +7,10 @@ use moat_core::{
     },
     ControlKind, EncryptResult, Event, EventKind, GroupKind, KeyPackageInput, MoatCredential,
     MoatSession, ModifierKind, OwnEventInput, ReactionPayload as CoreReactionPayload, RingCommand,
-    RingEvent, SenderInfo, StepEnv, TickInputs, WelcomeResult,
+    SenderInfo, StepEnv, TickInputs, WelcomeResult,
 };
 use moat_core::DeviceRingState;
-use moat_core::{decode_coord_msg, CoordMsg};
+use moat_core::CoordMsg;
 use std::sync::Mutex;
 
 // --- Error handling ---
@@ -428,8 +428,6 @@ pub struct SenderInfoDto {
     /// The sender's device name (format: "did:plc:xxx/Device Name")
     pub device_name: String,
     /// The sender's stable 16-byte device id, from their MLS credential.
-    /// Hosts pass this back into `handle_coord_msg` so the ring driver can
-    /// attribute coord messages without a coord-group member lookup.
     pub device_id: Vec<u8>,
 }
 
@@ -449,7 +447,6 @@ pub enum EventKindDto {
     Welcome,
     Checkpoint,
     Reaction,
-    Coord,
     SyncApp,
     Unknown,
 }
@@ -490,7 +487,6 @@ impl EventDto {
                 event.message_id = self.message_id;
                 event
             }
-            EventKindDto::Coord => Event::coord(self.group_id, self.epoch, self.payload),
             EventKindDto::SyncApp => Event::sync_app(self.group_id, self.epoch, self.payload),
             EventKindDto::Unknown => {
                 panic!("cannot convert Unknown event to core Event")
@@ -506,7 +502,6 @@ impl EventDto {
                 EventKind::Control(ControlKind::Welcome) => EventKindDto::Welcome,
                 EventKind::Control(ControlKind::Checkpoint) => EventKindDto::Checkpoint,
                 EventKind::Modifier(ModifierKind::Reaction) => EventKindDto::Reaction,
-                EventKind::Coord => EventKindDto::Coord,
                 EventKind::SyncApp => EventKindDto::SyncApp,
                 // Ring-lane events (SiblingMsg) are consumed by the ring
                 // driver, not by Dart's event surface — no DTO.
@@ -1014,11 +1009,12 @@ impl RingDriverHandle {
     /// Device ids of siblings confirmed to be in the ring.  Drives the
     /// same-user fan-out loop in the host.
     #[frb(sync)]
-    pub fn ring_joined_siblings(&self) -> Vec<Vec<u8>> {
+    pub fn ring_joined_siblings(&self, session: &MoatSessionHandle) -> Vec<Vec<u8>> {
+        let session_lock = session.inner.lock().unwrap();
         self.inner
             .lock()
             .unwrap()
-            .ring_joined_siblings()
+            .ring_joined_siblings(&session_lock)
             .into_iter()
             .map(|d| d.to_vec())
             .collect()
@@ -1065,9 +1061,6 @@ impl RingDriverHandle {
             credential: &credential,
             key_bundle: &key_bundle,
             now_ms: 0,
-            drawbridge_connected: false,
-            sync_session_active: false,
-            stealth_pubkeys: &[],
             sibling_stealth: &sibling_stealth,
         };
         let cmds = self.inner.lock().unwrap().emit_kp_request_for(&session_lock, &env, &owner);
@@ -1078,6 +1071,12 @@ impl RingDriverHandle {
     /// for `owner`.  The CoordMsg framing stays in Rust so the wire format has
     /// a single owner.  `None` if not in a ring or the sibling's stealth
     /// record is unknown.
+    ///
+    /// Flat parameter list rather than a bundled struct: each `#[frb]`
+    /// parameter becomes a named argument in the generated Dart binding, so
+    /// callers get the same readability a struct would give without an
+    /// extra DTO to keep in sync.
+    #[allow(clippy::too_many_arguments)]
     pub fn encrypt_user_conv_welcome(
         &self,
         session: &MoatSessionHandle,
@@ -1100,9 +1099,6 @@ impl RingDriverHandle {
             credential: &credential,
             key_bundle: &key_bundle,
             now_ms: 0,
-            drawbridge_connected: false,
-            sync_session_active: false,
-            stealth_pubkeys: &[],
             sibling_stealth: &sibling_stealth,
         };
         let msg = CoordMsg::UserConvWelcome {
@@ -1129,11 +1125,6 @@ impl RingDriverHandle {
             .into_iter()
             .map(|key_package| KeyPackageInput { key_package })
             .collect();
-        let stealth_pubkeys: Vec<[u8; 32]> = inputs
-            .stealth_pubkeys
-            .into_iter()
-            .map(|pk| pk.try_into().map_err(|_| "stealth_pubkey must be 32 bytes".to_string()))
-            .collect::<Result<_, _>>()?;
         let sibling_stealth = to_core_sibling_stealth(inputs.sibling_stealth)?;
         let own_events: Vec<OwnEventInput> = inputs
             .own_events
@@ -1151,138 +1142,27 @@ impl RingDriverHandle {
 
         let core_inputs = TickInputs {
             key_packages: &key_packages,
-            stealth_pubkeys: &stealth_pubkeys,
             sibling_stealth: &sibling_stealth,
             own_events: &own_events,
             stealth_privkey: &stealth_privkey,
             credential: &credential,
             key_bundle: &inputs.key_bundle,
             now_ms: inputs.now_ms,
-            drawbridge_has_own_connection: inputs.drawbridge_has_own_connection,
-            sync_session_active: inputs.sync_session_active,
             my_did: &inputs.did,
         };
 
         let cmds = self.inner.lock().unwrap().tick(&session_lock, core_inputs);
         Ok(cmds.into_iter().map(RingCommandDto::from).collect())
     }
-
-    /// Called when a coord-group Welcome was consumed outside `tick()` (e.g. by
-    /// `_pollOwnDid`).  The state machine records the coord group and emits
-    /// a Hello publish command for the caller to execute.
-    pub fn notify_coord_group_joined(
-        &self,
-        session: &MoatSessionHandle,
-        group_id: Vec<u8>,
-        key_bundle: Vec<u8>,
-        my_did: String,
-    ) -> Result<Vec<RingCommandDto>, String> {
-        let session_lock = session.inner.lock().unwrap();
-        let device_id = *session_lock.device_id();
-        let credential = MoatCredential::new(&my_did, "", device_id);
-        let env = StepEnv {
-            my_did: &my_did,
-            credential: &credential,
-            key_bundle: &key_bundle,
-            now_ms: 0,
-            drawbridge_connected: false,
-            sync_session_active: false,
-            stealth_pubkeys: &[],
-            sibling_stealth: &[],
-        };
-        let cmds = self.inner.lock().unwrap().step(
-            &session_lock,
-            &env,
-            RingEvent::CoordGroupJoined { group_id },
-        );
-        Ok(cmds.into_iter().map(RingCommandDto::from).collect())
-    }
-
-    /// Handle an incoming coord-group message (decrypted JSON payload).
-    pub fn handle_coord_msg(
-        &self,
-        session: &MoatSessionHandle,
-        my_did: String,
-        group_id: Vec<u8>,
-        payload: Vec<u8>,
-        sender_device_id: Option<Vec<u8>>,
-        sibling_stealth: Vec<SiblingStealthDto>,
-        key_bundle: Vec<u8>,
-    ) -> Result<Vec<RingCommandDto>, String> {
-        let msg = decode_coord_msg(&payload).map_err(|e| e.to_string())?;
-        let sender_device_id: Option<[u8; 16]> = sender_device_id
-            .map(|d| {
-                d.try_into().map_err(|_| "sender_device_id must be 16 bytes".to_string())
-            })
-            .transpose()?;
-        let sibling_stealth = to_core_sibling_stealth(sibling_stealth)?;
-        let session_lock = session.inner.lock().unwrap();
-        let device_id = *session_lock.device_id();
-        let credential = MoatCredential::new(&my_did, "", device_id);
-        let env = StepEnv {
-            my_did: &my_did,
-            credential: &credential,
-            key_bundle: &key_bundle,
-            now_ms: 0,
-            drawbridge_connected: false,
-            sync_session_active: false,
-            stealth_pubkeys: &[],
-            // `on_ring_welcome` fires from this path and ships the initial KP
-            // batches over the stealth lane, which needs each sibling's
-            // scan_pubkey — mirrors `handle_coord_msg_sync` in moat-cli.  An
-            // empty list here silently skips batch shipping.
-            sibling_stealth: &sibling_stealth,
-        };
-        let cmds = self.inner.lock().unwrap().step(
-            &session_lock,
-            &env,
-            RingEvent::CoordMsgReceived {
-                source_group_id: group_id,
-                sender_device_id,
-                msg,
-            },
-        );
-        Ok(cmds.into_iter().map(RingCommandDto::from).collect())
-    }
-
-    /// Report that a sync session ended (success or failure alike), clearing
-    /// the in-flight sync offer so the next peer owing one can be served.
-    ///
-    /// Only one offer is in flight at a time, so a host that drops a sync
-    /// session without calling this stalls sync for every remaining peer.
-    /// Emits no commands — pure state transition.
-    pub fn notify_sync_session_ended(&self, session: &MoatSessionHandle, my_did: String) {
-        let session_lock = session.inner.lock().unwrap();
-        let device_id = *session_lock.device_id();
-        let credential = MoatCredential::new(&my_did, "", device_id);
-        let key_bundle: Vec<u8> = Vec::new();
-        let env = StepEnv {
-            my_did: &my_did,
-            credential: &credential,
-            key_bundle: &key_bundle,
-            now_ms: 0,
-            drawbridge_connected: false,
-            sync_session_active: false,
-            stealth_pubkeys: &[],
-            sibling_stealth: &[],
-        };
-        let _ = self
-            .inner
-            .lock()
-            .unwrap()
-            .step(&session_lock, &env, RingEvent::SyncSessionEnded);
-    }
 }
 
 pub struct TickInputsDto {
     /// Sibling key packages fetched from our own PDS (driver filters out our own).
     pub key_packages: Vec<Vec<u8>>,
-    /// Stealth scan-pubkeys (32 bytes each) for all of our devices.
-    pub stealth_pubkeys: Vec<Vec<u8>>,
     /// Per-sibling stealth addressing: `scan_pubkey` paired with the stable
     /// `device_id` it belongs to.  Required for the ring driver to address
-    /// bootstrap KPs and steady-state `SiblingMsg` payloads at a specific
-    /// sibling.  Callers should filter out their own device.
+    /// steady-state `SiblingMsg` payloads at a specific sibling.  Callers
+    /// should filter out their own device.
     pub sibling_stealth: Vec<SiblingStealthDto>,
     /// Own-PDS events since `own_events_cursor`.
     pub own_events: Vec<OwnEventInputDto>,
@@ -1296,10 +1176,6 @@ pub struct TickInputsDto {
     pub key_bundle: Vec<u8>,
     /// Wall-clock time (ms since epoch); used as `ring_created_at` for new rings.
     pub now_ms: i64,
-    /// Whether the host's main Drawbridge WS is connected.
-    pub drawbridge_has_own_connection: bool,
-    /// Whether a sync session is already running.
-    pub sync_session_active: bool,
 }
 
 pub struct OwnEventInputDto {
@@ -1344,7 +1220,6 @@ fn to_core_sibling_stealth(
 pub enum GroupKindDto {
     User,
     Ring,
-    DeviceCoord,
 }
 
 impl From<GroupKind> for GroupKindDto {
@@ -1352,44 +1227,27 @@ impl From<GroupKind> for GroupKindDto {
         match k {
             GroupKind::User => GroupKindDto::User,
             GroupKind::Ring => GroupKindDto::Ring,
-            GroupKind::DeviceCoord => GroupKindDto::DeviceCoord,
         }
     }
 }
 
 #[derive(Debug)]
 pub enum RingCommandDto {
-    PublishEvent { tag: Vec<u8>, ciphertext: Vec<u8>, mark_own: bool },
-    StealthPublishWelcome { tag: Vec<u8>, ciphertext: Vec<u8> },
     PublishStealthEvent { tag: Vec<u8>, ciphertext: Vec<u8> },
     ReplenishKeyPackage,
     RegisterGroup { group_id: Vec<u8>, kind: GroupKindDto },
-    SendDrawbridgePairOffer { token: Vec<u8> },
-    SendDrawbridgePairJoin { token: Vec<u8> },
     PollForNewDevices,
 }
 
 impl From<RingCommand> for RingCommandDto {
     fn from(c: RingCommand) -> Self {
         match c {
-            RingCommand::PublishEvent { tag, ciphertext, mark_own } => {
-                RingCommandDto::PublishEvent { tag: tag.to_vec(), ciphertext, mark_own }
-            }
-            RingCommand::StealthPublishWelcome { tag, ciphertext } => {
-                RingCommandDto::StealthPublishWelcome { tag: tag.to_vec(), ciphertext }
-            }
             RingCommand::PublishStealthEvent { tag, ciphertext } => {
                 RingCommandDto::PublishStealthEvent { tag: tag.to_vec(), ciphertext }
             }
             RingCommand::ReplenishKeyPackage => RingCommandDto::ReplenishKeyPackage,
             RingCommand::RegisterGroup { group_id, kind } => {
                 RingCommandDto::RegisterGroup { group_id, kind: kind.into() }
-            }
-            RingCommand::SendDrawbridgePairOffer { token } => {
-                RingCommandDto::SendDrawbridgePairOffer { token }
-            }
-            RingCommand::SendDrawbridgePairJoin { token } => {
-                RingCommandDto::SendDrawbridgePairJoin { token }
             }
             RingCommand::PollForNewDevices => RingCommandDto::PollForNewDevices,
         }
@@ -2041,10 +1899,25 @@ mod ring_sync_ffi_tests {
         let kp = session
             .generate_key_package("did:plc:alice".into(), "Phone".into())
             .unwrap();
+        // `replenish_own_key_packages` runs on every tick regardless of ring
+        // membership and tops up to `KP_SELF_POOL_TARGET` (4) live published
+        // packages (see its doc comment in device_ring.rs) — so the pool
+        // snapshot needs 4 still-live packages, not just 1, for the tick to
+        // go quiet. Mint 3 more sharing the same signing identity.
+        let mut key_packages = vec![kp.key_package];
+        for _ in 0..3 {
+            let fresh = session
+                .replenish_key_package(
+                    "did:plc:alice".into(),
+                    "Phone".into(),
+                    kp.key_bundle.clone(),
+                )
+                .unwrap();
+            key_packages.push(fresh);
+        }
         let driver = RingDriverHandle::new_empty();
         let inputs = TickInputsDto {
-            key_packages: vec![],
-            stealth_pubkeys: vec![],
+            key_packages,
             sibling_stealth: vec![],
             own_events: vec![],
             stealth_privkey: vec![0u8; 32],
@@ -2052,8 +1925,6 @@ mod ring_sync_ffi_tests {
             device_name: "Phone".into(),
             key_bundle: kp.key_bundle,
             now_ms: 1_000_000,
-            drawbridge_has_own_connection: false,
-            sync_session_active: false,
         };
         let cmds = driver.tick(&session, inputs).unwrap();
         assert!(cmds.is_empty());
@@ -2068,7 +1939,6 @@ mod ring_sync_ffi_tests {
         let driver = RingDriverHandle::new_empty();
         let inputs = TickInputsDto {
             key_packages: vec![],
-            stealth_pubkeys: vec![],
             sibling_stealth: vec![],
             own_events: vec![],
             stealth_privkey: vec![0u8; 31],
@@ -2076,8 +1946,6 @@ mod ring_sync_ffi_tests {
             device_name: "Phone".into(),
             key_bundle: kp.key_bundle,
             now_ms: 0,
-            drawbridge_has_own_connection: false,
-            sync_session_active: false,
         };
         let err = driver.tick(&session, inputs).unwrap_err();
         assert!(err.contains("32 bytes"));

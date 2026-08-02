@@ -17,9 +17,6 @@ pub enum EventKind {
     Control(ControlKind),
     Message(MessageKind),
     Modifier(ModifierKind),
-    /// Device-coordination message sent over a `DeviceCoord` or `Ring` group.
-    /// The full [`crate::CoordMsg`] is JSON-encoded in `Event.payload`.
-    Coord,
     /// Sync protocol message sent over the device ring, transmitted as binary
     /// frames on the pair WebSocket. The payload is a padded JSON `SyncMsg`.
     SyncApp,
@@ -69,7 +66,6 @@ impl EventKind {
             EventKind::Control(kind) => kind.as_str_with_domain("control"),
             EventKind::Message(kind) => kind.as_str_with_domain("message"),
             EventKind::Modifier(kind) => kind.as_str_with_domain("modifier"),
-            EventKind::Coord => "coord".to_string(),
             EventKind::SyncApp => "sync.app".to_string(),
             EventKind::SiblingMsg => "sibling.msg".to_string(),
             EventKind::Unknown(s) => s.clone(),
@@ -337,20 +333,6 @@ impl Event {
         }
     }
 
-    /// Create a coordination message event for a `DeviceCoord` group.
-    pub fn coord(group_id: Vec<u8>, epoch: u64, payload: Vec<u8>) -> Self {
-        Self {
-            kind: EventKind::Coord,
-            group_id,
-            epoch,
-            payload,
-            message_id: None,
-            prev_event_hash: None,
-            epoch_fingerprint: None,
-            sender_device_id: None,
-        }
-    }
-
     /// Create a new reaction event (toggle semantics: same sender + emoji + target = remove)
     pub fn reaction(group_id: Vec<u8>, epoch: u64, target_message_id: &[u8], emoji: &str) -> Self {
         let reaction_payload = ReactionPayload {
@@ -547,7 +529,6 @@ impl<'de> Deserialize<'de> for EventKind {
         } else {
             // Legacy single-token kinds.
             let legacy = match raw.as_str() {
-                "coord" => EventKind::Coord,
                 "message" => EventKind::Message(MessageKind::Legacy),
                 "commit" => EventKind::Control(ControlKind::Commit),
                 "welcome" => EventKind::Control(ControlKind::Welcome),

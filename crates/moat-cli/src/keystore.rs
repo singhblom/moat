@@ -39,8 +39,8 @@ pub struct GroupMetadata {
         default
     )]
     pub participant_handles: Vec<String>,
-    /// Classification of this group (User/Ring/DeviceCoord). Defaults to User
-    /// for backwards compatibility with groups stored before Phase 2.
+    /// Classification of this group (User/Ring). Defaults to User for
+    /// older persisted records that predate this field.
     #[serde(default)]
     pub kind: GroupKind,
 }

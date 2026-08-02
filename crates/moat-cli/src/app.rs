@@ -11,10 +11,10 @@ use crate::{
 use crossterm::event::{KeyCode, KeyEvent};
 use moat_atproto::{BlobRef, MoatAtprotoClient};
 use moat_core::{
-    blob_decrypt, blob_encrypt, decode_coord_msg, encrypt_for_stealth, generate_stealth_keypair,
-    try_decrypt_stealth, ControlKind, CoordMsg, DeviceRingState, Event, EventKind, ExternalBlob,
-    GroupKind, LongTextMessage, MediaMessage, MessagePayload, MoatCredential, MoatSession,
-    ModifierKind, ParsedMessagePayload, RingCommand, RingEvent, StepEnv, CIPHERSUITE,
+    blob_decrypt, blob_encrypt, encrypt_for_stealth, generate_stealth_keypair, try_decrypt_stealth,
+    ControlKind, CoordMsg, DeviceRingState, Event, EventKind, ExternalBlob, GroupKind,
+    LongTextMessage, MediaMessage, MessagePayload, MoatCredential, MoatSession, ModifierKind,
+    ParsedMessagePayload, RingCommand, StepEnv, CIPHERSUITE,
 };
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::collections::{HashMap, HashSet};
@@ -376,10 +376,6 @@ pub(crate) enum BgEvent {
 
     // ── Drawbridge pairing (main WS control plane) ───────────────────────────
 
-    /// Send `pair_join{token}` on the main Drawbridge WS.
-    DrawbridgeSendPairJoin {
-        token: Vec<u8>,
-    },
     /// Relay acknowledged our offer; waiting for a joiner.
     PairPending,
     /// Both sides matched; open the `/pair` WS.
@@ -419,7 +415,6 @@ impl BgEvent {
             BgEvent::DrawbridgeConnectOwn { .. }
             | BgEvent::DrawbridgeNotifyEventPosted { .. }
             | BgEvent::DrawbridgeWatchTags { .. }
-            | BgEvent::DrawbridgeSendPairJoin { .. }
             | BgEvent::DrawbridgeConnectPair { .. }
             | BgEvent::DrawbridgeSendPairBinary { .. } => true,
 
@@ -559,24 +554,14 @@ pub struct App {
     /// Pairing token for the in-flight pair WS session.
     pending_pair_token: Option<Vec<u8>>,
 
-    /// `RingCommand::PublishEvent`/`PublishStealthEvent`s emitted from the
-    /// synchronous coord-message handler (`handle_coord_msg_sync`), which has
-    /// no async context to publish them.  Drained and published at the start
-    /// of the next `ring_tick_inner`.  This is the delivery path for
-    /// stealth-borne KP traffic (`KpBatch` ships on join, `KpRequest`
-    /// fulfillment) that a peer produces in response to an inbound coord
-    /// message.
-    ring_publish_queue: Vec<RingCommand>,
-
     /// Cached per-sibling stealth address records (`scan_pubkey` +
     /// `device_id`), refreshed each `ring_tick_inner` from
     /// `fetch_stealth_addresses`.  Needed by any code path that stealth-
     /// encrypts a `CoordMsg` to a sibling (same-user KP lane) outside the
-    /// tick's own fresh fetch — `poll_for_new_devices` and
-    /// `handle_coord_msg_sync` in particular.  A one-tick-stale cache is
-    /// fine: the consumer-driven low-water `KpRequest` retries self-heal
-    /// any miss caused by a sibling whose stealth record hasn't propagated
-    /// yet.
+    /// tick's own fresh fetch — `poll_for_new_devices` in particular.  A
+    /// one-tick-stale cache is fine: the consumer-driven low-water
+    /// `KpRequest` retries self-heal any miss caused by a sibling whose
+    /// stealth record hasn't propagated yet.
     cached_sibling_stealth: Vec<moat_core::SiblingStealth>,
 }
 
@@ -702,7 +687,6 @@ impl App {
             last_ring_tick: None,
             sync_session: None,
             pending_pair_token: None,
-            ring_publish_queue: Vec::new(),
             cached_sibling_stealth: Vec::new(),
         })
     }
@@ -1637,9 +1621,7 @@ impl App {
             }
 
             // ── Drawbridge pairing (async side handled by handle_bg_event_async) ──
-            BgEvent::DrawbridgeSendPairJoin { .. }
-            | BgEvent::DrawbridgeConnectPair { .. }
-            | BgEvent::DrawbridgeSendPairBinary { .. } => {}
+            BgEvent::DrawbridgeConnectPair { .. } | BgEvent::DrawbridgeSendPairBinary { .. } => {}
 
             BgEvent::PairPending => {
                 self.debug_log.log("sync: pair offer registered, waiting for joiner");
@@ -1660,7 +1642,6 @@ impl App {
                 self.drawbridge.clear_pair();
                 self.sync_session = None;
                 self.pending_pair_token = None;
-                self.notify_sync_session_ended();
             }
 
             BgEvent::PairConnected => {
@@ -1873,11 +1854,6 @@ impl App {
                         .log(&format!("drawbridge: register_push (tag-sync) failed: {e}"));
                 }
             }
-            BgEvent::DrawbridgeSendPairJoin { token } => {
-                if let Err(e) = self.drawbridge.send_pair_join(&token).await {
-                    self.debug_log.log(&format!("drawbridge: pair_join failed: {e}"));
-                }
-            }
             BgEvent::DrawbridgeConnectPair { url, token } => {
                 self.debug_log.log(&format!("sync: connecting to pair WS at {url}"));
                 match self.drawbridge.connect_pair(&url, &token).await {
@@ -1888,7 +1864,6 @@ impl App {
                         self.debug_log.log(&format!("sync: pair WS connect failed: {e}"));
                         self.sync_session = None;
                         self.pending_pair_token = None;
-                        self.notify_sync_session_ended();
                     }
                 }
             }
@@ -3044,17 +3019,6 @@ impl App {
                         self.mls.mark_digest_epoch_boundary(&group_id);
 
                     }
-                    EventKind::Coord => {
-                        // Route coord messages to the ring driver (pure state only;
-                        // any outgoing network responses are sent on the next ring tick).
-                        // Sender device_id comes from the MLS credential
-                        // via `DecryptResult.sender`; the in-payload
-                        // `Event.sender_device_id` would carry the same
-                        // value but is cross-checked by the
-                        // `SenderIdentityMismatch` transcript warning.
-                        let sender = decrypted.sender.as_ref().map(|s| s.device_id);
-                        self.handle_coord_msg_sync(&group_id, sender, &decrypted.event.payload);
-                    }
                     EventKind::Modifier(ModifierKind::Reaction) => {
                         if let Some(rp) = decrypted.event.reaction_payload() {
                             let sender_did =
@@ -3139,20 +3103,17 @@ impl App {
             .filter(|d| d != &my_did)
             .collect();
 
-        // A group where all members share our DID is a device-coordination group,
-        // not a user conversation.  Register its tags for routing but don't surface it.
+        // A group where all members share our DID cannot legitimately arrive
+        // via this cross-user stealth path: ring membership changes ride the
+        // pairing channel or `MoatSession::add_member` directly. Register
+        // tags so we don't lose track of an already-joined MLS group, but
+        // don't surface a conversation.
         if participant_dids.is_empty() {
-            let _ = self.keys.store_group_metadata(
-                &conv_id,
-                &GroupMetadata {
-                    participant_dids: vec![],
-                    participant_handles: vec![],
-                    kind: GroupKind::DeviceCoord,
-                },
-            );
             self.populate_candidate_tags(&conv_id, &group_id);
             self.replenish_key_package();
-            self.debug_log.log("process_welcome: joined coord group (same-DID), skipping conversation");
+            self.debug_log.log(
+                "process_welcome: same-DID Welcome via stealth is unexpected (registered tags only)",
+            );
             return true;
         }
 
@@ -4234,7 +4195,7 @@ impl App {
             return Ok(());
         }
 
-        let siblings = self.ring_driver.ring_joined_siblings();
+        let siblings = self.ring_driver.ring_joined_siblings(&self.mls);
         if siblings.is_empty() {
             return Ok(());
         }
@@ -4254,9 +4215,6 @@ impl App {
             credential: &credential,
             key_bundle: &key_bundle,
             now_ms: chrono::Utc::now().timestamp_millis(),
-            drawbridge_connected: self.drawbridge.has_own_connection(),
-            sync_session_active: self.sync_session.is_some(),
-            stealth_pubkeys: &[],
             sibling_stealth: &sibling_stealth,
         };
 
@@ -4437,14 +4395,6 @@ impl App {
         cmd: RingCommand,
     ) {
         match cmd {
-            RingCommand::PublishEvent { tag, ciphertext, mark_own } => {
-                if let Err(e) = client.publish_event(&tag, &ciphertext, None).await {
-                    self.debug_log
-                        .log(&format!("publish_ring_command: publish failed: {e}"));
-                } else if mark_own {
-                    self.own_published_tags.insert(tag);
-                }
-            }
             RingCommand::PublishStealthEvent { tag, ciphertext } => {
                 // Same-user KP lane (KpBatch / KpRequest / UserConvWelcome),
                 // stealth-addressed to a specific sibling.  Stealth payloads
@@ -4478,14 +4428,6 @@ impl App {
 
         let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?.clone();
         let my_did = client.did().to_string();
-
-        // Drain any ring publishes buffered by the synchronous coord-message
-        // handler (KP batch ships / KpRequest fulfillment produced while
-        // processing an inbound ring event, which had no async context).
-        let queued = std::mem::take(&mut self.ring_publish_queue);
-        for cmd in queued {
-            self.publish_ring_command(&client, cmd).await;
-        }
 
         let key_bundle = self.keys.load_identity_key().map_err(|e| {
             AppError::Other(format!("ring: failed to load identity key: {e}"))
@@ -4571,16 +4513,12 @@ impl App {
             .collect();
 
         let now_ms = chrono::Utc::now().timestamp_millis();
-        let drawbridge_has_own_connection = self.drawbridge.has_own_connection();
-        let sync_session_active = self.sync_session.is_some();
 
         self.debug_log.log(&format!(
-            "ring: tick in  {} sibling_ids=[{}] stealth={} sibling_stealth={} own_events={} | {}",
-            format!(
-                "kp={} (mine={kp_mine} mine_live={kp_mine_live} siblings={kp_siblings} \
-                 foreign={kp_foreign} unreadable={kp_unreadable})",
-                key_packages.len()
-            ),
+            "ring: tick in  kp={} (mine={kp_mine} mine_live={kp_mine_live} siblings={kp_siblings} \
+             foreign={kp_foreign} unreadable={kp_unreadable}) sibling_ids=[{}] stealth={} \
+             sibling_stealth={} own_events={} | {}",
+            key_packages.len(),
             sibling_ids.join(","),
             stealth_pubkeys.len(),
             sibling_stealth.len(),
@@ -4593,15 +4531,12 @@ impl App {
             &self.mls,
             TickInputs {
                 key_packages: &key_packages,
-                stealth_pubkeys: &stealth_pubkeys,
                 sibling_stealth: &sibling_stealth,
                 own_events: &own_events,
                 stealth_privkey: &stealth_privkey,
                 credential: &credential,
                 key_bundle: &key_bundle,
                 now_ms,
-                drawbridge_has_own_connection,
-                sync_session_active,
                 my_did: &my_did,
             },
         );
@@ -4625,20 +4560,6 @@ impl App {
         let mut needs_poll_for_new_devices = false;
         for cmd in cmds {
             match cmd {
-                RingCommand::PublishEvent { tag, ciphertext, mark_own } => {
-                    if let Err(e) = client.publish_event(&tag, &ciphertext, None).await {
-                        self.debug_log
-                            .log(&format!("ring: failed to publish event: {e}"));
-                    } else if mark_own {
-                        self.own_published_tags.insert(tag);
-                    }
-                }
-                RingCommand::StealthPublishWelcome { tag, ciphertext } => {
-                    if let Err(e) = client.publish_event(&tag, &ciphertext, None).await {
-                        self.debug_log
-                            .log(&format!("ring: failed to publish stealth welcome: {e}"));
-                    }
-                }
                 RingCommand::PublishStealthEvent { tag, ciphertext } => {
                     if let Err(e) = client.publish_event(&tag, &ciphertext, None).await {
                         self.debug_log
@@ -4691,13 +4612,6 @@ impl App {
                 RingCommand::ReplenishKeyPackage => {
                     self.replenish_key_package();
                 }
-                RingCommand::SendDrawbridgePairOffer { token } => {
-                    self.pending_pair_token = Some(token.clone());
-                    let _ = self.drawbridge.send_pair_offer(&token).await;
-                }
-                RingCommand::SendDrawbridgePairJoin { token } => {
-                    let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairJoin { token });
-                }
                 RingCommand::PollForNewDevices => {
                     needs_poll_for_new_devices = true;
                 }
@@ -4715,172 +4629,6 @@ impl App {
         }
 
         Ok(())
-    }
-
-    /// Synchronous coord-message handler — pure state only, no network I/O.
-    ///
-    /// Called from the sync `process_matched_event` path.  Any outgoing
-    /// network responses (RingInfo, Supersede) are deferred to the next
-    /// `ring_tick_inner` invocation via `ring_driver` state.
-    fn handle_coord_msg_sync(
-        &mut self,
-        group_id: &[u8],
-        sender_device_id: Option<[u8; 16]>,
-        payload: &[u8],
-    ) {
-        let msg = match decode_coord_msg(payload) {
-            Ok(m) => m,
-            Err(e) => {
-                self.debug_log
-                    .log(&format!("ring: coord msg decode failed: {e}"));
-                return;
-            }
-        };
-
-        let my_did = match self.client.as_ref() {
-            Some(c) => c.did().to_string(),
-            None => return,
-        };
-
-        let key_bundle = match self.keys.load_identity_key() {
-            Ok(k) => k,
-            Err(e) => {
-                self.debug_log
-                    .log(&format!("ring: failed to load identity key: {e}"));
-                return;
-            }
-        };
-        let device_name = match self.keys.get_or_create_device_name() {
-            Ok(n) => n,
-            Err(_) => return,
-        };
-        let credential = MoatCredential::new(&my_did, &device_name, *self.mls.device_id());
-        let sibling_stealth = self.cached_sibling_stealth.clone();
-
-        let env = StepEnv {
-            my_did: &my_did,
-            credential: &credential,
-            key_bundle: &key_bundle,
-            now_ms: chrono::Utc::now().timestamp_millis(),
-            drawbridge_connected: self.drawbridge.has_own_connection(),
-            sync_session_active: self.sync_session.is_some(),
-            stealth_pubkeys: &[],
-            // Synchronous coord-message handler; no on-tick bootstrap
-            // publishing fires from here.  Bootstrap KP publishing happens
-            // in the async ring_tick_inner path via TickInputs.sibling_stealth.
-            // `sibling_stealth` here is the last tick's cache — needed
-            // because `on_ring_welcome` (fired when a `RingWelcome` lands
-            // on this sync path) ships initial KP batches over the
-            // stealth lane, which requires each sibling's scan_pubkey.
-            sibling_stealth: &sibling_stealth,
-        };
-
-        let cmds = self.ring_driver.step(
-            &self.mls,
-            &env,
-            RingEvent::CoordMsgReceived {
-                source_group_id: group_id.to_vec(),
-                sender_device_id,
-                msg,
-            },
-        );
-
-        // step() may have called process_welcome internally — persist MLS state.
-        let _ = self.save_mls_state();
-
-        // Interpret the (small set of) commands this sync path can produce.
-        // Async-only commands (PublishEvent, StealthPublishWelcome,
-        // SendDrawbridgePairOffer) are not expected here; they fire from
-        // ring_tick_inner and are logged if seen.
-        self.interpret_sync_commands(cmds, &my_did);
-
-        if let Err(e) = self.keys.save_ring_state(&self.ring_driver) {
-            self.debug_log
-                .log(&format!("ring: failed to save ring state: {e}"));
-        }
-    }
-
-    /// Tell the ring driver a sync session has ended, so the in-flight
-    /// `OfferEmitted` clears and the next peer owing an offer can be served.
-    ///
-    /// Must be called from **every** path that drops `self.sync_session`,
-    /// success or failure alike. Only one offer is in flight at a time, so a
-    /// missed call here stalls sync for every remaining peer indefinitely.
-    fn notify_sync_session_ended(&mut self) {
-        let Some(client) = self.client.as_ref() else { return };
-        let my_did = client.did().to_string();
-        let Ok(key_bundle) = self.keys.load_identity_key() else { return };
-        let Ok(device_name) = self.keys.get_or_create_device_name() else { return };
-        let credential = MoatCredential::new(&my_did, &device_name, *self.mls.device_id());
-        let sibling_stealth = self.cached_sibling_stealth.clone();
-
-        let env = StepEnv {
-            my_did: &my_did,
-            credential: &credential,
-            key_bundle: &key_bundle,
-            now_ms: chrono::Utc::now().timestamp_millis(),
-            drawbridge_connected: self.drawbridge.has_own_connection(),
-            sync_session_active: false,
-            stealth_pubkeys: &[],
-            sibling_stealth: &sibling_stealth,
-        };
-
-        // SyncSessionEnded is a pure state transition — it emits no commands.
-        let _ = self
-            .ring_driver
-            .step(&self.mls, &env, RingEvent::SyncSessionEnded);
-
-        if let Err(e) = self.keys.save_ring_state(&self.ring_driver) {
-            self.debug_log
-                .log(&format!("ring: failed to save ring state: {e}"));
-        }
-    }
-
-    /// Interpret the subset of [`RingCommand`]s that a synchronous coord-message
-    /// handler can emit.  Async-only commands are logged and dropped — they
-    /// will be re-emitted by the next `ring_tick_inner` invocation if needed.
-    fn interpret_sync_commands(&mut self, cmds: Vec<RingCommand>, my_did: &str) {
-        for cmd in cmds {
-            match cmd {
-                RingCommand::RegisterGroup { group_id, kind } => {
-                    let group_id_hex = hex::encode(&group_id);
-                    let _ = self.keys.store_group_metadata(
-                        &group_id_hex,
-                        &GroupMetadata {
-                            participant_dids: vec![my_did.to_string()],
-                            participant_handles: vec![],
-                            kind,
-                        },
-                    );
-                    self.populate_candidate_tags(&group_id_hex, &group_id);
-                }
-                RingCommand::ReplenishKeyPackage => {
-                    self.replenish_key_package();
-                }
-                RingCommand::PollForNewDevices => {
-                    // Defer to next ring_tick (which calls poll_for_new_devices async).
-                }
-                RingCommand::SendDrawbridgePairJoin { token } => {
-                    self.pending_pair_token = Some(token.clone());
-                    let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairJoin { token });
-                }
-                // Stealth-lane network publishes (KpBatch ships on join,
-                // KpRequest fulfillment, UserConvWelcome) are produced here
-                // in response to an inbound coord message but have no async
-                // context to publish from.  Queue them; `ring_tick_inner`
-                // drains the queue.  These are one-shot responses — nothing
-                // re-emits them on a later tick, so dropping them would
-                // silently stall the fan-out.
-                cmd @ (RingCommand::PublishEvent { .. } | RingCommand::PublishStealthEvent { .. }) => {
-                    self.ring_publish_queue.push(cmd);
-                }
-                RingCommand::StealthPublishWelcome { .. }
-                | RingCommand::SendDrawbridgePairOffer { .. } => {
-                    self.debug_log
-                        .log("ring: async-only command emitted from sync path — dropped (will retry on next tick)");
-                }
-            }
-        }
     }
 
     /// Dismiss the oldest device alert
@@ -5012,7 +4760,6 @@ impl App {
                     self.sync_session = None;
                     self.pending_pair_token = None;
                     self.drawbridge.clear_pair();
-                    self.notify_sync_session_ended();
                 }
             }
         }

@@ -273,6 +273,11 @@ abstract class RingDriverHandle implements RustOpaqueInterface {
   /// for `owner`.  The CoordMsg framing stays in Rust so the wire format has
   /// a single owner.  `None` if not in a ring or the sibling's stealth
   /// record is unknown.
+  ///
+  /// Flat parameter list rather than a bundled struct: each `#[frb]`
+  /// parameter becomes a named argument in the generated Dart binding, so
+  /// callers get the same readability a struct would give without an
+  /// extra DTO to keep in sync.
   Future<RingCommandDto?> encryptUserConvWelcome(
       {required MoatSessionHandle session,
       required String myDid,
@@ -287,37 +292,9 @@ abstract class RingDriverHandle implements RustOpaqueInterface {
       RustLib.instance.api
           .crateApiSimpleRingDriverHandleFromStateJson(json: json);
 
-  /// Handle an incoming coord-group message (decrypted JSON payload).
-  Future<List<RingCommandDto>> handleCoordMsg(
-      {required MoatSessionHandle session,
-      required String myDid,
-      required List<int> groupId,
-      required List<int> payload,
-      Uint8List? senderDeviceId,
-      required List<SiblingStealthDto> siblingStealth,
-      required List<int> keyBundle});
-
   /// Create a new ring state with empty state.
   static RingDriverHandle newEmpty() =>
       RustLib.instance.api.crateApiSimpleRingDriverHandleNewEmpty();
-
-  /// Called when a coord-group Welcome was consumed outside `tick()` (e.g. by
-  /// `_pollOwnDid`).  The state machine records the coord group and emits
-  /// a Hello publish command for the caller to execute.
-  Future<List<RingCommandDto>> notifyCoordGroupJoined(
-      {required MoatSessionHandle session,
-      required List<int> groupId,
-      required List<int> keyBundle,
-      required String myDid});
-
-  /// Report that a sync session ended (success or failure alike), clearing
-  /// the in-flight sync offer so the next peer owing one can be served.
-  ///
-  /// Only one offer is in flight at a time, so a host that drops a sync
-  /// session without calling this stalls sync for every remaining peer.
-  /// Emits no commands — pure state transition.
-  Future<void> notifySyncSessionEnded(
-      {required MoatSessionHandle session, required String myDid});
 
   /// Cursor (rkey) for incremental own-PDS stealth scan.
   String? ownEventsCursor();
@@ -327,7 +304,7 @@ abstract class RingDriverHandle implements RustOpaqueInterface {
 
   /// Device ids of siblings confirmed to be in the ring.  Drives the
   /// same-user fan-out loop in the host.
-  List<Uint8List> ringJoinedSiblings();
+  List<Uint8List> ringJoinedSiblings({required MoatSessionHandle session});
 
   /// Drive one ring coordination tick. Returns commands for the host to interpret.
   Future<List<RingCommandDto>> tick(
@@ -642,7 +619,6 @@ enum EventKindDto {
   welcome,
   checkpoint,
   reaction,
-  coord,
   syncApp,
   unknown,
   ;
@@ -651,7 +627,6 @@ enum EventKindDto {
 enum GroupKindDto {
   user,
   ring,
-  deviceCoord,
   ;
 }
 
@@ -788,15 +763,6 @@ class ReactionPayloadDto {
 sealed class RingCommandDto with _$RingCommandDto {
   const RingCommandDto._();
 
-  const factory RingCommandDto.publishEvent({
-    required Uint8List tag,
-    required Uint8List ciphertext,
-    required bool markOwn,
-  }) = RingCommandDto_PublishEvent;
-  const factory RingCommandDto.stealthPublishWelcome({
-    required Uint8List tag,
-    required Uint8List ciphertext,
-  }) = RingCommandDto_StealthPublishWelcome;
   const factory RingCommandDto.publishStealthEvent({
     required Uint8List tag,
     required Uint8List ciphertext,
@@ -807,12 +773,6 @@ sealed class RingCommandDto with _$RingCommandDto {
     required Uint8List groupId,
     required GroupKindDto kind,
   }) = RingCommandDto_RegisterGroup;
-  const factory RingCommandDto.sendDrawbridgePairOffer({
-    required Uint8List token,
-  }) = RingCommandDto_SendDrawbridgePairOffer;
-  const factory RingCommandDto.sendDrawbridgePairJoin({
-    required Uint8List token,
-  }) = RingCommandDto_SendDrawbridgePairJoin;
   const factory RingCommandDto.pollForNewDevices() =
       RingCommandDto_PollForNewDevices;
 }
@@ -826,8 +786,6 @@ class SenderInfoDto {
   final String deviceName;
 
   /// The sender's stable 16-byte device id, from their MLS credential.
-  /// Hosts pass this back into `handle_coord_msg` so the ring driver can
-  /// attribute coord messages without a coord-group member lookup.
   final Uint8List deviceId;
 
   const SenderInfoDto({
@@ -1037,13 +995,10 @@ class TickInputsDto {
   /// Sibling key packages fetched from our own PDS (driver filters out our own).
   final List<Uint8List> keyPackages;
 
-  /// Stealth scan-pubkeys (32 bytes each) for all of our devices.
-  final List<Uint8List> stealthPubkeys;
-
   /// Per-sibling stealth addressing: `scan_pubkey` paired with the stable
   /// `device_id` it belongs to.  Required for the ring driver to address
-  /// bootstrap KPs and steady-state `SiblingMsg` payloads at a specific
-  /// sibling.  Callers should filter out their own device.
+  /// steady-state `SiblingMsg` payloads at a specific sibling.  Callers
+  /// should filter out their own device.
   final List<SiblingStealthDto> siblingStealth;
 
   /// Own-PDS events since `own_events_cursor`.
@@ -1064,15 +1019,8 @@ class TickInputsDto {
   /// Wall-clock time (ms since epoch); used as `ring_created_at` for new rings.
   final PlatformInt64 nowMs;
 
-  /// Whether the host's main Drawbridge WS is connected.
-  final bool drawbridgeHasOwnConnection;
-
-  /// Whether a sync session is already running.
-  final bool syncSessionActive;
-
   const TickInputsDto({
     required this.keyPackages,
-    required this.stealthPubkeys,
     required this.siblingStealth,
     required this.ownEvents,
     required this.stealthPrivkey,
@@ -1080,23 +1028,18 @@ class TickInputsDto {
     required this.deviceName,
     required this.keyBundle,
     required this.nowMs,
-    required this.drawbridgeHasOwnConnection,
-    required this.syncSessionActive,
   });
 
   @override
   int get hashCode =>
       keyPackages.hashCode ^
-      stealthPubkeys.hashCode ^
       siblingStealth.hashCode ^
       ownEvents.hashCode ^
       stealthPrivkey.hashCode ^
       did.hashCode ^
       deviceName.hashCode ^
       keyBundle.hashCode ^
-      nowMs.hashCode ^
-      drawbridgeHasOwnConnection.hashCode ^
-      syncSessionActive.hashCode;
+      nowMs.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1104,16 +1047,13 @@ class TickInputsDto {
       other is TickInputsDto &&
           runtimeType == other.runtimeType &&
           keyPackages == other.keyPackages &&
-          stealthPubkeys == other.stealthPubkeys &&
           siblingStealth == other.siblingStealth &&
           ownEvents == other.ownEvents &&
           stealthPrivkey == other.stealthPrivkey &&
           did == other.did &&
           deviceName == other.deviceName &&
           keyBundle == other.keyBundle &&
-          nowMs == other.nowMs &&
-          drawbridgeHasOwnConnection == other.drawbridgeHasOwnConnection &&
-          syncSessionActive == other.syncSessionActive;
+          nowMs == other.nowMs;
 }
 
 class WelcomeResultDto {

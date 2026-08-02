@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:typed_data';
 
 import '../models/conversation.dart';
@@ -33,16 +32,15 @@ class DeviceRingService {
   int _coordGroupCount = 0;
 
   /// Tags published by this device (mark_own=true) that the polling service
-  /// must skip to avoid self-processing ring-group coord events (e.g. SyncOffer).
+  /// must skip to avoid self-processing its own published events.
   final Set<String> _ownPublishedTagHexes = {};
 
-  /// Last tick's sibling stealth addresses, kept so the synchronous
-  /// coord-message path ([handleCoordMsg]) can stealth-address KP batches
-  /// without re-fetching.  `on_ring_welcome` fires from that path and ships
-  /// the initial KP batches, which needs each sibling's scan_pubkey — an
-  /// empty list there silently skips batch shipping.  Mirrors moat-cli's
-  /// `App.cached_sibling_stealth`; a one-tick-stale cache is fine because a
-  /// skipped send self-heals via the consumer-driven KpRequest refill.
+  /// Last tick's sibling stealth addresses, kept so KP-lane calls outside
+  /// `tick()` (e.g. [emitKpRequestFor], [encryptUserConvWelcome] in
+  /// `_pollForNewDevices`) can stealth-address a sibling without re-fetching.
+  /// Mirrors moat-cli's `App.cached_sibling_stealth`; a one-tick-stale cache
+  /// is fine because a skipped send self-heals via the consumer-driven
+  /// KpRequest refill.
   List<ffi.SiblingStealthDto> _cachedSiblingStealth = const [];
 
   /// Injected by the server/app setup so pollForNewDevices and registerGroup
@@ -88,26 +86,11 @@ class DeviceRingService {
     }
   }
 
-  /// Count peers that hold a coord group. Mirrors moat-core
-  /// `DeviceRingState::coord_group_count` (peers in `awaiting_their_hello`
-  /// or `coord_ready`).
-  static int _countCoordGroupsFromJson(String jsonStr) {
-    try {
-      final state = jsonDecode(jsonStr) as Map<String, dynamic>;
-      final peers = state['peers'];
-      if (peers is! Map) return 0;
-      var n = 0;
-      for (final entry in peers.values) {
-        if (entry is Map) {
-          final s = entry['state'];
-          if (s == 'awaiting_their_hello' || s == 'coord_ready') n++;
-        }
-      }
-      return n;
-    } catch (_) {
-      return 0;
-    }
-  }
+  /// Always 0. There is no device-coordination-group concept in the ring
+  /// driver; kept as a stable field for `coordGroupCount()`, surfaced in
+  /// `server/lib/http/server.dart`'s `/ring-status`. Mirrors
+  /// `DeviceRingState::coord_group_count` on the Rust side.
+  static int _countCoordGroupsFromJson(String jsonStr) => 0;
 
   /// Returns the ring group id if the device is enrolled.
   Future<Uint8List?> ringGroupId() async {
@@ -116,16 +99,14 @@ class DeviceRingService {
     return d.ringGroupId();
   }
 
-  /// Number of active coord groups (one per discovered sibling device).
-  ///
-  /// Updated after every [tick] from the persisted state JSON.
+  /// Always 0 — a stable field on `/ring-status` responses.
   int coordGroupCount() => _coordGroupCount;
 
   /// The rkey cursor up to which the ring driver has consumed own-DID events.
   ///
-  /// The polling service uses this to skip events already processed by the ring
-  /// driver (coord-group Welcomes) so they are not misrouted as conversation
-  /// Welcomes.
+  /// The polling service uses this to skip events already processed by the
+  /// ring driver (same-user key-package-lane SiblingMsg payloads) so they
+  /// are not misrouted as conversation Welcomes.
   String? ownEventsCursor() {
     final d = _driver;
     if (d == null) return null;
@@ -228,7 +209,6 @@ class DeviceRingService {
 
     final inputs = ffi.TickInputsDto(
       keyPackages: keyPackages.map((kp) => kp.keyPackage).toList(),
-      stealthPubkeys: stealthRecords.map((r) => r.scanPubkey).toList(),
       siblingStealth: siblingStealth,
       ownEvents: ownEvents
           .map((e) => ffi.OwnEventInputDto(
@@ -241,8 +221,6 @@ class DeviceRingService {
       deviceName: deviceName,
       keyBundle: keyBundle,
       nowMs: DateTime.now().millisecondsSinceEpoch,
-      drawbridgeHasOwnConnection: _drawbridge.isOwnConnected,
-      syncSessionActive: isSyncActive(),
     );
 
     final cmds = await driver.tick(session: session, inputs: inputs);
@@ -254,83 +232,12 @@ class DeviceRingService {
     await _interpret(cmds, did);
   }
 
-  /// Handle an incoming coord-group message (already decrypted; payload is
-  /// the JSON from `CoordMsg`).
-  /// Called when a coord-group Welcome was consumed by `_pollOwnDid` before
-  /// ring_tick had a chance to process it.  Registers the coord group in the
-  /// ring driver and publishes Hello so the sibling can exchange hellos.
-  Future<void> notifyCoordGroupJoined(Uint8List groupId) async {
-    final session = _auth.moatSession;
-    final did = _auth.did;
-    final driver = _driver;
-    if (session == null || did == null || driver == null) return;
-    final keyBundle = await _auth.secureStorage.loadKeyBundle();
-    if (keyBundle == null) return;
-    try {
-      final cmds = await driver.notifyCoordGroupJoined(
-        session: session,
-        groupId: groupId,
-        keyBundle: keyBundle,
-        myDid: did,
-      );
-      await _persist();
-      await _interpret(cmds, did);
-    } catch (e) {
-      moatLog('DeviceRingService: notifyCoordGroupJoined failed: $e');
-    }
-  }
-
-  Future<void> handleCoordMsg({
-    required Uint8List groupId,
-    required Uint8List payload,
-    Uint8List? senderDeviceId,
-  }) async {
-    final session = _auth.moatSession;
-    final did = _auth.did;
-    final driver = _driver;
-    if (session == null || did == null || driver == null) {
-      moatLog('DeviceRingService: handleCoordMsg skipped — not ready');
-      return;
-    }
-    final keyBundle = await _auth.secureStorage.loadKeyBundle();
-    if (keyBundle == null) {
-      moatLog('DeviceRingService: handleCoordMsg skipped — no key bundle');
-      return;
-    }
-    try {
-      final cmds = await driver.handleCoordMsg(
-        session: session,
-        myDid: did,
-        groupId: groupId,
-        payload: payload,
-        senderDeviceId: senderDeviceId,
-        siblingStealth: _cachedSiblingStealth,
-        keyBundle: keyBundle,
-      );
-      await _persist();
-      await _interpret(cmds, did);
-    } catch (e, st) {
-      moatLog('DeviceRingService: handleCoordMsg failed: $e\n$st');
-    }
-  }
-
   Future<void> _interpret(List<ffi.RingCommandDto> cmds, String did) async {
     final client = _auth.atprotoClient;
     for (final cmd in cmds) {
       try {
         await cmd.when(
-          publishEvent: (tag, ciphertext, markOwn) async {
-            await client.publishEvent(tag, ciphertext);
-            if (markOwn) {
-              final tagHex =
-                  tag.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-              _ownPublishedTagHexes.add(tagHex);
-            }
-          },
-          stealthPublishWelcome: (tag, ciphertext) async {
-            await client.publishEvent(tag, ciphertext);
-          },
-          // Stealth-addressed sibling payload (bootstrap KP or SiblingMsg).
+          // Stealth-addressed sibling payload (KpBatch/KpRequest/UserConvWelcome).
           // The host just publishes the ciphertext under the supplied tag;
           // the recipient decrypts it out-of-band, so it is not marked own.
           publishStealthEvent: (tag, ciphertext) async {
@@ -348,15 +255,6 @@ class DeviceRingService {
             if (kind == ffi.GroupKindDto.user) {
               await _registerUserGroup(Uint8List.fromList(groupId), did);
             }
-          },
-          sendDrawbridgePairOffer: (token) async {
-            _pendingPairToken = token;
-            _drawbridge.sendPairOffer(token);
-          },
-          sendDrawbridgePairJoin: (token) async {
-            moatLog('DeviceRingService: SendDrawbridgePairJoin received, forwarding to Drawbridge');
-            _pendingPairToken = token;
-            _drawbridge.sendPairJoin(token);
           },
           pollForNewDevices: () async {
             await _pollForNewDevices(did);
@@ -439,7 +337,7 @@ class DeviceRingService {
     // formation happen elsewhere; we wait for them.
     if (driver.ringGroupId() == null) return;
 
-    final siblings = driver.ringJoinedSiblings();
+    final siblings = driver.ringJoinedSiblings(session: session);
     if (siblings.isEmpty) return;
 
     final siblingStealth = _cachedSiblingStealth;
@@ -588,24 +486,6 @@ class DeviceRingService {
   /// Drop any pending pair-WS state — used when sync ends or aborts.
   void clearPendingPair() {
     _pendingPairToken = null;
-  }
-
-  /// Tell the ring driver a sync session ended (success or failure alike), so
-  /// the in-flight sync offer clears and the next peer owing one is served.
-  ///
-  /// Only one offer is in flight at a time, so a sync session that tears down
-  /// without reaching here stalls sync for every remaining peer.
-  Future<void> notifySyncSessionEnded() async {
-    final session = _auth.moatSession;
-    final did = _auth.did;
-    final driver = _driver;
-    if (session == null || did == null || driver == null) return;
-    try {
-      await driver.notifySyncSessionEnded(session: session, myDid: did);
-      await _persist();
-    } catch (e) {
-      moatLog('DeviceRingService: notifySyncSessionEnded failed: $e');
-    }
   }
 
   Future<void> dispose() async {

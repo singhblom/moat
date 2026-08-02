@@ -785,8 +785,7 @@ fn slot_orphan_within_window_when_clear_lags_consumption() {
     // exact orphan-within-slot bug.
     let stale = m.fetch_for_me(D3, D1).unwrap();
     m.consume(D1, D3, stale);
-    let err = m.process_welcome(D3, stale).expect_err("re-use must fail");
-    assert_eq!(err, ());
+    m.process_welcome(D3, stale).expect_err("re-use must fail");
     assert_eq!(
         m.failed_receives, 1,
         "without consumer-side dedupe, delayed slot clear permits a re-use"

@@ -18,99 +18,60 @@ final _privateConstructorUsedError = UnsupportedError(
 mixin _$RingCommandDto {
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List tag, Uint8List ciphertext, bool markOwn)
-        publishEvent,
-    required TResult Function(Uint8List tag, Uint8List ciphertext)
-        stealthPublishWelcome,
     required TResult Function(Uint8List tag, Uint8List ciphertext)
         publishStealthEvent,
     required TResult Function() replenishKeyPackage,
     required TResult Function(Uint8List groupId, GroupKindDto kind)
         registerGroup,
-    required TResult Function(Uint8List token) sendDrawbridgePairOffer,
-    required TResult Function(Uint8List token) sendDrawbridgePairJoin,
     required TResult Function() pollForNewDevices,
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List tag, Uint8List ciphertext, bool markOwn)?
-        publishEvent,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)?
-        stealthPublishWelcome,
     TResult? Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult? Function()? replenishKeyPackage,
     TResult? Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
-    TResult? Function(Uint8List token)? sendDrawbridgePairOffer,
-    TResult? Function(Uint8List token)? sendDrawbridgePairJoin,
     TResult? Function()? pollForNewDevices,
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List tag, Uint8List ciphertext, bool markOwn)?
-        publishEvent,
-    TResult Function(Uint8List tag, Uint8List ciphertext)?
-        stealthPublishWelcome,
     TResult Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult Function()? replenishKeyPackage,
     TResult Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
-    TResult Function(Uint8List token)? sendDrawbridgePairOffer,
-    TResult Function(Uint8List token)? sendDrawbridgePairJoin,
     TResult Function()? pollForNewDevices,
     required TResult orElse(),
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult map<TResult extends Object?>({
-    required TResult Function(RingCommandDto_PublishEvent value) publishEvent,
-    required TResult Function(RingCommandDto_StealthPublishWelcome value)
-        stealthPublishWelcome,
     required TResult Function(RingCommandDto_PublishStealthEvent value)
         publishStealthEvent,
     required TResult Function(RingCommandDto_ReplenishKeyPackage value)
         replenishKeyPackage,
     required TResult Function(RingCommandDto_RegisterGroup value) registerGroup,
-    required TResult Function(RingCommandDto_SendDrawbridgePairOffer value)
-        sendDrawbridgePairOffer,
-    required TResult Function(RingCommandDto_SendDrawbridgePairJoin value)
-        sendDrawbridgePairJoin,
     required TResult Function(RingCommandDto_PollForNewDevices value)
         pollForNewDevices,
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(RingCommandDto_PublishEvent value)? publishEvent,
-    TResult? Function(RingCommandDto_StealthPublishWelcome value)?
-        stealthPublishWelcome,
     TResult? Function(RingCommandDto_PublishStealthEvent value)?
         publishStealthEvent,
     TResult? Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult? Function(RingCommandDto_RegisterGroup value)? registerGroup,
-    TResult? Function(RingCommandDto_SendDrawbridgePairOffer value)?
-        sendDrawbridgePairOffer,
-    TResult? Function(RingCommandDto_SendDrawbridgePairJoin value)?
-        sendDrawbridgePairJoin,
     TResult? Function(RingCommandDto_PollForNewDevices value)?
         pollForNewDevices,
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult maybeMap<TResult extends Object?>({
-    TResult Function(RingCommandDto_PublishEvent value)? publishEvent,
-    TResult Function(RingCommandDto_StealthPublishWelcome value)?
-        stealthPublishWelcome,
     TResult Function(RingCommandDto_PublishStealthEvent value)?
         publishStealthEvent,
     TResult Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult Function(RingCommandDto_RegisterGroup value)? registerGroup,
-    TResult Function(RingCommandDto_SendDrawbridgePairOffer value)?
-        sendDrawbridgePairOffer,
-    TResult Function(RingCommandDto_SendDrawbridgePairJoin value)?
-        sendDrawbridgePairJoin,
     TResult Function(RingCommandDto_PollForNewDevices value)? pollForNewDevices,
     required TResult orElse(),
   }) =>
@@ -136,466 +97,6 @@ class _$RingCommandDtoCopyWithImpl<$Res, $Val extends RingCommandDto>
 
   /// Create a copy of RingCommandDto
   /// with the given fields replaced by the non-null parameter values.
-}
-
-/// @nodoc
-abstract class _$$RingCommandDto_PublishEventImplCopyWith<$Res> {
-  factory _$$RingCommandDto_PublishEventImplCopyWith(
-          _$RingCommandDto_PublishEventImpl value,
-          $Res Function(_$RingCommandDto_PublishEventImpl) then) =
-      __$$RingCommandDto_PublishEventImplCopyWithImpl<$Res>;
-  @useResult
-  $Res call({Uint8List tag, Uint8List ciphertext, bool markOwn});
-}
-
-/// @nodoc
-class __$$RingCommandDto_PublishEventImplCopyWithImpl<$Res>
-    extends _$RingCommandDtoCopyWithImpl<$Res,
-        _$RingCommandDto_PublishEventImpl>
-    implements _$$RingCommandDto_PublishEventImplCopyWith<$Res> {
-  __$$RingCommandDto_PublishEventImplCopyWithImpl(
-      _$RingCommandDto_PublishEventImpl _value,
-      $Res Function(_$RingCommandDto_PublishEventImpl) _then)
-      : super(_value, _then);
-
-  /// Create a copy of RingCommandDto
-  /// with the given fields replaced by the non-null parameter values.
-  @pragma('vm:prefer-inline')
-  @override
-  $Res call({
-    Object? tag = null,
-    Object? ciphertext = null,
-    Object? markOwn = null,
-  }) {
-    return _then(_$RingCommandDto_PublishEventImpl(
-      tag: null == tag
-          ? _value.tag
-          : tag // ignore: cast_nullable_to_non_nullable
-              as Uint8List,
-      ciphertext: null == ciphertext
-          ? _value.ciphertext
-          : ciphertext // ignore: cast_nullable_to_non_nullable
-              as Uint8List,
-      markOwn: null == markOwn
-          ? _value.markOwn
-          : markOwn // ignore: cast_nullable_to_non_nullable
-              as bool,
-    ));
-  }
-}
-
-/// @nodoc
-
-class _$RingCommandDto_PublishEventImpl extends RingCommandDto_PublishEvent {
-  const _$RingCommandDto_PublishEventImpl(
-      {required this.tag, required this.ciphertext, required this.markOwn})
-      : super._();
-
-  @override
-  final Uint8List tag;
-  @override
-  final Uint8List ciphertext;
-  @override
-  final bool markOwn;
-
-  @override
-  String toString() {
-    return 'RingCommandDto.publishEvent(tag: $tag, ciphertext: $ciphertext, markOwn: $markOwn)';
-  }
-
-  @override
-  bool operator ==(Object other) {
-    return identical(this, other) ||
-        (other.runtimeType == runtimeType &&
-            other is _$RingCommandDto_PublishEventImpl &&
-            const DeepCollectionEquality().equals(other.tag, tag) &&
-            const DeepCollectionEquality()
-                .equals(other.ciphertext, ciphertext) &&
-            (identical(other.markOwn, markOwn) || other.markOwn == markOwn));
-  }
-
-  @override
-  int get hashCode => Object.hash(
-      runtimeType,
-      const DeepCollectionEquality().hash(tag),
-      const DeepCollectionEquality().hash(ciphertext),
-      markOwn);
-
-  /// Create a copy of RingCommandDto
-  /// with the given fields replaced by the non-null parameter values.
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  @override
-  @pragma('vm:prefer-inline')
-  _$$RingCommandDto_PublishEventImplCopyWith<_$RingCommandDto_PublishEventImpl>
-      get copyWith => __$$RingCommandDto_PublishEventImplCopyWithImpl<
-          _$RingCommandDto_PublishEventImpl>(this, _$identity);
-
-  @override
-  @optionalTypeArgs
-  TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List tag, Uint8List ciphertext, bool markOwn)
-        publishEvent,
-    required TResult Function(Uint8List tag, Uint8List ciphertext)
-        stealthPublishWelcome,
-    required TResult Function(Uint8List tag, Uint8List ciphertext)
-        publishStealthEvent,
-    required TResult Function() replenishKeyPackage,
-    required TResult Function(Uint8List groupId, GroupKindDto kind)
-        registerGroup,
-    required TResult Function(Uint8List token) sendDrawbridgePairOffer,
-    required TResult Function(Uint8List token) sendDrawbridgePairJoin,
-    required TResult Function() pollForNewDevices,
-  }) {
-    return publishEvent(tag, ciphertext, markOwn);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List tag, Uint8List ciphertext, bool markOwn)?
-        publishEvent,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)?
-        stealthPublishWelcome,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
-    TResult? Function()? replenishKeyPackage,
-    TResult? Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
-    TResult? Function(Uint8List token)? sendDrawbridgePairOffer,
-    TResult? Function(Uint8List token)? sendDrawbridgePairJoin,
-    TResult? Function()? pollForNewDevices,
-  }) {
-    return publishEvent?.call(tag, ciphertext, markOwn);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List tag, Uint8List ciphertext, bool markOwn)?
-        publishEvent,
-    TResult Function(Uint8List tag, Uint8List ciphertext)?
-        stealthPublishWelcome,
-    TResult Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
-    TResult Function()? replenishKeyPackage,
-    TResult Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
-    TResult Function(Uint8List token)? sendDrawbridgePairOffer,
-    TResult Function(Uint8List token)? sendDrawbridgePairJoin,
-    TResult Function()? pollForNewDevices,
-    required TResult orElse(),
-  }) {
-    if (publishEvent != null) {
-      return publishEvent(tag, ciphertext, markOwn);
-    }
-    return orElse();
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult map<TResult extends Object?>({
-    required TResult Function(RingCommandDto_PublishEvent value) publishEvent,
-    required TResult Function(RingCommandDto_StealthPublishWelcome value)
-        stealthPublishWelcome,
-    required TResult Function(RingCommandDto_PublishStealthEvent value)
-        publishStealthEvent,
-    required TResult Function(RingCommandDto_ReplenishKeyPackage value)
-        replenishKeyPackage,
-    required TResult Function(RingCommandDto_RegisterGroup value) registerGroup,
-    required TResult Function(RingCommandDto_SendDrawbridgePairOffer value)
-        sendDrawbridgePairOffer,
-    required TResult Function(RingCommandDto_SendDrawbridgePairJoin value)
-        sendDrawbridgePairJoin,
-    required TResult Function(RingCommandDto_PollForNewDevices value)
-        pollForNewDevices,
-  }) {
-    return publishEvent(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(RingCommandDto_PublishEvent value)? publishEvent,
-    TResult? Function(RingCommandDto_StealthPublishWelcome value)?
-        stealthPublishWelcome,
-    TResult? Function(RingCommandDto_PublishStealthEvent value)?
-        publishStealthEvent,
-    TResult? Function(RingCommandDto_ReplenishKeyPackage value)?
-        replenishKeyPackage,
-    TResult? Function(RingCommandDto_RegisterGroup value)? registerGroup,
-    TResult? Function(RingCommandDto_SendDrawbridgePairOffer value)?
-        sendDrawbridgePairOffer,
-    TResult? Function(RingCommandDto_SendDrawbridgePairJoin value)?
-        sendDrawbridgePairJoin,
-    TResult? Function(RingCommandDto_PollForNewDevices value)?
-        pollForNewDevices,
-  }) {
-    return publishEvent?.call(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeMap<TResult extends Object?>({
-    TResult Function(RingCommandDto_PublishEvent value)? publishEvent,
-    TResult Function(RingCommandDto_StealthPublishWelcome value)?
-        stealthPublishWelcome,
-    TResult Function(RingCommandDto_PublishStealthEvent value)?
-        publishStealthEvent,
-    TResult Function(RingCommandDto_ReplenishKeyPackage value)?
-        replenishKeyPackage,
-    TResult Function(RingCommandDto_RegisterGroup value)? registerGroup,
-    TResult Function(RingCommandDto_SendDrawbridgePairOffer value)?
-        sendDrawbridgePairOffer,
-    TResult Function(RingCommandDto_SendDrawbridgePairJoin value)?
-        sendDrawbridgePairJoin,
-    TResult Function(RingCommandDto_PollForNewDevices value)? pollForNewDevices,
-    required TResult orElse(),
-  }) {
-    if (publishEvent != null) {
-      return publishEvent(this);
-    }
-    return orElse();
-  }
-}
-
-abstract class RingCommandDto_PublishEvent extends RingCommandDto {
-  const factory RingCommandDto_PublishEvent(
-      {required final Uint8List tag,
-      required final Uint8List ciphertext,
-      required final bool markOwn}) = _$RingCommandDto_PublishEventImpl;
-  const RingCommandDto_PublishEvent._() : super._();
-
-  Uint8List get tag;
-  Uint8List get ciphertext;
-  bool get markOwn;
-
-  /// Create a copy of RingCommandDto
-  /// with the given fields replaced by the non-null parameter values.
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  _$$RingCommandDto_PublishEventImplCopyWith<_$RingCommandDto_PublishEventImpl>
-      get copyWith => throw _privateConstructorUsedError;
-}
-
-/// @nodoc
-abstract class _$$RingCommandDto_StealthPublishWelcomeImplCopyWith<$Res> {
-  factory _$$RingCommandDto_StealthPublishWelcomeImplCopyWith(
-          _$RingCommandDto_StealthPublishWelcomeImpl value,
-          $Res Function(_$RingCommandDto_StealthPublishWelcomeImpl) then) =
-      __$$RingCommandDto_StealthPublishWelcomeImplCopyWithImpl<$Res>;
-  @useResult
-  $Res call({Uint8List tag, Uint8List ciphertext});
-}
-
-/// @nodoc
-class __$$RingCommandDto_StealthPublishWelcomeImplCopyWithImpl<$Res>
-    extends _$RingCommandDtoCopyWithImpl<$Res,
-        _$RingCommandDto_StealthPublishWelcomeImpl>
-    implements _$$RingCommandDto_StealthPublishWelcomeImplCopyWith<$Res> {
-  __$$RingCommandDto_StealthPublishWelcomeImplCopyWithImpl(
-      _$RingCommandDto_StealthPublishWelcomeImpl _value,
-      $Res Function(_$RingCommandDto_StealthPublishWelcomeImpl) _then)
-      : super(_value, _then);
-
-  /// Create a copy of RingCommandDto
-  /// with the given fields replaced by the non-null parameter values.
-  @pragma('vm:prefer-inline')
-  @override
-  $Res call({
-    Object? tag = null,
-    Object? ciphertext = null,
-  }) {
-    return _then(_$RingCommandDto_StealthPublishWelcomeImpl(
-      tag: null == tag
-          ? _value.tag
-          : tag // ignore: cast_nullable_to_non_nullable
-              as Uint8List,
-      ciphertext: null == ciphertext
-          ? _value.ciphertext
-          : ciphertext // ignore: cast_nullable_to_non_nullable
-              as Uint8List,
-    ));
-  }
-}
-
-/// @nodoc
-
-class _$RingCommandDto_StealthPublishWelcomeImpl
-    extends RingCommandDto_StealthPublishWelcome {
-  const _$RingCommandDto_StealthPublishWelcomeImpl(
-      {required this.tag, required this.ciphertext})
-      : super._();
-
-  @override
-  final Uint8List tag;
-  @override
-  final Uint8List ciphertext;
-
-  @override
-  String toString() {
-    return 'RingCommandDto.stealthPublishWelcome(tag: $tag, ciphertext: $ciphertext)';
-  }
-
-  @override
-  bool operator ==(Object other) {
-    return identical(this, other) ||
-        (other.runtimeType == runtimeType &&
-            other is _$RingCommandDto_StealthPublishWelcomeImpl &&
-            const DeepCollectionEquality().equals(other.tag, tag) &&
-            const DeepCollectionEquality()
-                .equals(other.ciphertext, ciphertext));
-  }
-
-  @override
-  int get hashCode => Object.hash(
-      runtimeType,
-      const DeepCollectionEquality().hash(tag),
-      const DeepCollectionEquality().hash(ciphertext));
-
-  /// Create a copy of RingCommandDto
-  /// with the given fields replaced by the non-null parameter values.
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  @override
-  @pragma('vm:prefer-inline')
-  _$$RingCommandDto_StealthPublishWelcomeImplCopyWith<
-          _$RingCommandDto_StealthPublishWelcomeImpl>
-      get copyWith => __$$RingCommandDto_StealthPublishWelcomeImplCopyWithImpl<
-          _$RingCommandDto_StealthPublishWelcomeImpl>(this, _$identity);
-
-  @override
-  @optionalTypeArgs
-  TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List tag, Uint8List ciphertext, bool markOwn)
-        publishEvent,
-    required TResult Function(Uint8List tag, Uint8List ciphertext)
-        stealthPublishWelcome,
-    required TResult Function(Uint8List tag, Uint8List ciphertext)
-        publishStealthEvent,
-    required TResult Function() replenishKeyPackage,
-    required TResult Function(Uint8List groupId, GroupKindDto kind)
-        registerGroup,
-    required TResult Function(Uint8List token) sendDrawbridgePairOffer,
-    required TResult Function(Uint8List token) sendDrawbridgePairJoin,
-    required TResult Function() pollForNewDevices,
-  }) {
-    return stealthPublishWelcome(tag, ciphertext);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List tag, Uint8List ciphertext, bool markOwn)?
-        publishEvent,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)?
-        stealthPublishWelcome,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
-    TResult? Function()? replenishKeyPackage,
-    TResult? Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
-    TResult? Function(Uint8List token)? sendDrawbridgePairOffer,
-    TResult? Function(Uint8List token)? sendDrawbridgePairJoin,
-    TResult? Function()? pollForNewDevices,
-  }) {
-    return stealthPublishWelcome?.call(tag, ciphertext);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List tag, Uint8List ciphertext, bool markOwn)?
-        publishEvent,
-    TResult Function(Uint8List tag, Uint8List ciphertext)?
-        stealthPublishWelcome,
-    TResult Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
-    TResult Function()? replenishKeyPackage,
-    TResult Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
-    TResult Function(Uint8List token)? sendDrawbridgePairOffer,
-    TResult Function(Uint8List token)? sendDrawbridgePairJoin,
-    TResult Function()? pollForNewDevices,
-    required TResult orElse(),
-  }) {
-    if (stealthPublishWelcome != null) {
-      return stealthPublishWelcome(tag, ciphertext);
-    }
-    return orElse();
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult map<TResult extends Object?>({
-    required TResult Function(RingCommandDto_PublishEvent value) publishEvent,
-    required TResult Function(RingCommandDto_StealthPublishWelcome value)
-        stealthPublishWelcome,
-    required TResult Function(RingCommandDto_PublishStealthEvent value)
-        publishStealthEvent,
-    required TResult Function(RingCommandDto_ReplenishKeyPackage value)
-        replenishKeyPackage,
-    required TResult Function(RingCommandDto_RegisterGroup value) registerGroup,
-    required TResult Function(RingCommandDto_SendDrawbridgePairOffer value)
-        sendDrawbridgePairOffer,
-    required TResult Function(RingCommandDto_SendDrawbridgePairJoin value)
-        sendDrawbridgePairJoin,
-    required TResult Function(RingCommandDto_PollForNewDevices value)
-        pollForNewDevices,
-  }) {
-    return stealthPublishWelcome(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(RingCommandDto_PublishEvent value)? publishEvent,
-    TResult? Function(RingCommandDto_StealthPublishWelcome value)?
-        stealthPublishWelcome,
-    TResult? Function(RingCommandDto_PublishStealthEvent value)?
-        publishStealthEvent,
-    TResult? Function(RingCommandDto_ReplenishKeyPackage value)?
-        replenishKeyPackage,
-    TResult? Function(RingCommandDto_RegisterGroup value)? registerGroup,
-    TResult? Function(RingCommandDto_SendDrawbridgePairOffer value)?
-        sendDrawbridgePairOffer,
-    TResult? Function(RingCommandDto_SendDrawbridgePairJoin value)?
-        sendDrawbridgePairJoin,
-    TResult? Function(RingCommandDto_PollForNewDevices value)?
-        pollForNewDevices,
-  }) {
-    return stealthPublishWelcome?.call(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeMap<TResult extends Object?>({
-    TResult Function(RingCommandDto_PublishEvent value)? publishEvent,
-    TResult Function(RingCommandDto_StealthPublishWelcome value)?
-        stealthPublishWelcome,
-    TResult Function(RingCommandDto_PublishStealthEvent value)?
-        publishStealthEvent,
-    TResult Function(RingCommandDto_ReplenishKeyPackage value)?
-        replenishKeyPackage,
-    TResult Function(RingCommandDto_RegisterGroup value)? registerGroup,
-    TResult Function(RingCommandDto_SendDrawbridgePairOffer value)?
-        sendDrawbridgePairOffer,
-    TResult Function(RingCommandDto_SendDrawbridgePairJoin value)?
-        sendDrawbridgePairJoin,
-    TResult Function(RingCommandDto_PollForNewDevices value)? pollForNewDevices,
-    required TResult orElse(),
-  }) {
-    if (stealthPublishWelcome != null) {
-      return stealthPublishWelcome(this);
-    }
-    return orElse();
-  }
-}
-
-abstract class RingCommandDto_StealthPublishWelcome extends RingCommandDto {
-  const factory RingCommandDto_StealthPublishWelcome(
-          {required final Uint8List tag, required final Uint8List ciphertext}) =
-      _$RingCommandDto_StealthPublishWelcomeImpl;
-  const RingCommandDto_StealthPublishWelcome._() : super._();
-
-  Uint8List get tag;
-  Uint8List get ciphertext;
-
-  /// Create a copy of RingCommandDto
-  /// with the given fields replaced by the non-null parameter values.
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  _$$RingCommandDto_StealthPublishWelcomeImplCopyWith<
-          _$RingCommandDto_StealthPublishWelcomeImpl>
-      get copyWith => throw _privateConstructorUsedError;
 }
 
 /// @nodoc
@@ -686,17 +187,11 @@ class _$RingCommandDto_PublishStealthEventImpl
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List tag, Uint8List ciphertext, bool markOwn)
-        publishEvent,
-    required TResult Function(Uint8List tag, Uint8List ciphertext)
-        stealthPublishWelcome,
     required TResult Function(Uint8List tag, Uint8List ciphertext)
         publishStealthEvent,
     required TResult Function() replenishKeyPackage,
     required TResult Function(Uint8List groupId, GroupKindDto kind)
         registerGroup,
-    required TResult Function(Uint8List token) sendDrawbridgePairOffer,
-    required TResult Function(Uint8List token) sendDrawbridgePairJoin,
     required TResult Function() pollForNewDevices,
   }) {
     return publishStealthEvent(tag, ciphertext);
@@ -705,15 +200,9 @@ class _$RingCommandDto_PublishStealthEventImpl
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List tag, Uint8List ciphertext, bool markOwn)?
-        publishEvent,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)?
-        stealthPublishWelcome,
     TResult? Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult? Function()? replenishKeyPackage,
     TResult? Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
-    TResult? Function(Uint8List token)? sendDrawbridgePairOffer,
-    TResult? Function(Uint8List token)? sendDrawbridgePairJoin,
     TResult? Function()? pollForNewDevices,
   }) {
     return publishStealthEvent?.call(tag, ciphertext);
@@ -722,15 +211,9 @@ class _$RingCommandDto_PublishStealthEventImpl
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List tag, Uint8List ciphertext, bool markOwn)?
-        publishEvent,
-    TResult Function(Uint8List tag, Uint8List ciphertext)?
-        stealthPublishWelcome,
     TResult Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult Function()? replenishKeyPackage,
     TResult Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
-    TResult Function(Uint8List token)? sendDrawbridgePairOffer,
-    TResult Function(Uint8List token)? sendDrawbridgePairJoin,
     TResult Function()? pollForNewDevices,
     required TResult orElse(),
   }) {
@@ -743,18 +226,11 @@ class _$RingCommandDto_PublishStealthEventImpl
   @override
   @optionalTypeArgs
   TResult map<TResult extends Object?>({
-    required TResult Function(RingCommandDto_PublishEvent value) publishEvent,
-    required TResult Function(RingCommandDto_StealthPublishWelcome value)
-        stealthPublishWelcome,
     required TResult Function(RingCommandDto_PublishStealthEvent value)
         publishStealthEvent,
     required TResult Function(RingCommandDto_ReplenishKeyPackage value)
         replenishKeyPackage,
     required TResult Function(RingCommandDto_RegisterGroup value) registerGroup,
-    required TResult Function(RingCommandDto_SendDrawbridgePairOffer value)
-        sendDrawbridgePairOffer,
-    required TResult Function(RingCommandDto_SendDrawbridgePairJoin value)
-        sendDrawbridgePairJoin,
     required TResult Function(RingCommandDto_PollForNewDevices value)
         pollForNewDevices,
   }) {
@@ -764,18 +240,11 @@ class _$RingCommandDto_PublishStealthEventImpl
   @override
   @optionalTypeArgs
   TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(RingCommandDto_PublishEvent value)? publishEvent,
-    TResult? Function(RingCommandDto_StealthPublishWelcome value)?
-        stealthPublishWelcome,
     TResult? Function(RingCommandDto_PublishStealthEvent value)?
         publishStealthEvent,
     TResult? Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult? Function(RingCommandDto_RegisterGroup value)? registerGroup,
-    TResult? Function(RingCommandDto_SendDrawbridgePairOffer value)?
-        sendDrawbridgePairOffer,
-    TResult? Function(RingCommandDto_SendDrawbridgePairJoin value)?
-        sendDrawbridgePairJoin,
     TResult? Function(RingCommandDto_PollForNewDevices value)?
         pollForNewDevices,
   }) {
@@ -785,18 +254,11 @@ class _$RingCommandDto_PublishStealthEventImpl
   @override
   @optionalTypeArgs
   TResult maybeMap<TResult extends Object?>({
-    TResult Function(RingCommandDto_PublishEvent value)? publishEvent,
-    TResult Function(RingCommandDto_StealthPublishWelcome value)?
-        stealthPublishWelcome,
     TResult Function(RingCommandDto_PublishStealthEvent value)?
         publishStealthEvent,
     TResult Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult Function(RingCommandDto_RegisterGroup value)? registerGroup,
-    TResult Function(RingCommandDto_SendDrawbridgePairOffer value)?
-        sendDrawbridgePairOffer,
-    TResult Function(RingCommandDto_SendDrawbridgePairJoin value)?
-        sendDrawbridgePairJoin,
     TResult Function(RingCommandDto_PollForNewDevices value)? pollForNewDevices,
     required TResult orElse(),
   }) {
@@ -870,17 +332,11 @@ class _$RingCommandDto_ReplenishKeyPackageImpl
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List tag, Uint8List ciphertext, bool markOwn)
-        publishEvent,
-    required TResult Function(Uint8List tag, Uint8List ciphertext)
-        stealthPublishWelcome,
     required TResult Function(Uint8List tag, Uint8List ciphertext)
         publishStealthEvent,
     required TResult Function() replenishKeyPackage,
     required TResult Function(Uint8List groupId, GroupKindDto kind)
         registerGroup,
-    required TResult Function(Uint8List token) sendDrawbridgePairOffer,
-    required TResult Function(Uint8List token) sendDrawbridgePairJoin,
     required TResult Function() pollForNewDevices,
   }) {
     return replenishKeyPackage();
@@ -889,15 +345,9 @@ class _$RingCommandDto_ReplenishKeyPackageImpl
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List tag, Uint8List ciphertext, bool markOwn)?
-        publishEvent,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)?
-        stealthPublishWelcome,
     TResult? Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult? Function()? replenishKeyPackage,
     TResult? Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
-    TResult? Function(Uint8List token)? sendDrawbridgePairOffer,
-    TResult? Function(Uint8List token)? sendDrawbridgePairJoin,
     TResult? Function()? pollForNewDevices,
   }) {
     return replenishKeyPackage?.call();
@@ -906,15 +356,9 @@ class _$RingCommandDto_ReplenishKeyPackageImpl
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List tag, Uint8List ciphertext, bool markOwn)?
-        publishEvent,
-    TResult Function(Uint8List tag, Uint8List ciphertext)?
-        stealthPublishWelcome,
     TResult Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult Function()? replenishKeyPackage,
     TResult Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
-    TResult Function(Uint8List token)? sendDrawbridgePairOffer,
-    TResult Function(Uint8List token)? sendDrawbridgePairJoin,
     TResult Function()? pollForNewDevices,
     required TResult orElse(),
   }) {
@@ -927,18 +371,11 @@ class _$RingCommandDto_ReplenishKeyPackageImpl
   @override
   @optionalTypeArgs
   TResult map<TResult extends Object?>({
-    required TResult Function(RingCommandDto_PublishEvent value) publishEvent,
-    required TResult Function(RingCommandDto_StealthPublishWelcome value)
-        stealthPublishWelcome,
     required TResult Function(RingCommandDto_PublishStealthEvent value)
         publishStealthEvent,
     required TResult Function(RingCommandDto_ReplenishKeyPackage value)
         replenishKeyPackage,
     required TResult Function(RingCommandDto_RegisterGroup value) registerGroup,
-    required TResult Function(RingCommandDto_SendDrawbridgePairOffer value)
-        sendDrawbridgePairOffer,
-    required TResult Function(RingCommandDto_SendDrawbridgePairJoin value)
-        sendDrawbridgePairJoin,
     required TResult Function(RingCommandDto_PollForNewDevices value)
         pollForNewDevices,
   }) {
@@ -948,18 +385,11 @@ class _$RingCommandDto_ReplenishKeyPackageImpl
   @override
   @optionalTypeArgs
   TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(RingCommandDto_PublishEvent value)? publishEvent,
-    TResult? Function(RingCommandDto_StealthPublishWelcome value)?
-        stealthPublishWelcome,
     TResult? Function(RingCommandDto_PublishStealthEvent value)?
         publishStealthEvent,
     TResult? Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult? Function(RingCommandDto_RegisterGroup value)? registerGroup,
-    TResult? Function(RingCommandDto_SendDrawbridgePairOffer value)?
-        sendDrawbridgePairOffer,
-    TResult? Function(RingCommandDto_SendDrawbridgePairJoin value)?
-        sendDrawbridgePairJoin,
     TResult? Function(RingCommandDto_PollForNewDevices value)?
         pollForNewDevices,
   }) {
@@ -969,18 +399,11 @@ class _$RingCommandDto_ReplenishKeyPackageImpl
   @override
   @optionalTypeArgs
   TResult maybeMap<TResult extends Object?>({
-    TResult Function(RingCommandDto_PublishEvent value)? publishEvent,
-    TResult Function(RingCommandDto_StealthPublishWelcome value)?
-        stealthPublishWelcome,
     TResult Function(RingCommandDto_PublishStealthEvent value)?
         publishStealthEvent,
     TResult Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult Function(RingCommandDto_RegisterGroup value)? registerGroup,
-    TResult Function(RingCommandDto_SendDrawbridgePairOffer value)?
-        sendDrawbridgePairOffer,
-    TResult Function(RingCommandDto_SendDrawbridgePairJoin value)?
-        sendDrawbridgePairJoin,
     TResult Function(RingCommandDto_PollForNewDevices value)? pollForNewDevices,
     required TResult orElse(),
   }) {
@@ -1081,17 +504,11 @@ class _$RingCommandDto_RegisterGroupImpl extends RingCommandDto_RegisterGroup {
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List tag, Uint8List ciphertext, bool markOwn)
-        publishEvent,
-    required TResult Function(Uint8List tag, Uint8List ciphertext)
-        stealthPublishWelcome,
     required TResult Function(Uint8List tag, Uint8List ciphertext)
         publishStealthEvent,
     required TResult Function() replenishKeyPackage,
     required TResult Function(Uint8List groupId, GroupKindDto kind)
         registerGroup,
-    required TResult Function(Uint8List token) sendDrawbridgePairOffer,
-    required TResult Function(Uint8List token) sendDrawbridgePairJoin,
     required TResult Function() pollForNewDevices,
   }) {
     return registerGroup(groupId, kind);
@@ -1100,15 +517,9 @@ class _$RingCommandDto_RegisterGroupImpl extends RingCommandDto_RegisterGroup {
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List tag, Uint8List ciphertext, bool markOwn)?
-        publishEvent,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)?
-        stealthPublishWelcome,
     TResult? Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult? Function()? replenishKeyPackage,
     TResult? Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
-    TResult? Function(Uint8List token)? sendDrawbridgePairOffer,
-    TResult? Function(Uint8List token)? sendDrawbridgePairJoin,
     TResult? Function()? pollForNewDevices,
   }) {
     return registerGroup?.call(groupId, kind);
@@ -1117,15 +528,9 @@ class _$RingCommandDto_RegisterGroupImpl extends RingCommandDto_RegisterGroup {
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List tag, Uint8List ciphertext, bool markOwn)?
-        publishEvent,
-    TResult Function(Uint8List tag, Uint8List ciphertext)?
-        stealthPublishWelcome,
     TResult Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult Function()? replenishKeyPackage,
     TResult Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
-    TResult Function(Uint8List token)? sendDrawbridgePairOffer,
-    TResult Function(Uint8List token)? sendDrawbridgePairJoin,
     TResult Function()? pollForNewDevices,
     required TResult orElse(),
   }) {
@@ -1138,18 +543,11 @@ class _$RingCommandDto_RegisterGroupImpl extends RingCommandDto_RegisterGroup {
   @override
   @optionalTypeArgs
   TResult map<TResult extends Object?>({
-    required TResult Function(RingCommandDto_PublishEvent value) publishEvent,
-    required TResult Function(RingCommandDto_StealthPublishWelcome value)
-        stealthPublishWelcome,
     required TResult Function(RingCommandDto_PublishStealthEvent value)
         publishStealthEvent,
     required TResult Function(RingCommandDto_ReplenishKeyPackage value)
         replenishKeyPackage,
     required TResult Function(RingCommandDto_RegisterGroup value) registerGroup,
-    required TResult Function(RingCommandDto_SendDrawbridgePairOffer value)
-        sendDrawbridgePairOffer,
-    required TResult Function(RingCommandDto_SendDrawbridgePairJoin value)
-        sendDrawbridgePairJoin,
     required TResult Function(RingCommandDto_PollForNewDevices value)
         pollForNewDevices,
   }) {
@@ -1159,18 +557,11 @@ class _$RingCommandDto_RegisterGroupImpl extends RingCommandDto_RegisterGroup {
   @override
   @optionalTypeArgs
   TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(RingCommandDto_PublishEvent value)? publishEvent,
-    TResult? Function(RingCommandDto_StealthPublishWelcome value)?
-        stealthPublishWelcome,
     TResult? Function(RingCommandDto_PublishStealthEvent value)?
         publishStealthEvent,
     TResult? Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult? Function(RingCommandDto_RegisterGroup value)? registerGroup,
-    TResult? Function(RingCommandDto_SendDrawbridgePairOffer value)?
-        sendDrawbridgePairOffer,
-    TResult? Function(RingCommandDto_SendDrawbridgePairJoin value)?
-        sendDrawbridgePairJoin,
     TResult? Function(RingCommandDto_PollForNewDevices value)?
         pollForNewDevices,
   }) {
@@ -1180,18 +571,11 @@ class _$RingCommandDto_RegisterGroupImpl extends RingCommandDto_RegisterGroup {
   @override
   @optionalTypeArgs
   TResult maybeMap<TResult extends Object?>({
-    TResult Function(RingCommandDto_PublishEvent value)? publishEvent,
-    TResult Function(RingCommandDto_StealthPublishWelcome value)?
-        stealthPublishWelcome,
     TResult Function(RingCommandDto_PublishStealthEvent value)?
         publishStealthEvent,
     TResult Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult Function(RingCommandDto_RegisterGroup value)? registerGroup,
-    TResult Function(RingCommandDto_SendDrawbridgePairOffer value)?
-        sendDrawbridgePairOffer,
-    TResult Function(RingCommandDto_SendDrawbridgePairJoin value)?
-        sendDrawbridgePairJoin,
     TResult Function(RingCommandDto_PollForNewDevices value)? pollForNewDevices,
     required TResult orElse(),
   }) {
@@ -1216,433 +600,6 @@ abstract class RingCommandDto_RegisterGroup extends RingCommandDto {
   @JsonKey(includeFromJson: false, includeToJson: false)
   _$$RingCommandDto_RegisterGroupImplCopyWith<
           _$RingCommandDto_RegisterGroupImpl>
-      get copyWith => throw _privateConstructorUsedError;
-}
-
-/// @nodoc
-abstract class _$$RingCommandDto_SendDrawbridgePairOfferImplCopyWith<$Res> {
-  factory _$$RingCommandDto_SendDrawbridgePairOfferImplCopyWith(
-          _$RingCommandDto_SendDrawbridgePairOfferImpl value,
-          $Res Function(_$RingCommandDto_SendDrawbridgePairOfferImpl) then) =
-      __$$RingCommandDto_SendDrawbridgePairOfferImplCopyWithImpl<$Res>;
-  @useResult
-  $Res call({Uint8List token});
-}
-
-/// @nodoc
-class __$$RingCommandDto_SendDrawbridgePairOfferImplCopyWithImpl<$Res>
-    extends _$RingCommandDtoCopyWithImpl<$Res,
-        _$RingCommandDto_SendDrawbridgePairOfferImpl>
-    implements _$$RingCommandDto_SendDrawbridgePairOfferImplCopyWith<$Res> {
-  __$$RingCommandDto_SendDrawbridgePairOfferImplCopyWithImpl(
-      _$RingCommandDto_SendDrawbridgePairOfferImpl _value,
-      $Res Function(_$RingCommandDto_SendDrawbridgePairOfferImpl) _then)
-      : super(_value, _then);
-
-  /// Create a copy of RingCommandDto
-  /// with the given fields replaced by the non-null parameter values.
-  @pragma('vm:prefer-inline')
-  @override
-  $Res call({
-    Object? token = null,
-  }) {
-    return _then(_$RingCommandDto_SendDrawbridgePairOfferImpl(
-      token: null == token
-          ? _value.token
-          : token // ignore: cast_nullable_to_non_nullable
-              as Uint8List,
-    ));
-  }
-}
-
-/// @nodoc
-
-class _$RingCommandDto_SendDrawbridgePairOfferImpl
-    extends RingCommandDto_SendDrawbridgePairOffer {
-  const _$RingCommandDto_SendDrawbridgePairOfferImpl({required this.token})
-      : super._();
-
-  @override
-  final Uint8List token;
-
-  @override
-  String toString() {
-    return 'RingCommandDto.sendDrawbridgePairOffer(token: $token)';
-  }
-
-  @override
-  bool operator ==(Object other) {
-    return identical(this, other) ||
-        (other.runtimeType == runtimeType &&
-            other is _$RingCommandDto_SendDrawbridgePairOfferImpl &&
-            const DeepCollectionEquality().equals(other.token, token));
-  }
-
-  @override
-  int get hashCode =>
-      Object.hash(runtimeType, const DeepCollectionEquality().hash(token));
-
-  /// Create a copy of RingCommandDto
-  /// with the given fields replaced by the non-null parameter values.
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  @override
-  @pragma('vm:prefer-inline')
-  _$$RingCommandDto_SendDrawbridgePairOfferImplCopyWith<
-          _$RingCommandDto_SendDrawbridgePairOfferImpl>
-      get copyWith =>
-          __$$RingCommandDto_SendDrawbridgePairOfferImplCopyWithImpl<
-              _$RingCommandDto_SendDrawbridgePairOfferImpl>(this, _$identity);
-
-  @override
-  @optionalTypeArgs
-  TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List tag, Uint8List ciphertext, bool markOwn)
-        publishEvent,
-    required TResult Function(Uint8List tag, Uint8List ciphertext)
-        stealthPublishWelcome,
-    required TResult Function(Uint8List tag, Uint8List ciphertext)
-        publishStealthEvent,
-    required TResult Function() replenishKeyPackage,
-    required TResult Function(Uint8List groupId, GroupKindDto kind)
-        registerGroup,
-    required TResult Function(Uint8List token) sendDrawbridgePairOffer,
-    required TResult Function(Uint8List token) sendDrawbridgePairJoin,
-    required TResult Function() pollForNewDevices,
-  }) {
-    return sendDrawbridgePairOffer(token);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List tag, Uint8List ciphertext, bool markOwn)?
-        publishEvent,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)?
-        stealthPublishWelcome,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
-    TResult? Function()? replenishKeyPackage,
-    TResult? Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
-    TResult? Function(Uint8List token)? sendDrawbridgePairOffer,
-    TResult? Function(Uint8List token)? sendDrawbridgePairJoin,
-    TResult? Function()? pollForNewDevices,
-  }) {
-    return sendDrawbridgePairOffer?.call(token);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List tag, Uint8List ciphertext, bool markOwn)?
-        publishEvent,
-    TResult Function(Uint8List tag, Uint8List ciphertext)?
-        stealthPublishWelcome,
-    TResult Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
-    TResult Function()? replenishKeyPackage,
-    TResult Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
-    TResult Function(Uint8List token)? sendDrawbridgePairOffer,
-    TResult Function(Uint8List token)? sendDrawbridgePairJoin,
-    TResult Function()? pollForNewDevices,
-    required TResult orElse(),
-  }) {
-    if (sendDrawbridgePairOffer != null) {
-      return sendDrawbridgePairOffer(token);
-    }
-    return orElse();
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult map<TResult extends Object?>({
-    required TResult Function(RingCommandDto_PublishEvent value) publishEvent,
-    required TResult Function(RingCommandDto_StealthPublishWelcome value)
-        stealthPublishWelcome,
-    required TResult Function(RingCommandDto_PublishStealthEvent value)
-        publishStealthEvent,
-    required TResult Function(RingCommandDto_ReplenishKeyPackage value)
-        replenishKeyPackage,
-    required TResult Function(RingCommandDto_RegisterGroup value) registerGroup,
-    required TResult Function(RingCommandDto_SendDrawbridgePairOffer value)
-        sendDrawbridgePairOffer,
-    required TResult Function(RingCommandDto_SendDrawbridgePairJoin value)
-        sendDrawbridgePairJoin,
-    required TResult Function(RingCommandDto_PollForNewDevices value)
-        pollForNewDevices,
-  }) {
-    return sendDrawbridgePairOffer(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(RingCommandDto_PublishEvent value)? publishEvent,
-    TResult? Function(RingCommandDto_StealthPublishWelcome value)?
-        stealthPublishWelcome,
-    TResult? Function(RingCommandDto_PublishStealthEvent value)?
-        publishStealthEvent,
-    TResult? Function(RingCommandDto_ReplenishKeyPackage value)?
-        replenishKeyPackage,
-    TResult? Function(RingCommandDto_RegisterGroup value)? registerGroup,
-    TResult? Function(RingCommandDto_SendDrawbridgePairOffer value)?
-        sendDrawbridgePairOffer,
-    TResult? Function(RingCommandDto_SendDrawbridgePairJoin value)?
-        sendDrawbridgePairJoin,
-    TResult? Function(RingCommandDto_PollForNewDevices value)?
-        pollForNewDevices,
-  }) {
-    return sendDrawbridgePairOffer?.call(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeMap<TResult extends Object?>({
-    TResult Function(RingCommandDto_PublishEvent value)? publishEvent,
-    TResult Function(RingCommandDto_StealthPublishWelcome value)?
-        stealthPublishWelcome,
-    TResult Function(RingCommandDto_PublishStealthEvent value)?
-        publishStealthEvent,
-    TResult Function(RingCommandDto_ReplenishKeyPackage value)?
-        replenishKeyPackage,
-    TResult Function(RingCommandDto_RegisterGroup value)? registerGroup,
-    TResult Function(RingCommandDto_SendDrawbridgePairOffer value)?
-        sendDrawbridgePairOffer,
-    TResult Function(RingCommandDto_SendDrawbridgePairJoin value)?
-        sendDrawbridgePairJoin,
-    TResult Function(RingCommandDto_PollForNewDevices value)? pollForNewDevices,
-    required TResult orElse(),
-  }) {
-    if (sendDrawbridgePairOffer != null) {
-      return sendDrawbridgePairOffer(this);
-    }
-    return orElse();
-  }
-}
-
-abstract class RingCommandDto_SendDrawbridgePairOffer extends RingCommandDto {
-  const factory RingCommandDto_SendDrawbridgePairOffer(
-          {required final Uint8List token}) =
-      _$RingCommandDto_SendDrawbridgePairOfferImpl;
-  const RingCommandDto_SendDrawbridgePairOffer._() : super._();
-
-  Uint8List get token;
-
-  /// Create a copy of RingCommandDto
-  /// with the given fields replaced by the non-null parameter values.
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  _$$RingCommandDto_SendDrawbridgePairOfferImplCopyWith<
-          _$RingCommandDto_SendDrawbridgePairOfferImpl>
-      get copyWith => throw _privateConstructorUsedError;
-}
-
-/// @nodoc
-abstract class _$$RingCommandDto_SendDrawbridgePairJoinImplCopyWith<$Res> {
-  factory _$$RingCommandDto_SendDrawbridgePairJoinImplCopyWith(
-          _$RingCommandDto_SendDrawbridgePairJoinImpl value,
-          $Res Function(_$RingCommandDto_SendDrawbridgePairJoinImpl) then) =
-      __$$RingCommandDto_SendDrawbridgePairJoinImplCopyWithImpl<$Res>;
-  @useResult
-  $Res call({Uint8List token});
-}
-
-/// @nodoc
-class __$$RingCommandDto_SendDrawbridgePairJoinImplCopyWithImpl<$Res>
-    extends _$RingCommandDtoCopyWithImpl<$Res,
-        _$RingCommandDto_SendDrawbridgePairJoinImpl>
-    implements _$$RingCommandDto_SendDrawbridgePairJoinImplCopyWith<$Res> {
-  __$$RingCommandDto_SendDrawbridgePairJoinImplCopyWithImpl(
-      _$RingCommandDto_SendDrawbridgePairJoinImpl _value,
-      $Res Function(_$RingCommandDto_SendDrawbridgePairJoinImpl) _then)
-      : super(_value, _then);
-
-  /// Create a copy of RingCommandDto
-  /// with the given fields replaced by the non-null parameter values.
-  @pragma('vm:prefer-inline')
-  @override
-  $Res call({
-    Object? token = null,
-  }) {
-    return _then(_$RingCommandDto_SendDrawbridgePairJoinImpl(
-      token: null == token
-          ? _value.token
-          : token // ignore: cast_nullable_to_non_nullable
-              as Uint8List,
-    ));
-  }
-}
-
-/// @nodoc
-
-class _$RingCommandDto_SendDrawbridgePairJoinImpl
-    extends RingCommandDto_SendDrawbridgePairJoin {
-  const _$RingCommandDto_SendDrawbridgePairJoinImpl({required this.token})
-      : super._();
-
-  @override
-  final Uint8List token;
-
-  @override
-  String toString() {
-    return 'RingCommandDto.sendDrawbridgePairJoin(token: $token)';
-  }
-
-  @override
-  bool operator ==(Object other) {
-    return identical(this, other) ||
-        (other.runtimeType == runtimeType &&
-            other is _$RingCommandDto_SendDrawbridgePairJoinImpl &&
-            const DeepCollectionEquality().equals(other.token, token));
-  }
-
-  @override
-  int get hashCode =>
-      Object.hash(runtimeType, const DeepCollectionEquality().hash(token));
-
-  /// Create a copy of RingCommandDto
-  /// with the given fields replaced by the non-null parameter values.
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  @override
-  @pragma('vm:prefer-inline')
-  _$$RingCommandDto_SendDrawbridgePairJoinImplCopyWith<
-          _$RingCommandDto_SendDrawbridgePairJoinImpl>
-      get copyWith => __$$RingCommandDto_SendDrawbridgePairJoinImplCopyWithImpl<
-          _$RingCommandDto_SendDrawbridgePairJoinImpl>(this, _$identity);
-
-  @override
-  @optionalTypeArgs
-  TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List tag, Uint8List ciphertext, bool markOwn)
-        publishEvent,
-    required TResult Function(Uint8List tag, Uint8List ciphertext)
-        stealthPublishWelcome,
-    required TResult Function(Uint8List tag, Uint8List ciphertext)
-        publishStealthEvent,
-    required TResult Function() replenishKeyPackage,
-    required TResult Function(Uint8List groupId, GroupKindDto kind)
-        registerGroup,
-    required TResult Function(Uint8List token) sendDrawbridgePairOffer,
-    required TResult Function(Uint8List token) sendDrawbridgePairJoin,
-    required TResult Function() pollForNewDevices,
-  }) {
-    return sendDrawbridgePairJoin(token);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List tag, Uint8List ciphertext, bool markOwn)?
-        publishEvent,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)?
-        stealthPublishWelcome,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
-    TResult? Function()? replenishKeyPackage,
-    TResult? Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
-    TResult? Function(Uint8List token)? sendDrawbridgePairOffer,
-    TResult? Function(Uint8List token)? sendDrawbridgePairJoin,
-    TResult? Function()? pollForNewDevices,
-  }) {
-    return sendDrawbridgePairJoin?.call(token);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List tag, Uint8List ciphertext, bool markOwn)?
-        publishEvent,
-    TResult Function(Uint8List tag, Uint8List ciphertext)?
-        stealthPublishWelcome,
-    TResult Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
-    TResult Function()? replenishKeyPackage,
-    TResult Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
-    TResult Function(Uint8List token)? sendDrawbridgePairOffer,
-    TResult Function(Uint8List token)? sendDrawbridgePairJoin,
-    TResult Function()? pollForNewDevices,
-    required TResult orElse(),
-  }) {
-    if (sendDrawbridgePairJoin != null) {
-      return sendDrawbridgePairJoin(token);
-    }
-    return orElse();
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult map<TResult extends Object?>({
-    required TResult Function(RingCommandDto_PublishEvent value) publishEvent,
-    required TResult Function(RingCommandDto_StealthPublishWelcome value)
-        stealthPublishWelcome,
-    required TResult Function(RingCommandDto_PublishStealthEvent value)
-        publishStealthEvent,
-    required TResult Function(RingCommandDto_ReplenishKeyPackage value)
-        replenishKeyPackage,
-    required TResult Function(RingCommandDto_RegisterGroup value) registerGroup,
-    required TResult Function(RingCommandDto_SendDrawbridgePairOffer value)
-        sendDrawbridgePairOffer,
-    required TResult Function(RingCommandDto_SendDrawbridgePairJoin value)
-        sendDrawbridgePairJoin,
-    required TResult Function(RingCommandDto_PollForNewDevices value)
-        pollForNewDevices,
-  }) {
-    return sendDrawbridgePairJoin(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(RingCommandDto_PublishEvent value)? publishEvent,
-    TResult? Function(RingCommandDto_StealthPublishWelcome value)?
-        stealthPublishWelcome,
-    TResult? Function(RingCommandDto_PublishStealthEvent value)?
-        publishStealthEvent,
-    TResult? Function(RingCommandDto_ReplenishKeyPackage value)?
-        replenishKeyPackage,
-    TResult? Function(RingCommandDto_RegisterGroup value)? registerGroup,
-    TResult? Function(RingCommandDto_SendDrawbridgePairOffer value)?
-        sendDrawbridgePairOffer,
-    TResult? Function(RingCommandDto_SendDrawbridgePairJoin value)?
-        sendDrawbridgePairJoin,
-    TResult? Function(RingCommandDto_PollForNewDevices value)?
-        pollForNewDevices,
-  }) {
-    return sendDrawbridgePairJoin?.call(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeMap<TResult extends Object?>({
-    TResult Function(RingCommandDto_PublishEvent value)? publishEvent,
-    TResult Function(RingCommandDto_StealthPublishWelcome value)?
-        stealthPublishWelcome,
-    TResult Function(RingCommandDto_PublishStealthEvent value)?
-        publishStealthEvent,
-    TResult Function(RingCommandDto_ReplenishKeyPackage value)?
-        replenishKeyPackage,
-    TResult Function(RingCommandDto_RegisterGroup value)? registerGroup,
-    TResult Function(RingCommandDto_SendDrawbridgePairOffer value)?
-        sendDrawbridgePairOffer,
-    TResult Function(RingCommandDto_SendDrawbridgePairJoin value)?
-        sendDrawbridgePairJoin,
-    TResult Function(RingCommandDto_PollForNewDevices value)? pollForNewDevices,
-    required TResult orElse(),
-  }) {
-    if (sendDrawbridgePairJoin != null) {
-      return sendDrawbridgePairJoin(this);
-    }
-    return orElse();
-  }
-}
-
-abstract class RingCommandDto_SendDrawbridgePairJoin extends RingCommandDto {
-  const factory RingCommandDto_SendDrawbridgePairJoin(
-          {required final Uint8List token}) =
-      _$RingCommandDto_SendDrawbridgePairJoinImpl;
-  const RingCommandDto_SendDrawbridgePairJoin._() : super._();
-
-  Uint8List get token;
-
-  /// Create a copy of RingCommandDto
-  /// with the given fields replaced by the non-null parameter values.
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  _$$RingCommandDto_SendDrawbridgePairJoinImplCopyWith<
-          _$RingCommandDto_SendDrawbridgePairJoinImpl>
       get copyWith => throw _privateConstructorUsedError;
 }
 
@@ -1692,17 +649,11 @@ class _$RingCommandDto_PollForNewDevicesImpl
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List tag, Uint8List ciphertext, bool markOwn)
-        publishEvent,
-    required TResult Function(Uint8List tag, Uint8List ciphertext)
-        stealthPublishWelcome,
     required TResult Function(Uint8List tag, Uint8List ciphertext)
         publishStealthEvent,
     required TResult Function() replenishKeyPackage,
     required TResult Function(Uint8List groupId, GroupKindDto kind)
         registerGroup,
-    required TResult Function(Uint8List token) sendDrawbridgePairOffer,
-    required TResult Function(Uint8List token) sendDrawbridgePairJoin,
     required TResult Function() pollForNewDevices,
   }) {
     return pollForNewDevices();
@@ -1711,15 +662,9 @@ class _$RingCommandDto_PollForNewDevicesImpl
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List tag, Uint8List ciphertext, bool markOwn)?
-        publishEvent,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)?
-        stealthPublishWelcome,
     TResult? Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult? Function()? replenishKeyPackage,
     TResult? Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
-    TResult? Function(Uint8List token)? sendDrawbridgePairOffer,
-    TResult? Function(Uint8List token)? sendDrawbridgePairJoin,
     TResult? Function()? pollForNewDevices,
   }) {
     return pollForNewDevices?.call();
@@ -1728,15 +673,9 @@ class _$RingCommandDto_PollForNewDevicesImpl
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List tag, Uint8List ciphertext, bool markOwn)?
-        publishEvent,
-    TResult Function(Uint8List tag, Uint8List ciphertext)?
-        stealthPublishWelcome,
     TResult Function(Uint8List tag, Uint8List ciphertext)? publishStealthEvent,
     TResult Function()? replenishKeyPackage,
     TResult Function(Uint8List groupId, GroupKindDto kind)? registerGroup,
-    TResult Function(Uint8List token)? sendDrawbridgePairOffer,
-    TResult Function(Uint8List token)? sendDrawbridgePairJoin,
     TResult Function()? pollForNewDevices,
     required TResult orElse(),
   }) {
@@ -1749,18 +688,11 @@ class _$RingCommandDto_PollForNewDevicesImpl
   @override
   @optionalTypeArgs
   TResult map<TResult extends Object?>({
-    required TResult Function(RingCommandDto_PublishEvent value) publishEvent,
-    required TResult Function(RingCommandDto_StealthPublishWelcome value)
-        stealthPublishWelcome,
     required TResult Function(RingCommandDto_PublishStealthEvent value)
         publishStealthEvent,
     required TResult Function(RingCommandDto_ReplenishKeyPackage value)
         replenishKeyPackage,
     required TResult Function(RingCommandDto_RegisterGroup value) registerGroup,
-    required TResult Function(RingCommandDto_SendDrawbridgePairOffer value)
-        sendDrawbridgePairOffer,
-    required TResult Function(RingCommandDto_SendDrawbridgePairJoin value)
-        sendDrawbridgePairJoin,
     required TResult Function(RingCommandDto_PollForNewDevices value)
         pollForNewDevices,
   }) {
@@ -1770,18 +702,11 @@ class _$RingCommandDto_PollForNewDevicesImpl
   @override
   @optionalTypeArgs
   TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(RingCommandDto_PublishEvent value)? publishEvent,
-    TResult? Function(RingCommandDto_StealthPublishWelcome value)?
-        stealthPublishWelcome,
     TResult? Function(RingCommandDto_PublishStealthEvent value)?
         publishStealthEvent,
     TResult? Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult? Function(RingCommandDto_RegisterGroup value)? registerGroup,
-    TResult? Function(RingCommandDto_SendDrawbridgePairOffer value)?
-        sendDrawbridgePairOffer,
-    TResult? Function(RingCommandDto_SendDrawbridgePairJoin value)?
-        sendDrawbridgePairJoin,
     TResult? Function(RingCommandDto_PollForNewDevices value)?
         pollForNewDevices,
   }) {
@@ -1791,18 +716,11 @@ class _$RingCommandDto_PollForNewDevicesImpl
   @override
   @optionalTypeArgs
   TResult maybeMap<TResult extends Object?>({
-    TResult Function(RingCommandDto_PublishEvent value)? publishEvent,
-    TResult Function(RingCommandDto_StealthPublishWelcome value)?
-        stealthPublishWelcome,
     TResult Function(RingCommandDto_PublishStealthEvent value)?
         publishStealthEvent,
     TResult Function(RingCommandDto_ReplenishKeyPackage value)?
         replenishKeyPackage,
     TResult Function(RingCommandDto_RegisterGroup value)? registerGroup,
-    TResult Function(RingCommandDto_SendDrawbridgePairOffer value)?
-        sendDrawbridgePairOffer,
-    TResult Function(RingCommandDto_SendDrawbridgePairJoin value)?
-        sendDrawbridgePairJoin,
     TResult Function(RingCommandDto_PollForNewDevices value)? pollForNewDevices,
     required TResult orElse(),
   }) {

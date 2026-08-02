@@ -52,11 +52,9 @@ use std::sync::RwLock;
 pub use crate::credential::MoatCredential;
 pub use crate::error::{Error, ErrorCode, Result};
 pub use crate::device_ring::{
-    classify_group_kind, decode_coord_msg, decode_welcome_envelope, encode_coord_msg,
-    encode_welcome_envelope, reconcile_rings, AddedBy, CoordGroupResult, CoordMsg, DeviceId,
-    DeviceRingState, GroupKind, InvariantViolation, KeyPackageInput, OfferedKp, OwnEventInput,
-    summarize_ring_commands, PeerState, ReconcileDecision, RingCommand, RingEvent, RingLink,
-    RingMembership, SiblingStealth, StepEnv, SyncStatus, TickInputs,
+    decode_coord_msg, encode_coord_msg, summarize_ring_commands, CoordMsg, DeviceId,
+    DeviceRingState, GroupKind, KeyPackageInput, OfferedKp, OwnEventInput, RingCommand, RingEvent,
+    RingMembership, SiblingStealth, StepEnv, TickInputs,
 };
 pub use crate::event::{
     ControlKind, DecryptOutcome, Event, EventKind, MessageKind, ModifierKind, ReactionPayload,
@@ -517,25 +515,6 @@ impl MoatSession {
         key_bundle: &[u8],
     ) -> Result<Vec<u8>> {
         self.create_group(credential, key_bundle)
-    }
-
-    /// Create a pairwise device coordination group between this device and a sibling.
-    ///
-    /// Creates an MLS group, immediately adds the sibling via their key package,
-    /// and returns the group ID, commit, and welcome for the sibling.
-    pub fn create_device_coord_group(
-        &self,
-        credential: &MoatCredential,
-        key_bundle: &[u8],
-        sibling_key_package: &[u8],
-    ) -> Result<crate::device_ring::CoordGroupResult> {
-        let group_id = self.create_group(credential, key_bundle)?;
-        let welcome_result = self.add_member(&group_id, key_bundle, sibling_key_package)?;
-        Ok(crate::device_ring::CoordGroupResult {
-            group_id,
-            commit: welcome_result.commit,
-            welcome: welcome_result.welcome,
-        })
     }
 
     /// Check if there are unsaved changes.
