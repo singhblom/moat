@@ -1,7 +1,4 @@
 //! Unit tests for the pairing channel crypto.
-//!
-//! Currently red: the functions under test in `moat_core::pairing` are
-//! unimplemented (`todo!()`) — see `crates/moat-core/src/pairing.rs`.
 
 use moat_core::{derive_pairing_keys, open_frame, seal_frame, PairingChannelKeys};
 

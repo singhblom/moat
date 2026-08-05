@@ -13,10 +13,11 @@
 //!    happen *inside* the driver (it takes `&MoatSession`), and the emitted
 //!    [`PairingCommand`]s cover host IO only (send frame, seed the KP pool,
 //!    surface the approval prompt, start sync).
-//!
-//! The wire types and signatures below are settled; most function bodies
-//! are still `todo!()` pending implementation.
 
+use aes_gcm::{
+    aead::{Aead, KeyInit},
+    Aes128Gcm, Key, Nonce,
+};
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use serde_with::{base64::Base64, serde_as};
@@ -65,57 +66,125 @@ pub struct PairingPayload {
 impl PairingPayload {
     /// Encode to the raw 49-byte wire form: `[version][token][secret]`.
     pub fn encode(&self) -> Vec<u8> {
-        let _ = (&self.token, &self.secret);
-        todo!("moat-core pairing.rs: PairingPayload::encode")
+        let mut out = Vec::with_capacity(PAIRING_PAYLOAD_LEN);
+        out.push(PAIRING_PAYLOAD_VERSION);
+        out.extend_from_slice(&self.token);
+        out.extend_from_slice(&self.secret);
+        out
     }
 
     /// Decode from the raw wire form. Rejects a bad version byte or a
     /// length other than [`PAIRING_PAYLOAD_LEN`].
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        let _ = bytes;
-        todo!("moat-core pairing.rs: PairingPayload::decode")
+        if bytes.len() != PAIRING_PAYLOAD_LEN {
+            return Err(Error::PairingProtocol(format!(
+                "pairing payload must be {PAIRING_PAYLOAD_LEN} bytes, got {}",
+                bytes.len()
+            )));
+        }
+        if bytes[0] != PAIRING_PAYLOAD_VERSION {
+            return Err(Error::PairingProtocol(format!(
+                "unsupported pairing payload version {:#04x}, expected {:#04x}",
+                bytes[0], PAIRING_PAYLOAD_VERSION
+            )));
+        }
+
+        let mut token = [0u8; PAIRING_TOKEN_LEN];
+        token.copy_from_slice(&bytes[1..1 + PAIRING_TOKEN_LEN]);
+        let mut secret = [0u8; PAIRING_SECRET_LEN];
+        secret.copy_from_slice(&bytes[1 + PAIRING_TOKEN_LEN..]);
+
+        Ok(Self { token, secret })
     }
 
     /// Encode to the hyphen-grouped Crockford base32 text form
     /// (`MZXW6-YTBOI-…`), for manual entry / display beneath a QR code.
     pub fn to_text(&self) -> String {
-        todo!("moat-core pairing.rs: PairingPayload::to_text")
+        crockford_encode(&self.encode())
+            .as_bytes()
+            .chunks(5)
+            .map(|group| std::str::from_utf8(group).expect("crockford output is ASCII"))
+            .collect::<Vec<_>>()
+            .join("-")
     }
 
     /// Decode from the text form. Hyphens and whitespace are ignored;
     /// letters are case-insensitive. Rejects characters outside the
     /// Crockford alphabet and malformed lengths.
     pub fn from_text(s: &str) -> Result<Self> {
-        let _ = s;
-        todo!("moat-core pairing.rs: PairingPayload::from_text")
+        Self::decode(&crockford_decode(s)?)
     }
 
     /// Encode to the `moat-pair:<text-form>` URI used for the QR payload, so
     /// the app can register a URI handler and reject foreign QRs cheaply.
     pub fn to_uri(&self) -> String {
-        todo!("moat-core pairing.rs: PairingPayload::to_uri")
+        format!("{PAIRING_URI_SCHEME}{}", self.to_text())
     }
 
     /// Decode from the `moat-pair:` URI form. Rejects a missing/foreign
     /// scheme.
     pub fn from_uri(s: &str) -> Result<Self> {
-        let _ = s;
-        todo!("moat-core pairing.rs: PairingPayload::from_uri")
+        let rest = s.strip_prefix(PAIRING_URI_SCHEME).ok_or_else(|| {
+            Error::PairingProtocol(format!(
+                "pairing uri must start with {PAIRING_URI_SCHEME}, got: {s}"
+            ))
+        })?;
+        Self::from_text(rest)
     }
 }
 
 /// Crockford base32 encode of arbitrary bytes (no hyphen grouping, no
 /// padding characters). [`PairingPayload::to_text`] groups the result.
 pub fn crockford_encode(data: &[u8]) -> String {
-    let _ = data;
-    todo!("moat-core pairing.rs: crockford_encode")
+    let mut out = String::with_capacity(data.len().div_ceil(5) * 8);
+    let mut buffer: u32 = 0;
+    let mut bits_in_buffer: u32 = 0;
+
+    for &byte in data {
+        buffer = (buffer << 8) | byte as u32;
+        bits_in_buffer += 8;
+        while bits_in_buffer >= 5 {
+            bits_in_buffer -= 5;
+            let idx = (buffer >> bits_in_buffer) & 0x1F;
+            out.push(CROCKFORD_ALPHABET[idx as usize] as char);
+        }
+    }
+    if bits_in_buffer > 0 {
+        let idx = (buffer << (5 - bits_in_buffer)) & 0x1F;
+        out.push(CROCKFORD_ALPHABET[idx as usize] as char);
+    }
+    out
 }
 
 /// Crockford base32 decode. Case-insensitive; ignores `-` and whitespace.
 /// Rejects any character outside [`CROCKFORD_ALPHABET`].
 pub fn crockford_decode(s: &str) -> Result<Vec<u8>> {
-    let _ = s;
-    todo!("moat-core pairing.rs: crockford_decode")
+    fn value(c: char) -> Option<u8> {
+        let upper = c.to_ascii_uppercase();
+        CROCKFORD_ALPHABET
+            .iter()
+            .position(|&b| b as char == upper)
+            .map(|i| i as u8)
+    }
+
+    let mut out = Vec::new();
+    let mut buffer: u32 = 0;
+    let mut bits_in_buffer: u32 = 0;
+
+    for c in s.chars() {
+        if c == '-' || c.is_whitespace() {
+            continue;
+        }
+        let v = value(c)
+            .ok_or_else(|| Error::PairingProtocol(format!("invalid pairing code character: {c}")))?;
+        buffer = ((buffer << 5) | v as u32) & 0xFFFF;
+        bits_in_buffer += 5;
+        if bits_in_buffer >= 8 {
+            bits_in_buffer -= 8;
+            out.push(((buffer >> bits_in_buffer) & 0xFF) as u8);
+        }
+    }
+    Ok(out)
 }
 
 // ─── Channel crypto ──────────────────────────────────────────────────────────
@@ -169,12 +238,25 @@ pub fn derive_pairing_keys(
     }
 }
 
+/// Build the 12-byte AES-GCM nonce for a frame: 4 zero bytes followed by the
+/// 64-bit counter, big-endian. Deterministic in the counter alone (no random
+/// component) — reuse across a nonce space is prevented entirely by callers
+/// never reusing a counter value under the same key (see [`PairingSession`]).
+fn frame_nonce(counter: u64) -> [u8; PAIRING_FRAME_NONCE_LEN] {
+    let mut nonce = [0u8; PAIRING_FRAME_NONCE_LEN];
+    nonce[4..].copy_from_slice(&counter.to_be_bytes());
+    nonce
+}
+
 /// Seal a frame with AES-128-GCM under `key`, using `counter` as a monotonic
 /// nonce source. Callers must never reuse a counter value under the same key
 /// — see [`PairingSession`] for the per-direction counter it maintains.
 pub fn seal_frame(key: &[u8; PAIRING_FRAME_KEY_LEN], counter: u64, plaintext: &[u8]) -> Vec<u8> {
-    let _ = (key, counter, plaintext);
-    todo!("moat-core pairing.rs: seal_frame")
+    let cipher = Aes128Gcm::new(Key::<Aes128Gcm>::from_slice(key));
+    let nonce = frame_nonce(counter);
+    cipher
+        .encrypt(Nonce::from_slice(&nonce), plaintext)
+        .expect("AES-128-GCM encryption over a valid key/nonce cannot fail")
 }
 
 /// Open a frame sealed by [`seal_frame`]. Returns
@@ -187,8 +269,11 @@ pub fn open_frame(
     counter: u64,
     ciphertext: &[u8],
 ) -> Result<Vec<u8>> {
-    let _ = (key, counter, ciphertext);
-    todo!("moat-core pairing.rs: open_frame")
+    let cipher = Aes128Gcm::new(Key::<Aes128Gcm>::from_slice(key));
+    let nonce = frame_nonce(counter);
+    cipher
+        .decrypt(Nonce::from_slice(&nonce), ciphertext)
+        .map_err(|_| Error::PairingCrypto("failed to open pairing frame".to_string()))
 }
 
 // ─── Session messages ────────────────────────────────────────────────────────
@@ -225,7 +310,7 @@ pub struct Enroll {
 /// redundant, unauthenticated `did` field here would just be a second,
 /// weaker copy of that same fact.
 #[serde_as]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SiblingInfo {
     #[serde_as(as = "Base64")]
     pub device_id: DeviceId,
@@ -300,6 +385,11 @@ pub enum PairingCommand {
     /// New device, on receiving `Admit`: the ring has been joined and
     /// should be persisted by the host under the given id.
     PersistRing { ring_id: Vec<u8> },
+    /// New device, on receiving `Admit`: the roster of already-established
+    /// siblings, so the host can seed its `sibling_stealth` table and start
+    /// addressing `SiblingMsg` traffic to every sibling from its first
+    /// tick, without waiting on `stealthAddress`-record discovery.
+    RosterReceived { roster: Vec<SiblingInfo> },
     /// Both sides, once Enroll/Admit has completed: hand the open channel
     /// to `SyncSession` for history sync. The pairing AEAD keeps running
     /// underneath for the whole session rather than re-keying to ring MLS.
@@ -319,6 +409,7 @@ impl PairingCommand {
             PairingCommand::SeedKpPool { .. } => "seed_kp_pool",
             PairingCommand::SurfaceApprovalPrompt { .. } => "surface_approval_prompt",
             PairingCommand::PersistRing { .. } => "persist_ring",
+            PairingCommand::RosterReceived { .. } => "roster_received",
             PairingCommand::StartSync => "start_sync",
             PairingCommand::Abort { .. } => "abort",
         }
@@ -355,15 +446,9 @@ enum NewDevicePhase {
     /// we could be replying to — and `on_frame_received` must reject it
     /// rather than treat it as an Admit.
     Idle,
-    /// Enroll sent; waiting for Admit. Not yet constructed: `start_enroll`'s
-    /// body is still `todo!()`, so nothing drives the transition out of
-    /// `Idle` yet.
-    #[allow(dead_code)]
+    /// Enroll sent; waiting for Admit.
     AwaitingAdmit,
-    /// Reached once Admit has been processed. Not yet constructed: none of
-    /// `PairingSession::on_frame_received`'s Admit arm has a real body yet,
-    /// so nothing drives the transition into it.
-    #[allow(dead_code)]
+    /// Reached once Admit has been processed.
     Done,
 }
 
@@ -374,11 +459,8 @@ enum ExistingDevicePhase {
     AwaitingEnroll,
     /// Enroll received and parsed; waiting for the user to tap Approve
     /// (see [`PairingSession::pending_enroll`] / [`PairingSession::approve`]).
-    /// Not yet constructed — see the note on `NewDevicePhase::Done`.
-    #[allow(dead_code)]
     AwaitingApproval,
-    /// Not yet constructed — see the note on `NewDevicePhase::Done`.
-    #[allow(dead_code)]
+    /// Admit sent.
     Done,
 }
 
@@ -399,18 +481,13 @@ enum Phase {
 #[derive(Debug)]
 pub struct PairingSession {
     phase: Phase,
-    /// Not yet read: only `derive_pairing_keys` constructs a value for this,
-    /// and it's unimplemented — nothing calls `seal_frame`/`open_frame` yet.
-    #[allow(dead_code)]
+    /// The two directional channel keys derived at construction.
     keys: PairingChannelKeys,
     /// Monotonic counter for frames *we* send. Never reused — see
-    /// [`seal_frame`]. Not yet read — see the note on `keys`.
-    #[allow(dead_code)]
+    /// [`seal_frame`].
     send_counter: u64,
     /// Highest counter successfully opened from the peer. Used to detect
     /// replay/reflection: an incoming frame must strictly increase this.
-    /// Not yet read — see the note on `keys`.
-    #[allow(dead_code)]
     recv_counter: u64,
     /// Existing-device only: the parsed `Enroll`, once received, held until
     /// the host calls [`PairingSession::approve`].
@@ -457,6 +534,33 @@ impl PairingSession {
         }
     }
 
+    /// Seal `plaintext` under this session's own send-direction key at the
+    /// next unused counter, advancing `send_counter`. New device sends
+    /// under `k_new_to_old`; existing device sends under `k_old_to_new`.
+    fn seal_and_advance(&mut self, plaintext: &[u8]) -> Vec<u8> {
+        let key = match self.phase {
+            Phase::NewDevice(_) => &self.keys.k_new_to_old,
+            Phase::ExistingDevice(_) => &self.keys.k_old_to_new,
+        };
+        let ciphertext = seal_frame(key, self.send_counter, plaintext);
+        self.send_counter += 1;
+        ciphertext
+    }
+
+    /// Open `ciphertext` under the peer's send-direction key at the next
+    /// expected counter, advancing `recv_counter` only on success — a
+    /// failed open (wrong key, replay, tamper) must not desynchronize the
+    /// counter from what a legitimate retried frame would need.
+    fn open_and_advance(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>> {
+        let key = match self.phase {
+            Phase::NewDevice(_) => &self.keys.k_old_to_new,
+            Phase::ExistingDevice(_) => &self.keys.k_new_to_old,
+        };
+        let plaintext = open_frame(key, self.recv_counter, ciphertext)?;
+        self.recv_counter += 1;
+        Ok(plaintext)
+    }
+
     /// New device: build and seal the `Enroll` frame once the pair channel
     /// reaches `paired`. `mls` mints the fresh ring KeyPackage (via
     /// `replenish_key_package`-style key reuse — see the signing-key
@@ -472,8 +576,24 @@ impl PairingSession {
         stealth_scan_pubkey: [u8; 32],
         conv_kps: Vec<OfferedKp>,
     ) -> Vec<PairingCommand> {
-        let _ = (mls, credential, key_bundle, stealth_scan_pubkey, conv_kps);
-        todo!("moat-core pairing.rs: PairingSession::start_enroll")
+        // Reuses the identity signing key, not a throwaway one — see the
+        // "Signing-key identity" note at the top of `device_ring.rs`, which
+        // this KP is subject to just like the steady-state KP-lane ones.
+        let ring_kp = mls
+            .replenish_key_package(credential, key_bundle)
+            .expect("minting the ring KeyPackage from the device's own identity key bundle should not fail");
+
+        let enroll = PairingMsg::Enroll(Enroll {
+            credential: credential.clone(),
+            stealth_scan_pubkey,
+            ring_kp,
+            conv_kps,
+        });
+        let ciphertext = self.seal_and_advance(&encode_pairing_msg(&enroll));
+
+        self.phase = Phase::NewDevice(NewDevicePhase::AwaitingAdmit);
+
+        vec![PairingCommand::SendFrame { ciphertext }]
     }
 
     /// Feed a sealed frame received over the pair channel. Opens it under
@@ -505,8 +625,65 @@ impl PairingSession {
         own_credential: &MoatCredential,
         ciphertext: &[u8],
     ) -> Result<Vec<PairingCommand>> {
-        let _ = (mls, own_credential, ciphertext);
-        todo!("moat-core pairing.rs: PairingSession::on_frame_received")
+        let plaintext = self.open_and_advance(ciphertext)?;
+        let msg = decode_pairing_msg(&plaintext)?;
+        let phase = self.phase.clone();
+
+        match (phase, msg) {
+            (
+                Phase::ExistingDevice(ExistingDevicePhase::AwaitingEnroll),
+                PairingMsg::Enroll(enroll),
+            ) => {
+                if enroll.credential.did() != own_credential.did() {
+                    return Err(Error::PairingProtocol(format!(
+                        "Enroll DID {} does not match this device's own DID {}",
+                        enroll.credential.did(),
+                        own_credential.did()
+                    )));
+                }
+                let device_name = enroll.credential.device_name().to_string();
+                let did = enroll.credential.did().to_string();
+                self.pending_enroll = Some(enroll);
+                self.phase = Phase::ExistingDevice(ExistingDevicePhase::AwaitingApproval);
+                Ok(vec![PairingCommand::SurfaceApprovalPrompt { device_name, did }])
+            }
+            (Phase::ExistingDevice(ExistingDevicePhase::AwaitingApproval), PairingMsg::Enroll(_)) => {
+                Err(Error::PairingProtocol(
+                    "a second Enroll arrived while one is already pending approval".to_string(),
+                ))
+            }
+            (Phase::NewDevice(NewDevicePhase::AwaitingAdmit), PairingMsg::Admit(admit)) => {
+                let group_id = mls.process_welcome(&admit.welcome)?;
+
+                // No `did` field on `Admit`/`SiblingInfo` to check up front
+                // (see `SiblingInfo`'s docs) — the ring's own MLS member
+                // credentials, available only now, are the only anchor.
+                let dids = mls.get_group_dids(&group_id)?;
+                if dids.is_empty() || !dids.iter().all(|d| d == own_credential.did()) {
+                    return Err(Error::PairingProtocol(
+                        "Admit's Welcome landed this device in a ring under a foreign DID"
+                            .to_string(),
+                    ));
+                }
+
+                self.ring_id = Some(group_id.clone());
+                self.phase = Phase::NewDevice(NewDevicePhase::Done);
+                let done = self.seal_and_advance(&encode_pairing_msg(&PairingMsg::Done));
+
+                Ok(vec![
+                    PairingCommand::PersistRing { ring_id: group_id },
+                    PairingCommand::RosterReceived { roster: admit.roster },
+                    PairingCommand::StartSync,
+                    PairingCommand::SendFrame { ciphertext: done },
+                ])
+            }
+            // Teardown courtesy only — `is_done()` never waits on this, and
+            // it carries no state of its own to apply.
+            (_, PairingMsg::Done) => Ok(vec![]),
+            (phase, msg) => Err(Error::PairingProtocol(format!(
+                "unexpected {msg:?} received in phase {phase:?}"
+            ))),
+        }
     }
 
     /// Existing device only: the peer's `Enroll`, once received, pending
@@ -535,15 +712,68 @@ impl PairingSession {
     /// `existing_ring_id` is `None` for a first pairing (no ring exists
     /// yet) and `Some(ring_id)` when adding a joiner to an already-existing
     /// ring.
+    ///
+    /// `own_stealth_pubkey` and `known_siblings` supply what [`Admit::roster`]
+    /// needs but `PairingSession` cannot derive on its own: stealth scan
+    /// keys live host-side (fed into `DeviceRingState::tick` from
+    /// `social.moat.stealthAddress` PDS records — see that module's
+    /// `SiblingStealth` doc), never in MLS group state. `known_siblings` is
+    /// the host's already-known roster of other ring members (empty for a
+    /// first pairing); the emitted `Admit.roster` is `[own SiblingInfo] ++
+    /// known_siblings`.
     pub fn approve(
         &mut self,
         mls: &MoatSession,
         credential: &MoatCredential,
         key_bundle: &[u8],
+        own_stealth_pubkey: [u8; 32],
+        known_siblings: &[SiblingInfo],
         existing_ring_id: Option<&[u8]>,
     ) -> Result<Vec<PairingCommand>> {
-        let _ = (mls, credential, key_bundle, existing_ring_id);
-        todo!("moat-core pairing.rs: PairingSession::approve")
+        if !matches!(
+            self.phase,
+            Phase::ExistingDevice(ExistingDevicePhase::AwaitingApproval)
+        ) {
+            return Err(Error::PairingProtocol(
+                "approve() called with no pending Enroll to approve".to_string(),
+            ));
+        }
+        let enroll = self
+            .pending_enroll
+            .take()
+            .expect("AwaitingApproval implies a pending Enroll");
+
+        let ring_id: Vec<u8> = match existing_ring_id {
+            None => mls.create_device_ring(credential, key_bundle)?,
+            Some(ring_id) => ring_id.to_vec(),
+        };
+        let welcome_result = mls.add_member(&ring_id, key_bundle, &enroll.ring_kp)?;
+
+        let mut roster = vec![SiblingInfo {
+            device_id: *mls.device_id(),
+            device_name: credential.device_name().to_string(),
+            stealth_pubkey: own_stealth_pubkey,
+        }];
+        roster.extend_from_slice(known_siblings);
+
+        let admit = PairingMsg::Admit(Admit {
+            ring_id: ring_id.clone(),
+            welcome: welcome_result.welcome,
+            roster,
+        });
+        let ciphertext = self.seal_and_advance(&encode_pairing_msg(&admit));
+
+        self.ring_id = Some(ring_id);
+        self.phase = Phase::ExistingDevice(ExistingDevicePhase::Done);
+
+        Ok(vec![
+            PairingCommand::SeedKpPool {
+                device_id: *enroll.credential.device_id(),
+                kps: enroll.conv_kps,
+            },
+            PairingCommand::SendFrame { ciphertext },
+            PairingCommand::StartSync,
+        ])
     }
 
     /// `true` once this session has reached its terminal `Done` phase: the

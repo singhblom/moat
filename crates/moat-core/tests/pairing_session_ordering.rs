@@ -2,8 +2,7 @@
 //!
 //! These describe protocol-level misuse that the driver must reject with a
 //! structured error rather than panic, hang, or silently do the wrong
-//! thing. Currently red: `PairingSession`'s methods are unimplemented
-//! (`todo!()`) — see `crates/moat-core/src/pairing.rs`.
+//! thing.
 
 use moat_core::{
     encode_pairing_msg, seal_frame, Admit, MoatCredential, MoatSession, PairingCommand,
@@ -43,7 +42,7 @@ fn existing_device_approve_without_enroll_is_rejected() {
     let (mls, credential, key_bundle) = new_device();
     let mut session = PairingSession::existing_device(&SECRET, &TOKEN);
 
-    let result = session.approve(&mls, &credential, &key_bundle, None);
+    let result = session.approve(&mls, &credential, &key_bundle, [0u8; 32], &[], None);
 
     assert!(
         result.is_err(),

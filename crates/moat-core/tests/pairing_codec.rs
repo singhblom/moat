@@ -1,7 +1,4 @@
 //! Unit tests for the pairing code codec.
-//!
-//! Currently red: the functions under test in `moat_core::pairing` are
-//! unimplemented (`todo!()`) — see `crates/moat-core/src/pairing.rs`.
 
 use moat_core::{crockford_decode, crockford_encode, PairingPayload, CROCKFORD_ALPHABET};
 
