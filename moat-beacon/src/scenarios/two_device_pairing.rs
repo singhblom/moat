@@ -43,8 +43,14 @@ pub async fn run(verbose: bool) {
     vlog!("=== Scenario: two-device-pairing ===");
 
     // ── Prologue ──────────────────────────────────────────────────────────────
-    vlog!("[setup] starting TestWorld with one account (alice)...");
-    let mut world = TestWorld::new(&["alice"], ".postern.test")
+    //
+    // Live pairing rendezvous (`pair_offer`/`pair_join`) needs a real
+    // Drawbridge relay — without a label here, `TestWorld` doesn't spawn
+    // one and moat-cli falls back to the hardcoded default relay
+    // (`DEFAULT_DRAWBRIDGE_URL`), which is a real deployed instance, not a
+    // test double.
+    vlog!("[setup] starting TestWorld with one account (alice) + drawbridge...");
+    let mut world = TestWorld::new_with_drawbridge(&[("alice", "alice")], ".postern.test")
         .await
         .expect("world setup");
 
@@ -67,6 +73,13 @@ pub async fn run(verbose: bool) {
         .await
         .expect("new device login");
     vlog!("[setup] new device logged in");
+
+    // Login triggers the main-WS Drawbridge connect in the background; wait
+    // for both devices to actually be attached before racing pair_offer /
+    // pair_join against it.
+    world
+        .wait_for_drawbridge_connections(2, Duration::from_secs(5))
+        .await;
 
     // ── Pairing ───────────────────────────────────────────────────────────────
     //

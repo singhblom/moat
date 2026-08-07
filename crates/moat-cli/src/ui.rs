@@ -56,6 +56,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             "Enter handle to watch:",
             &app.watch_handle_input,
         );
+    } else if app.focus == Focus::PairEnterCode {
+        draw_handle_input_popup(
+            frame,
+            "Link a Device",
+            "Enter pairing code:",
+            &app.pair_enter_code_input,
+        );
+    } else if app.focus == Focus::PairShowCode {
+        draw_pair_show_code_popup(frame, app);
+    } else if app.focus == Focus::PairApprove {
+        draw_pair_approve_popup(frame, app);
     }
 
     // Draw message info popup if toggled
@@ -672,6 +683,85 @@ fn draw_handle_input_popup(frame: &mut Frame, title: &str, label: &str, input: &
 
     // Cursor
     frame.set_cursor_position((chunks[1].x + 1 + input.len() as u16, chunks[1].y + 1));
+}
+
+/// New device: display the pairing code and wait. Shows a "waiting" status
+/// until `PairingSession::is_done()`, then a confirmation and dismiss hint.
+fn draw_pair_show_code_popup(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+
+    let popup_width = 60.min(area.width.saturating_sub(4));
+    let popup_height = 8;
+    let popup_x = (area.width - popup_width) / 2;
+    let popup_y = (area.height - popup_height) / 2;
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+    frame.render_widget(Clear, popup_area);
+
+    let done = app.pairing_done();
+    let block = Block::default()
+        .title(" Link This Device ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(if done { Color::Green } else { Color::Cyan }));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let code = app.pending_pair_code.as_deref().unwrap_or("");
+    let status = if done {
+        "Paired! Press any key to continue."
+    } else {
+        "On your other device: Settings -> Link a device, then enter this code."
+    };
+
+    let lines = vec![
+        Line::from(Span::styled(code, Style::default().fg(Color::Yellow))),
+        Line::from(""),
+        Line::from(status),
+    ];
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true });
+    frame.render_widget(paragraph, inner);
+}
+
+/// Existing device: confirmation screen naming the peer awaiting an
+/// approval decision.
+fn draw_pair_approve_popup(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+
+    let popup_width = 60.min(area.width.saturating_sub(4));
+    let popup_height = 8;
+    let popup_x = (area.width - popup_width) / 2;
+    let popup_y = (area.height - popup_height) / 2;
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+    frame.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .title(" Link a Device? ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Magenta));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let (device_name, did) = app
+        .pending_pair_prompt
+        .as_ref()
+        .map(|(name, did)| (name.as_str(), did.as_str()))
+        .unwrap_or(("unknown device", ""));
+
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("Device: ", Style::default().fg(Color::Yellow)),
+            Span::raw(device_name),
+        ]),
+        Line::from(vec![
+            Span::styled("DID: ", Style::default().fg(Color::Yellow)),
+            Span::raw(did),
+        ]),
+        Line::from(""),
+        Line::from("Approve? (y/Enter to approve, n/Esc to reject)"),
+    ];
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true });
+    frame.render_widget(paragraph, inner);
 }
 
 fn draw_message_info_popup(frame: &mut Frame, app: &App) {

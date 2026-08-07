@@ -392,6 +392,31 @@ impl DeviceRingState {
         }
     }
 
+    /// Record that we are now an MLS member of `ring_id`, looking up our own
+    /// leaf index from the group's member list. Called once, host-side, when
+    /// a pairing exchange completes (qr-pairing.md Phase 3): the new device
+    /// from `PairingCommand::PersistRing`, the existing device right after a
+    /// successful `PairingSession::approve()` (which has no command of its
+    /// own for this — the existing device already knows it just
+    /// created/joined `ring_id`).
+    pub fn record_ring_membership(
+        &mut self,
+        mls: &MoatSession,
+        ring_id: Vec<u8>,
+        now_ms: i64,
+    ) -> Result<()> {
+        let our_leaf = mls
+            .get_group_members(&ring_id)?
+            .into_iter()
+            .find(|(_, cred)| cred.as_ref().map(|c| *c.device_id()) == Some(*mls.device_id()))
+            .map(|(leaf, _)| leaf)
+            .ok_or_else(|| {
+                Error::GroupLoad("own device not found in ring member list after pairing".into())
+            })?;
+        self.ring = RingMembership::InRing { ring_id, created_at: now_ms, our_leaf };
+        Ok(())
+    }
+
     /// Always 0. This state machine has no device-coordination-group
     /// concept; kept as a stable accessor for hosts reporting ring status
     /// (`api_ring_status`, Beacon's `RingStatus` DTO).
@@ -918,12 +943,20 @@ impl DeviceRingState {
     }
 
     /// Emit `KP_POOL_TARGET` fresh KPs to `recipient` via the stealth lane,
-    /// split across `ceil(KP_POOL_TARGET / KP_BATCH_CAP)` batches. Called by
-    /// `pairing.rs` whenever ring topology changes (a sibling was added, or
-    /// we joined the ring ourselves), since ring creation/joining happens
-    /// there. If the recipient's stealth record is not yet known the batch
-    /// is skipped — the consumer-driven low-water `KpRequest` retries the
-    /// fill on later ticks.
+    /// split across `ceil(KP_POOL_TARGET / KP_BATCH_CAP)` batches. If the
+    /// recipient's stealth record is not yet known the batch is skipped —
+    /// the consumer-driven low-water `KpRequest` retries the fill on later
+    /// ticks.
+    ///
+    /// Has no production caller as of the pairing redesign (only a unit
+    /// test below exercises it directly): the newcomer's initial batch to
+    /// the *approver* rides `Enroll.conv_kps` instead (`pairing.rs`), and
+    /// its batches to *other*, already-established siblings aren't proactively
+    /// pushed — they self-heal reactively via each sibling's own low-water
+    /// `KpRequest` once its pool for the newcomer runs dry. Kept as
+    /// general-purpose pool-seeding infrastructure (and its test as a
+    /// fixture for `same_user_fan_out_deferred_add_unblocks_on_next_batch`),
+    /// not because anything currently calls it live.
     pub fn ship_initial_kp_batches_to(
         &mut self,
         mls: &MoatSession,
@@ -1066,6 +1099,73 @@ mod tests {
             3,
             "d3 must see all three devices (d1, d2, d3) from d1's Welcome alone, got {} members",
             members.len()
+        );
+    }
+
+    #[test]
+    fn record_ring_membership_sets_ring_id_and_own_leaf() {
+        let d1 = MoatSession::new();
+        let d2 = MoatSession::new();
+        let d1_cred = make_credential("did:plc:user", "d1", *d1.device_id());
+        let d2_cred = make_credential("did:plc:user", "d2", *d2.device_id());
+        let (_d1_kp, d1_kb) = d1.generate_key_package(&d1_cred).expect("d1 kp");
+        let (d2_kp, _d2_kb) = d2.generate_key_package(&d2_cred).expect("d2 kp");
+
+        let ring_id = d1.create_device_ring(&d1_cred, &d1_kb).expect("create ring");
+        let wr = d1.add_device(&ring_id, &d1_kb, &d2_kp).expect("d1 add d2");
+        let joined = d2.process_welcome(&wr.welcome).expect("d2 join");
+        assert_eq!(joined, ring_id);
+
+        let mut d1_state = DeviceRingState::new();
+        d1_state
+            .record_ring_membership(&d1, ring_id.clone(), 1_000)
+            .expect("d1 record membership");
+        let mut d2_state = DeviceRingState::new();
+        d2_state
+            .record_ring_membership(&d2, ring_id.clone(), 2_000)
+            .expect("d2 record membership");
+
+        assert_eq!(d1_state.ring_id(), Some(ring_id.as_slice()));
+        assert_eq!(d2_state.ring_id(), Some(ring_id.as_slice()));
+        assert_eq!(d1_state.ring_created_at(), Some(1_000));
+        assert_eq!(d2_state.ring_created_at(), Some(2_000));
+
+        let d1_members = d1.get_group_members(&ring_id).expect("d1 members");
+        let d1_leaf = d1_members
+            .iter()
+            .find(|(_, cred)| cred.as_ref().map(|c| *c.device_id()) == Some(*d1.device_id()))
+            .map(|(leaf, _)| *leaf)
+            .expect("d1 in own member list");
+        let d2_leaf = d1_members
+            .iter()
+            .find(|(_, cred)| cred.as_ref().map(|c| *c.device_id()) == Some(*d2.device_id()))
+            .map(|(leaf, _)| *leaf)
+            .expect("d2 in member list");
+        assert_ne!(d1_leaf, d2_leaf, "the two devices must occupy distinct leaves");
+
+        match d1_state.ring {
+            RingMembership::InRing { our_leaf, .. } => assert_eq!(our_leaf, d1_leaf),
+            ref other => panic!("expected InRing, got {other:?}"),
+        }
+        match d2_state.ring {
+            RingMembership::InRing { our_leaf, .. } => assert_eq!(our_leaf, d2_leaf),
+            ref other => panic!("expected InRing, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn record_ring_membership_errors_if_device_is_not_actually_a_member() {
+        let mut outsider_state = DeviceRingState::new();
+        let outsider = MoatSession::new();
+        let creator = MoatSession::new();
+        let creator_cred = make_credential("did:plc:user", "creator", *creator.device_id());
+        let (_kp, kb) = creator.generate_key_package(&creator_cred).expect("kp");
+        let ring_id = creator.create_device_ring(&creator_cred, &kb).expect("create ring");
+
+        let result = outsider_state.record_ring_membership(&outsider, ring_id, 0);
+        assert!(
+            result.is_err(),
+            "a device that isn't actually a member of the ring must not be recorded as one"
         );
     }
 

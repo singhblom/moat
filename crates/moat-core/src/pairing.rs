@@ -378,6 +378,18 @@ pub enum PairingCommand {
         device_id: DeviceId,
         kps: Vec<OfferedKp>,
     },
+    /// Existing device, on Approve (second+ pairing onward): publish the
+    /// ring Add commit to the PDS under `tag`, so any *other* sibling not
+    /// party to this pairing (asleep, or simply not the approver) can pick
+    /// it up on its own next poll and advance its own MLS view — the
+    /// mechanism qr-pairing.md §6 describes ("a sibling asleep during a
+    /// pairing just processes the ring Add commit from the PDS on its next
+    /// poll"). The `Welcome` still rides the pair channel raw (`Admit`);
+    /// only the commit needs this second, PDS-borne path, since a bystander
+    /// isn't on the pair channel at all. `tag` is derived *before*
+    /// `add_member` — the invite-lane-duplication.md §3 rule: deriving it
+    /// after would tag the commit at the wrong (post-add) epoch.
+    PublishRingCommit { tag: [u8; 16], ciphertext: Vec<u8> },
     /// Existing device, on receiving `Enroll`: show the confirmation
     /// screen naming the new device, gated on a user tap before
     /// [`PairingSession::approve`] is called.
@@ -394,10 +406,6 @@ pub enum PairingCommand {
     /// to `SyncSession` for history sync. The pairing AEAD keeps running
     /// underneath for the whole session rather than re-keying to ring MLS.
     StartSync,
-    /// Pairing failed (decryption failure, protocol violation, DID
-    /// mismatch). Both screens should show "code mismatch — try again" and
-    /// the new device should regenerate its code.
-    Abort { reason: String },
 }
 
 impl PairingCommand {
@@ -407,11 +415,11 @@ impl PairingCommand {
         match self {
             PairingCommand::SendFrame { .. } => "send_frame",
             PairingCommand::SeedKpPool { .. } => "seed_kp_pool",
+            PairingCommand::PublishRingCommit { .. } => "publish_ring_commit",
             PairingCommand::SurfaceApprovalPrompt { .. } => "surface_approval_prompt",
             PairingCommand::PersistRing { .. } => "persist_ring",
             PairingCommand::RosterReceived { .. } => "roster_received",
             PairingCommand::StartSync => "start_sync",
-            PairingCommand::Abort { .. } => "abort",
         }
     }
 }
@@ -567,7 +575,11 @@ impl PairingSession {
     /// identity note at the top of `device_ring.rs`, which applies here
     /// too). Moves the session from `Idle` to `AwaitingAdmit`; must be
     /// called exactly once, before any frame is fed to
-    /// [`on_frame_received`](Self::on_frame_received).
+    /// [`on_frame_received`](Self::on_frame_received). Returns `Err` and
+    /// leaves the session in `Idle` (not advanced, nothing sent) if minting
+    /// the KeyPackage fails — a host-level error, not a panic, since it can
+    /// legitimately happen (e.g. corrupt local key state) and callers
+    /// should be able to surface it rather than crash.
     pub fn start_enroll(
         &mut self,
         mls: &MoatSession,
@@ -575,13 +587,11 @@ impl PairingSession {
         key_bundle: &[u8],
         stealth_scan_pubkey: [u8; 32],
         conv_kps: Vec<OfferedKp>,
-    ) -> Vec<PairingCommand> {
+    ) -> Result<Vec<PairingCommand>> {
         // Reuses the identity signing key, not a throwaway one — see the
         // "Signing-key identity" note at the top of `device_ring.rs`, which
         // this KP is subject to just like the steady-state KP-lane ones.
-        let ring_kp = mls
-            .replenish_key_package(credential, key_bundle)
-            .expect("minting the ring KeyPackage from the device's own identity key bundle should not fail");
+        let ring_kp = mls.replenish_key_package(credential, key_bundle)?;
 
         let enroll = PairingMsg::Enroll(Enroll {
             credential: credential.clone(),
@@ -593,15 +603,16 @@ impl PairingSession {
 
         self.phase = Phase::NewDevice(NewDevicePhase::AwaitingAdmit);
 
-        vec![PairingCommand::SendFrame { ciphertext }]
+        Ok(vec![PairingCommand::SendFrame { ciphertext }])
     }
 
     /// Feed a sealed frame received over the pair channel. Opens it under
     /// the peer's directional key with the next expected counter, decodes
     /// the [`PairingMsg`], and dispatches on role + phase. A decryption or
-    /// ordering-violation error aborts the session (host still gets a
-    /// `PairingCommand::Abort` back via the `Err`, so both screens can show
-    /// an explicit error). A frame received while the new-device session is
+    /// ordering-violation error aborts the session — the host gets it via
+    /// the plain `Err` return (there is no `Ok`-wrapped abort command; the
+    /// error variant itself carries enough for both screens to show an
+    /// explicit error). A frame received while the new-device session is
     /// still `Idle` (i.e. before [`start_enroll`](Self::start_enroll) was
     /// ever called) is one such ordering violation — nothing was sent for
     /// it to be a reply to.
@@ -658,6 +669,18 @@ impl PairingSession {
                 // No `did` field on `Admit`/`SiblingInfo` to check up front
                 // (see `SiblingInfo`'s docs) — the ring's own MLS member
                 // credentials, available only now, are the only anchor.
+                //
+                // Known gap: `process_welcome` above has already joined
+                // this foreign group and consumed the init key by the time
+                // this check runs and rejects it — there is no cleanup of
+                // that local MLS state on this error path (no
+                // `MoatSession` primitive to un-join a group exists today).
+                // Low severity in practice (it requires the attacker to
+                // hold the QR secret in the first place), but worth fixing
+                // — and worth a red test for a malicious `Admit`, mirroring
+                // the existing Mallory coverage for the Enroll direction —
+                // before this path is relied on for anything beyond
+                // rejecting the pairing.
                 let dids = mls.get_group_dids(&group_id)?;
                 if dids.is_empty() || !dids.iter().all(|d| d == own_credential.did()) {
                     return Err(Error::PairingProtocol(
@@ -698,6 +721,34 @@ impl PairingSession {
     /// see the field doc on `ring_id`.
     pub fn ring_id(&self) -> Option<&[u8]> {
         self.ring_id.as_deref()
+    }
+
+    /// The two directional AEAD keys this session derived at construction.
+    /// Exposed so the host can keep sealing/opening frames under the
+    /// pairing AEAD after `is_done()` — qr-pairing.md §3.2's "keep the
+    /// pairing AEAD for the whole session" decision means the history sync
+    /// handed off via `PairingCommand::StartSync` does not re-key to ring
+    /// MLS, unlike the established-devices reconnect-sync path (§3.6),
+    /// which is a real ring member on both ends and has no such channel to
+    /// continue.
+    pub fn channel_keys(&self) -> &PairingChannelKeys {
+        &self.keys
+    }
+
+    /// The next unused counter for frames *we* send, continuing this
+    /// session's own sequence. A host driving traffic after `is_done()`
+    /// must start here — reusing a counter already used during
+    /// Enroll/Admit/Done would violate the AEAD's nonce-uniqueness
+    /// requirement (see [`seal_frame`]).
+    pub fn next_send_counter(&self) -> u64 {
+        self.send_counter
+    }
+
+    /// The next unused counter for frames *we* expect to receive,
+    /// continuing this session's own sequence. See
+    /// [`next_send_counter`](Self::next_send_counter).
+    pub fn next_recv_counter(&self) -> u64 {
+        self.recv_counter
     }
 
     /// Existing device only: called once the user taps Approve on the named
@@ -747,6 +798,11 @@ impl PairingSession {
             None => mls.create_device_ring(credential, key_bundle)?,
             Some(ring_id) => ring_id.to_vec(),
         };
+        // Derive the commit's tag at the *current* epoch, before add_member
+        // advances it — invite-lane-duplication.md §3's rule; deriving it
+        // after would tag the commit under the epoch it produces, not the
+        // one a bystander still at the old epoch is scanning for.
+        let commit_tag = mls.derive_next_tag(&ring_id, key_bundle)?;
         let welcome_result = mls.add_member(&ring_id, key_bundle, &enroll.ring_kp)?;
 
         let mut roster = vec![SiblingInfo {
@@ -770,6 +826,10 @@ impl PairingSession {
             PairingCommand::SeedKpPool {
                 device_id: *enroll.credential.device_id(),
                 kps: enroll.conv_kps,
+            },
+            PairingCommand::PublishRingCommit {
+                tag: commit_tag,
+                ciphertext: welcome_result.commit,
             },
             PairingCommand::SendFrame { ciphertext },
             PairingCommand::StartSync,

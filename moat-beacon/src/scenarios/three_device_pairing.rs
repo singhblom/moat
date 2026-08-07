@@ -86,7 +86,9 @@ pub async fn run(verbose: bool) {
 
     vlog!("=== Scenario: three-device-pairing ===");
 
-    let mut world = TestWorld::new(&["alice"], ".postern.test")
+    // Live pairing rendezvous needs a real Drawbridge relay — see the note
+    // in `two_device_pairing.rs`'s prologue.
+    let mut world = TestWorld::new_with_drawbridge(&[("alice", "alice")], ".postern.test")
         .await
         .expect("world setup");
     let d1 = world.client("alice").clone();
@@ -121,15 +123,38 @@ pub async fn run(verbose: bool) {
         s1.ring_group_id, s3.ring_group_id,
         "d1 and d3 must share the *same* ring — d3's pairing must not have created a second one"
     );
-    // d2's full MLS view (whether it has actually caught up to the
-    // Add(d3) commit — the "everyone converges" half of what this
-    // scenario replaces) isn't observable through `RingStatus` today: the
-    // DTO only carries `ring_group_id` and the always-0 `coord_group_count`
-    // (see `DeviceRingState::coord_group_count`'s doc). Live membership
-    // convergence for a bystander sibling is pinned at the moat-core
-    // in-process level instead
-    // (`pairing_simulation::three_device_pairing_converges_and_third_device_gets_history`),
-    // which can call `MoatSession::get_group_members` directly.
+    // d1 and d3 both see 3 members synchronously (d1 performed the add;
+    // d3 joined via the Welcome), but d2 — the bystander, uninvolved in
+    // the d1<->d3 pairing — only converges once it fetches and processes
+    // the Add(d3) commit from the PDS on its own next poll (qr-pairing.md
+    // §6: "a sibling asleep during a pairing processes the ring Add commit
+    // from the PDS on its next poll"). Bounded wait so a dropped commit
+    // fails the test instead of hanging it.
+    assert_eq!(s1.ring_member_count, 3, "d1 must see all three ring members");
+    assert_eq!(s3.ring_member_count, 3, "d3 must see all three ring members via d1's Welcome");
+
+    const D2_CONVERGE_TIMEOUT: Duration = Duration::from_secs(20);
+    let deadline = std::time::Instant::now() + D2_CONVERGE_TIMEOUT;
+    let mut d2_member_count = s2.ring_member_count;
+    while d2_member_count != 3 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "d2 (bystander to d1<->d3's pairing) never converged to 3 ring members \
+             within {D2_CONVERGE_TIMEOUT:?} (stuck at {d2_member_count}); the Add(d3) \
+             commit was never delivered — this must fail the test, not hang it"
+        );
+        // `ring_tick` alone isn't enough: it drives the *stealth-lane*
+        // scan (same-user SiblingMsg traffic), not the tag-matched event
+        // fetch that discovers a plain published event like the ring Add
+        // commit. That fetch is `poll`'s job — without calling it
+        // explicitly here, convergence depends entirely on d2's own
+        // background adaptive poll (30s while Drawbridge-connected),
+        // which can outlast this bounded wait on unlucky timing.
+        let _ = d2.ring_tick().await;
+        let _ = d2.poll().await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        d2_member_count = d2.ring_status().await.expect("d2 ring_status").ring_member_count;
+    }
 
     for (label, client) in [("d1", &d1), ("d2", &d2), ("d3", &d3)] {
         let convs = client

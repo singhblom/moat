@@ -74,6 +74,15 @@ pub fn generate_stealth_keypair() -> ([u8; 32], [u8; 32]) {
     (privkey_bytes, pubkey.to_bytes())
 }
 
+/// Derive the public key for an already-generated stealth private key. Hosts
+/// persist only the private key (`KeyStore::store_stealth_key`); any call
+/// site that needs the public key again later (e.g. `PairingSession`'s
+/// `stealth_scan_pubkey`/`own_stealth_pubkey` arguments) re-derives it here
+/// rather than duplicating X25519 handling outside this module.
+pub fn stealth_pubkey_from_privkey(privkey: &[u8; 32]) -> [u8; 32] {
+    PublicKey::from(&StaticSecret::from(*privkey)).to_bytes()
+}
+
 /// Encrypt a Welcome message for one or more recipients (devices).
 ///
 /// Uses key encapsulation: the welcome is encrypted once with a random CEK,
@@ -300,6 +309,12 @@ mod tests {
         let (privkey2, pubkey2) = generate_stealth_keypair();
         assert_ne!(privkey, privkey2);
         assert_ne!(pubkey, pubkey2);
+    }
+
+    #[test]
+    fn pubkey_from_privkey_matches_generation_output() {
+        let (privkey, pubkey) = generate_stealth_keypair();
+        assert_eq!(stealth_pubkey_from_privkey(&privkey), pubkey);
     }
 
     #[test]

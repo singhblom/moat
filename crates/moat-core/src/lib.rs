@@ -55,7 +55,7 @@ pub use crate::error::{Error, ErrorCode, Result};
 pub use crate::device_ring::{
     decode_coord_msg, encode_coord_msg, summarize_ring_commands, CoordMsg, DeviceId,
     DeviceRingState, GroupKind, KeyPackageInput, OfferedKp, OwnEventInput, RingCommand, RingEvent,
-    RingMembership, SiblingStealth, StepEnv, TickInputs,
+    RingMembership, SiblingStealth, StepEnv, TickInputs, KP_POOL_TARGET,
 };
 pub use crate::event::{
     ControlKind, DecryptOutcome, Event, EventKind, MessageKind, ModifierKind, ReactionPayload,
@@ -67,7 +67,9 @@ pub use crate::message::{
 };
 pub use crate::blob::{blob_decrypt, blob_encrypt};
 pub use crate::padding::{pad_to_bucket, unpad, Bucket};
-pub use crate::stealth::{encrypt_for_stealth, generate_stealth_keypair, try_decrypt_stealth};
+pub use crate::stealth::{
+    encrypt_for_stealth, generate_stealth_keypair, stealth_pubkey_from_privkey, try_decrypt_stealth,
+};
 pub(crate) use crate::storage::MoatProvider;
 pub use crate::tag::{
     derive_event_tag, generate_candidate_tags, prior_epoch_gap_limit, MAX_PRIOR_EPOCHS,

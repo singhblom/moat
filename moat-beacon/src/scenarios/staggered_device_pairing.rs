@@ -40,9 +40,13 @@ pub async fn run(verbose: bool) {
 
     vlog!("=== Scenario: staggered-device-pairing ===");
 
-    let mut world = TestWorld::new(&["alice", "bob"], ".postern.test")
-        .await
-        .expect("world setup");
+    // Live pairing rendezvous needs a real Drawbridge relay — see the note
+    // in `two_device_pairing.rs`'s prologue. Alice and Bob get separate
+    // relays, matching real-world per-user relay discovery.
+    let mut world =
+        TestWorld::new_with_drawbridge(&[("alice", "alice"), ("bob", "bob")], ".postern.test")
+            .await
+            .expect("world setup");
     let d1 = world.client("alice").clone();
     let bob = world.client("bob").clone();
     d1.login("alice.postern.test", "any-password").await.expect("d1 login");
@@ -103,9 +107,14 @@ pub async fn run(verbose: bool) {
     let deadline = std::time::Instant::now() + TIMEOUT;
     let (mut d2_has_it, mut d3_has_it) = (false, false);
     loop {
-        // `ring_tick` (not `poll`) is what drives `PollForNewDevices` — the
-        // fan-out of a new user conversation to confirmed ring siblings.
+        // `ring_tick` (not `poll`) is what drives `PollForNewDevices` on the
+        // adder's side (d1) and the own-PDS stealth scan that picks up the
+        // resulting `UserConvWelcome` on the receiving siblings' side (d2,
+        // d3) — `/poll` alone only re-fetches conversations already known
+        // locally, so it can't discover a brand new one.
         let _ = d1.ring_tick().await;
+        let _ = d2.ring_tick().await;
+        let _ = d3.ring_tick().await;
         let _ = d1.poll().await;
         let _ = d2.poll().await;
         let _ = d3.poll().await;

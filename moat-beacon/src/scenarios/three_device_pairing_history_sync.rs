@@ -83,9 +83,13 @@ pub async fn run(verbose: bool) {
 
     vlog!("=== Scenario: three-device-pairing-history-sync ===");
 
-    let mut world = TestWorld::new(&["alice", "bob"], ".postern.test")
-        .await
-        .expect("world setup");
+    // Live pairing rendezvous needs a real Drawbridge relay — see the note
+    // in `two_device_pairing.rs`'s prologue. Alice and Bob get separate
+    // relays, matching real-world per-user relay discovery.
+    let mut world =
+        TestWorld::new_with_drawbridge(&[("alice", "alice"), ("bob", "bob")], ".postern.test")
+            .await
+            .expect("world setup");
     let d1 = world.client("alice").clone();
     let bob = world.client("bob").clone();
 

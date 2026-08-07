@@ -296,10 +296,8 @@ impl DrawbridgeManager {
         Ok(())
     }
 
-    /// Send `pair_offer{token}` on the main WS. Not yet called — device
-    /// pairing has no caller wired up yet, but this sends the exact
-    /// rendezvous message a pairing flow needs.
-    #[allow(dead_code)]
+    /// Send `pair_offer{token}` on the main WS. Called by the new device to
+    /// start a live pairing session.
     pub async fn send_pair_offer(&mut self, token: &[u8]) -> Result<(), String> {
         let own = self.own.as_mut().ok_or("not connected to own Drawbridge")?;
         let msg = serde_json::json!({
@@ -312,9 +310,8 @@ impl DrawbridgeManager {
             .map_err(|e| format!("send pair_offer: {e}"))
     }
 
-    /// Send `pair_join{token}` on the main WS. Not yet called — see the
-    /// note on `send_pair_offer`.
-    #[allow(dead_code)]
+    /// Send `pair_join{token}` on the main WS. Called by the existing
+    /// device in response to a scanned/typed pairing code.
     pub async fn send_pair_join(&mut self, token: &[u8]) -> Result<(), String> {
         let own = self.own.as_mut().ok_or("not connected to own Drawbridge")?;
         let msg = serde_json::json!({

@@ -84,13 +84,9 @@ fn existing_device_rejects_a_second_enroll_while_awaiting_approval() {
     let mut new_session = PairingSession::new_device(&SECRET, &TOKEN);
     let mut existing_session = PairingSession::existing_device(&SECRET, &TOKEN);
 
-    let enroll_cmds = new_session.start_enroll(
-        &mls_new,
-        &credential_new,
-        &kb_new,
-        [0u8; 32],
-        Vec::new(),
-    );
+    let enroll_cmds = new_session
+        .start_enroll(&mls_new, &credential_new, &kb_new, [0u8; 32], Vec::new())
+        .expect("start_enroll must succeed");
     let enroll_frame = enroll_cmds
         .iter()
         .find_map(|c| match c {
@@ -145,13 +141,9 @@ fn did_mismatch_between_enroll_and_the_channel_owner_is_a_hard_abort() {
     let (_kp, kb_attacker) = mls_attacker.generate_key_package(&attacker_credential).unwrap();
     let mut attacker_session = PairingSession::new_device(&SECRET, &TOKEN);
 
-    let enroll_cmds = attacker_session.start_enroll(
-        &mls_attacker,
-        &attacker_credential,
-        &kb_attacker,
-        [0u8; 32],
-        Vec::new(),
-    );
+    let enroll_cmds = attacker_session
+        .start_enroll(&mls_attacker, &attacker_credential, &kb_attacker, [0u8; 32], Vec::new())
+        .expect("start_enroll must succeed");
     let enroll_frame = enroll_cmds
         .iter()
         .find_map(|c| match c {
@@ -183,7 +175,9 @@ fn new_device_rejects_admit_whose_welcome_lands_it_in_a_foreign_dids_ring() {
     let (new_device_kp, kb_new) = mls_new.generate_key_package(&credential_new).unwrap();
 
     let mut new_session = PairingSession::new_device(&SECRET, &TOKEN);
-    new_session.start_enroll(&mls_new, &credential_new, &kb_new, [0u8; 32], Vec::new());
+    new_session
+        .start_enroll(&mls_new, &credential_new, &kb_new, [0u8; 32], Vec::new())
+        .expect("start_enroll must succeed");
 
     // A ring under a completely different DID adds the new device's real
     // KeyPackage directly at the MLS layer (`add_member`, not

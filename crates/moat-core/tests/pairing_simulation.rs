@@ -67,13 +67,15 @@ fn run_pairing_session(
 
     let conv_kps: Vec<OfferedKp> = Vec::new();
 
-    let new_cmds = new_session.start_enroll(
-        &new_device.mls,
-        &new_device.credential,
-        &new_device.key_bundle,
-        new_device.stealth_pub,
-        conv_kps,
-    );
+    let new_cmds = new_session
+        .start_enroll(
+            &new_device.mls,
+            &new_device.credential,
+            &new_device.key_bundle,
+            new_device.stealth_pub,
+            conv_kps,
+        )
+        .expect("start_enroll must succeed");
 
     let enroll_frame = new_cmds
         .iter()
