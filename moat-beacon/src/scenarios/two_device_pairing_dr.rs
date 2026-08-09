@@ -1,19 +1,16 @@
-//! Two-device live QR/text pairing scenario.
+//! Two-device live QR/text pairing scenario — new device runs the Dart
+//! headless server, existing device runs the Rust CLI.
 //!
-//! Alice's second device ("new device") requests a pairing code via
-//! `POST /pair/new`; Alice's first device ("existing device") enters it via
-//! `POST /pair/confirm`. Both devices then poll `GET /pair/status` until
-//! pairing completes — bounded, so a stuck pairing fails the test instead
-//! of hanging it.
-//!
-//! Sets up one user with two `moat-cli` processes under the same
-//! credentials, since pairing presupposes a logged-in new device.
+//! Same story as [`super::two_device_pairing`], but exercises the
+//! cross-implementation direction where the *joining* device is the Dart
+//! port of the pairing driver and the *approving* device is Rust.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 use crate::scenarios::Action;
+use crate::world::ParticipantKind;
 use crate::world::TestWorld;
 
 pub(crate) fn run_boxed(
@@ -34,7 +31,7 @@ pub async fn run(verbose: bool) {
         ($($t:tt)*) => { if verbose { eprintln!($($t)*); } }
     }
 
-    vlog!("=== Scenario: two-device-pairing ===");
+    vlog!("=== Scenario: two-device-pairing-dr (new=Dart, existing=Rust) ===");
 
     // ── Prologue ──────────────────────────────────────────────────────────────
     //
@@ -43,16 +40,16 @@ pub async fn run(verbose: bool) {
     // one and moat-cli falls back to the hardcoded default relay
     // (`DEFAULT_DRAWBRIDGE_URL`), which is a real deployed instance, not a
     // test double.
-    vlog!("[setup] starting TestWorld with one account (alice) + drawbridge...");
+    vlog!("[setup] starting TestWorld with one account (alice, Rust) + drawbridge...");
     let mut world = TestWorld::new_with_drawbridge(&[("alice", "alice")], ".postern.test")
         .await
         .expect("world setup");
 
     let existing = world.client("alice").clone();
 
-    vlog!("[setup] spawning the new device...");
+    vlog!("[setup] spawning the new device (Dart)...");
     let new_device = world
-        .spawn_nth_device("alice-d2", crate::world::ParticipantKind::RustCli)
+        .spawn_nth_device("alice-d2", ParticipantKind::DartServer)
         .await
         .expect("spawn new device");
 
@@ -155,7 +152,7 @@ pub async fn run(verbose: bool) {
         "new device conversation list should be empty; got {convs_new:?}"
     );
 
-    vlog!("[check] two-device pairing... ok");
+    vlog!("[check] two-device pairing (dr)... ok");
     if verbose {
         eprintln!("\n=== PASSED ===");
     }

@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:moat_dart_common/moat_dart_common.dart' hide DebugLog;
 import 'services/conversation_manager.dart' as app_cm;
+import 'services/pairing_manager.dart';
 import 'providers/auth_provider.dart';
 import 'providers/conversations_provider.dart';
 import 'providers/profile_provider.dart';
@@ -16,11 +17,18 @@ import 'providers/theme_provider.dart';
 import 'providers/watch_list_provider.dart';
 import 'screens/login_screen.dart';
 import 'screens/conversations_screen.dart';
+import 'screens/approve_pairing_screen.dart';
 import 'services/flutter_storage_backend.dart';
 import 'services/flutter_storage_factory.dart';
 import 'services/debug_log.dart';
 import 'services/push_service.dart';
 import 'firebase_options.dart';
+
+/// Lets `PairingManager`'s `onApprovalPending` callback push a screen from
+/// outside the widget tree — mirrors `moat-cli`'s TUI switching
+/// `Focus::PairApprove` synchronously the moment `SurfaceApprovalPrompt`
+/// arrives, rather than the enter-code screen having to poll for it.
+final rootNavigatorKey = GlobalKey<NavigatorState>();
 
 const _notificationChannelId = 'moat_messages';
 const _androidDetails = AndroidNotificationDetails(
@@ -271,6 +279,7 @@ class MoatApp extends StatelessWidget {
         builder: (context) {
           final themeMode = context.watch<ThemeProvider>().themeMode;
           return MaterialApp(
+            navigatorKey: rootNavigatorKey,
             title: 'Moat',
             debugShowCheckedModeBanner: false,
             themeMode: themeMode,
@@ -410,6 +419,19 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
         authService: auth.service,
         storage: widget.msgStorage,
       );
+      PairingManager.instance.init(
+        authService: auth.service,
+        drawbridge: DrawbridgeService.instance,
+        ring: ringService,
+        sync: syncService,
+        conversationStorage: widget.convStorage,
+        messageStorage: widget.msgStorage,
+      );
+      PairingManager.instance.service!.onApprovalPending = () {
+        rootNavigatorKey.currentState?.push(
+          MaterialPageRoute(builder: (_) => const ApprovePairingScreen()),
+        );
+      };
 
       _pollingService!.onMessages = app_cm.ConversationManager.instance.notify;
       _pollingService!.onReaction = app_cm.ConversationManager.instance.notifyReaction;
@@ -428,6 +450,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       _pollingStarted = false;
       ConversationManager.instance.clear();
       app_cm.ConversationManager.instance.clear();
+      PairingManager.instance.clear();
       DrawbridgeService.instance.reset();
       debugPrint('PollingService stopped, Drawbridge reset');
     }

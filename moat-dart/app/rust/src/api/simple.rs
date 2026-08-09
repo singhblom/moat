@@ -1006,6 +1006,27 @@ impl RingDriverHandle {
         self.inner.lock().unwrap().own_events_cursor().map(str::to_string)
     }
 
+    /// Record that we are now an MLS member of `ring_id`, looking up our
+    /// own leaf index from the group's member list. Called once, host-side,
+    /// when a pairing exchange completes — the new device from
+    /// `PairingCommandDto.persistRing`, the existing device right after a
+    /// successful `PairingSessionHandle.approve` (which has no command of
+    /// its own for this, since it already knows it just created/joined
+    /// `ring_id`). Mirrors `moat-cli`'s `App`-level interpreter.
+    pub fn record_ring_membership(
+        &self,
+        session: &MoatSessionHandle,
+        ring_id: Vec<u8>,
+        now_ms: i64,
+    ) -> Result<(), String> {
+        let session_lock = session.inner.lock().unwrap();
+        self.inner
+            .lock()
+            .unwrap()
+            .record_ring_membership(&session_lock, ring_id, now_ms)
+            .map_err(|e| e.to_string())
+    }
+
     /// Device ids of siblings confirmed to be in the ring.  Drives the
     /// same-user fan-out loop in the host.
     #[frb(sync)]
@@ -1018,6 +1039,39 @@ impl RingDriverHandle {
             .into_iter()
             .map(|d| d.to_vec())
             .collect()
+    }
+
+    /// Allocate `count` fresh, monotonic KP sequence numbers from this
+    /// device's own owner-global counter — must go through here (not a
+    /// host-local counter) so seqs never collide with ones allocated
+    /// elsewhere for a different purpose (e.g. steady-state KP-lane
+    /// batches). Used by `PairingService.startEnroll` to build
+    /// `Enroll.conv_kps` without a separate FFI surface per caller.
+    #[frb(sync)]
+    pub fn allocate_kp_seqs(&self, count: u64) -> Vec<u64> {
+        self.inner.lock().unwrap().allocate_kp_seqs(count as usize)
+    }
+
+    /// Seed `owner`'s consumer-side pool with a freshly-received batch.
+    /// Mirrors `moat-cli`'s `PairingCommandDto.seedKpPool` handling — the
+    /// existing device calls this with the newcomer's `Enroll.conv_kps` on
+    /// Approve, seeding the newcomer's pool directly instead of a
+    /// KpRequest/KpBatch round trip over the stealth lane.
+    #[frb(sync)]
+    pub fn ingest_kp_batch(
+        &self,
+        owner_device_id: Vec<u8>,
+        kps: Vec<OfferedKpDto>,
+    ) -> Result<(), String> {
+        let owner: [u8; 16] = owner_device_id
+            .try_into()
+            .map_err(|_| "owner_device_id must be 16 bytes".to_string())?;
+        let batch: Vec<moat_core::OfferedKp> = kps
+            .into_iter()
+            .map(|kp| moat_core::OfferedKp { rkey: kp.rkey, seq: kp.seq, key_package: kp.key_package })
+            .collect();
+        self.inner.lock().unwrap().ingest_kp_batch(&owner, batch);
+        Ok(())
     }
 
     /// Claim one unused key package from the local pool for `owner`, marking
@@ -1433,6 +1487,378 @@ impl From<SyncOutput> for SyncOutputDto {
             SyncOutput::Complete => SyncOutputDto::Complete,
         }
     }
+}
+
+// --- Live pairing (QR / text code) device onboarding ---
+//
+// Dart mirror of `crates/moat-core/src/pairing.rs` + the pairing
+// interpreter in `crates/moat-cli/src/app.rs`. Fully-qualified
+// `moat_core::` paths throughout (rather than adding to the shared `use`
+// block above) to keep this section's diff self-contained.
+
+/// Decoded pairing code contents: rendezvous token + channel secret.
+pub struct PairingPayloadDto {
+    pub token: Vec<u8>,
+    pub secret: Vec<u8>,
+}
+
+fn payload_from_core(p: moat_core::PairingPayload) -> PairingPayloadDto {
+    PairingPayloadDto { token: p.token.to_vec(), secret: p.secret.to_vec() }
+}
+
+fn payload_to_core(token: Vec<u8>, secret: Vec<u8>) -> Result<moat_core::PairingPayload, String> {
+    let token: [u8; moat_core::PAIRING_TOKEN_LEN] = token
+        .try_into()
+        .map_err(|_| format!("token must be {} bytes", moat_core::PAIRING_TOKEN_LEN))?;
+    let secret: [u8; moat_core::PAIRING_SECRET_LEN] = secret
+        .try_into()
+        .map_err(|_| format!("secret must be {} bytes", moat_core::PAIRING_SECRET_LEN))?;
+    Ok(moat_core::PairingPayload { token, secret })
+}
+
+/// Encode `token`+`secret` to the hyphen-grouped Crockford base32 text form
+/// (`MZXW6-YTBOI-…`), for manual entry / display beneath a QR code.
+pub fn pairing_payload_to_text(token: Vec<u8>, secret: Vec<u8>) -> Result<String, String> {
+    Ok(payload_to_core(token, secret)?.to_text())
+}
+
+/// Decode a pairing code's text form back into token+secret.
+pub fn pairing_payload_from_text(text: String) -> Result<PairingPayloadDto, String> {
+    moat_core::PairingPayload::from_text(&text)
+        .map(payload_from_core)
+        .map_err(|e| e.to_string())
+}
+
+/// Encode `token`+`secret` to the `moat-pair:` URI form used for the QR payload.
+pub fn pairing_payload_to_uri(token: Vec<u8>, secret: Vec<u8>) -> Result<String, String> {
+    Ok(payload_to_core(token, secret)?.to_uri())
+}
+
+/// Decode a `moat-pair:` URI back into token+secret.
+pub fn pairing_payload_from_uri(uri: String) -> Result<PairingPayloadDto, String> {
+    moat_core::PairingPayload::from_uri(&uri)
+        .map(payload_from_core)
+        .map_err(|e| e.to_string())
+}
+
+/// Sent by the new device once the pair channel is up. `credential` reuses
+/// [`CredentialDto`] rather than a new type.
+pub struct EnrollDto {
+    pub credential: CredentialDto,
+    pub stealth_scan_pubkey: Vec<u8>,
+    pub ring_kp: Vec<u8>,
+    pub conv_kps: Vec<OfferedKpDto>,
+}
+
+/// One existing sibling's identity + stealth address, carried in
+/// `Admit.roster`.
+pub struct SiblingInfoDto {
+    pub device_id: Vec<u8>,
+    pub device_name: String,
+    pub stealth_pubkey: Vec<u8>,
+}
+
+impl From<moat_core::SiblingInfo> for SiblingInfoDto {
+    fn from(s: moat_core::SiblingInfo) -> Self {
+        SiblingInfoDto {
+            device_id: s.device_id.to_vec(),
+            device_name: s.device_name,
+            stealth_pubkey: s.stealth_pubkey.to_vec(),
+        }
+    }
+}
+
+fn sibling_info_to_core(s: SiblingInfoDto) -> Result<moat_core::SiblingInfo, String> {
+    Ok(moat_core::SiblingInfo {
+        device_id: s
+            .device_id
+            .try_into()
+            .map_err(|_| "device_id must be 16 bytes".to_string())?,
+        device_name: s.device_name,
+        stealth_pubkey: s
+            .stealth_pubkey
+            .try_into()
+            .map_err(|_| "stealth_pubkey must be 32 bytes".to_string())?,
+    })
+}
+
+/// Side effect requested by [`PairingSessionHandle`]. Mirrors
+/// `moat_core::PairingCommand` 1:1 — see that type's doc for what each
+/// variant means and who's expected to act on it.
+pub enum PairingCommandDto {
+    SendFrame { ciphertext: Vec<u8> },
+    SeedKpPool { device_id: Vec<u8>, kps: Vec<OfferedKpDto> },
+    PublishRingCommit { tag: Vec<u8>, ciphertext: Vec<u8> },
+    SurfaceApprovalPrompt { device_name: String, did: String },
+    PersistRing { ring_id: Vec<u8> },
+    RosterReceived { roster: Vec<SiblingInfoDto> },
+    StartSync,
+}
+
+impl From<moat_core::PairingCommand> for PairingCommandDto {
+    fn from(c: moat_core::PairingCommand) -> Self {
+        use moat_core::PairingCommand;
+        match c {
+            PairingCommand::SendFrame { ciphertext } => {
+                PairingCommandDto::SendFrame { ciphertext }
+            }
+            PairingCommand::SeedKpPool { device_id, kps } => PairingCommandDto::SeedKpPool {
+                device_id: device_id.to_vec(),
+                kps: kps
+                    .into_iter()
+                    .map(|kp| OfferedKpDto { rkey: kp.rkey, seq: kp.seq, key_package: kp.key_package })
+                    .collect(),
+            },
+            PairingCommand::PublishRingCommit { tag, ciphertext } => {
+                PairingCommandDto::PublishRingCommit { tag: tag.to_vec(), ciphertext }
+            }
+            PairingCommand::SurfaceApprovalPrompt { device_name, did } => {
+                PairingCommandDto::SurfaceApprovalPrompt { device_name, did }
+            }
+            PairingCommand::PersistRing { ring_id } => PairingCommandDto::PersistRing { ring_id },
+            PairingCommand::RosterReceived { roster } => PairingCommandDto::RosterReceived {
+                roster: roster.into_iter().map(SiblingInfoDto::from).collect(),
+            },
+            PairingCommand::StartSync => PairingCommandDto::StartSync,
+        }
+    }
+}
+
+fn credential_from_dto(dto: CredentialDto) -> Result<MoatCredential, String> {
+    let device_id: [u8; 16] = dto
+        .device_id
+        .try_into()
+        .map_err(|_| "device_id must be 16 bytes".to_string())?;
+    Ok(MoatCredential::new(&dto.did, &dto.device_name, device_id))
+}
+
+/// Opaque handle to a `PairingSession`, thread-safe via Mutex. Both roles
+/// (new device / existing device) live in one type, selected at
+/// construction — mirrors `moat_core::pairing::PairingSession` exactly.
+pub struct PairingSessionHandle {
+    inner: Mutex<moat_core::PairingSession>,
+}
+
+impl PairingSessionHandle {
+    /// Construct a session for the new (joining) device.
+    #[frb(sync)]
+    pub fn new_device(secret: Vec<u8>, token: Vec<u8>) -> Result<PairingSessionHandle, String> {
+        let secret: [u8; moat_core::PAIRING_SECRET_LEN] = secret
+            .try_into()
+            .map_err(|_| "secret must be 32 bytes".to_string())?;
+        let token: [u8; moat_core::PAIRING_TOKEN_LEN] = token
+            .try_into()
+            .map_err(|_| "token must be 16 bytes".to_string())?;
+        Ok(PairingSessionHandle {
+            inner: Mutex::new(moat_core::PairingSession::new_device(&secret, &token)),
+        })
+    }
+
+    /// Construct a session for the existing (approving) device.
+    #[frb(sync)]
+    pub fn existing_device(secret: Vec<u8>, token: Vec<u8>) -> Result<PairingSessionHandle, String> {
+        let secret: [u8; moat_core::PAIRING_SECRET_LEN] = secret
+            .try_into()
+            .map_err(|_| "secret must be 32 bytes".to_string())?;
+        let token: [u8; moat_core::PAIRING_TOKEN_LEN] = token
+            .try_into()
+            .map_err(|_| "token must be 16 bytes".to_string())?;
+        Ok(PairingSessionHandle {
+            inner: Mutex::new(moat_core::PairingSession::existing_device(&secret, &token)),
+        })
+    }
+
+    /// New device: build and seal the `Enroll` frame once the pair channel
+    /// reaches `paired`.
+    pub fn start_enroll(
+        &self,
+        session: &MoatSessionHandle,
+        credential: CredentialDto,
+        key_bundle: Vec<u8>,
+        stealth_scan_pubkey: Vec<u8>,
+        conv_kps: Vec<OfferedKpDto>,
+    ) -> Result<Vec<PairingCommandDto>, String> {
+        let credential = credential_from_dto(credential)?;
+        let stealth_scan_pubkey: [u8; 32] = stealth_scan_pubkey
+            .try_into()
+            .map_err(|_| "stealth_scan_pubkey must be 32 bytes".to_string())?;
+        let kps: Vec<moat_core::OfferedKp> = conv_kps
+            .into_iter()
+            .map(|kp| moat_core::OfferedKp { rkey: kp.rkey, seq: kp.seq, key_package: kp.key_package })
+            .collect();
+        let session_lock = session.inner.lock().unwrap();
+        let cmds = self
+            .inner
+            .lock()
+            .unwrap()
+            .start_enroll(&session_lock, &credential, &key_bundle, stealth_scan_pubkey, kps)
+            .map_err(|e| e.to_string())?;
+        Ok(cmds.into_iter().map(PairingCommandDto::from).collect())
+    }
+
+    /// Feed a sealed frame received over the pair channel. Dispatches on
+    /// role + phase; a decryption or ordering-violation error aborts the
+    /// session (returned as `Err`).
+    pub fn on_frame_received(
+        &self,
+        session: &MoatSessionHandle,
+        own_credential: CredentialDto,
+        ciphertext: Vec<u8>,
+    ) -> Result<Vec<PairingCommandDto>, String> {
+        let own_credential = credential_from_dto(own_credential)?;
+        let session_lock = session.inner.lock().unwrap();
+        let cmds = self
+            .inner
+            .lock()
+            .unwrap()
+            .on_frame_received(&session_lock, &own_credential, &ciphertext)
+            .map_err(|e| e.to_string())?;
+        Ok(cmds.into_iter().map(PairingCommandDto::from).collect())
+    }
+
+    /// Existing device only: the peer's `Enroll`, once received, pending
+    /// the user's approval decision.
+    #[frb(sync)]
+    pub fn pending_enroll(&self) -> Option<EnrollDto> {
+        self.inner.lock().unwrap().pending_enroll().map(|e| EnrollDto {
+            credential: CredentialDto {
+                did: e.credential.did().to_string(),
+                device_id: e.credential.device_id().to_vec(),
+                device_name: e.credential.device_name().to_string(),
+            },
+            stealth_scan_pubkey: e.stealth_scan_pubkey.to_vec(),
+            ring_kp: e.ring_kp.clone(),
+            conv_kps: e
+                .conv_kps
+                .iter()
+                .map(|kp| OfferedKpDto {
+                    rkey: kp.rkey.clone(),
+                    seq: kp.seq,
+                    key_package: kp.key_package.clone(),
+                })
+                .collect(),
+        })
+    }
+
+    /// The ring this session ended up in, once known.
+    #[frb(sync)]
+    pub fn ring_id(&self) -> Option<Vec<u8>> {
+        self.inner.lock().unwrap().ring_id().map(<[u8]>::to_vec)
+    }
+
+    /// Existing device only: called once the user taps Approve. Creates
+    /// the ring (first pairing) or adds the joiner (subsequent pairings),
+    /// seeds the newcomer's KP pool, and emits the sealed `Admit` frame.
+    pub fn approve(
+        &self,
+        session: &MoatSessionHandle,
+        credential: CredentialDto,
+        key_bundle: Vec<u8>,
+        own_stealth_pubkey: Vec<u8>,
+        known_siblings: Vec<SiblingInfoDto>,
+        existing_ring_id: Option<Vec<u8>>,
+    ) -> Result<Vec<PairingCommandDto>, String> {
+        let credential = credential_from_dto(credential)?;
+        let own_stealth_pubkey: [u8; 32] = own_stealth_pubkey
+            .try_into()
+            .map_err(|_| "own_stealth_pubkey must be 32 bytes".to_string())?;
+        let siblings: Vec<moat_core::SiblingInfo> = known_siblings
+            .into_iter()
+            .map(sibling_info_to_core)
+            .collect::<Result<_, _>>()?;
+        let session_lock = session.inner.lock().unwrap();
+        let cmds = self
+            .inner
+            .lock()
+            .unwrap()
+            .approve(
+                &session_lock,
+                &credential,
+                &key_bundle,
+                own_stealth_pubkey,
+                &siblings,
+                existing_ring_id.as_deref(),
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(cmds.into_iter().map(PairingCommandDto::from).collect())
+    }
+
+    /// `true` once this session has reached its terminal `Done` phase.
+    #[frb(sync)]
+    pub fn is_done(&self) -> bool {
+        self.inner.lock().unwrap().is_done()
+    }
+
+    /// The new-device→existing-device directional AEAD key, for
+    /// continuing the pairing-AEAD stream past `is_done()` (the history
+    /// sync handoff) — see `next_send_counter`/`next_recv_counter`.
+    #[frb(sync)]
+    pub fn channel_key_new_to_old(&self) -> Vec<u8> {
+        self.inner.lock().unwrap().channel_keys().k_new_to_old.to_vec()
+    }
+
+    /// The existing-device→new-device directional AEAD key.
+    #[frb(sync)]
+    pub fn channel_key_old_to_new(&self) -> Vec<u8> {
+        self.inner.lock().unwrap().channel_keys().k_old_to_new.to_vec()
+    }
+
+    /// Next unused counter for frames *we* send, continuing this session's
+    /// own sequence — never reuse a value already used during Enroll/Admit/Done.
+    #[frb(sync)]
+    pub fn next_send_counter(&self) -> u64 {
+        self.inner.lock().unwrap().next_send_counter()
+    }
+
+    /// Next unused counter for frames *we* expect to receive.
+    #[frb(sync)]
+    pub fn next_recv_counter(&self) -> u64 {
+        self.inner.lock().unwrap().next_recv_counter()
+    }
+}
+
+/// Seal a frame with AES-128-GCM under the pairing channel's directional
+/// key (`key` must be 16 bytes — one of `channel_key_new_to_old`/
+/// `channel_key_old_to_new`). Used to run the pairing-AEAD history-sync
+/// phase after `is_done()`, continuing the counter sequence — never reuse
+/// a counter value under the same key.
+pub fn pairing_seal_frame(key: Vec<u8>, counter: u64, plaintext: Vec<u8>) -> Result<Vec<u8>, String> {
+    let key: [u8; moat_core::PAIRING_FRAME_KEY_LEN] = key
+        .try_into()
+        .map_err(|_| "key must be 16 bytes".to_string())?;
+    Ok(moat_core::seal_frame(&key, counter, &plaintext))
+}
+
+/// Open a frame sealed by [`pairing_seal_frame`].
+pub fn pairing_open_frame(key: Vec<u8>, counter: u64, ciphertext: Vec<u8>) -> Result<Vec<u8>, String> {
+    let key: [u8; moat_core::PAIRING_FRAME_KEY_LEN] = key
+        .try_into()
+        .map_err(|_| "key must be 16 bytes".to_string())?;
+    moat_core::open_frame(&key, counter, &ciphertext).map_err(|e| e.to_string())
+}
+
+/// `true` if `plaintext` (already opened under the pairing AEAD) decodes
+/// as the pairing session's advisory `Done` courtesy rather than a
+/// `SyncMsg`. Used by the post-Done pairing-sync phase to recognize and
+/// ignore a `Done` that arrives after the local side has already
+/// transitioned to sync-frame dispatch — see the note on
+/// `PairingCommandDto.startSync` for why this can happen even in a
+/// well-behaved exchange.
+#[frb(sync)]
+pub fn pairing_frame_is_done(plaintext: Vec<u8>) -> bool {
+    matches!(
+        moat_core::decode_pairing_msg(&plaintext),
+        Ok(moat_core::PairingMsg::Done)
+    )
+}
+
+/// How many fresh KeyPackages a new device should seed the approver's pool
+/// with via `Enroll.conv_kps` — `moat_core::device_ring::KP_POOL_TARGET`,
+/// exposed so hosts building that batch (e.g. `PairingService.dart`) don't
+/// hand-duplicate the literal.
+#[frb(sync)]
+pub fn kp_pool_target() -> u64 {
+    moat_core::KP_POOL_TARGET as u64
 }
 
 #[frb(init)]
@@ -2283,5 +2709,131 @@ mod push_tests {
         assert_eq!(push_media_label(Some("image/gif")), "🎞️ GIF");
         assert_eq!(push_media_label(Some("video/mp4")), "🎬 Video");
         assert_eq!(push_media_label(Some("video/webm")), "🎬 Video");
+    }
+}
+
+#[cfg(test)]
+mod pairing_ffi_tests {
+    use super::*;
+
+    fn cred(session: &MoatSessionHandle, did: &str, device_name: &str) -> CredentialDto {
+        CredentialDto {
+            did: did.to_string(),
+            device_id: session.device_id(),
+            device_name: device_name.to_string(),
+        }
+    }
+
+    #[test]
+    fn pairing_payload_text_roundtrip() {
+        let text = pairing_payload_to_text(vec![0x11u8; 16], vec![0x22u8; 32]).unwrap();
+        assert!(text.contains('-'), "text form should be hyphen-grouped");
+        let decoded = pairing_payload_from_text(text).unwrap();
+        assert_eq!(decoded.token, vec![0x11u8; 16]);
+        assert_eq!(decoded.secret, vec![0x22u8; 32]);
+    }
+
+    #[test]
+    fn pairing_payload_uri_roundtrip() {
+        let uri = pairing_payload_to_uri(vec![0x33u8; 16], vec![0x44u8; 32]).unwrap();
+        assert!(uri.starts_with("moat-pair:"));
+        let decoded = pairing_payload_from_uri(uri).unwrap();
+        assert_eq!(decoded.token, vec![0x33u8; 16]);
+        assert_eq!(decoded.secret, vec![0x44u8; 32]);
+    }
+
+    #[test]
+    fn pairing_payload_from_text_rejects_bad_characters() {
+        assert!(pairing_payload_from_text("IIIII-LLLLL-OOOOO-UUUUU".to_string()).is_err());
+    }
+
+    /// Full Enroll → Admit → Done exchange over the FFI surface — the Dart
+    /// mirror of `moat-core/tests/pairing_simulation.rs`'s
+    /// `two_device_pairing_converges`.
+    #[test]
+    fn two_device_pairing_converges_via_ffi() {
+        let new_session = MoatSessionHandle::new_session();
+        let existing_session = MoatSessionHandle::new_session();
+        let new_kp = new_session
+            .generate_key_package("did:plc:alice".into(), "Alice's Phone".into())
+            .unwrap();
+        let existing_kp = existing_session
+            .generate_key_package("did:plc:alice".into(), "Alice's Laptop".into())
+            .unwrap();
+
+        let new_pairing =
+            PairingSessionHandle::new_device(vec![0x42u8; 32], vec![0x24u8; 16]).unwrap();
+        let existing_pairing =
+            PairingSessionHandle::existing_device(vec![0x42u8; 32], vec![0x24u8; 16]).unwrap();
+
+        let enroll_cmds = new_pairing
+            .start_enroll(
+                &new_session,
+                cred(&new_session, "did:plc:alice", "Alice's Phone"),
+                new_kp.key_bundle,
+                vec![0u8; 32],
+                vec![],
+            )
+            .unwrap();
+        let enroll_frame = enroll_cmds
+            .into_iter()
+            .find_map(|c| match c {
+                PairingCommandDto::SendFrame { ciphertext } => Some(ciphertext),
+                _ => None,
+            })
+            .expect("start_enroll must emit a SendFrame");
+
+        let existing_cmds = existing_pairing
+            .on_frame_received(
+                &existing_session,
+                cred(&existing_session, "did:plc:alice", "Alice's Laptop"),
+                enroll_frame,
+            )
+            .unwrap();
+        assert!(existing_cmds
+            .iter()
+            .any(|c| matches!(c, PairingCommandDto::SurfaceApprovalPrompt { .. })));
+        assert!(existing_pairing.pending_enroll().is_some());
+
+        let admit_cmds = existing_pairing
+            .approve(
+                &existing_session,
+                cred(&existing_session, "did:plc:alice", "Alice's Laptop"),
+                existing_kp.key_bundle,
+                vec![1u8; 32],
+                vec![],
+                None,
+            )
+            .unwrap();
+        assert!(admit_cmds.iter().any(|c| matches!(c, PairingCommandDto::SeedKpPool { .. })));
+        assert!(admit_cmds
+            .iter()
+            .any(|c| matches!(c, PairingCommandDto::PublishRingCommit { .. })));
+        assert!(admit_cmds.iter().any(|c| matches!(c, PairingCommandDto::StartSync)));
+
+        let admit_frame = admit_cmds
+            .into_iter()
+            .find_map(|c| match c {
+                PairingCommandDto::SendFrame { ciphertext } => Some(ciphertext),
+                _ => None,
+            })
+            .expect("approve must emit a SendFrame");
+
+        let final_cmds = new_pairing
+            .on_frame_received(
+                &new_session,
+                cred(&new_session, "did:plc:alice", "Alice's Phone"),
+                admit_frame,
+            )
+            .unwrap();
+        assert!(final_cmds.iter().any(|c| matches!(c, PairingCommandDto::PersistRing { .. })));
+        assert!(final_cmds
+            .iter()
+            .any(|c| matches!(c, PairingCommandDto::RosterReceived { .. })));
+        assert!(final_cmds.iter().any(|c| matches!(c, PairingCommandDto::StartSync)));
+
+        assert!(new_pairing.is_done());
+        assert!(existing_pairing.is_done());
+        assert_eq!(new_pairing.ring_id(), existing_pairing.ring_id());
     }
 }

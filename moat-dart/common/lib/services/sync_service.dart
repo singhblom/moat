@@ -1,8 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import '../models/conversation.dart';
-import '../models/message.dart';
 import '../rust/api/simple.dart' as ffi;
 import 'auth_service.dart';
 import 'conversation_storage.dart';
@@ -10,6 +8,7 @@ import 'debug_log.dart';
 import 'device_ring_service.dart';
 import 'drawbridge_service.dart';
 import 'message_storage.dart';
+import 'paired_sync_builder.dart';
 
 /// Owns a [ffi.SyncSessionHandle] and bridges it to the Drawbridge `/pair` WS.
 ///
@@ -46,6 +45,16 @@ class SyncService {
         _ring = ring,
         _convStorage = conversationStorage,
         _messageStorage = messageStorage {
+    reclaimPairCallbacks();
+  }
+
+  /// (Re-)claim `DrawbridgeService.onPairConnected`/`onPairFrame`/
+  /// `onPairClosed`. Normally only needed once, from the constructor —
+  /// exposed as a public method so `PairingService` can hand these
+  /// callback slots back after a live pairing exchange (which needs them
+  /// too, for its own attached-phase Enroll/Admit/Done + post-Done sync)
+  /// completes or aborts.
+  void reclaimPairCallbacks() {
     _drawbridge.onPairConnected = _handlePairConnected;
     _drawbridge.onPairFrame = _handlePairFrame;
     _drawbridge.onPairClosed = _handlePairClosed;
@@ -109,30 +118,16 @@ class SyncService {
     }
     final ringEpoch = (await session.getGroupEpoch(groupId: ringId)) ?? BigInt.zero;
 
-    final conversations = await _convStorage.loadAll();
-    final syncSession = ffi.SyncSessionHandle.newSession();
-    _session = syncSession;
+    final setup = await buildPairedSyncSession(
+      session: session,
+      convStorage: _convStorage,
+      messageStorage: _messageStorage,
+      ringEpoch: ringEpoch,
+    );
+    _session = setup.session;
 
-    final convStates = <ffi.ConvStateDto>[];
-    for (final conv in conversations) {
-      final ourMessages =
-          await _loadSyncMessagesFor(conv.groupIdHex, conv.groupId);
-      await syncSession.addConvPlan(
-        groupId: conv.groupId,
-        convId: conv.groupIdHex,
-        ourMessages: ourMessages,
-        expectingBatch: ourMessages.isEmpty,
-      );
-      final state = await _convStateFor(session, conv, ourMessages);
-      if (state != null) convStates.add(state);
-    }
-
-    moatLog('SyncService: calling onPaired with ${convStates.length} convs, ringEpoch=$ringEpoch');
-
-    final outputs =
-        await syncSession.onPaired(ourConvs: convStates, ringEpoch: ringEpoch);
-    moatLog('SyncService: onPaired returned ${outputs.length} outputs');
-    await _processOutputs(outputs, ringId, keyBundle, did);
+    moatLog('SyncService: onPaired returned ${setup.outputs.length} outputs');
+    await _processOutputs(setup.outputs, ringId, keyBundle, did);
 
     // Replay any frames that arrived during the async setup window (before
     // onPaired was called).  Now that the state machine has processed onPaired,
@@ -217,15 +212,9 @@ class SyncService {
           }
         },
         store: (convId, messages) async {
-          final groupId = _decodeHex(convId);
-          final mapped = messages
-              .map((m) => _messageFromSyncDto(m, groupId, did))
-              .toList(growable: false);
-          if (mapped.isNotEmpty) {
-            await _messageStorage.appendMessages(convId, mapped);
-          }
-          moatLog(
-              'SyncService: stored ${mapped.length} message(s) for $convId');
+          final count =
+              await storeSyncOutputMessages(_messageStorage, convId, messages, did);
+          moatLog('SyncService: stored $count message(s) for $convId');
         },
         complete: () async {
           moatLog('SyncService: session complete — closing pair WS');
@@ -237,91 +226,10 @@ class SyncService {
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
-
-  Future<List<ffi.SyncMessageDto>> _loadSyncMessagesFor(
-    String convId,
-    Uint8List groupId,
-  ) async {
-    final messages = await _messageStorage.loadMessages(convId);
-    final out = <ffi.SyncMessageDto>[];
-    for (final m in messages) {
-      // Skip optimistic/local-only messages: they have no rkey assigned yet.
-      if (m.localId != null && m.rkey == 'pending') continue;
-      out.add(ffi.SyncMessageDto(
-        rkey: m.rkey,
-        messageId: m.messageId,
-        senderDid: m.senderDid,
-        senderDeviceName: m.senderDeviceId ?? '',
-        timestampMs: m.timestamp.millisecondsSinceEpoch,
-        content: m.content,
-        isOwn: m.isOwn,
-        // Attachments are not yet round-tripped through sync; keep null for
-        // text-only messages and rely on the original PDS publish for media.
-      ));
-    }
-    return out;
-  }
-
-  Future<ffi.ConvStateDto?> _convStateFor(
-    ffi.MoatSessionHandle session,
-    Conversation conv,
-    List<ffi.SyncMessageDto> ourMessages,
-  ) async {
-    try {
-      final tip = await session.digestTip(groupId: conv.groupId);
-      final anchors = await session.digestAnchors(groupId: conv.groupId);
-      // digestRange relies on append_to_digest which is not called in the Dart
-      // path. Derive oldest/newest directly from the messages we loaded.
-      String? oldestRkey;
-      String? newestRkey;
-      if (ourMessages.isNotEmpty) {
-        final rkeys = ourMessages.map((m) => m.rkey).toList()..sort();
-        oldestRkey = rkeys.first;
-        newestRkey = rkeys.last;
-      }
-      return ffi.ConvStateDto(
-        groupId: conv.groupId,
-        oldestRkey: oldestRkey,
-        newestRkey: newestRkey,
-        tipDigest: tip ?? Uint8List(32),
-        anchors: anchors,
-      );
-    } catch (e) {
-      moatLog('SyncService: convState failed for ${conv.groupIdHex}: $e');
-      return null;
-    }
-  }
-
-  Message _messageFromSyncDto(
-    ffi.SyncMessageDto m,
-    Uint8List groupId,
-    String myDid,
-  ) {
-    final isOwn = m.senderDid == myDid;
-    final id = '${_hex(groupId)}_${m.rkey}';
-    return Message(
-      id: id,
-      groupId: groupId,
-      senderDid: m.senderDid,
-      senderDeviceId: m.senderDeviceName.isEmpty ? null : m.senderDeviceName,
-      content: m.content,
-      timestamp: DateTime.fromMillisecondsSinceEpoch(m.timestampMs),
-      isOwn: isOwn,
-      epoch: 0,
-      messageId: m.messageId,
-    );
-  }
-
-  String _hex(Uint8List bytes) =>
-      bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-
-  Uint8List _decodeHex(String hex) {
-    final out = Uint8List(hex.length ~/ 2);
-    for (var i = 0; i < out.length; i++) {
-      out[i] = int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16);
-    }
-    return out;
-  }
+  //
+  // Conv-state gathering (loading local messages, building ConvStateDtos)
+  // and Store-output handling moved to `paired_sync_builder.dart`, shared
+  // with `PairingService`'s post-Done sync phase.
 
   /// Single teardown funnel for a sync session, however it ended. Every path
   /// that drops the session goes through here so the ring driver always learns

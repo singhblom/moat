@@ -6,10 +6,6 @@
 //! successor to the deleted `three_device_bootstrap` scenario's coord-group
 //! handshake.
 //!
-//! **Intentionally red**, for the same reason as `two_device_pairing`:
-//! `/pair/*` doesn't exist on moat-cli's http server yet, and
-//! `moat_core::pairing::PairingSession` is unimplemented.
-//!
 //! Unlike `two_device_pairing`, this scenario doesn't need to thread a ring
 //! id anywhere by hand: D1's own persisted ring state already remembers
 //! which ring it belongs to, so `pair_confirm` for D3's code re-uses it

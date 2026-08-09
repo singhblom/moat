@@ -15,6 +15,1458 @@ final _privateConstructorUsedError = UnsupportedError(
     'It seems like you constructed your class using `MyClass._()`. This constructor is only meant to be used by freezed and you are not supposed to need it nor use it.\nPlease check the documentation here for more information: https://github.com/rrousselGit/freezed#adding-getters-and-methods-to-our-models');
 
 /// @nodoc
+mixin _$PairingCommandDto {
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(Uint8List ciphertext) sendFrame,
+    required TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)
+        seedKpPool,
+    required TResult Function(Uint8List tag, Uint8List ciphertext)
+        publishRingCommit,
+    required TResult Function(String deviceName, String did)
+        surfaceApprovalPrompt,
+    required TResult Function(Uint8List ringId) persistRing,
+    required TResult Function(List<SiblingInfoDto> roster) rosterReceived,
+    required TResult Function() startSync,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(Uint8List ciphertext)? sendFrame,
+    TResult? Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
+    TResult? Function(String deviceName, String did)? surfaceApprovalPrompt,
+    TResult? Function(Uint8List ringId)? persistRing,
+    TResult? Function(List<SiblingInfoDto> roster)? rosterReceived,
+    TResult? Function()? startSync,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(Uint8List ciphertext)? sendFrame,
+    TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
+    TResult Function(String deviceName, String did)? surfaceApprovalPrompt,
+    TResult Function(Uint8List ringId)? persistRing,
+    TResult Function(List<SiblingInfoDto> roster)? rosterReceived,
+    TResult Function()? startSync,
+    required TResult orElse(),
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(PairingCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairingCommandDto_SeedKpPool value) seedKpPool,
+    required TResult Function(PairingCommandDto_PublishRingCommit value)
+        publishRingCommit,
+    required TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)
+        surfaceApprovalPrompt,
+    required TResult Function(PairingCommandDto_PersistRing value) persistRing,
+    required TResult Function(PairingCommandDto_RosterReceived value)
+        rosterReceived,
+    required TResult Function(PairingCommandDto_StartSync value) startSync,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(PairingCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
+    TResult? Function(PairingCommandDto_PublishRingCommit value)?
+        publishRingCommit,
+    TResult? Function(PairingCommandDto_SurfaceApprovalPrompt value)?
+        surfaceApprovalPrompt,
+    TResult? Function(PairingCommandDto_PersistRing value)? persistRing,
+    TResult? Function(PairingCommandDto_RosterReceived value)? rosterReceived,
+    TResult? Function(PairingCommandDto_StartSync value)? startSync,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(PairingCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
+    TResult Function(PairingCommandDto_PublishRingCommit value)?
+        publishRingCommit,
+    TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)?
+        surfaceApprovalPrompt,
+    TResult Function(PairingCommandDto_PersistRing value)? persistRing,
+    TResult Function(PairingCommandDto_RosterReceived value)? rosterReceived,
+    TResult Function(PairingCommandDto_StartSync value)? startSync,
+    required TResult orElse(),
+  }) =>
+      throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class $PairingCommandDtoCopyWith<$Res> {
+  factory $PairingCommandDtoCopyWith(
+          PairingCommandDto value, $Res Function(PairingCommandDto) then) =
+      _$PairingCommandDtoCopyWithImpl<$Res, PairingCommandDto>;
+}
+
+/// @nodoc
+class _$PairingCommandDtoCopyWithImpl<$Res, $Val extends PairingCommandDto>
+    implements $PairingCommandDtoCopyWith<$Res> {
+  _$PairingCommandDtoCopyWithImpl(this._value, this._then);
+
+  // ignore: unused_field
+  final $Val _value;
+  // ignore: unused_field
+  final $Res Function($Val) _then;
+
+  /// Create a copy of PairingCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+}
+
+/// @nodoc
+abstract class _$$PairingCommandDto_SendFrameImplCopyWith<$Res> {
+  factory _$$PairingCommandDto_SendFrameImplCopyWith(
+          _$PairingCommandDto_SendFrameImpl value,
+          $Res Function(_$PairingCommandDto_SendFrameImpl) then) =
+      __$$PairingCommandDto_SendFrameImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({Uint8List ciphertext});
+}
+
+/// @nodoc
+class __$$PairingCommandDto_SendFrameImplCopyWithImpl<$Res>
+    extends _$PairingCommandDtoCopyWithImpl<$Res,
+        _$PairingCommandDto_SendFrameImpl>
+    implements _$$PairingCommandDto_SendFrameImplCopyWith<$Res> {
+  __$$PairingCommandDto_SendFrameImplCopyWithImpl(
+      _$PairingCommandDto_SendFrameImpl _value,
+      $Res Function(_$PairingCommandDto_SendFrameImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of PairingCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? ciphertext = null,
+  }) {
+    return _then(_$PairingCommandDto_SendFrameImpl(
+      ciphertext: null == ciphertext
+          ? _value.ciphertext
+          : ciphertext // ignore: cast_nullable_to_non_nullable
+              as Uint8List,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$PairingCommandDto_SendFrameImpl extends PairingCommandDto_SendFrame {
+  const _$PairingCommandDto_SendFrameImpl({required this.ciphertext})
+      : super._();
+
+  @override
+  final Uint8List ciphertext;
+
+  @override
+  String toString() {
+    return 'PairingCommandDto.sendFrame(ciphertext: $ciphertext)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$PairingCommandDto_SendFrameImpl &&
+            const DeepCollectionEquality()
+                .equals(other.ciphertext, ciphertext));
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(runtimeType, const DeepCollectionEquality().hash(ciphertext));
+
+  /// Create a copy of PairingCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$PairingCommandDto_SendFrameImplCopyWith<_$PairingCommandDto_SendFrameImpl>
+      get copyWith => __$$PairingCommandDto_SendFrameImplCopyWithImpl<
+          _$PairingCommandDto_SendFrameImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(Uint8List ciphertext) sendFrame,
+    required TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)
+        seedKpPool,
+    required TResult Function(Uint8List tag, Uint8List ciphertext)
+        publishRingCommit,
+    required TResult Function(String deviceName, String did)
+        surfaceApprovalPrompt,
+    required TResult Function(Uint8List ringId) persistRing,
+    required TResult Function(List<SiblingInfoDto> roster) rosterReceived,
+    required TResult Function() startSync,
+  }) {
+    return sendFrame(ciphertext);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(Uint8List ciphertext)? sendFrame,
+    TResult? Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
+    TResult? Function(String deviceName, String did)? surfaceApprovalPrompt,
+    TResult? Function(Uint8List ringId)? persistRing,
+    TResult? Function(List<SiblingInfoDto> roster)? rosterReceived,
+    TResult? Function()? startSync,
+  }) {
+    return sendFrame?.call(ciphertext);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(Uint8List ciphertext)? sendFrame,
+    TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
+    TResult Function(String deviceName, String did)? surfaceApprovalPrompt,
+    TResult Function(Uint8List ringId)? persistRing,
+    TResult Function(List<SiblingInfoDto> roster)? rosterReceived,
+    TResult Function()? startSync,
+    required TResult orElse(),
+  }) {
+    if (sendFrame != null) {
+      return sendFrame(ciphertext);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(PairingCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairingCommandDto_SeedKpPool value) seedKpPool,
+    required TResult Function(PairingCommandDto_PublishRingCommit value)
+        publishRingCommit,
+    required TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)
+        surfaceApprovalPrompt,
+    required TResult Function(PairingCommandDto_PersistRing value) persistRing,
+    required TResult Function(PairingCommandDto_RosterReceived value)
+        rosterReceived,
+    required TResult Function(PairingCommandDto_StartSync value) startSync,
+  }) {
+    return sendFrame(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(PairingCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
+    TResult? Function(PairingCommandDto_PublishRingCommit value)?
+        publishRingCommit,
+    TResult? Function(PairingCommandDto_SurfaceApprovalPrompt value)?
+        surfaceApprovalPrompt,
+    TResult? Function(PairingCommandDto_PersistRing value)? persistRing,
+    TResult? Function(PairingCommandDto_RosterReceived value)? rosterReceived,
+    TResult? Function(PairingCommandDto_StartSync value)? startSync,
+  }) {
+    return sendFrame?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(PairingCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
+    TResult Function(PairingCommandDto_PublishRingCommit value)?
+        publishRingCommit,
+    TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)?
+        surfaceApprovalPrompt,
+    TResult Function(PairingCommandDto_PersistRing value)? persistRing,
+    TResult Function(PairingCommandDto_RosterReceived value)? rosterReceived,
+    TResult Function(PairingCommandDto_StartSync value)? startSync,
+    required TResult orElse(),
+  }) {
+    if (sendFrame != null) {
+      return sendFrame(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class PairingCommandDto_SendFrame extends PairingCommandDto {
+  const factory PairingCommandDto_SendFrame(
+          {required final Uint8List ciphertext}) =
+      _$PairingCommandDto_SendFrameImpl;
+  const PairingCommandDto_SendFrame._() : super._();
+
+  Uint8List get ciphertext;
+
+  /// Create a copy of PairingCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$PairingCommandDto_SendFrameImplCopyWith<_$PairingCommandDto_SendFrameImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class _$$PairingCommandDto_SeedKpPoolImplCopyWith<$Res> {
+  factory _$$PairingCommandDto_SeedKpPoolImplCopyWith(
+          _$PairingCommandDto_SeedKpPoolImpl value,
+          $Res Function(_$PairingCommandDto_SeedKpPoolImpl) then) =
+      __$$PairingCommandDto_SeedKpPoolImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({Uint8List deviceId, List<OfferedKpDto> kps});
+}
+
+/// @nodoc
+class __$$PairingCommandDto_SeedKpPoolImplCopyWithImpl<$Res>
+    extends _$PairingCommandDtoCopyWithImpl<$Res,
+        _$PairingCommandDto_SeedKpPoolImpl>
+    implements _$$PairingCommandDto_SeedKpPoolImplCopyWith<$Res> {
+  __$$PairingCommandDto_SeedKpPoolImplCopyWithImpl(
+      _$PairingCommandDto_SeedKpPoolImpl _value,
+      $Res Function(_$PairingCommandDto_SeedKpPoolImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of PairingCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? deviceId = null,
+    Object? kps = null,
+  }) {
+    return _then(_$PairingCommandDto_SeedKpPoolImpl(
+      deviceId: null == deviceId
+          ? _value.deviceId
+          : deviceId // ignore: cast_nullable_to_non_nullable
+              as Uint8List,
+      kps: null == kps
+          ? _value._kps
+          : kps // ignore: cast_nullable_to_non_nullable
+              as List<OfferedKpDto>,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$PairingCommandDto_SeedKpPoolImpl extends PairingCommandDto_SeedKpPool {
+  const _$PairingCommandDto_SeedKpPoolImpl(
+      {required this.deviceId, required final List<OfferedKpDto> kps})
+      : _kps = kps,
+        super._();
+
+  @override
+  final Uint8List deviceId;
+  final List<OfferedKpDto> _kps;
+  @override
+  List<OfferedKpDto> get kps {
+    if (_kps is EqualUnmodifiableListView) return _kps;
+    // ignore: implicit_dynamic_type
+    return EqualUnmodifiableListView(_kps);
+  }
+
+  @override
+  String toString() {
+    return 'PairingCommandDto.seedKpPool(deviceId: $deviceId, kps: $kps)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$PairingCommandDto_SeedKpPoolImpl &&
+            const DeepCollectionEquality().equals(other.deviceId, deviceId) &&
+            const DeepCollectionEquality().equals(other._kps, _kps));
+  }
+
+  @override
+  int get hashCode => Object.hash(
+      runtimeType,
+      const DeepCollectionEquality().hash(deviceId),
+      const DeepCollectionEquality().hash(_kps));
+
+  /// Create a copy of PairingCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$PairingCommandDto_SeedKpPoolImplCopyWith<
+          _$PairingCommandDto_SeedKpPoolImpl>
+      get copyWith => __$$PairingCommandDto_SeedKpPoolImplCopyWithImpl<
+          _$PairingCommandDto_SeedKpPoolImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(Uint8List ciphertext) sendFrame,
+    required TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)
+        seedKpPool,
+    required TResult Function(Uint8List tag, Uint8List ciphertext)
+        publishRingCommit,
+    required TResult Function(String deviceName, String did)
+        surfaceApprovalPrompt,
+    required TResult Function(Uint8List ringId) persistRing,
+    required TResult Function(List<SiblingInfoDto> roster) rosterReceived,
+    required TResult Function() startSync,
+  }) {
+    return seedKpPool(deviceId, kps);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(Uint8List ciphertext)? sendFrame,
+    TResult? Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
+    TResult? Function(String deviceName, String did)? surfaceApprovalPrompt,
+    TResult? Function(Uint8List ringId)? persistRing,
+    TResult? Function(List<SiblingInfoDto> roster)? rosterReceived,
+    TResult? Function()? startSync,
+  }) {
+    return seedKpPool?.call(deviceId, kps);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(Uint8List ciphertext)? sendFrame,
+    TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
+    TResult Function(String deviceName, String did)? surfaceApprovalPrompt,
+    TResult Function(Uint8List ringId)? persistRing,
+    TResult Function(List<SiblingInfoDto> roster)? rosterReceived,
+    TResult Function()? startSync,
+    required TResult orElse(),
+  }) {
+    if (seedKpPool != null) {
+      return seedKpPool(deviceId, kps);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(PairingCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairingCommandDto_SeedKpPool value) seedKpPool,
+    required TResult Function(PairingCommandDto_PublishRingCommit value)
+        publishRingCommit,
+    required TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)
+        surfaceApprovalPrompt,
+    required TResult Function(PairingCommandDto_PersistRing value) persistRing,
+    required TResult Function(PairingCommandDto_RosterReceived value)
+        rosterReceived,
+    required TResult Function(PairingCommandDto_StartSync value) startSync,
+  }) {
+    return seedKpPool(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(PairingCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
+    TResult? Function(PairingCommandDto_PublishRingCommit value)?
+        publishRingCommit,
+    TResult? Function(PairingCommandDto_SurfaceApprovalPrompt value)?
+        surfaceApprovalPrompt,
+    TResult? Function(PairingCommandDto_PersistRing value)? persistRing,
+    TResult? Function(PairingCommandDto_RosterReceived value)? rosterReceived,
+    TResult? Function(PairingCommandDto_StartSync value)? startSync,
+  }) {
+    return seedKpPool?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(PairingCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
+    TResult Function(PairingCommandDto_PublishRingCommit value)?
+        publishRingCommit,
+    TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)?
+        surfaceApprovalPrompt,
+    TResult Function(PairingCommandDto_PersistRing value)? persistRing,
+    TResult Function(PairingCommandDto_RosterReceived value)? rosterReceived,
+    TResult Function(PairingCommandDto_StartSync value)? startSync,
+    required TResult orElse(),
+  }) {
+    if (seedKpPool != null) {
+      return seedKpPool(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class PairingCommandDto_SeedKpPool extends PairingCommandDto {
+  const factory PairingCommandDto_SeedKpPool(
+          {required final Uint8List deviceId,
+          required final List<OfferedKpDto> kps}) =
+      _$PairingCommandDto_SeedKpPoolImpl;
+  const PairingCommandDto_SeedKpPool._() : super._();
+
+  Uint8List get deviceId;
+  List<OfferedKpDto> get kps;
+
+  /// Create a copy of PairingCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$PairingCommandDto_SeedKpPoolImplCopyWith<
+          _$PairingCommandDto_SeedKpPoolImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class _$$PairingCommandDto_PublishRingCommitImplCopyWith<$Res> {
+  factory _$$PairingCommandDto_PublishRingCommitImplCopyWith(
+          _$PairingCommandDto_PublishRingCommitImpl value,
+          $Res Function(_$PairingCommandDto_PublishRingCommitImpl) then) =
+      __$$PairingCommandDto_PublishRingCommitImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({Uint8List tag, Uint8List ciphertext});
+}
+
+/// @nodoc
+class __$$PairingCommandDto_PublishRingCommitImplCopyWithImpl<$Res>
+    extends _$PairingCommandDtoCopyWithImpl<$Res,
+        _$PairingCommandDto_PublishRingCommitImpl>
+    implements _$$PairingCommandDto_PublishRingCommitImplCopyWith<$Res> {
+  __$$PairingCommandDto_PublishRingCommitImplCopyWithImpl(
+      _$PairingCommandDto_PublishRingCommitImpl _value,
+      $Res Function(_$PairingCommandDto_PublishRingCommitImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of PairingCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? tag = null,
+    Object? ciphertext = null,
+  }) {
+    return _then(_$PairingCommandDto_PublishRingCommitImpl(
+      tag: null == tag
+          ? _value.tag
+          : tag // ignore: cast_nullable_to_non_nullable
+              as Uint8List,
+      ciphertext: null == ciphertext
+          ? _value.ciphertext
+          : ciphertext // ignore: cast_nullable_to_non_nullable
+              as Uint8List,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$PairingCommandDto_PublishRingCommitImpl
+    extends PairingCommandDto_PublishRingCommit {
+  const _$PairingCommandDto_PublishRingCommitImpl(
+      {required this.tag, required this.ciphertext})
+      : super._();
+
+  @override
+  final Uint8List tag;
+  @override
+  final Uint8List ciphertext;
+
+  @override
+  String toString() {
+    return 'PairingCommandDto.publishRingCommit(tag: $tag, ciphertext: $ciphertext)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$PairingCommandDto_PublishRingCommitImpl &&
+            const DeepCollectionEquality().equals(other.tag, tag) &&
+            const DeepCollectionEquality()
+                .equals(other.ciphertext, ciphertext));
+  }
+
+  @override
+  int get hashCode => Object.hash(
+      runtimeType,
+      const DeepCollectionEquality().hash(tag),
+      const DeepCollectionEquality().hash(ciphertext));
+
+  /// Create a copy of PairingCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$PairingCommandDto_PublishRingCommitImplCopyWith<
+          _$PairingCommandDto_PublishRingCommitImpl>
+      get copyWith => __$$PairingCommandDto_PublishRingCommitImplCopyWithImpl<
+          _$PairingCommandDto_PublishRingCommitImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(Uint8List ciphertext) sendFrame,
+    required TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)
+        seedKpPool,
+    required TResult Function(Uint8List tag, Uint8List ciphertext)
+        publishRingCommit,
+    required TResult Function(String deviceName, String did)
+        surfaceApprovalPrompt,
+    required TResult Function(Uint8List ringId) persistRing,
+    required TResult Function(List<SiblingInfoDto> roster) rosterReceived,
+    required TResult Function() startSync,
+  }) {
+    return publishRingCommit(tag, ciphertext);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(Uint8List ciphertext)? sendFrame,
+    TResult? Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
+    TResult? Function(String deviceName, String did)? surfaceApprovalPrompt,
+    TResult? Function(Uint8List ringId)? persistRing,
+    TResult? Function(List<SiblingInfoDto> roster)? rosterReceived,
+    TResult? Function()? startSync,
+  }) {
+    return publishRingCommit?.call(tag, ciphertext);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(Uint8List ciphertext)? sendFrame,
+    TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
+    TResult Function(String deviceName, String did)? surfaceApprovalPrompt,
+    TResult Function(Uint8List ringId)? persistRing,
+    TResult Function(List<SiblingInfoDto> roster)? rosterReceived,
+    TResult Function()? startSync,
+    required TResult orElse(),
+  }) {
+    if (publishRingCommit != null) {
+      return publishRingCommit(tag, ciphertext);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(PairingCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairingCommandDto_SeedKpPool value) seedKpPool,
+    required TResult Function(PairingCommandDto_PublishRingCommit value)
+        publishRingCommit,
+    required TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)
+        surfaceApprovalPrompt,
+    required TResult Function(PairingCommandDto_PersistRing value) persistRing,
+    required TResult Function(PairingCommandDto_RosterReceived value)
+        rosterReceived,
+    required TResult Function(PairingCommandDto_StartSync value) startSync,
+  }) {
+    return publishRingCommit(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(PairingCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
+    TResult? Function(PairingCommandDto_PublishRingCommit value)?
+        publishRingCommit,
+    TResult? Function(PairingCommandDto_SurfaceApprovalPrompt value)?
+        surfaceApprovalPrompt,
+    TResult? Function(PairingCommandDto_PersistRing value)? persistRing,
+    TResult? Function(PairingCommandDto_RosterReceived value)? rosterReceived,
+    TResult? Function(PairingCommandDto_StartSync value)? startSync,
+  }) {
+    return publishRingCommit?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(PairingCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
+    TResult Function(PairingCommandDto_PublishRingCommit value)?
+        publishRingCommit,
+    TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)?
+        surfaceApprovalPrompt,
+    TResult Function(PairingCommandDto_PersistRing value)? persistRing,
+    TResult Function(PairingCommandDto_RosterReceived value)? rosterReceived,
+    TResult Function(PairingCommandDto_StartSync value)? startSync,
+    required TResult orElse(),
+  }) {
+    if (publishRingCommit != null) {
+      return publishRingCommit(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class PairingCommandDto_PublishRingCommit extends PairingCommandDto {
+  const factory PairingCommandDto_PublishRingCommit(
+          {required final Uint8List tag, required final Uint8List ciphertext}) =
+      _$PairingCommandDto_PublishRingCommitImpl;
+  const PairingCommandDto_PublishRingCommit._() : super._();
+
+  Uint8List get tag;
+  Uint8List get ciphertext;
+
+  /// Create a copy of PairingCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$PairingCommandDto_PublishRingCommitImplCopyWith<
+          _$PairingCommandDto_PublishRingCommitImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class _$$PairingCommandDto_SurfaceApprovalPromptImplCopyWith<$Res> {
+  factory _$$PairingCommandDto_SurfaceApprovalPromptImplCopyWith(
+          _$PairingCommandDto_SurfaceApprovalPromptImpl value,
+          $Res Function(_$PairingCommandDto_SurfaceApprovalPromptImpl) then) =
+      __$$PairingCommandDto_SurfaceApprovalPromptImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({String deviceName, String did});
+}
+
+/// @nodoc
+class __$$PairingCommandDto_SurfaceApprovalPromptImplCopyWithImpl<$Res>
+    extends _$PairingCommandDtoCopyWithImpl<$Res,
+        _$PairingCommandDto_SurfaceApprovalPromptImpl>
+    implements _$$PairingCommandDto_SurfaceApprovalPromptImplCopyWith<$Res> {
+  __$$PairingCommandDto_SurfaceApprovalPromptImplCopyWithImpl(
+      _$PairingCommandDto_SurfaceApprovalPromptImpl _value,
+      $Res Function(_$PairingCommandDto_SurfaceApprovalPromptImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of PairingCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? deviceName = null,
+    Object? did = null,
+  }) {
+    return _then(_$PairingCommandDto_SurfaceApprovalPromptImpl(
+      deviceName: null == deviceName
+          ? _value.deviceName
+          : deviceName // ignore: cast_nullable_to_non_nullable
+              as String,
+      did: null == did
+          ? _value.did
+          : did // ignore: cast_nullable_to_non_nullable
+              as String,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$PairingCommandDto_SurfaceApprovalPromptImpl
+    extends PairingCommandDto_SurfaceApprovalPrompt {
+  const _$PairingCommandDto_SurfaceApprovalPromptImpl(
+      {required this.deviceName, required this.did})
+      : super._();
+
+  @override
+  final String deviceName;
+  @override
+  final String did;
+
+  @override
+  String toString() {
+    return 'PairingCommandDto.surfaceApprovalPrompt(deviceName: $deviceName, did: $did)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$PairingCommandDto_SurfaceApprovalPromptImpl &&
+            (identical(other.deviceName, deviceName) ||
+                other.deviceName == deviceName) &&
+            (identical(other.did, did) || other.did == did));
+  }
+
+  @override
+  int get hashCode => Object.hash(runtimeType, deviceName, did);
+
+  /// Create a copy of PairingCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$PairingCommandDto_SurfaceApprovalPromptImplCopyWith<
+          _$PairingCommandDto_SurfaceApprovalPromptImpl>
+      get copyWith =>
+          __$$PairingCommandDto_SurfaceApprovalPromptImplCopyWithImpl<
+              _$PairingCommandDto_SurfaceApprovalPromptImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(Uint8List ciphertext) sendFrame,
+    required TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)
+        seedKpPool,
+    required TResult Function(Uint8List tag, Uint8List ciphertext)
+        publishRingCommit,
+    required TResult Function(String deviceName, String did)
+        surfaceApprovalPrompt,
+    required TResult Function(Uint8List ringId) persistRing,
+    required TResult Function(List<SiblingInfoDto> roster) rosterReceived,
+    required TResult Function() startSync,
+  }) {
+    return surfaceApprovalPrompt(deviceName, did);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(Uint8List ciphertext)? sendFrame,
+    TResult? Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
+    TResult? Function(String deviceName, String did)? surfaceApprovalPrompt,
+    TResult? Function(Uint8List ringId)? persistRing,
+    TResult? Function(List<SiblingInfoDto> roster)? rosterReceived,
+    TResult? Function()? startSync,
+  }) {
+    return surfaceApprovalPrompt?.call(deviceName, did);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(Uint8List ciphertext)? sendFrame,
+    TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
+    TResult Function(String deviceName, String did)? surfaceApprovalPrompt,
+    TResult Function(Uint8List ringId)? persistRing,
+    TResult Function(List<SiblingInfoDto> roster)? rosterReceived,
+    TResult Function()? startSync,
+    required TResult orElse(),
+  }) {
+    if (surfaceApprovalPrompt != null) {
+      return surfaceApprovalPrompt(deviceName, did);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(PairingCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairingCommandDto_SeedKpPool value) seedKpPool,
+    required TResult Function(PairingCommandDto_PublishRingCommit value)
+        publishRingCommit,
+    required TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)
+        surfaceApprovalPrompt,
+    required TResult Function(PairingCommandDto_PersistRing value) persistRing,
+    required TResult Function(PairingCommandDto_RosterReceived value)
+        rosterReceived,
+    required TResult Function(PairingCommandDto_StartSync value) startSync,
+  }) {
+    return surfaceApprovalPrompt(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(PairingCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
+    TResult? Function(PairingCommandDto_PublishRingCommit value)?
+        publishRingCommit,
+    TResult? Function(PairingCommandDto_SurfaceApprovalPrompt value)?
+        surfaceApprovalPrompt,
+    TResult? Function(PairingCommandDto_PersistRing value)? persistRing,
+    TResult? Function(PairingCommandDto_RosterReceived value)? rosterReceived,
+    TResult? Function(PairingCommandDto_StartSync value)? startSync,
+  }) {
+    return surfaceApprovalPrompt?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(PairingCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
+    TResult Function(PairingCommandDto_PublishRingCommit value)?
+        publishRingCommit,
+    TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)?
+        surfaceApprovalPrompt,
+    TResult Function(PairingCommandDto_PersistRing value)? persistRing,
+    TResult Function(PairingCommandDto_RosterReceived value)? rosterReceived,
+    TResult Function(PairingCommandDto_StartSync value)? startSync,
+    required TResult orElse(),
+  }) {
+    if (surfaceApprovalPrompt != null) {
+      return surfaceApprovalPrompt(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class PairingCommandDto_SurfaceApprovalPrompt
+    extends PairingCommandDto {
+  const factory PairingCommandDto_SurfaceApprovalPrompt(
+          {required final String deviceName, required final String did}) =
+      _$PairingCommandDto_SurfaceApprovalPromptImpl;
+  const PairingCommandDto_SurfaceApprovalPrompt._() : super._();
+
+  String get deviceName;
+  String get did;
+
+  /// Create a copy of PairingCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$PairingCommandDto_SurfaceApprovalPromptImplCopyWith<
+          _$PairingCommandDto_SurfaceApprovalPromptImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class _$$PairingCommandDto_PersistRingImplCopyWith<$Res> {
+  factory _$$PairingCommandDto_PersistRingImplCopyWith(
+          _$PairingCommandDto_PersistRingImpl value,
+          $Res Function(_$PairingCommandDto_PersistRingImpl) then) =
+      __$$PairingCommandDto_PersistRingImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({Uint8List ringId});
+}
+
+/// @nodoc
+class __$$PairingCommandDto_PersistRingImplCopyWithImpl<$Res>
+    extends _$PairingCommandDtoCopyWithImpl<$Res,
+        _$PairingCommandDto_PersistRingImpl>
+    implements _$$PairingCommandDto_PersistRingImplCopyWith<$Res> {
+  __$$PairingCommandDto_PersistRingImplCopyWithImpl(
+      _$PairingCommandDto_PersistRingImpl _value,
+      $Res Function(_$PairingCommandDto_PersistRingImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of PairingCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? ringId = null,
+  }) {
+    return _then(_$PairingCommandDto_PersistRingImpl(
+      ringId: null == ringId
+          ? _value.ringId
+          : ringId // ignore: cast_nullable_to_non_nullable
+              as Uint8List,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$PairingCommandDto_PersistRingImpl
+    extends PairingCommandDto_PersistRing {
+  const _$PairingCommandDto_PersistRingImpl({required this.ringId}) : super._();
+
+  @override
+  final Uint8List ringId;
+
+  @override
+  String toString() {
+    return 'PairingCommandDto.persistRing(ringId: $ringId)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$PairingCommandDto_PersistRingImpl &&
+            const DeepCollectionEquality().equals(other.ringId, ringId));
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(runtimeType, const DeepCollectionEquality().hash(ringId));
+
+  /// Create a copy of PairingCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$PairingCommandDto_PersistRingImplCopyWith<
+          _$PairingCommandDto_PersistRingImpl>
+      get copyWith => __$$PairingCommandDto_PersistRingImplCopyWithImpl<
+          _$PairingCommandDto_PersistRingImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(Uint8List ciphertext) sendFrame,
+    required TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)
+        seedKpPool,
+    required TResult Function(Uint8List tag, Uint8List ciphertext)
+        publishRingCommit,
+    required TResult Function(String deviceName, String did)
+        surfaceApprovalPrompt,
+    required TResult Function(Uint8List ringId) persistRing,
+    required TResult Function(List<SiblingInfoDto> roster) rosterReceived,
+    required TResult Function() startSync,
+  }) {
+    return persistRing(ringId);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(Uint8List ciphertext)? sendFrame,
+    TResult? Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
+    TResult? Function(String deviceName, String did)? surfaceApprovalPrompt,
+    TResult? Function(Uint8List ringId)? persistRing,
+    TResult? Function(List<SiblingInfoDto> roster)? rosterReceived,
+    TResult? Function()? startSync,
+  }) {
+    return persistRing?.call(ringId);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(Uint8List ciphertext)? sendFrame,
+    TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
+    TResult Function(String deviceName, String did)? surfaceApprovalPrompt,
+    TResult Function(Uint8List ringId)? persistRing,
+    TResult Function(List<SiblingInfoDto> roster)? rosterReceived,
+    TResult Function()? startSync,
+    required TResult orElse(),
+  }) {
+    if (persistRing != null) {
+      return persistRing(ringId);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(PairingCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairingCommandDto_SeedKpPool value) seedKpPool,
+    required TResult Function(PairingCommandDto_PublishRingCommit value)
+        publishRingCommit,
+    required TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)
+        surfaceApprovalPrompt,
+    required TResult Function(PairingCommandDto_PersistRing value) persistRing,
+    required TResult Function(PairingCommandDto_RosterReceived value)
+        rosterReceived,
+    required TResult Function(PairingCommandDto_StartSync value) startSync,
+  }) {
+    return persistRing(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(PairingCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
+    TResult? Function(PairingCommandDto_PublishRingCommit value)?
+        publishRingCommit,
+    TResult? Function(PairingCommandDto_SurfaceApprovalPrompt value)?
+        surfaceApprovalPrompt,
+    TResult? Function(PairingCommandDto_PersistRing value)? persistRing,
+    TResult? Function(PairingCommandDto_RosterReceived value)? rosterReceived,
+    TResult? Function(PairingCommandDto_StartSync value)? startSync,
+  }) {
+    return persistRing?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(PairingCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
+    TResult Function(PairingCommandDto_PublishRingCommit value)?
+        publishRingCommit,
+    TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)?
+        surfaceApprovalPrompt,
+    TResult Function(PairingCommandDto_PersistRing value)? persistRing,
+    TResult Function(PairingCommandDto_RosterReceived value)? rosterReceived,
+    TResult Function(PairingCommandDto_StartSync value)? startSync,
+    required TResult orElse(),
+  }) {
+    if (persistRing != null) {
+      return persistRing(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class PairingCommandDto_PersistRing extends PairingCommandDto {
+  const factory PairingCommandDto_PersistRing(
+      {required final Uint8List ringId}) = _$PairingCommandDto_PersistRingImpl;
+  const PairingCommandDto_PersistRing._() : super._();
+
+  Uint8List get ringId;
+
+  /// Create a copy of PairingCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$PairingCommandDto_PersistRingImplCopyWith<
+          _$PairingCommandDto_PersistRingImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class _$$PairingCommandDto_RosterReceivedImplCopyWith<$Res> {
+  factory _$$PairingCommandDto_RosterReceivedImplCopyWith(
+          _$PairingCommandDto_RosterReceivedImpl value,
+          $Res Function(_$PairingCommandDto_RosterReceivedImpl) then) =
+      __$$PairingCommandDto_RosterReceivedImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({List<SiblingInfoDto> roster});
+}
+
+/// @nodoc
+class __$$PairingCommandDto_RosterReceivedImplCopyWithImpl<$Res>
+    extends _$PairingCommandDtoCopyWithImpl<$Res,
+        _$PairingCommandDto_RosterReceivedImpl>
+    implements _$$PairingCommandDto_RosterReceivedImplCopyWith<$Res> {
+  __$$PairingCommandDto_RosterReceivedImplCopyWithImpl(
+      _$PairingCommandDto_RosterReceivedImpl _value,
+      $Res Function(_$PairingCommandDto_RosterReceivedImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of PairingCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? roster = null,
+  }) {
+    return _then(_$PairingCommandDto_RosterReceivedImpl(
+      roster: null == roster
+          ? _value._roster
+          : roster // ignore: cast_nullable_to_non_nullable
+              as List<SiblingInfoDto>,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$PairingCommandDto_RosterReceivedImpl
+    extends PairingCommandDto_RosterReceived {
+  const _$PairingCommandDto_RosterReceivedImpl(
+      {required final List<SiblingInfoDto> roster})
+      : _roster = roster,
+        super._();
+
+  final List<SiblingInfoDto> _roster;
+  @override
+  List<SiblingInfoDto> get roster {
+    if (_roster is EqualUnmodifiableListView) return _roster;
+    // ignore: implicit_dynamic_type
+    return EqualUnmodifiableListView(_roster);
+  }
+
+  @override
+  String toString() {
+    return 'PairingCommandDto.rosterReceived(roster: $roster)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$PairingCommandDto_RosterReceivedImpl &&
+            const DeepCollectionEquality().equals(other._roster, _roster));
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(runtimeType, const DeepCollectionEquality().hash(_roster));
+
+  /// Create a copy of PairingCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$PairingCommandDto_RosterReceivedImplCopyWith<
+          _$PairingCommandDto_RosterReceivedImpl>
+      get copyWith => __$$PairingCommandDto_RosterReceivedImplCopyWithImpl<
+          _$PairingCommandDto_RosterReceivedImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(Uint8List ciphertext) sendFrame,
+    required TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)
+        seedKpPool,
+    required TResult Function(Uint8List tag, Uint8List ciphertext)
+        publishRingCommit,
+    required TResult Function(String deviceName, String did)
+        surfaceApprovalPrompt,
+    required TResult Function(Uint8List ringId) persistRing,
+    required TResult Function(List<SiblingInfoDto> roster) rosterReceived,
+    required TResult Function() startSync,
+  }) {
+    return rosterReceived(roster);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(Uint8List ciphertext)? sendFrame,
+    TResult? Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
+    TResult? Function(String deviceName, String did)? surfaceApprovalPrompt,
+    TResult? Function(Uint8List ringId)? persistRing,
+    TResult? Function(List<SiblingInfoDto> roster)? rosterReceived,
+    TResult? Function()? startSync,
+  }) {
+    return rosterReceived?.call(roster);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(Uint8List ciphertext)? sendFrame,
+    TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
+    TResult Function(String deviceName, String did)? surfaceApprovalPrompt,
+    TResult Function(Uint8List ringId)? persistRing,
+    TResult Function(List<SiblingInfoDto> roster)? rosterReceived,
+    TResult Function()? startSync,
+    required TResult orElse(),
+  }) {
+    if (rosterReceived != null) {
+      return rosterReceived(roster);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(PairingCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairingCommandDto_SeedKpPool value) seedKpPool,
+    required TResult Function(PairingCommandDto_PublishRingCommit value)
+        publishRingCommit,
+    required TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)
+        surfaceApprovalPrompt,
+    required TResult Function(PairingCommandDto_PersistRing value) persistRing,
+    required TResult Function(PairingCommandDto_RosterReceived value)
+        rosterReceived,
+    required TResult Function(PairingCommandDto_StartSync value) startSync,
+  }) {
+    return rosterReceived(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(PairingCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
+    TResult? Function(PairingCommandDto_PublishRingCommit value)?
+        publishRingCommit,
+    TResult? Function(PairingCommandDto_SurfaceApprovalPrompt value)?
+        surfaceApprovalPrompt,
+    TResult? Function(PairingCommandDto_PersistRing value)? persistRing,
+    TResult? Function(PairingCommandDto_RosterReceived value)? rosterReceived,
+    TResult? Function(PairingCommandDto_StartSync value)? startSync,
+  }) {
+    return rosterReceived?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(PairingCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
+    TResult Function(PairingCommandDto_PublishRingCommit value)?
+        publishRingCommit,
+    TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)?
+        surfaceApprovalPrompt,
+    TResult Function(PairingCommandDto_PersistRing value)? persistRing,
+    TResult Function(PairingCommandDto_RosterReceived value)? rosterReceived,
+    TResult Function(PairingCommandDto_StartSync value)? startSync,
+    required TResult orElse(),
+  }) {
+    if (rosterReceived != null) {
+      return rosterReceived(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class PairingCommandDto_RosterReceived extends PairingCommandDto {
+  const factory PairingCommandDto_RosterReceived(
+          {required final List<SiblingInfoDto> roster}) =
+      _$PairingCommandDto_RosterReceivedImpl;
+  const PairingCommandDto_RosterReceived._() : super._();
+
+  List<SiblingInfoDto> get roster;
+
+  /// Create a copy of PairingCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$PairingCommandDto_RosterReceivedImplCopyWith<
+          _$PairingCommandDto_RosterReceivedImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class _$$PairingCommandDto_StartSyncImplCopyWith<$Res> {
+  factory _$$PairingCommandDto_StartSyncImplCopyWith(
+          _$PairingCommandDto_StartSyncImpl value,
+          $Res Function(_$PairingCommandDto_StartSyncImpl) then) =
+      __$$PairingCommandDto_StartSyncImplCopyWithImpl<$Res>;
+}
+
+/// @nodoc
+class __$$PairingCommandDto_StartSyncImplCopyWithImpl<$Res>
+    extends _$PairingCommandDtoCopyWithImpl<$Res,
+        _$PairingCommandDto_StartSyncImpl>
+    implements _$$PairingCommandDto_StartSyncImplCopyWith<$Res> {
+  __$$PairingCommandDto_StartSyncImplCopyWithImpl(
+      _$PairingCommandDto_StartSyncImpl _value,
+      $Res Function(_$PairingCommandDto_StartSyncImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of PairingCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+}
+
+/// @nodoc
+
+class _$PairingCommandDto_StartSyncImpl extends PairingCommandDto_StartSync {
+  const _$PairingCommandDto_StartSyncImpl() : super._();
+
+  @override
+  String toString() {
+    return 'PairingCommandDto.startSync()';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$PairingCommandDto_StartSyncImpl);
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(Uint8List ciphertext) sendFrame,
+    required TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)
+        seedKpPool,
+    required TResult Function(Uint8List tag, Uint8List ciphertext)
+        publishRingCommit,
+    required TResult Function(String deviceName, String did)
+        surfaceApprovalPrompt,
+    required TResult Function(Uint8List ringId) persistRing,
+    required TResult Function(List<SiblingInfoDto> roster) rosterReceived,
+    required TResult Function() startSync,
+  }) {
+    return startSync();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(Uint8List ciphertext)? sendFrame,
+    TResult? Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
+    TResult? Function(String deviceName, String did)? surfaceApprovalPrompt,
+    TResult? Function(Uint8List ringId)? persistRing,
+    TResult? Function(List<SiblingInfoDto> roster)? rosterReceived,
+    TResult? Function()? startSync,
+  }) {
+    return startSync?.call();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(Uint8List ciphertext)? sendFrame,
+    TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
+    TResult Function(String deviceName, String did)? surfaceApprovalPrompt,
+    TResult Function(Uint8List ringId)? persistRing,
+    TResult Function(List<SiblingInfoDto> roster)? rosterReceived,
+    TResult Function()? startSync,
+    required TResult orElse(),
+  }) {
+    if (startSync != null) {
+      return startSync();
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(PairingCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairingCommandDto_SeedKpPool value) seedKpPool,
+    required TResult Function(PairingCommandDto_PublishRingCommit value)
+        publishRingCommit,
+    required TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)
+        surfaceApprovalPrompt,
+    required TResult Function(PairingCommandDto_PersistRing value) persistRing,
+    required TResult Function(PairingCommandDto_RosterReceived value)
+        rosterReceived,
+    required TResult Function(PairingCommandDto_StartSync value) startSync,
+  }) {
+    return startSync(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(PairingCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
+    TResult? Function(PairingCommandDto_PublishRingCommit value)?
+        publishRingCommit,
+    TResult? Function(PairingCommandDto_SurfaceApprovalPrompt value)?
+        surfaceApprovalPrompt,
+    TResult? Function(PairingCommandDto_PersistRing value)? persistRing,
+    TResult? Function(PairingCommandDto_RosterReceived value)? rosterReceived,
+    TResult? Function(PairingCommandDto_StartSync value)? startSync,
+  }) {
+    return startSync?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(PairingCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
+    TResult Function(PairingCommandDto_PublishRingCommit value)?
+        publishRingCommit,
+    TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)?
+        surfaceApprovalPrompt,
+    TResult Function(PairingCommandDto_PersistRing value)? persistRing,
+    TResult Function(PairingCommandDto_RosterReceived value)? rosterReceived,
+    TResult Function(PairingCommandDto_StartSync value)? startSync,
+    required TResult orElse(),
+  }) {
+    if (startSync != null) {
+      return startSync(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class PairingCommandDto_StartSync extends PairingCommandDto {
+  const factory PairingCommandDto_StartSync() =
+      _$PairingCommandDto_StartSyncImpl;
+  const PairingCommandDto_StartSync._() : super._();
+}
+
+/// @nodoc
 mixin _$RingCommandDto {
   @optionalTypeArgs
   TResult when<TResult extends Object?>({

@@ -77,6 +77,16 @@ class DrawbridgeService {
   int _reconnectAttempts = 0;
   static const _maxReconnectDelay = Duration(seconds: 60);
 
+  /// A pairing rendezvous message (`pair_offer`/`pair_join`) that hasn't
+  /// been acknowledged with `pair_ready` yet. Resent on every successful
+  /// (re)authentication — mirrors `moat-cli`'s `pending_pair_rendezvous_token`
+  /// (`crates/moat-cli/src/app.rs`), which covers both a plain reconnect
+  /// and the specific race where a `pair_join` reaches the relay before the
+  /// peer's `pair_offer` has registered (the relay's "token not found or
+  /// expired" error). Cleared once `pair_ready` arrives.
+  Uint8List? _pendingPairRendezvousToken;
+  bool? _pendingPairRendezvousIsOffer;
+
   /// Tags currently registered on own relay.
   final Set<String> _watchedTagHexes = {};
 
@@ -152,6 +162,7 @@ class DrawbridgeService {
           _ownAuthenticated = true;
           _sendWatchedTags();
           _sendPushRegistration();
+          _resendPendingPairRendezvous();
         case 'new_event':
           _handleNewEvent(msg);
         case 'pair_pending':
@@ -160,7 +171,14 @@ class DrawbridgeService {
         case 'pair_ready':
           _handlePairReady(msg);
         case 'error':
+          // Any error on the main WS is treated as connection-fatal, same
+          // as `moat-cli`'s client — forces a reconnect cycle so a
+          // rendezvous message lost to the pair_offer/pair_join race (the
+          // relay doesn't close the socket for this error, it just replies
+          // in-band) gets resent once reconnected.
           moatLog('DrawbridgeService: Own relay error: ${msg['message']}');
+          _ownAuthenticated = false;
+          _scheduleReconnect();
         default:
           moatLog('DrawbridgeService: Unknown own message type: $type');
       }
@@ -247,13 +265,38 @@ class DrawbridgeService {
       return;
     }
     moatLog('DrawbridgeService: pair_ready url=$pairUrl');
+    // Rendezvous succeeded — no more resend-on-reconnect needed.
+    _pendingPairRendezvousToken = null;
+    _pendingPairRendezvousIsOffer = null;
     onPairReady?.call(DrawbridgePairReady(pairUrl: pairUrl, token: token));
+  }
+
+  void _resendPendingPairRendezvous() {
+    final token = _pendingPairRendezvousToken;
+    final isOffer = _pendingPairRendezvousIsOffer;
+    if (token == null || isOffer == null) return;
+    moatLog('DrawbridgeService: resending pending pair_${isOffer ? "offer" : "join"} after reconnect');
+    if (isOffer) {
+      sendPairOffer(token);
+    } else {
+      sendPairJoin(token);
+    }
+  }
+
+  /// Drop any pairing rendezvous message queued for resend-on-reconnect —
+  /// called when a pairing is aborted or superseded so a stale token from a
+  /// dead session never gets resent into an unrelated future connection.
+  void clearPendingPairRendezvous() {
+    _pendingPairRendezvousToken = null;
+    _pendingPairRendezvousIsOffer = null;
   }
 
   // -- Pair WS (sync-session transport) --------------------------------------
 
   /// Send `pair_offer{token}` on the own WS. Caller is the offerer.
   void sendPairOffer(Uint8List token) {
+    _pendingPairRendezvousToken = token;
+    _pendingPairRendezvousIsOffer = true;
     if (!_ownAuthenticated || _ownChannel == null) {
       moatLog('DrawbridgeService: sendPairOffer dropped — own WS not ready');
       return;
@@ -266,6 +309,8 @@ class DrawbridgeService {
 
   /// Send `pair_join{token}` on the own WS. Caller is the joiner.
   void sendPairJoin(Uint8List token) {
+    _pendingPairRendezvousToken = token;
+    _pendingPairRendezvousIsOffer = false;
     if (!_ownAuthenticated || _ownChannel == null) {
       moatLog('DrawbridgeService: sendPairJoin dropped — own WS not ready (authenticated=$_ownAuthenticated channel=${_ownChannel != null})');
       return;
@@ -574,6 +619,7 @@ class DrawbridgeService {
     _pushPlatform = null;
     _reconnectAttempts = 0;
     _disposed = false;
+    clearPendingPairRendezvous();
   }
 
   static String _bytesToHex(Uint8List bytes) {

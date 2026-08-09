@@ -32,10 +32,14 @@ pub mod same_drawbridge_local;
 pub mod staggered_device_pairing;
 pub mod three_device_pairing;
 pub mod three_device_pairing_history_sync;
+pub mod three_device_pairing_history_sync_dr;
 pub mod three_party_chat;
 pub mod three_party_push;
 pub mod three_party_restart;
 pub mod two_device_pairing;
+pub mod two_device_pairing_dd;
+pub mod two_device_pairing_dr;
+pub mod two_device_pairing_rd;
 pub mod two_party_chat;
 pub mod two_party_fanout;
 pub mod two_party_push;
@@ -746,35 +750,63 @@ pub static SCENARIOS: &[Scenario] = &[
     },
     Scenario {
         name: "two-device-pairing",
-        description: "One user, two devices — live QR/text pairing (currently red: /pair endpoints not implemented)",
+        description: "One user, two devices (Rust + Rust) — live QR/text pairing",
         run_fn: two_device_pairing::run_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
+        name: "two-device-pairing-dd",
+        description: "One user, two devices (Dart + Dart) — live QR/text pairing",
+        run_fn: two_device_pairing_dd::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "two-device-pairing-rd",
+        description: "One user, two devices (new=Rust, existing=Dart) — live QR/text pairing",
+        run_fn: two_device_pairing_rd::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "two-device-pairing-dr",
+        description: "One user, two devices (new=Dart, existing=Rust) — live QR/text pairing",
+        run_fn: two_device_pairing_dr::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
         name: "three-device-pairing",
-        description: "One user, three devices — D1 pairs D2 then D3 into the same ring (currently red)",
+        description: "One user, three devices — D1 pairs D2 then D3 into the same ring",
         run_fn: three_device_pairing::run_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
         name: "three-device-pairing-history-sync",
-        description: "D1 has pre-existing history with Bob; D2 then D3 pair in and must sync it (currently red)",
+        description: "D1 has pre-existing history with Bob; D2 then D3 pair in and must sync it",
         run_fn: three_device_pairing_history_sync::run_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
+        name: "three-device-pairing-history-sync-dr",
+        description: "Same as three-device-pairing-history-sync, but D2/D3 (new devices) run Dart, D1 stays Rust",
+        run_fn: three_device_pairing_history_sync_dr::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
         name: "staggered-device-pairing",
-        description: "D2 is offline while D1 pairs D3; D2 must catch up on its own (currently red)",
+        description: "D2 is offline while D1 pairs D3; D2 must catch up on its own",
         run_fn: staggered_device_pairing::run_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
         name: "lost-device-pairing",
-        description: "D1 is permanently lost after pairing D2; D2 alone pairs D3 and history survives (currently red)",
+        description: "D1 is permanently lost after pairing D2; D2 alone pairs D3 and history survives",
         run_fn: lost_device_pairing::run_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),

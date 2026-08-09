@@ -1,25 +1,23 @@
-//! Three-device pairing history-sync scenario.
+//! Three-device pairing history-sync scenario — new devices run the Dart
+//! headless server, existing device (D1) runs the Rust CLI.
 //!
-//! Alice's first device (D1) already has a conversation with Bob, with
-//! messages sent before either of Alice's other two devices exist. D2
-//! pairs in and must end up with that history; D3 then pairs in
-//! (against D1's now-existing ring) and must end up with it too.
-//!
-//! This is the pairing-based successor to the deleted
-//! `two_device_history_sync` / `three_device_history_sync` scenarios, and
-//! it is the scenario finding 1 of the Phase 0 review names directly:
-//! nothing before this asserted that `PairingCommand::StartSync` actually
-//! leads to messages arriving on the new device, only that the command was
-//! emitted (`moat-core/tests/pairing_simulation.rs` checks that much at the
-//! unit level).
-//!
+//! Same story as [`super::three_device_pairing_history_sync`] (D1 already
+//! has conversation history with Bob predating D2/D3; both must sync it in
+//! via pairing), but D2 and D3 are Dart participants. This is the only
+//! coverage exercising `PairingService.dart`'s post-Done history-sync
+//! phase (`_startPairingSyncSession`/`_processPairingSyncOutputs`/
+//! `_processPairingSyncFrame`, `paired_sync_builder.dart`) against a
+//! *non-empty* conversation — the `two_device_pairing_dd`/`_rd`/`_dr` cells
+//! all pair into a brand-new, empty ring, so `SyncOutput::Store` never
+//! actually fires there.
+
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
 use crate::scenarios::three_device_pairing::pair_devices;
 use crate::scenarios::Action;
-use crate::world::TestWorld;
+use crate::world::{ParticipantKind, TestWorld};
 
 pub(crate) fn run_boxed(
     _actions: Vec<Action>,
@@ -75,7 +73,7 @@ pub async fn run(verbose: bool) {
         ($($t:tt)*) => { if verbose { eprintln!($($t)*); } }
     }
 
-    vlog!("=== Scenario: three-device-pairing-history-sync ===");
+    vlog!("=== Scenario: three-device-pairing-history-sync-dr (new devices=Dart, D1=Rust) ===");
 
     // Live pairing rendezvous needs a real Drawbridge relay — see the note
     // in `two_device_pairing.rs`'s prologue. Alice and Bob get separate
@@ -116,29 +114,29 @@ pub async fn run(verbose: bool) {
     let d1_before = d1.get_messages(&group_id).await.expect("d1 get_messages");
     assert_eq!(d1_before.len(), test_messages.len(), "d1 should hold all pre-pairing history");
 
-    // ── D2 pairs in and must sync that history ─────────────────────────────────
+    // ── D2 (Dart) pairs in and must sync that history ──────────────────────────
     let d2 = world
-        .spawn_nth_device("alice-d2", crate::world::ParticipantKind::RustCli)
+        .spawn_nth_device("alice-d2", ParticipantKind::DartServer)
         .await
         .expect("spawn d2");
     d2.login("alice.postern.test", "any-password").await.expect("d2 login");
 
-    vlog!("[pair] d1 <- d2...");
+    vlog!("[pair] d1 <- d2 (Dart)...");
     pair_devices(&d1, &d2, verbose).await;
     wait_for_history(&d2, &group_id, &test_messages, "d2", verbose).await;
 
-    // ── D3 pairs into the now-existing ring and must also sync that history ────
+    // ── D3 (Dart) pairs into the now-existing ring and must also sync it ───────
     let d3 = world
-        .spawn_nth_device("alice-d3", crate::world::ParticipantKind::RustCli)
+        .spawn_nth_device("alice-d3", ParticipantKind::DartServer)
         .await
         .expect("spawn d3");
     d3.login("alice.postern.test", "any-password").await.expect("d3 login");
 
-    vlog!("[pair] d1 <- d3...");
+    vlog!("[pair] d1 <- d3 (Dart)...");
     pair_devices(&d1, &d3, verbose).await;
     wait_for_history(&d3, &group_id, &test_messages, "d3", verbose).await;
 
-    vlog!("[check] three-device pairing history sync... ok");
+    vlog!("[check] three-device pairing history sync (dr)... ok");
     if verbose {
         eprintln!("\n=== PASSED ===");
     }

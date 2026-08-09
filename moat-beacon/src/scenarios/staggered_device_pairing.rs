@@ -14,9 +14,6 @@
 //! *approving* device (D1) to be live, so "staggered" here means "a
 //! bystander sibling is offline during someone else's pairing," not "which
 //! device onboards first."
-//!
-//! **Intentionally red**: `/pair/*` doesn't exist yet and `PairingSession`
-//! is unimplemented; expect failure on the first `pair_new` call.
 
 use std::future::Future;
 use std::pin::Pin;

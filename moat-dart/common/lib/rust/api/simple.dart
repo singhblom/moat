@@ -8,9 +8,9 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'simple.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `from_core`, `into_core`, `push_media_label`, `push_plaintext_preview`, `to_core_sibling_stealth`
+// These functions are ignored because they are not marked as `pub`: `credential_from_dto`, `from_core`, `into_core`, `payload_from_core`, `payload_to_core`, `push_media_label`, `push_plaintext_preview`, `sibling_info_to_core`, `to_core_sibling_stealth`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `MoatError`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 /// Generate a stealth keypair. Returns (private_key, public_key) each 32 bytes.
 StealthKeypair generateStealthKeypair() =>
@@ -126,6 +126,63 @@ Future<DecryptedPush> decryptPushPayload(
         groupIds: groupIds,
         tag: tag,
         ciphertext: ciphertext);
+
+/// Encode `token`+`secret` to the hyphen-grouped Crockford base32 text form
+/// (`MZXW6-YTBOI-…`), for manual entry / display beneath a QR code.
+Future<String> pairingPayloadToText(
+        {required List<int> token, required List<int> secret}) =>
+    RustLib.instance.api
+        .crateApiSimplePairingPayloadToText(token: token, secret: secret);
+
+/// Decode a pairing code's text form back into token+secret.
+Future<PairingPayloadDto> pairingPayloadFromText({required String text}) =>
+    RustLib.instance.api.crateApiSimplePairingPayloadFromText(text: text);
+
+/// Encode `token`+`secret` to the `moat-pair:` URI form used for the QR payload.
+Future<String> pairingPayloadToUri(
+        {required List<int> token, required List<int> secret}) =>
+    RustLib.instance.api
+        .crateApiSimplePairingPayloadToUri(token: token, secret: secret);
+
+/// Decode a `moat-pair:` URI back into token+secret.
+Future<PairingPayloadDto> pairingPayloadFromUri({required String uri}) =>
+    RustLib.instance.api.crateApiSimplePairingPayloadFromUri(uri: uri);
+
+/// Seal a frame with AES-128-GCM under the pairing channel's directional
+/// key (`key` must be 16 bytes — one of `channel_key_new_to_old`/
+/// `channel_key_old_to_new`). Used to run the pairing-AEAD history-sync
+/// phase after `is_done()`, continuing the counter sequence — never reuse
+/// a counter value under the same key.
+Future<Uint8List> pairingSealFrame(
+        {required List<int> key,
+        required BigInt counter,
+        required List<int> plaintext}) =>
+    RustLib.instance.api.crateApiSimplePairingSealFrame(
+        key: key, counter: counter, plaintext: plaintext);
+
+/// Open a frame sealed by [`pairing_seal_frame`].
+Future<Uint8List> pairingOpenFrame(
+        {required List<int> key,
+        required BigInt counter,
+        required List<int> ciphertext}) =>
+    RustLib.instance.api.crateApiSimplePairingOpenFrame(
+        key: key, counter: counter, ciphertext: ciphertext);
+
+/// `true` if `plaintext` (already opened under the pairing AEAD) decodes
+/// as the pairing session's advisory `Done` courtesy rather than a
+/// `SyncMsg`. Used by the post-Done pairing-sync phase to recognize and
+/// ignore a `Done` that arrives after the local side has already
+/// transitioned to sync-frame dispatch — see the note on
+/// `PairingCommandDto.startSync` for why this can happen even in a
+/// well-behaved exchange.
+bool pairingFrameIsDone({required List<int> plaintext}) =>
+    RustLib.instance.api.crateApiSimplePairingFrameIsDone(plaintext: plaintext);
+
+/// How many fresh KeyPackages a new device should seed the approver's pool
+/// with via `Enroll.conv_kps` — `moat_core::device_ring::KP_POOL_TARGET`,
+/// exposed so hosts building that batch (e.g. `PairingService.dart`) don't
+/// hand-duplicate the literal.
+BigInt kpPoolTarget() => RustLib.instance.api.crateApiSimpleKpPoolTarget();
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MoatSessionHandle>>
 abstract class MoatSessionHandle implements RustOpaqueInterface {
@@ -243,8 +300,84 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
       required List<int> keyBundle});
 }
 
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<PairingSessionHandle>>
+abstract class PairingSessionHandle implements RustOpaqueInterface {
+  /// Existing device only: called once the user taps Approve. Creates
+  /// the ring (first pairing) or adds the joiner (subsequent pairings),
+  /// seeds the newcomer's KP pool, and emits the sealed `Admit` frame.
+  Future<List<PairingCommandDto>> approve(
+      {required MoatSessionHandle session,
+      required CredentialDto credential,
+      required List<int> keyBundle,
+      required List<int> ownStealthPubkey,
+      required List<SiblingInfoDto> knownSiblings,
+      Uint8List? existingRingId});
+
+  /// The new-device→existing-device directional AEAD key, for
+  /// continuing the pairing-AEAD stream past `is_done()` (the history
+  /// sync handoff) — see `next_send_counter`/`next_recv_counter`.
+  Uint8List channelKeyNewToOld();
+
+  /// The existing-device→new-device directional AEAD key.
+  Uint8List channelKeyOldToNew();
+
+  /// Construct a session for the existing (approving) device.
+  static PairingSessionHandle existingDevice(
+          {required List<int> secret, required List<int> token}) =>
+      RustLib.instance.api.crateApiSimplePairingSessionHandleExistingDevice(
+          secret: secret, token: token);
+
+  /// `true` once this session has reached its terminal `Done` phase.
+  bool isDone();
+
+  /// Construct a session for the new (joining) device.
+  static PairingSessionHandle newDevice(
+          {required List<int> secret, required List<int> token}) =>
+      RustLib.instance.api.crateApiSimplePairingSessionHandleNewDevice(
+          secret: secret, token: token);
+
+  /// Next unused counter for frames *we* expect to receive.
+  BigInt nextRecvCounter();
+
+  /// Next unused counter for frames *we* send, continuing this session's
+  /// own sequence — never reuse a value already used during Enroll/Admit/Done.
+  BigInt nextSendCounter();
+
+  /// Feed a sealed frame received over the pair channel. Dispatches on
+  /// role + phase; a decryption or ordering-violation error aborts the
+  /// session (returned as `Err`).
+  Future<List<PairingCommandDto>> onFrameReceived(
+      {required MoatSessionHandle session,
+      required CredentialDto ownCredential,
+      required List<int> ciphertext});
+
+  /// Existing device only: the peer's `Enroll`, once received, pending
+  /// the user's approval decision.
+  EnrollDto? pendingEnroll();
+
+  /// The ring this session ended up in, once known.
+  Uint8List? ringId();
+
+  /// New device: build and seal the `Enroll` frame once the pair channel
+  /// reaches `paired`.
+  Future<List<PairingCommandDto>> startEnroll(
+      {required MoatSessionHandle session,
+      required CredentialDto credential,
+      required List<int> keyBundle,
+      required List<int> stealthScanPubkey,
+      required List<OfferedKpDto> convKps});
+}
+
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<RingDriverHandle>>
 abstract class RingDriverHandle implements RustOpaqueInterface {
+  /// Allocate `count` fresh, monotonic KP sequence numbers from this
+  /// device's own owner-global counter — must go through here (not a
+  /// host-local counter) so seqs never collide with ones allocated
+  /// elsewhere for a different purpose (e.g. steady-state KP-lane
+  /// batches). Used by `PairingService.startEnroll` to build
+  /// `Enroll.conv_kps` without a separate FFI surface per caller.
+  Uint64List allocateKpSeqs({required BigInt count});
+
   /// Claim one unused key package from the local pool for `owner`, marking
   /// its seq consumed.  `None` means the pool is drained — the host should
   /// emit a `KpRequest` via [`Self::emit_kp_request_for`] and defer the add
@@ -292,12 +425,32 @@ abstract class RingDriverHandle implements RustOpaqueInterface {
       RustLib.instance.api
           .crateApiSimpleRingDriverHandleFromStateJson(json: json);
 
+  /// Seed `owner`'s consumer-side pool with a freshly-received batch.
+  /// Mirrors `moat-cli`'s `PairingCommandDto.seedKpPool` handling — the
+  /// existing device calls this with the newcomer's `Enroll.conv_kps` on
+  /// Approve, seeding the newcomer's pool directly instead of a
+  /// KpRequest/KpBatch round trip over the stealth lane.
+  void ingestKpBatch(
+      {required List<int> ownerDeviceId, required List<OfferedKpDto> kps});
+
   /// Create a new ring state with empty state.
   static RingDriverHandle newEmpty() =>
       RustLib.instance.api.crateApiSimpleRingDriverHandleNewEmpty();
 
   /// Cursor (rkey) for incremental own-PDS stealth scan.
   String? ownEventsCursor();
+
+  /// Record that we are now an MLS member of `ring_id`, looking up our
+  /// own leaf index from the group's member list. Called once, host-side,
+  /// when a pairing exchange completes — the new device from
+  /// `PairingCommandDto.persistRing`, the existing device right after a
+  /// successful `PairingSessionHandle.approve` (which has no command of
+  /// its own for this, since it already knows it just created/joined
+  /// `ring_id`). Mirrors `moat-cli`'s `App`-level interpreter.
+  Future<void> recordRingMembership(
+      {required MoatSessionHandle session,
+      required List<int> ringId,
+      required PlatformInt64 nowMs});
 
   /// Raw ring group ID, if a ring exists.
   Uint8List? ringGroupId();
@@ -569,6 +722,39 @@ class EncryptResultDto {
           messageId == other.messageId;
 }
 
+/// Sent by the new device once the pair channel is up. `credential` reuses
+/// [`CredentialDto`] rather than a new type.
+class EnrollDto {
+  final CredentialDto credential;
+  final Uint8List stealthScanPubkey;
+  final Uint8List ringKp;
+  final List<OfferedKpDto> convKps;
+
+  const EnrollDto({
+    required this.credential,
+    required this.stealthScanPubkey,
+    required this.ringKp,
+    required this.convKps,
+  });
+
+  @override
+  int get hashCode =>
+      credential.hashCode ^
+      stealthScanPubkey.hashCode ^
+      ringKp.hashCode ^
+      convKps.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EnrollDto &&
+          runtimeType == other.runtimeType &&
+          credential == other.credential &&
+          stealthScanPubkey == other.stealthScanPubkey &&
+          ringKp == other.ringKp &&
+          convKps == other.convKps;
+}
+
 class EventDto {
   final EventKindDto kind;
   final Uint8List groupId;
@@ -737,6 +923,56 @@ class OwnEventInputDto {
           ciphertext == other.ciphertext;
 }
 
+@freezed
+sealed class PairingCommandDto with _$PairingCommandDto {
+  const PairingCommandDto._();
+
+  const factory PairingCommandDto.sendFrame({
+    required Uint8List ciphertext,
+  }) = PairingCommandDto_SendFrame;
+  const factory PairingCommandDto.seedKpPool({
+    required Uint8List deviceId,
+    required List<OfferedKpDto> kps,
+  }) = PairingCommandDto_SeedKpPool;
+  const factory PairingCommandDto.publishRingCommit({
+    required Uint8List tag,
+    required Uint8List ciphertext,
+  }) = PairingCommandDto_PublishRingCommit;
+  const factory PairingCommandDto.surfaceApprovalPrompt({
+    required String deviceName,
+    required String did,
+  }) = PairingCommandDto_SurfaceApprovalPrompt;
+  const factory PairingCommandDto.persistRing({
+    required Uint8List ringId,
+  }) = PairingCommandDto_PersistRing;
+  const factory PairingCommandDto.rosterReceived({
+    required List<SiblingInfoDto> roster,
+  }) = PairingCommandDto_RosterReceived;
+  const factory PairingCommandDto.startSync() = PairingCommandDto_StartSync;
+}
+
+/// Decoded pairing code contents: rendezvous token + channel secret.
+class PairingPayloadDto {
+  final Uint8List token;
+  final Uint8List secret;
+
+  const PairingPayloadDto({
+    required this.token,
+    required this.secret,
+  });
+
+  @override
+  int get hashCode => token.hashCode ^ secret.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PairingPayloadDto &&
+          runtimeType == other.runtimeType &&
+          token == other.token &&
+          secret == other.secret;
+}
+
 /// Reaction payload extracted from a Reaction event.
 class ReactionPayloadDto {
   final String emoji;
@@ -805,6 +1041,33 @@ class SenderInfoDto {
           did == other.did &&
           deviceName == other.deviceName &&
           deviceId == other.deviceId;
+}
+
+/// One existing sibling's identity + stealth address, carried in
+/// `Admit.roster`.
+class SiblingInfoDto {
+  final Uint8List deviceId;
+  final String deviceName;
+  final Uint8List stealthPubkey;
+
+  const SiblingInfoDto({
+    required this.deviceId,
+    required this.deviceName,
+    required this.stealthPubkey,
+  });
+
+  @override
+  int get hashCode =>
+      deviceId.hashCode ^ deviceName.hashCode ^ stealthPubkey.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SiblingInfoDto &&
+          runtimeType == other.runtimeType &&
+          deviceId == other.deviceId &&
+          deviceName == other.deviceName &&
+          stealthPubkey == other.stealthPubkey;
 }
 
 /// A sibling device's stealth address: the 32-byte X25519 scan pubkey plus the

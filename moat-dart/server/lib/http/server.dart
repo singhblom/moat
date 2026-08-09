@@ -26,6 +26,7 @@ Handler buildRouter({
   required BlobService blobService,
   required DeviceRingService ringService,
   required SyncService syncService,
+  required PairingService pairingService,
   MessageStorage? messageStorage,
 }) {
   final router = Router();
@@ -420,16 +421,72 @@ Handler buildRouter({
     }
   });
 
-  // GET /ring-status — current ring group id and coord group count
+  // GET /ring-status — current ring group id, coord group count, and this
+  // device's own MLS view of ring membership (0 if not in a ring) — lets a
+  // bystander sibling's convergence (or lack of it) after another device's
+  // pairing be observed at all, matching moat-cli's `/ring-status`.
   router.get('/ring-status', (Request request) async {
     final ringId = await ringService.ringGroupId();
     final ringIdHex = ringId == null
         ? null
         : ringId.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    var ringMemberCount = 0;
+    final session = authService.moatSession;
+    if (ringId != null && session != null) {
+      try {
+        ringMemberCount =
+            (await session.getGroupMemberCredentials(groupId: ringId)).length;
+      } catch (e) {
+        moatLog('Server: ring-status getGroupMemberCredentials failed: $e');
+      }
+    }
     return Response.ok(
       jsonEncode({
         'ring_group_id': ringIdHex,
         'coord_group_count': ringService.coordGroupCount(),
+        'ring_member_count': ringMemberCount,
+      }),
+      headers: _jsonHeaders,
+    );
+  });
+
+  // POST /pair/new — new device requests a pairing code.
+  router.post('/pair/new', (Request request) async {
+    try {
+      final code = await pairingService.startEnroll();
+      return Response.ok(jsonEncode({'code': code}), headers: _jsonHeaders);
+    } catch (e) {
+      moatLog('Server: pair/new error: $e');
+      return Response(500,
+          body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
+    }
+  });
+
+  // POST /pair/confirm — existing device enters a pairing code.
+  router.post('/pair/confirm', (Request request) async {
+    try {
+      final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+      final code = body['code'] as String;
+      await pairingService.confirmCode(code);
+      return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
+    } catch (e) {
+      moatLog('Server: pair/confirm error: $e');
+      return Response(500,
+          body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
+    }
+  });
+
+  // GET /pair/status
+  router.get('/pair/status', (Request request) async {
+    return Response.ok(
+      jsonEncode({
+        'done': pairingService.isDone,
+        'ring_group_id': pairingService.ringId == null
+            ? null
+            : pairingService.ringId!
+                .map((b) => b.toRadixString(16).padLeft(2, '0'))
+                .join(),
+        'pending_device_name': pairingService.pendingDeviceName,
       }),
       headers: _jsonHeaders,
     );

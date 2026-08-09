@@ -72,6 +72,20 @@ Future<void> main(List<String> args) async {
     messageStorage: msgStorage,
   );
 
+  // Live pairing (QR / text code) device onboarding. Auto-approve — this
+  // is the headless server (Beacon), which has no user to tap Approve;
+  // the interactive Flutter app instead sets `autoApprove: false` and
+  // shows an approve screen.
+  final pairingService = PairingService(
+    auth: authService,
+    drawbridge: DrawbridgeService.instance,
+    ring: ringService,
+    sync: syncService,
+    conversationStorage: convStorage,
+    messageStorage: msgStorage,
+    autoApprove: true,
+  );
+
   final pollingService = PollingService(
     authService: authService,
     conversationsService: convsService,
@@ -108,6 +122,7 @@ Future<void> main(List<String> args) async {
     blobService: blobService,
     ringService: ringService,
     syncService: syncService,
+    pairingService: pairingService,
     messageStorage: msgStorage,
   );
 

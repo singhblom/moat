@@ -12,6 +12,8 @@ import '../utils/display_name.dart';
 import '../widgets/avatar_widget.dart';
 import 'conversation_screen.dart';
 import 'new_conversation_screen.dart';
+import 'show_pairing_code_screen.dart';
+import 'enter_pairing_code_screen.dart';
 import 'watch_list_screen.dart';
 
 class ConversationsScreen extends StatelessWidget {
@@ -42,6 +44,18 @@ class ConversationsScreen extends StatelessWidget {
               } else if (value == 'toggle_theme') {
                 final brightness = Theme.of(context).brightness;
                 context.read<ThemeProvider>().toggleTheme(brightness);
+              } else if (value == 'show_pairing_code') {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => const ShowPairingCodeScreen(),
+                  ),
+                );
+              } else if (value == 'enter_pairing_code') {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => const EnterPairingCodeScreen(),
+                  ),
+                );
               }
             },
             itemBuilder: (context) {
@@ -68,6 +82,28 @@ class ConversationsScreen extends StatelessWidget {
                     ],
                   ),
                 ),
+                const PopupMenuDivider(),
+                const PopupMenuItem(
+                  value: 'show_pairing_code',
+                  child: Row(
+                    children: [
+                      Icon(Icons.qr_code),
+                      SizedBox(width: 8),
+                      Text('Show my pairing code'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'enter_pairing_code',
+                  child: Row(
+                    children: [
+                      Icon(Icons.qr_code_scanner),
+                      SizedBox(width: 8),
+                      Text('Enter a pairing code'),
+                    ],
+                  ),
+                ),
+                const PopupMenuDivider(),
                 const PopupMenuItem(
                   value: 'logout',
                   child: Row(

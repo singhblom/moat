@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import '../models/conversation.dart';
 import '../rust/api/simple.dart' as ffi;
+import '../utils/platform_int64.dart';
 import 'auth_service.dart';
 import 'conversations_service.dart';
 import 'debug_log.dart';
@@ -43,6 +44,29 @@ class DeviceRingService {
   /// KpRequest refill.
   List<ffi.SiblingStealthDto> _cachedSiblingStealth = const [];
 
+  /// Read-only view of the cached sibling stealth addresses — used by
+  /// `PairingService` to assemble `known_siblings` for `approve()`
+  /// (`Admit.roster` needs every already-known sibling's stealth key,
+  /// which lives here, not in MLS group state).
+  List<ffi.SiblingStealthDto> get cachedSiblingStealth => _cachedSiblingStealth;
+
+  /// Upsert one sibling's stealth address into the cache — used by
+  /// `PairingService` to record a newcomer's stealth key (from its
+  /// `Enroll`) or a roster entry (from a processed `Admit`) immediately,
+  /// without waiting for the next `tick()`'s `stealthAddress`-record fetch.
+  void upsertSiblingStealth(Uint8List deviceId, Uint8List scanPubkey) {
+    final idx = _cachedSiblingStealth
+        .indexWhere((s) => _bytesEqual(s.deviceId, deviceId));
+    final entry = ffi.SiblingStealthDto(scanPubkey: scanPubkey, deviceId: deviceId);
+    if (idx >= 0) {
+      final updated = List<ffi.SiblingStealthDto>.from(_cachedSiblingStealth);
+      updated[idx] = entry;
+      _cachedSiblingStealth = updated;
+    } else {
+      _cachedSiblingStealth = [..._cachedSiblingStealth, entry];
+    }
+  }
+
   /// Injected by the server/app setup so pollForNewDevices and registerGroup
   /// for User groups can surface conversations.
   ConversationsService? convsService;
@@ -61,6 +85,14 @@ class DeviceRingService {
   })  : _auth = auth,
         _drawbridge = drawbridge,
         _backend = backend {
+    reclaimPairReadyCallback();
+  }
+
+  /// (Re-)claim `DrawbridgeService.onPairReady`. Normally only needed once,
+  /// from the constructor — exposed as a public method so `PairingService`
+  /// can hand this callback slot back after a live pairing exchange
+  /// (which needs it too, for its own rendezvous) completes or aborts.
+  void reclaimPairReadyCallback() {
     _drawbridge.onPairReady = _handlePairReady;
   }
 
@@ -101,6 +133,51 @@ class DeviceRingService {
 
   /// Always 0 — a stable field on `/ring-status` responses.
   int coordGroupCount() => _coordGroupCount;
+
+  /// Allocate `count` fresh, monotonic KP sequence numbers from this
+  /// device's own owner-global counter, persisting the advanced counter
+  /// immediately. Used by `PairingService.startEnroll` to build
+  /// `Enroll.conv_kps` — must go through the driver's own counter (not a
+  /// caller-local one) so seqs never collide with ones allocated elsewhere.
+  Future<List<BigInt>> allocateKpSeqs(int count) async {
+    final d = _driver;
+    if (d == null) return const [];
+    final seqs = d.allocateKpSeqs(count: BigInt.from(count));
+    await _persist();
+    return seqs;
+  }
+
+  /// Seed `ownerDeviceId`'s consumer-side pool with a freshly-received
+  /// batch — called by `PairingService` (existing device, on Approve)
+  /// with the newcomer's `Enroll.conv_kps`.
+  Future<void> ingestKpBatch(Uint8List ownerDeviceId, List<ffi.OfferedKpDto> kps) async {
+    final d = _driver;
+    if (d == null) return;
+    try {
+      d.ingestKpBatch(ownerDeviceId: ownerDeviceId, kps: kps);
+    } catch (e) {
+      moatLog('DeviceRingService: ingestKpBatch failed: $e');
+    }
+    await _persist();
+  }
+
+  /// Record that we are now an MLS member of `ringId`, persisting
+  /// immediately. Called by `PairingService` once on the new device (after
+  /// processing `Admit`) and once on the existing device (right after a
+  /// successful `approve()`, first pairing only — see the note on why the
+  /// existing device has no command of its own for this).
+  Future<void> recordRingMembership(Uint8List ringId) async {
+    final d = _driver;
+    final session = _auth.moatSession;
+    if (d == null || session == null) return;
+    final nowMs = toPlatformInt64(DateTime.now().millisecondsSinceEpoch);
+    try {
+      await d.recordRingMembership(session: session, ringId: ringId, nowMs: nowMs);
+    } catch (e) {
+      moatLog('DeviceRingService: recordRingMembership failed: $e');
+    }
+    await _persist();
+  }
 
   /// The rkey cursor up to which the ring driver has consumed own-DID events.
   ///
@@ -220,7 +297,7 @@ class DeviceRingService {
       did: did,
       deviceName: deviceName,
       keyBundle: keyBundle,
-      nowMs: DateTime.now().millisecondsSinceEpoch,
+      nowMs: toPlatformInt64(DateTime.now().millisecondsSinceEpoch),
     );
 
     final cmds = await driver.tick(session: session, inputs: inputs);

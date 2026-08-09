@@ -18,10 +18,7 @@
 //! There was no prior implementation of this scenario to delete —
 //! `ring-inversion.md` §0c proposed `smoke_three_device_lost_device` for
 //! the old coord-group design but it was never built — so this is wholly
-//! new red coverage, not a rewrite.
-//!
-//! **Intentionally red**: `/pair/*` doesn't exist yet and `PairingSession`
-//! is unimplemented; expect failure on the first `pair_new` call.
+//! new coverage, not a rewrite.
 
 use std::future::Future;
 use std::pin::Pin;
