@@ -1649,8 +1649,9 @@ impl PairingSessionHandle {
         let token: [u8; moat_core::PAIRING_TOKEN_LEN] = token
             .try_into()
             .map_err(|_| "token must be 16 bytes".to_string())?;
+        let payload = moat_core::PairingPayload { secret, token };
         Ok(PairingSessionHandle {
-            inner: Mutex::new(moat_core::PairingSession::new_device(&secret, &token)),
+            inner: Mutex::new(moat_core::PairingSession::new_device(&payload)),
         })
     }
 

@@ -1207,7 +1207,8 @@ impl App {
         rand::thread_rng().fill_bytes(&mut token);
         rand::thread_rng().fill_bytes(&mut secret);
 
-        let code = PairingPayload { token, secret }.to_text();
+        let payload = PairingPayload { token, secret };
+        let code = payload.to_text();
 
         // A previous pairing's pair WS / sync state (if any) is now
         // superseded — a device only ever drives one pairing exchange at a
@@ -1218,7 +1219,7 @@ impl App {
         self.drawbridge.clear_pair();
         self.sync_session = None;
         self.pairing_sync_keys = None;
-        self.pairing_session = Some(PairingSession::new_device(&secret, &token));
+        self.pairing_session = Some(PairingSession::new_device(&payload));
         self.pairing_is_new_device = Some(true);
         self.pending_pair_code = Some(code.clone());
         self.pending_pair_prompt = None;

@@ -472,12 +472,58 @@ enum ExistingDevicePhase {
     Done,
 }
 
-/// Which role this session is playing. Both roles live in one type,
-/// selected at construction.
+/// Which role this session is playing, or that it has failed. Both roles
+/// live in one type, selected at construction; `Failed` is reachable from
+/// either role's non-terminal states (see [`PairingSession::fail`]) and,
+/// once reached, is never overwritten by a later error (see
+/// [`PairingSession::is_terminal`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Phase {
     NewDevice(NewDevicePhase),
     ExistingDevice(ExistingDevicePhase),
+    /// Terminal failure. Carries the reason so it survives for
+    /// [`PairingSession::ui_state`] / status reporting — a failed pairing
+    /// must not be indistinguishable from a slow one.
+    Failed { reason: String },
+}
+
+/// Presentation projection of [`PairingSession`]'s state, for UI rendering.
+/// Every host (moat-cli's TUI/HTTP, moat-dart's Flutter/server) renders
+/// this; none derives its own — see [`PairingSession::ui_state`].
+///
+/// Purely a projection of `Phase` plus the retained code/Enroll/ring-id
+/// data needed to fill in each variant: it is computed fresh on every call,
+/// never cached, so it cannot diverge from the underlying protocol state.
+#[serde_as]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "phase", rename_all = "snake_case")]
+pub enum PairingUiState {
+    /// No pairing in flight. `PairingSession` itself never reports this —
+    /// it only ever exists once a pairing has started — so this variant is
+    /// for a host wrapping `Option<PairingSession>` to report when that
+    /// option is `None`.
+    Idle,
+    /// New device: code generated, waiting for the peer to enter it. Holds
+    /// steady across the whole wait, including after `Enroll` has been
+    /// sent (still waiting on `Admit`) — the code stays valid and
+    /// displayed for the whole exchange.
+    ShowingCode { code: String, uri: String },
+    /// Existing device: code accepted, waiting for the peer's `Enroll`.
+    AwaitingPeer,
+    /// Existing device: `Enroll` received, waiting on the approve/reject
+    /// decision.
+    AwaitingApproval { device_name: String, did: String },
+    /// Enroll/Admit exchange complete. Says nothing about history sync —
+    /// that stays observable via the existing `/sync/status`, matching
+    /// `PairingMsg::Done`'s settled meaning.
+    Done {
+        #[serde_as(as = "Base64")]
+        ring_id: Vec<u8>,
+    },
+    /// Terminal failure. Retained on the session rather than thrown away —
+    /// so `/pair/status` can report a reason instead of `done: false`
+    /// forever with no explanation.
+    Failed { reason: String },
 }
 
 /// The Enroll/Admit exchange as a command-returning driver.
@@ -509,25 +555,35 @@ pub struct PairingSession {
     /// thread the second device's ring id into the next `approve()` call
     /// without a side channel.
     ring_id: Option<Vec<u8>>,
+    /// New-device only: the text and URI forms of this session's own
+    /// pairing code, computed once at construction from the
+    /// [`PairingPayload`] handed to [`new_device`](Self::new_device) — the
+    /// data [`PairingUiState::ShowingCode`] needs. `None` for an
+    /// existing-device session, which never shows a code of its own.
+    code: Option<(String, String)>,
 }
 
 impl PairingSession {
-    /// Construct a session for the new (joining) device.
-    pub fn new_device(
-        secret: &[u8; PAIRING_SECRET_LEN],
-        token: &[u8; PAIRING_TOKEN_LEN],
-    ) -> Self {
+    /// Construct a session for the new (joining) device. `payload` is the
+    /// freshly generated token+secret this device will display as a code
+    /// (QR and text form) for the peer to scan or type; `ui_state()` reads
+    /// [`PairingPayload::to_text`]/[`to_uri`](PairingPayload::to_uri) off it
+    /// once here, so hosts don't need a second copy of the code alongside
+    /// the session.
+    pub fn new_device(payload: &PairingPayload) -> Self {
         Self {
             phase: Phase::NewDevice(NewDevicePhase::Idle),
-            keys: derive_pairing_keys(secret, token),
+            keys: derive_pairing_keys(&payload.secret, &payload.token),
             send_counter: 0,
             recv_counter: 0,
             pending_enroll: None,
             ring_id: None,
+            code: Some((payload.to_text(), payload.to_uri())),
         }
     }
 
-    /// Construct a session for the existing (approving) device.
+    /// Construct a session for the existing (approving) device, from a
+    /// code the user scanned or typed.
     pub fn existing_device(
         secret: &[u8; PAIRING_SECRET_LEN],
         token: &[u8; PAIRING_TOKEN_LEN],
@@ -539,16 +595,130 @@ impl PairingSession {
             recv_counter: 0,
             pending_enroll: None,
             ring_id: None,
+            code: None,
         }
+    }
+
+    /// `true` once this session has reached a terminal phase (`Done`,
+    /// either role, or `Failed`) — used to guard [`fail`](Self::fail),
+    /// [`reject`](Self::reject), and [`cancel`](Self::cancel) so a
+    /// completed session's outcome is never overwritten by a later,
+    /// spurious call.
+    fn is_terminal(&self) -> bool {
+        matches!(
+            self.phase,
+            Phase::NewDevice(NewDevicePhase::Done)
+                | Phase::ExistingDevice(ExistingDevicePhase::Done)
+                | Phase::Failed { .. }
+        )
+    }
+
+    /// Move this session to `Failed { reason }`, unless it has already
+    /// reached a terminal phase — a stray failure after `Done` must not
+    /// erase a real completion, and a session already `Failed` keeps its
+    /// original reason.
+    fn fail(&mut self, reason: String) {
+        if !self.is_terminal() {
+            self.phase = Phase::Failed { reason };
+        }
+    }
+
+    /// Render this session's current state for UI presentation — see
+    /// [`PairingUiState`]. Every host renders this; none derives its own.
+    pub fn ui_state(&self) -> PairingUiState {
+        match &self.phase {
+            Phase::NewDevice(NewDevicePhase::Idle) | Phase::NewDevice(NewDevicePhase::AwaitingAdmit) => {
+                let (code, uri) = self
+                    .code
+                    .clone()
+                    .expect("a new-device session always has a code, set at construction");
+                PairingUiState::ShowingCode { code, uri }
+            }
+            Phase::NewDevice(NewDevicePhase::Done) => PairingUiState::Done {
+                ring_id: self
+                    .ring_id
+                    .clone()
+                    .expect("NewDevice(Done) is only reached after Admit.ring_id is recorded"),
+            },
+            Phase::ExistingDevice(ExistingDevicePhase::AwaitingEnroll) => PairingUiState::AwaitingPeer,
+            Phase::ExistingDevice(ExistingDevicePhase::AwaitingApproval) => {
+                let enroll = self
+                    .pending_enroll
+                    .as_ref()
+                    .expect("AwaitingApproval implies a pending Enroll");
+                PairingUiState::AwaitingApproval {
+                    device_name: enroll.credential.device_name().to_string(),
+                    did: enroll.credential.did().to_string(),
+                }
+            }
+            Phase::ExistingDevice(ExistingDevicePhase::Done) => PairingUiState::Done {
+                ring_id: self
+                    .ring_id
+                    .clone()
+                    .expect("ExistingDevice(Done) is only reached after approve() records ring_id"),
+            },
+            Phase::Failed { reason } => PairingUiState::Failed {
+                reason: reason.clone(),
+            },
+        }
+    }
+
+    /// Existing device only: decline a pending `Enroll` (`AwaitingApproval`)
+    /// after the user rejects the named peer. Moves the session to
+    /// `Failed` — a hard stop; no further frames should be sent or
+    /// accepted on this session. Errors, without changing the session's
+    /// phase, if there is no pending `Enroll` to reject — including when
+    /// the session has already reached a terminal state, so a completed
+    /// pairing's outcome is never overwritten by a stray reject.
+    pub fn reject(&mut self) -> Result<()> {
+        if !matches!(
+            self.phase,
+            Phase::ExistingDevice(ExistingDevicePhase::AwaitingApproval)
+        ) {
+            return Err(Error::PairingProtocol(
+                "reject() called with no pending Enroll to reject".to_string(),
+            ));
+        }
+        self.pending_enroll = None;
+        self.phase = Phase::Failed {
+            reason: "rejected by user".to_string(),
+        };
+        Ok(())
+    }
+
+    /// Either role: abort an in-flight pairing before it reaches a
+    /// terminal state — e.g. the user backs out of the show-code or
+    /// enter-code screen. Moves the session to `Failed`. Errors, without
+    /// changing the session's phase, if the session has already reached a
+    /// terminal state (`Done` or a prior `Failed`) — there is nothing left
+    /// to cancel, and a completed session must keep reporting its real
+    /// outcome.
+    pub fn cancel(&mut self) -> Result<()> {
+        if self.is_terminal() {
+            return Err(Error::PairingProtocol(
+                "cannot cancel a session that has already reached a terminal state".to_string(),
+            ));
+        }
+        self.pending_enroll = None;
+        self.phase = Phase::Failed {
+            reason: "cancelled".to_string(),
+        };
+        Ok(())
     }
 
     /// Seal `plaintext` under this session's own send-direction key at the
     /// next unused counter, advancing `send_counter`. New device sends
     /// under `k_new_to_old`; existing device sends under `k_old_to_new`.
+    /// Callers must guard against `Phase::Failed` themselves (every public
+    /// entry point that reaches this does) — a `Failed` session has no
+    /// send direction left to pick.
     fn seal_and_advance(&mut self, plaintext: &[u8]) -> Vec<u8> {
         let key = match self.phase {
             Phase::NewDevice(_) => &self.keys.k_new_to_old,
             Phase::ExistingDevice(_) => &self.keys.k_old_to_new,
+            Phase::Failed { .. } => {
+                unreachable!("seal_and_advance callers must guard against a Failed session")
+            }
         };
         let ciphertext = seal_frame(key, self.send_counter, plaintext);
         self.send_counter += 1;
@@ -558,11 +728,15 @@ impl PairingSession {
     /// Open `ciphertext` under the peer's send-direction key at the next
     /// expected counter, advancing `recv_counter` only on success — a
     /// failed open (wrong key, replay, tamper) must not desynchronize the
-    /// counter from what a legitimate retried frame would need.
+    /// counter from what a legitimate retried frame would need. See
+    /// [`seal_and_advance`](Self::seal_and_advance) on the `Failed` guard.
     fn open_and_advance(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>> {
         let key = match self.phase {
             Phase::NewDevice(_) => &self.keys.k_old_to_new,
             Phase::ExistingDevice(_) => &self.keys.k_new_to_old,
+            Phase::Failed { .. } => {
+                unreachable!("open_and_advance callers must guard against a Failed session")
+            }
         };
         let plaintext = open_frame(key, self.recv_counter, ciphertext)?;
         self.recv_counter += 1;
@@ -575,11 +749,12 @@ impl PairingSession {
     /// identity note at the top of `device_ring.rs`, which applies here
     /// too). Moves the session from `Idle` to `AwaitingAdmit`; must be
     /// called exactly once, before any frame is fed to
-    /// [`on_frame_received`](Self::on_frame_received). Returns `Err` and
-    /// leaves the session in `Idle` (not advanced, nothing sent) if minting
-    /// the KeyPackage fails — a host-level error, not a panic, since it can
-    /// legitimately happen (e.g. corrupt local key state) and callers
-    /// should be able to surface it rather than crash.
+    /// [`on_frame_received`](Self::on_frame_received). Moves the session to
+    /// `Failed` and returns `Err` if minting the KeyPackage fails, or if
+    /// called on a session that has already reached a terminal state — a
+    /// host-level error, not a panic, since it can legitimately happen
+    /// (e.g. corrupt local key state) and callers should be able to
+    /// surface it rather than crash.
     pub fn start_enroll(
         &mut self,
         mls: &MoatSession,
@@ -588,10 +763,21 @@ impl PairingSession {
         stealth_scan_pubkey: [u8; 32],
         conv_kps: Vec<OfferedKp>,
     ) -> Result<Vec<PairingCommand>> {
+        if self.is_terminal() {
+            let reason = "start_enroll() called on a session that has already reached a terminal state".to_string();
+            return Err(Error::PairingProtocol(reason));
+        }
+
         // Reuses the identity signing key, not a throwaway one — see the
         // "Signing-key identity" note at the top of `device_ring.rs`, which
         // this KP is subject to just like the steady-state KP-lane ones.
-        let ring_kp = mls.replenish_key_package(credential, key_bundle)?;
+        let ring_kp = match mls.replenish_key_package(credential, key_bundle) {
+            Ok(kp) => kp,
+            Err(e) => {
+                self.fail(e.to_string());
+                return Err(e);
+            }
+        };
 
         let enroll = PairingMsg::Enroll(Enroll {
             credential: credential.clone(),
@@ -630,12 +816,38 @@ impl PairingSession {
     /// mismatch there means the `Admit` led us into somebody else's ring.
     /// On success, records `Admit.ring_id` so it's available via
     /// [`ring_id`](Self::ring_id).
+    ///
+    /// Any `Err` returned by this method — decryption failure, decode
+    /// failure, DID mismatch, or an ordering violation — moves the session
+    /// to `Failed { reason }` first, so the reason survives for
+    /// [`ui_state`](Self::ui_state) / status reporting rather than being
+    /// thrown away (unless the session was already terminal, in which case
+    /// its existing outcome is preserved — see [`fail`](Self::fail)).
     pub fn on_frame_received(
         &mut self,
         mls: &MoatSession,
         own_credential: &MoatCredential,
         ciphertext: &[u8],
     ) -> Result<Vec<PairingCommand>> {
+        let result = self.on_frame_received_impl(mls, own_credential, ciphertext);
+        if let Err(ref e) = result {
+            self.fail(e.to_string());
+        }
+        result
+    }
+
+    fn on_frame_received_impl(
+        &mut self,
+        mls: &MoatSession,
+        own_credential: &MoatCredential,
+        ciphertext: &[u8],
+    ) -> Result<Vec<PairingCommand>> {
+        if self.is_terminal() {
+            return Err(Error::PairingProtocol(
+                "on_frame_received() called on a session that has already reached a terminal state"
+                    .to_string(),
+            ));
+        }
         let plaintext = self.open_and_advance(ciphertext)?;
         let msg = decode_pairing_msg(&plaintext)?;
         let phase = self.phase.clone();
@@ -772,6 +984,14 @@ impl PairingSession {
     /// the host's already-known roster of other ring members (empty for a
     /// first pairing); the emitted `Admit.roster` is `[own SiblingInfo] ++
     /// known_siblings`.
+    ///
+    /// Errors without changing the session's phase if there is no pending
+    /// `Enroll` to approve (including a terminal session — a completed or
+    /// already-failed pairing's outcome is never overwritten by a stray
+    /// approve). Once past that guard, any further `Err` — a failure
+    /// creating or adding to the ring — moves the session to
+    /// `Failed { reason }` first, so the reason survives for
+    /// [`ui_state`](Self::ui_state) / status reporting.
     pub fn approve(
         &mut self,
         mls: &MoatSession,
@@ -789,6 +1009,29 @@ impl PairingSession {
                 "approve() called with no pending Enroll to approve".to_string(),
             ));
         }
+        let result = self.approve_impl(
+            mls,
+            credential,
+            key_bundle,
+            own_stealth_pubkey,
+            known_siblings,
+            existing_ring_id,
+        );
+        if let Err(ref e) = result {
+            self.fail(e.to_string());
+        }
+        result
+    }
+
+    fn approve_impl(
+        &mut self,
+        mls: &MoatSession,
+        credential: &MoatCredential,
+        key_bundle: &[u8],
+        own_stealth_pubkey: [u8; 32],
+        known_siblings: &[SiblingInfo],
+        existing_ring_id: Option<&[u8]>,
+    ) -> Result<Vec<PairingCommand>> {
         let enroll = self
             .pending_enroll
             .take()

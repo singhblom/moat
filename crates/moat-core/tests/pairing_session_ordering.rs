@@ -6,11 +6,18 @@
 
 use moat_core::{
     encode_pairing_msg, seal_frame, Admit, MoatCredential, MoatSession, PairingCommand,
-    PairingMsg, PairingSession,
+    PairingMsg, PairingPayload, PairingSession, PairingUiState,
 };
 
 const SECRET: [u8; 32] = [0xAA; 32];
 const TOKEN: [u8; 16] = [0xBB; 16];
+
+fn new_device_payload() -> PairingPayload {
+    PairingPayload {
+        secret: SECRET,
+        token: TOKEN,
+    }
+}
 
 fn new_device() -> (MoatSession, MoatCredential, Vec<u8>) {
     let mls = MoatSession::new();
@@ -21,7 +28,7 @@ fn new_device() -> (MoatSession, MoatCredential, Vec<u8>) {
 
 #[test]
 fn new_device_session_starts_not_done() {
-    let session = PairingSession::new_device(&SECRET, &TOKEN);
+    let session = PairingSession::new_device(&new_device_payload());
     assert!(
         !session.is_done(),
         "a freshly constructed session must not report done before any exchange"
@@ -54,7 +61,7 @@ fn existing_device_approve_without_enroll_is_rejected() {
 #[test]
 fn new_device_rejects_admit_frame_before_sending_enroll() {
     let (mls_new, _credential_new, _kb_new) = new_device();
-    let mut new_session = PairingSession::new_device(&SECRET, &TOKEN);
+    let mut new_session = PairingSession::new_device(&new_device_payload());
 
     // An (unsolicited) Admit-shaped frame, sealed as if the existing device
     // had sent it — but the new device never sent Enroll, so this must be
@@ -81,7 +88,7 @@ fn new_device_rejects_admit_frame_before_sending_enroll() {
 fn existing_device_rejects_a_second_enroll_while_awaiting_approval() {
     let (mls_existing, credential_existing, kb_existing) = new_device();
     let (mls_new, credential_new, kb_new) = new_device();
-    let mut new_session = PairingSession::new_device(&SECRET, &TOKEN);
+    let mut new_session = PairingSession::new_device(&new_device_payload());
     let mut existing_session = PairingSession::existing_device(&SECRET, &TOKEN);
 
     let enroll_cmds = new_session
@@ -139,7 +146,7 @@ fn did_mismatch_between_enroll_and_the_channel_owner_is_a_hard_abort() {
     let attacker_credential =
         MoatCredential::new("did:plc:mallory", "Mallory's Phone", *mls_attacker.device_id());
     let (_kp, kb_attacker) = mls_attacker.generate_key_package(&attacker_credential).unwrap();
-    let mut attacker_session = PairingSession::new_device(&SECRET, &TOKEN);
+    let mut attacker_session = PairingSession::new_device(&new_device_payload());
 
     let enroll_cmds = attacker_session
         .start_enroll(&mls_attacker, &attacker_credential, &kb_attacker, [0u8; 32], Vec::new())
@@ -174,7 +181,7 @@ fn new_device_rejects_admit_whose_welcome_lands_it_in_a_foreign_dids_ring() {
         MoatCredential::new("did:plc:alice", "Alice's Phone", *mls_new.device_id());
     let (new_device_kp, kb_new) = mls_new.generate_key_package(&credential_new).unwrap();
 
-    let mut new_session = PairingSession::new_device(&SECRET, &TOKEN);
+    let mut new_session = PairingSession::new_device(&new_device_payload());
     new_session
         .start_enroll(&mls_new, &credential_new, &kb_new, [0u8; 32], Vec::new())
         .expect("start_enroll must succeed");
@@ -210,5 +217,234 @@ fn new_device_rejects_admit_whose_welcome_lands_it_in_a_foreign_dids_ring() {
         result.is_err(),
         "an Admit whose Welcome lands the new device in a ring under a \
          different DID than its own must be rejected outright"
+    );
+}
+
+// ─── PairingUiState ──────────────────────────────────────────────────────
+
+fn find_send_frame(cmds: &[PairingCommand]) -> Vec<u8> {
+    cmds.iter()
+        .find_map(|c| match c {
+            PairingCommand::SendFrame { ciphertext } => Some(ciphertext.clone()),
+            _ => None,
+        })
+        .expect("expected a SendFrame command in this batch")
+}
+
+#[test]
+fn full_ui_state_sequence_for_both_roles() {
+    let (mls_new, credential_new, kb_new) = new_device();
+    let (mls_existing, credential_existing, _kb_existing) = new_device();
+
+    let mut new_session = PairingSession::new_device(&new_device_payload());
+    let mut existing_session = PairingSession::existing_device(&SECRET, &TOKEN);
+
+    // New device: ShowingCode from construction, unchanged by start_enroll.
+    match new_session.ui_state() {
+        PairingUiState::ShowingCode { code, uri } => {
+            assert!(!code.is_empty());
+            assert!(uri.starts_with("moat-pair:"));
+        }
+        other => panic!("expected ShowingCode before start_enroll, got {other:?}"),
+    }
+    // Existing device: AwaitingPeer from construction.
+    assert_eq!(existing_session.ui_state(), PairingUiState::AwaitingPeer);
+
+    let enroll_cmds = new_session
+        .start_enroll(&mls_new, &credential_new, &kb_new, [0u8; 32], Vec::new())
+        .expect("start_enroll must succeed");
+    let enroll_frame = find_send_frame(&enroll_cmds);
+    assert!(
+        matches!(new_session.ui_state(), PairingUiState::ShowingCode { .. }),
+        "the code stays displayed while Enroll is in flight"
+    );
+
+    existing_session
+        .on_frame_received(&mls_existing, &credential_existing, &enroll_frame)
+        .expect("Enroll must be accepted");
+    match existing_session.ui_state() {
+        PairingUiState::AwaitingApproval { device_name, did } => {
+            assert_eq!(device_name, "Alice's Phone");
+            assert_eq!(did, "did:plc:alice");
+        }
+        other => panic!("expected AwaitingApproval after Enroll, got {other:?}"),
+    }
+
+    let admit_cmds = existing_session
+        .approve(&mls_existing, &credential_existing, &_kb_existing, [0u8; 32], &[], None)
+        .expect("approve must succeed");
+    let admit_frame = find_send_frame(&admit_cmds);
+    let existing_ring_id = match existing_session.ui_state() {
+        PairingUiState::Done { ring_id } => ring_id,
+        other => panic!("expected Done after approve, got {other:?}"),
+    };
+
+    new_session
+        .on_frame_received(&mls_new, &credential_new, &admit_frame)
+        .expect("Admit must be accepted");
+    match new_session.ui_state() {
+        PairingUiState::Done { ring_id } => assert_eq!(ring_id, existing_ring_id),
+        other => panic!("expected Done after Admit, got {other:?}"),
+    }
+}
+
+#[test]
+fn reject_from_awaiting_approval_moves_to_failed() {
+    let (mls_new, credential_new, kb_new) = new_device();
+    let (mls_existing, credential_existing, _kb_existing) = new_device();
+
+    let mut new_session = PairingSession::new_device(&new_device_payload());
+    let mut existing_session = PairingSession::existing_device(&SECRET, &TOKEN);
+
+    // Too early: no pending Enroll yet.
+    let early = existing_session.reject();
+    assert!(early.is_err(), "reject() with nothing pending must be rejected");
+    assert_eq!(existing_session.ui_state(), PairingUiState::AwaitingPeer);
+
+    let enroll_cmds = new_session
+        .start_enroll(&mls_new, &credential_new, &kb_new, [0u8; 32], Vec::new())
+        .expect("start_enroll must succeed");
+    let enroll_frame = find_send_frame(&enroll_cmds);
+    existing_session
+        .on_frame_received(&mls_existing, &credential_existing, &enroll_frame)
+        .expect("Enroll must be accepted");
+
+    existing_session.reject().expect("reject from AwaitingApproval must succeed");
+
+    match existing_session.ui_state() {
+        PairingUiState::Failed { reason } => assert!(!reason.is_empty()),
+        other => panic!("expected Failed after reject, got {other:?}"),
+    }
+    assert!(existing_session.pending_enroll().is_none());
+    assert!(!existing_session.is_done());
+}
+
+#[test]
+fn cancel_from_each_non_terminal_state_moves_to_failed() {
+    // New device, Idle (fresh construction, before start_enroll).
+    let mut s = PairingSession::new_device(&new_device_payload());
+    s.cancel().expect("cancel from Idle must succeed");
+    assert!(matches!(s.ui_state(), PairingUiState::Failed { .. }));
+
+    // New device, AwaitingAdmit (after start_enroll).
+    let (mls_new, credential_new, kb_new) = new_device();
+    let mut s = PairingSession::new_device(&new_device_payload());
+    s.start_enroll(&mls_new, &credential_new, &kb_new, [0u8; 32], Vec::new())
+        .expect("start_enroll must succeed");
+    s.cancel().expect("cancel from AwaitingAdmit must succeed");
+    assert!(matches!(s.ui_state(), PairingUiState::Failed { .. }));
+
+    // Existing device, AwaitingEnroll (fresh construction).
+    let mut s = PairingSession::existing_device(&SECRET, &TOKEN);
+    s.cancel().expect("cancel from AwaitingEnroll must succeed");
+    assert!(matches!(s.ui_state(), PairingUiState::Failed { .. }));
+
+    // Existing device, AwaitingApproval (Enroll received).
+    let (mls_new2, credential_new2, kb_new2) = new_device();
+    let (mls_existing, credential_existing, _kb_existing) = new_device();
+    let mut new_session = PairingSession::new_device(&new_device_payload());
+    let mut existing_session = PairingSession::existing_device(&SECRET, &TOKEN);
+    let enroll_cmds = new_session
+        .start_enroll(&mls_new2, &credential_new2, &kb_new2, [0u8; 32], Vec::new())
+        .expect("start_enroll must succeed");
+    let enroll_frame = find_send_frame(&enroll_cmds);
+    existing_session
+        .on_frame_received(&mls_existing, &credential_existing, &enroll_frame)
+        .expect("Enroll must be accepted");
+    existing_session
+        .cancel()
+        .expect("cancel from AwaitingApproval must succeed");
+    assert!(matches!(existing_session.ui_state(), PairingUiState::Failed { .. }));
+}
+
+#[test]
+fn every_err_path_leaves_a_failed_with_non_empty_reason() {
+    // Ordering violation: Admit before Enroll was ever sent.
+    let (mls_new, credential_new, _kb_new) = new_device();
+    let mut s = PairingSession::new_device(&new_device_payload());
+    let keys = moat_core::derive_pairing_keys(&SECRET, &TOKEN);
+    let bogus_admit = PairingMsg::Admit(Admit {
+        ring_id: vec![1, 2, 3],
+        welcome: vec![9, 9, 9],
+        roster: vec![],
+    });
+    let plaintext = encode_pairing_msg(&bogus_admit);
+    let ciphertext = seal_frame(&keys.k_old_to_new, 0, &plaintext);
+    assert!(s.on_frame_received(&mls_new, &credential_new, &ciphertext).is_err());
+    match s.ui_state() {
+        PairingUiState::Failed { reason } => assert!(!reason.is_empty()),
+        other => panic!("expected Failed, got {other:?}"),
+    }
+
+    // DID mismatch on Enroll.
+    let (mls_existing, credential_existing, _kb_existing) = new_device();
+    let mut existing_session = PairingSession::existing_device(&SECRET, &TOKEN);
+    let mls_attacker = MoatSession::new();
+    let attacker_credential =
+        MoatCredential::new("did:plc:mallory", "Mallory's Phone", *mls_attacker.device_id());
+    let (_kp, kb_attacker) = mls_attacker.generate_key_package(&attacker_credential).unwrap();
+    let mut attacker_session = PairingSession::new_device(&new_device_payload());
+    let enroll_cmds = attacker_session
+        .start_enroll(&mls_attacker, &attacker_credential, &kb_attacker, [0u8; 32], Vec::new())
+        .expect("start_enroll must succeed");
+    let enroll_frame = find_send_frame(&enroll_cmds);
+    assert!(existing_session
+        .on_frame_received(&mls_existing, &credential_existing, &enroll_frame)
+        .is_err());
+    match existing_session.ui_state() {
+        PairingUiState::Failed { reason } => assert!(!reason.is_empty()),
+        other => panic!("expected Failed, got {other:?}"),
+    }
+
+    // Decryption failure: garbage ciphertext.
+    let mut s = PairingSession::existing_device(&SECRET, &TOKEN);
+    let (mls_garbage, credential_garbage, _kb) = new_device();
+    assert!(s
+        .on_frame_received(&mls_garbage, &credential_garbage, b"not a real frame")
+        .is_err());
+    match s.ui_state() {
+        PairingUiState::Failed { reason } => assert!(!reason.is_empty()),
+        other => panic!("expected Failed, got {other:?}"),
+    }
+}
+
+#[test]
+fn reject_and_cancel_from_a_terminal_state_are_rejected_and_leave_it_unchanged() {
+    // Failed is terminal: neither reject() nor cancel() can act on it again.
+    let mut s = PairingSession::existing_device(&SECRET, &TOKEN);
+    s.cancel().expect("first cancel must succeed");
+    let state_before = s.ui_state();
+    assert!(s.cancel().is_err(), "cancel from Failed must be rejected");
+    assert_eq!(s.ui_state(), state_before, "a second cancel must not change the reason");
+    assert!(s.reject().is_err(), "reject from Failed must be rejected");
+    assert_eq!(s.ui_state(), state_before);
+
+    // Done is terminal: a full successful exchange, then reject()/cancel()
+    // afterward must not downgrade it back to Failed.
+    let (mls_new, credential_new, kb_new) = new_device();
+    let (mls_existing, credential_existing, _kb_existing) = new_device();
+    let mut new_session = PairingSession::new_device(&new_device_payload());
+    let mut existing_session = PairingSession::existing_device(&SECRET, &TOKEN);
+    let enroll_cmds = new_session
+        .start_enroll(&mls_new, &credential_new, &kb_new, [0u8; 32], Vec::new())
+        .expect("start_enroll must succeed");
+    let enroll_frame = find_send_frame(&enroll_cmds);
+    existing_session
+        .on_frame_received(&mls_existing, &credential_existing, &enroll_frame)
+        .expect("Enroll must be accepted");
+    existing_session
+        .approve(&mls_existing, &credential_existing, &_kb_existing, [0u8; 32], &[], None)
+        .expect("approve must succeed");
+    assert!(matches!(existing_session.ui_state(), PairingUiState::Done { .. }));
+
+    assert!(existing_session.cancel().is_err(), "cancel from Done must be rejected");
+    assert!(
+        matches!(existing_session.ui_state(), PairingUiState::Done { .. }),
+        "cancel() on a Done session must not overwrite it with Failed"
+    );
+    assert!(existing_session.reject().is_err(), "reject from Done must be rejected");
+    assert!(
+        matches!(existing_session.ui_state(), PairingUiState::Done { .. }),
+        "reject() on a Done session must not overwrite it with Failed"
     );
 }

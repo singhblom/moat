@@ -4,7 +4,8 @@
 
 use moat_core::{
     decode_pairing_msg, derive_pairing_keys, generate_stealth_keypair, open_frame, MoatCredential,
-    MoatSession, OfferedKp, PairingCommand, PairingMsg, PairingSession, SiblingInfo,
+    MoatSession, OfferedKp, PairingCommand, PairingMsg, PairingPayload, PairingSession,
+    SiblingInfo,
 };
 
 /// A simulated device: its own `MoatSession`, credential, key bundle, and
@@ -62,7 +63,7 @@ fn run_pairing_session(
     let secret = [0x42u8; 32];
     let token = [0x24u8; 16];
 
-    let mut new_session = PairingSession::new_device(&secret, &token);
+    let mut new_session = PairingSession::new_device(&PairingPayload { secret, token });
     let mut existing_session = PairingSession::existing_device(&secret, &token);
 
     let conv_kps: Vec<OfferedKp> = Vec::new();
