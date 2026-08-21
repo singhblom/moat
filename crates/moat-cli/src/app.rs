@@ -15,7 +15,8 @@ use moat_core::{
     stealth_pubkey_from_privkey, try_decrypt_stealth, ControlKind, CoordMsg, DeviceRingState,
     Event, EventKind, ExternalBlob, GroupKind, LongTextMessage, MediaMessage, MessagePayload,
     MoatCredential, MoatSession, ModifierKind, PairingCommand, PairingPayload, PairingSession,
-    ParsedMessagePayload, RingCommand, SiblingInfo, SiblingStealth, StepEnv, CIPHERSUITE,
+    PairingUiState, ParsedMessagePayload, RingCommand, SiblingInfo, SiblingStealth, StepEnv,
+    CIPHERSUITE,
 };
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::collections::{HashMap, HashSet};
@@ -611,20 +612,17 @@ pub struct App {
 
     // ── Live pairing (QR / text code) device onboarding ─────────────────────
     /// Active pairing exchange, once `/pair/new` or `/pair/confirm` has been
-    /// called. Left in place (not cleared) once `is_done()` — `PairStatus`
-    /// must keep reporting `done: true` after completion, not just at the
-    /// instant it happens.
+    /// called. Left in place (not cleared) once terminal (`Done` or
+    /// `Failed`) — `ui_state()`/`GET /pair/status` must keep reporting the
+    /// real outcome after completion, not just at the instant it happens.
+    /// The single source of truth for pairing progress: every render/
+    /// dispatch site reads it via `pairing_ui_state()` rather than caching
+    /// its own copy of the code, the pending prompt, or a done flag.
     pairing_session: Option<PairingSession>,
     /// Which role `pairing_session` is playing: `Some(true)` for the new
     /// (joining) device, `Some(false)` for the existing (approving) device.
     /// Tells the `PairConnected` handler whether to call `start_enroll`.
     pairing_is_new_device: Option<bool>,
-    /// New device: the text-form code returned by the most recent
-    /// `/pair/new`, kept around for TUI redisplay.
-    pub(crate) pending_pair_code: Option<String>,
-    /// Existing device: `(device_name, did)` of a peer whose `Enroll` has
-    /// been received but not yet approved. `None` once approved or aborted.
-    pub(crate) pending_pair_prompt: Option<(String, String)>,
     /// The rendezvous token for an in-flight `pair_offer`/`pair_join` that
     /// hasn't been acknowledged (`pair_ready`) yet. If the main WS drops and
     /// reconnects while this is still set, the reconnect handler resends
@@ -775,8 +773,6 @@ impl App {
             cached_sibling_stealth: Vec::new(),
             pairing_session: None,
             pairing_is_new_device: None,
-            pending_pair_code: None,
-            pending_pair_prompt: None,
             pending_pair_rendezvous_token: None,
             pairing_sync_keys: None,
             pairing_sync_send_counter: 0,
@@ -1221,8 +1217,6 @@ impl App {
         self.pairing_sync_keys = None;
         self.pairing_session = Some(PairingSession::new_device(&payload));
         self.pairing_is_new_device = Some(true);
-        self.pending_pair_code = Some(code.clone());
-        self.pending_pair_prompt = None;
         self.pending_pair_rendezvous_token = Some(token.to_vec());
 
         let _ = self
@@ -1235,9 +1229,10 @@ impl App {
     /// HTTP `POST /pair/confirm` — existing device enters a pairing code.
     /// Parses the code, starts a `PairingSession::existing_device`, and
     /// kicks off the Drawbridge rendezvous (`pair_join`) asynchronously.
-    /// Approval of the resulting `Enroll` happens later, once it arrives
-    /// (auto-accepted in `--http` mode, gated on a user tap in the UIs —
-    /// see `interpret_pairing_commands`).
+    /// Approval of the resulting `Enroll` is a separate, explicit step —
+    /// `confirm` no longer implies it. Poll `GET /pair/status` for
+    /// `awaiting_approval` and call `POST /pair/approve` (or `/pair/reject`)
+    /// once it arrives; no host — including `--http` — auto-approves.
     pub fn api_pair_confirm(&mut self, code: &str) -> Result<()> {
         if self.client.is_none() {
             return Err(AppError::NotLoggedIn);
@@ -1252,7 +1247,6 @@ impl App {
         self.pairing_session =
             Some(PairingSession::existing_device(&payload.secret, &payload.token));
         self.pairing_is_new_device = Some(false);
-        self.pending_pair_prompt = None;
         self.pending_pair_rendezvous_token = Some(payload.token.to_vec());
 
         let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairJoin {
@@ -1262,14 +1256,67 @@ impl App {
         Ok(())
     }
 
-    /// HTTP `GET /pair/status` — returns `(done, ring_group_id,
-    /// pending_device_name)`.
-    pub fn api_pair_status(&self) -> (bool, Option<String>, Option<String>) {
-        let done = self.pairing_session.as_ref().map(|s| s.is_done()).unwrap_or(false);
-        let ring_group_id = self.ring_driver.ring_id().map(hex::encode);
-        let pending_device_name =
-            self.pending_pair_prompt.as_ref().map(|(name, _)| name.clone());
-        (done, ring_group_id, pending_device_name)
+    /// HTTP `POST /pair/approve` — existing device: approve the `Enroll`
+    /// `ui_state()` reports as `awaiting_approval`. Errors if there is no
+    /// active session or nothing pending (mirrors `PairingSession::approve`'s
+    /// own guard).
+    pub fn api_pair_approve(&mut self) -> Result<()> {
+        self.approve_pending_pairing()
+    }
+
+    /// HTTP `POST /pair/reject` — existing device: decline the pending
+    /// `Enroll`, moving the session to `Failed`.
+    pub fn api_pair_reject(&mut self) -> Result<()> {
+        let session = self
+            .pairing_session
+            .as_mut()
+            .ok_or_else(|| AppError::Other("no active pairing session".to_string()))?;
+        session.reject().map_err(AppError::Mls)?;
+        self.pending_pair_rendezvous_token = None;
+        self.drawbridge.clear_pair();
+        Ok(())
+    }
+
+    /// HTTP `POST /pair/cancel` — either role: abort an in-flight pairing
+    /// before it reaches a terminal state, moving the session to `Failed`.
+    pub fn api_pair_cancel(&mut self) -> Result<()> {
+        let session = self
+            .pairing_session
+            .as_mut()
+            .ok_or_else(|| AppError::Other("no active pairing session".to_string()))?;
+        session.cancel().map_err(AppError::Mls)?;
+        self.pending_pair_rendezvous_token = None;
+        self.drawbridge.clear_pair();
+        Ok(())
+    }
+
+    /// HTTP `GET /pair/status` — returns the serialized `PairingUiState`
+    /// verbatim; every host renders this, none derives its own notion of
+    /// pairing progress.
+    pub fn api_pair_status(&self) -> PairingUiState {
+        self.pairing_ui_state()
+    }
+
+    /// The current pairing UI state — `Idle` if no pairing is in flight
+    /// (`pairing_session` is `None`), otherwise the active session's
+    /// `ui_state()`. The single source of truth every render/dispatch site
+    /// (TUI popups, `GET /pair/status`) reads instead of deriving its own.
+    pub(crate) fn pairing_ui_state(&self) -> PairingUiState {
+        self.pairing_session
+            .as_ref()
+            .map(|s| s.ui_state())
+            .unwrap_or(PairingUiState::Idle)
+    }
+
+    /// `true` once the active pairing (if any) has nothing left to do —
+    /// reached a terminal state (`Done`/`Failed`), or there is no session
+    /// at all. Used by the TUI popups to know when any key should dismiss
+    /// rather than be interpreted as approve/reject/cancel.
+    pub(crate) fn pairing_is_terminal(&self) -> bool {
+        matches!(
+            self.pairing_ui_state(),
+            PairingUiState::Idle | PairingUiState::Done { .. } | PairingUiState::Failed { .. }
+        )
     }
 
     // ── End HTTP API methods ──────────────────────────────────────────
@@ -1836,6 +1883,14 @@ impl App {
                 self.sync_session = None;
                 self.pending_pair_token = None;
                 self.pairing_sync_keys = None;
+                // The pair WS closed before a still-in-flight PairingSession
+                // reached a terminal state (peer walked away, relay TTL) —
+                // cancel() so `ui_state()` reports why instead of leaving
+                // the session stuck forever in whatever phase it was in.
+                // A no-op `Err` if the session was already terminal.
+                if let Some(session) = self.pairing_session.as_mut() {
+                    let _ = session.cancel();
+                }
             }
 
             BgEvent::PairConnected => {
@@ -2111,7 +2166,14 @@ impl App {
                         self.debug_log.log(&format!("sync: pair WS connect failed: {e}"));
                         self.sync_session = None;
                         self.pending_pair_token = None;
-                        self.pairing_session = None;
+                        // Transport-level failure, external to
+                        // `PairingSession` (it never saw this) — `cancel()`
+                        // it explicitly so `ui_state()` reports `Failed`
+                        // instead of getting silently stuck in whatever
+                        // non-terminal phase it was in.
+                        if let Some(session) = self.pairing_session.as_mut() {
+                            let _ = session.cancel();
+                        }
                         self.pairing_is_new_device = None;
                         self.pending_pair_rendezvous_token = None;
                     }
@@ -2125,7 +2187,9 @@ impl App {
             BgEvent::DrawbridgeSendPairOffer { token } => {
                 if let Err(e) = self.drawbridge.send_pair_offer(&token).await {
                     self.debug_log.log(&format!("pairing: send_pair_offer failed: {e}"));
-                    self.pairing_session = None;
+                    if let Some(session) = self.pairing_session.as_mut() {
+                        let _ = session.cancel();
+                    }
                     self.pairing_is_new_device = None;
                     self.pending_pair_rendezvous_token = None;
                 }
@@ -2133,7 +2197,9 @@ impl App {
             BgEvent::DrawbridgeSendPairJoin { token } => {
                 if let Err(e) = self.drawbridge.send_pair_join(&token).await {
                     self.debug_log.log(&format!("pairing: send_pair_join failed: {e}"));
-                    self.pairing_session = None;
+                    if let Some(session) = self.pairing_session.as_mut() {
+                        let _ = session.cancel();
+                    }
                     self.pairing_is_new_device = None;
                     self.pending_pair_rendezvous_token = None;
                 }
@@ -3747,24 +3813,20 @@ impl App {
         Ok(false)
     }
 
-    /// New device: showing the pairing code. Any key dismisses once paired
-    /// (`pairing_done()`); Esc always dismisses and, if pairing hasn't
-    /// completed yet, aborts it (clears local state, closes the pair WS).
+    /// New device: showing the pairing code (rendered from `ui_state()` —
+    /// see `draw_pair_show_code_popup`). Any key dismisses once terminal
+    /// (`Done` or `Failed`); Esc while still showing the code aborts the
+    /// pairing via `cancel()`.
     fn handle_pair_show_code_key(&mut self, key: KeyEvent) -> Result<bool> {
-        let done = self.pairing_done();
+        let terminal = self.pairing_is_terminal();
         match key.code {
             KeyCode::Esc => {
-                if !done {
-                    self.pairing_session = None;
-                    self.pairing_is_new_device = None;
-                    self.pending_pair_rendezvous_token = None;
-                    self.drawbridge.clear_pair();
+                if !terminal {
+                    let _ = self.api_pair_cancel();
                 }
-                self.pending_pair_code = None;
                 self.focus = Focus::Conversations;
             }
-            _ if done => {
-                self.pending_pair_code = None;
+            _ if terminal => {
                 self.focus = Focus::Conversations;
             }
             _ => {}
@@ -3803,19 +3865,26 @@ impl App {
     }
 
     /// Existing device: confirmation screen naming the peer awaiting
-    /// approval. Enter/`y` approves; Esc/`n` rejects (aborts the pairing).
+    /// approval (rendered from `ui_state()` — see `draw_pair_approve_popup`).
+    /// Enter/`y` approves; Esc/`n` rejects. Any key dismisses once terminal
+    /// — reached either by this key's own approve/reject, or by a
+    /// background failure since the prompt was shown (surfaced via
+    /// `ui_state()`'s `Failed` instead of a silent teardown).
     fn handle_pair_approve_key(&mut self, key: KeyEvent) -> Result<bool> {
+        if self.pairing_is_terminal() {
+            self.focus = Focus::Conversations;
+            return Ok(false);
+        }
         match key.code {
             KeyCode::Enter | KeyCode::Char('y') => {
-                self.approve_pending_pairing();
-                self.focus = Focus::Conversations;
+                // On failure, stay on this screen — `ui_state()` now shows
+                // `Failed { reason }`, dismissible by the next key press.
+                if self.approve_pending_pairing().is_ok() {
+                    self.focus = Focus::Conversations;
+                }
             }
             KeyCode::Esc | KeyCode::Char('n') => {
-                self.pending_pair_prompt = None;
-                self.pairing_session = None;
-                self.pairing_is_new_device = None;
-                self.pending_pair_rendezvous_token = None;
-                self.drawbridge.clear_pair();
+                let _ = self.api_pair_reject();
                 self.focus = Focus::Conversations;
             }
             _ => {}
@@ -5379,14 +5448,6 @@ impl App {
 
     // ── Live pairing (QR / text code) device onboarding ─────────────────────
 
-    /// `true` once the active `PairingSession` (if any) has reached its
-    /// terminal `Done` phase. Used by the TUI to know when to dismiss the
-    /// "show code" popup on its own — kept as a method rather than exposing
-    /// `PairingSession` itself to `ui.rs`.
-    pub(crate) fn pairing_done(&self) -> bool {
-        self.pairing_session.as_ref().map(|s| s.is_done()).unwrap_or(false)
-    }
-
     /// Own credential/key_bundle/stealth pubkey, gathered synchronously the
     /// same way `ring_tick_inner`/`start_sync_session` do. `None` if any
     /// required local state is missing (not logged in, keys not loaded).
@@ -5444,9 +5505,11 @@ impl App {
         ) {
             Ok(cmds) => cmds,
             Err(e) => {
+                // `start_enroll` already recorded `Failed { reason }` on
+                // the session itself before returning this error (moat-core
+                // `PairingSession::fail`) — don't throw that state away by
+                // nulling `pairing_session` here; `ui_state()` needs it.
                 self.debug_log.log(&format!("pairing: start_enroll failed: {e}"));
-                self.pairing_session = None;
-                self.pairing_is_new_device = None;
                 self.pending_pair_rendezvous_token = None;
                 self.drawbridge.clear_pair();
                 return;
@@ -5462,8 +5525,10 @@ impl App {
     }
 
     /// Feed a sealed frame received on the pair WS to the active
-    /// `PairingSession`. On a protocol/crypto error, aborts the pairing:
-    /// clears local state and closes the pair WS.
+    /// `PairingSession`. On a protocol/crypto error, the session itself is
+    /// already `Failed { reason }` (see `on_frame_received`'s doc) — this
+    /// only tears down the *transport* (pair WS, rendezvous token), not the
+    /// session, so `ui_state()` keeps reporting why it failed.
     fn handle_pairing_frame(&mut self, data: Vec<u8>) {
         let Some((credential, _key_bundle, _stealth_pubkey)) = self.own_pairing_identity() else {
             self.debug_log.log("pairing: cannot process frame — identity not ready");
@@ -5481,8 +5546,6 @@ impl App {
             }
             Err(e) => {
                 self.debug_log.log(&format!("pairing: frame rejected: {e}"));
-                self.pairing_session = None;
-                self.pairing_is_new_device = None;
                 self.pending_pair_rendezvous_token = None;
                 self.drawbridge.clear_pair();
             }
@@ -5515,20 +5578,25 @@ impl App {
             .collect()
     }
 
-    /// Existing device: called once the user taps Approve (interactive UI),
-    /// or automatically as soon as `Enroll` arrives in `--http` mode
-    /// (Beacon) — see `interpret_pairing_commands`'s `SurfaceApprovalPrompt`
-    /// arm.
-    fn approve_pending_pairing(&mut self) {
+    /// Existing device: called once the user taps Approve (interactive UI)
+    /// or `POST /pair/approve` is called (headless — no host auto-approves
+    /// anymore; see `interpret_pairing_commands`'s `SurfaceApprovalPrompt`
+    /// arm). Errors without side effects if identity state isn't ready or
+    /// there's no active session; `session.approve()`'s own guard (no
+    /// pending `Enroll`) is reported the same way.
+    fn approve_pending_pairing(&mut self) -> Result<()> {
         let Some((credential, key_bundle, stealth_pubkey)) = self.own_pairing_identity() else {
-            self.debug_log.log("pairing: cannot approve — identity not ready");
-            return;
+            return Err(AppError::Other(
+                "pairing: cannot approve — identity not ready".to_string(),
+            ));
         };
         let existing_ring_id = self.ring_driver.ring_id().map(<[u8]>::to_vec);
         let is_first_pairing = existing_ring_id.is_none();
         let known_siblings = self.known_pairing_siblings();
 
-        let Some(session) = self.pairing_session.as_mut() else { return };
+        let Some(session) = self.pairing_session.as_mut() else {
+            return Err(AppError::Other("no active pairing session".to_string()));
+        };
         // `approve()` consumes `pending_enroll` internally and has no
         // command to hand the newcomer's stealth key back to the host —
         // `Admit.roster` only ever carries *already-known* siblings (see
@@ -5552,7 +5620,6 @@ impl App {
         // list tells the *existing* device host to persist its own
         // membership (it already knew it was joining/creating `ring_id`).
         let new_ring_id = session.ring_id().map(<[u8]>::to_vec);
-        self.pending_pair_prompt = None;
 
         match result {
             Ok(cmds) => {
@@ -5619,13 +5686,17 @@ impl App {
                 // periodic ring tick (every 30s, which can outlast a
                 // bounded test/UX wait entirely).
                 let _ = self.bg_tx.send(BgEvent::PollForNewDevicesNow);
+                Ok(())
             }
             Err(e) => {
+                // `approve()` already recorded `Failed { reason }` on the
+                // session itself before returning this error (moat-core
+                // `PairingSession::fail`) — don't throw that state away by
+                // nulling `pairing_session` here; `ui_state()` needs it.
                 self.debug_log.log(&format!("pairing: approve failed: {e}"));
-                self.pairing_session = None;
-                self.pairing_is_new_device = None;
                 self.pending_pair_rendezvous_token = None;
                 self.drawbridge.clear_pair();
+                Err(AppError::Mls(e))
             }
         }
     }
@@ -5633,8 +5704,9 @@ impl App {
     /// Interpret `PairingCommand`s from `PairingSession` — mirrors the
     /// `RingCommand` interpreter in `ring_tick_inner` and
     /// `process_sync_outputs`. Deliberately does not clear
-    /// `pairing_session` on `StartSync`: `PairStatus::done` must keep
-    /// reading `true` after completion, not just at the instant it happens.
+    /// `pairing_session` on `StartSync`: `ui_state()`/`GET /pair/status`
+    /// must keep reporting the real terminal outcome after completion, not
+    /// just at the instant it happens.
     ///
     /// `StartSync` is deferred to the end of the batch rather than acted on
     /// where it appears in `cmds`: it immediately sends a sync `Hello` at
@@ -5661,15 +5733,15 @@ impl App {
                         .bg_tx
                         .send(BgEvent::PublishRingCommit { tag, ciphertext });
                 }
-                PairingCommand::SurfaceApprovalPrompt { device_name, did } => {
-                    self.pending_pair_prompt = Some((device_name, did));
-                    if self.event_broadcast.is_some() {
-                        // --http / Beacon: no user tap to wait on.
-                        self.approve_pending_pairing();
-                    } else {
-                        self.focus = Focus::PairApprove;
-                    }
-                }
+                // No host branches on headless-vs-UI mode here anymore: the
+                // command only ever records that an `Enroll` arrived —
+                // `pending_enroll()` on the session already carries
+                // `device_name`/`did`, surfaced via `ui_state()`'s
+                // `AwaitingApproval` variant, so there's nothing further to
+                // cache. Approval (TUI tap or `POST /pair/approve`) is
+                // always a separate, explicit step; `sync_pairing_focus`
+                // below moves the TUI to the approve screen.
+                PairingCommand::SurfaceApprovalPrompt { .. } => {}
                 PairingCommand::PersistRing { ring_id } => {
                     let now_ms = chrono::Utc::now().timestamp_millis();
                     let ring_id_hex = hex::encode(&ring_id);
@@ -5726,6 +5798,22 @@ impl App {
         }
         if start_sync {
             self.start_pairing_sync_session();
+        }
+        self.sync_pairing_focus();
+    }
+
+    /// Keep the TUI's `Focus` synchronized with `ui_state()` rather than
+    /// having individual command handlers set `Focus::Pair*` imperatively.
+    /// Only `AwaitingApproval` needs an active transition — it's the one
+    /// state a host doesn't already have a screen open for (an incoming
+    /// `Enroll` can arrive while the user is anywhere in the TUI); every
+    /// other pairing screen's own key handler already renders and dismisses
+    /// off `ui_state()` directly (see `draw_pair_show_code_popup`,
+    /// `draw_pair_approve_popup`, `handle_pair_show_code_key`,
+    /// `handle_pair_approve_key`).
+    fn sync_pairing_focus(&mut self) {
+        if matches!(self.pairing_ui_state(), PairingUiState::AwaitingApproval { .. }) {
+            self.focus = Focus::PairApprove;
         }
     }
 }

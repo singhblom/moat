@@ -428,14 +428,30 @@ async fn post_pair_confirm(
     Ok(Json(json!({ "ok": true })))
 }
 
-async fn get_pair_status(State(state): State<Arc<ServerState>>) -> Json<Value> {
+async fn post_pair_approve(State(state): State<Arc<ServerState>>) -> HandlerResult<Json<Value>> {
+    let mut app = state.app.lock().await;
+    app.api_pair_approve().map_err(app_err)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn post_pair_reject(State(state): State<Arc<ServerState>>) -> HandlerResult<Json<Value>> {
+    let mut app = state.app.lock().await;
+    app.api_pair_reject().map_err(app_err)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn post_pair_cancel(State(state): State<Arc<ServerState>>) -> HandlerResult<Json<Value>> {
+    let mut app = state.app.lock().await;
+    app.api_pair_cancel().map_err(app_err)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// `GET /pair/status` — the serialized `PairingUiState` verbatim, e.g.
+/// `{"phase":"showing_code","code":"...","uri":"..."}` or
+/// `{"phase":"failed","reason":"..."}`. No host-specific shape on top.
+async fn get_pair_status(State(state): State<Arc<ServerState>>) -> Json<moat_core::PairingUiState> {
     let app = state.app.lock().await;
-    let (done, ring_group_id, pending_device_name) = app.api_pair_status();
-    Json(json!({
-        "done": done,
-        "ring_group_id": ring_group_id,
-        "pending_device_name": pending_device_name,
-    }))
+    Json(app.api_pair_status())
 }
 
 async fn post_sync_start(State(state): State<Arc<ServerState>>) -> Json<Value> {
@@ -547,6 +563,9 @@ pub async fn run_http(
         .route("/ring-status", get(get_ring_status))
         .route("/pair/new", post(post_pair_new))
         .route("/pair/confirm", post(post_pair_confirm))
+        .route("/pair/approve", post(post_pair_approve))
+        .route("/pair/reject", post(post_pair_reject))
+        .route("/pair/cancel", post(post_pair_cancel))
         .route("/pair/status", get(get_pair_status))
         .route("/sync/start", post(post_sync_start))
         .route("/sync/status", get(get_sync_status))

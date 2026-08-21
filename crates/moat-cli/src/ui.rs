@@ -1,6 +1,7 @@
 //! Terminal UI rendering with Ratatui
 
 use crate::app::{App, DeviceAlert, DisplayMessage, Focus, LoginField, QUICK_EMOJIS};
+use moat_core::PairingUiState;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -685,8 +686,10 @@ fn draw_handle_input_popup(frame: &mut Frame, title: &str, label: &str, input: &
     frame.set_cursor_position((chunks[1].x + 1 + input.len() as u16, chunks[1].y + 1));
 }
 
-/// New device: display the pairing code and wait. Shows a "waiting" status
-/// until `PairingSession::is_done()`, then a confirmation and dismiss hint.
+/// New device: display the pairing code and wait. Renders straight off
+/// `App::pairing_ui_state()` — the code text, the waiting/paired/failed
+/// status, and the border color are all derived from it, never cached
+/// separately.
 fn draw_pair_show_code_popup(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
@@ -698,32 +701,51 @@ fn draw_pair_show_code_popup(frame: &mut Frame, app: &App) {
 
     frame.render_widget(Clear, popup_area);
 
-    let done = app.pairing_done();
+    let (border_color, lines): (Color, Vec<Line>) = match app.pairing_ui_state() {
+        PairingUiState::ShowingCode { code, .. } => (
+            Color::Cyan,
+            vec![
+                Line::from(Span::styled(code, Style::default().fg(Color::Yellow))),
+                Line::from(""),
+                Line::from(
+                    "On your other device: Settings -> Link a device, then enter this code.",
+                ),
+            ],
+        ),
+        PairingUiState::Done { .. } => (
+            Color::Green,
+            vec![Line::from("Paired! Press any key to continue.")],
+        ),
+        PairingUiState::Failed { reason } => (
+            Color::Red,
+            vec![
+                Line::from(Span::styled("Pairing failed", Style::default().fg(Color::Red))),
+                Line::from(""),
+                Line::from(reason),
+                Line::from(""),
+                Line::from("Press any key to continue."),
+            ],
+        ),
+        // Not reachable while this popup is showing (Focus::PairShowCode
+        // only follows a successful `api_pair_new`), kept for exhaustiveness.
+        PairingUiState::Idle | PairingUiState::AwaitingPeer | PairingUiState::AwaitingApproval { .. } => {
+            (Color::Cyan, vec![Line::from("")])
+        }
+    };
+
     let block = Block::default()
         .title(" Link This Device ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(if done { Color::Green } else { Color::Cyan }));
+        .border_style(Style::default().fg(border_color));
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
 
-    let code = app.pending_pair_code.as_deref().unwrap_or("");
-    let status = if done {
-        "Paired! Press any key to continue."
-    } else {
-        "On your other device: Settings -> Link a device, then enter this code."
-    };
-
-    let lines = vec![
-        Line::from(Span::styled(code, Style::default().fg(Color::Yellow))),
-        Line::from(""),
-        Line::from(status),
-    ];
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true });
     frame.render_widget(paragraph, inner);
 }
 
 /// Existing device: confirmation screen naming the peer awaiting an
-/// approval decision.
+/// approval decision. Renders straight off `App::pairing_ui_state()`.
 fn draw_pair_approve_popup(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
@@ -742,24 +764,36 @@ fn draw_pair_approve_popup(frame: &mut Frame, app: &App) {
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
 
-    let (device_name, did) = app
-        .pending_pair_prompt
-        .as_ref()
-        .map(|(name, did)| (name.as_str(), did.as_str()))
-        .unwrap_or(("unknown device", ""));
+    let lines: Vec<Line> = match app.pairing_ui_state() {
+        PairingUiState::AwaitingApproval { device_name, did } => vec![
+            Line::from(vec![
+                Span::styled("Device: ", Style::default().fg(Color::Yellow)),
+                Span::raw(device_name),
+            ]),
+            Line::from(vec![
+                Span::styled("DID: ", Style::default().fg(Color::Yellow)),
+                Span::raw(did),
+            ]),
+            Line::from(""),
+            Line::from("Approve? (y/Enter to approve, n/Esc to reject)"),
+        ],
+        PairingUiState::Done { .. } => {
+            vec![Line::from("Device added! Press any key to continue.")]
+        }
+        PairingUiState::Failed { reason } => vec![
+            Line::from(Span::styled("Pairing failed", Style::default().fg(Color::Red))),
+            Line::from(""),
+            Line::from(reason),
+            Line::from(""),
+            Line::from("Press any key to continue."),
+        ],
+        // Not reachable while this popup is showing (`sync_pairing_focus`
+        // only switches here on `AwaitingApproval`), kept for exhaustiveness.
+        PairingUiState::Idle | PairingUiState::ShowingCode { .. } | PairingUiState::AwaitingPeer => {
+            vec![Line::from("")]
+        }
+    };
 
-    let lines = vec![
-        Line::from(vec![
-            Span::styled("Device: ", Style::default().fg(Color::Yellow)),
-            Span::raw(device_name),
-        ]),
-        Line::from(vec![
-            Span::styled("DID: ", Style::default().fg(Color::Yellow)),
-            Span::raw(did),
-        ]),
-        Line::from(""),
-        Line::from("Approve? (y/Enter to approve, n/Esc to reject)"),
-    ];
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true });
     frame.render_widget(paragraph, inner);
 }
