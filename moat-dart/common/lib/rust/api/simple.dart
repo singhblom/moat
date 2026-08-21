@@ -10,7 +10,7 @@ part 'simple.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `credential_from_dto`, `from_core`, `into_core`, `payload_from_core`, `payload_to_core`, `push_media_label`, `push_plaintext_preview`, `sibling_info_to_core`, `to_core_sibling_stealth`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `MoatError`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 /// Generate a stealth keypair. Returns (private_key, public_key) each 32 bytes.
 StealthKeypair generateStealthKeypair() =>
@@ -313,6 +313,11 @@ abstract class PairingSessionHandle implements RustOpaqueInterface {
       required List<SiblingInfoDto> knownSiblings,
       Uint8List? existingRingId});
 
+  /// Either role: abort an in-flight pairing before it reaches a terminal
+  /// state, moving the session to `Failed`. Errors, without changing the
+  /// session's state, if it has already reached a terminal state.
+  void cancel();
+
   /// The new-device→existing-device directional AEAD key, for
   /// continuing the pairing-AEAD stream past `is_done()` (the history
   /// sync handoff) — see `next_send_counter`/`next_recv_counter`.
@@ -355,6 +360,12 @@ abstract class PairingSessionHandle implements RustOpaqueInterface {
   /// the user's approval decision.
   EnrollDto? pendingEnroll();
 
+  /// Existing device only: decline a pending `Enroll`, moving the session
+  /// to `Failed`. Errors, without changing the session's state, if there
+  /// is no pending `Enroll` to reject (including an already-terminal
+  /// session).
+  void reject();
+
   /// The ring this session ended up in, once known.
   Uint8List? ringId();
 
@@ -366,6 +377,12 @@ abstract class PairingSessionHandle implements RustOpaqueInterface {
       required List<int> keyBundle,
       required List<int> stealthScanPubkey,
       required List<OfferedKpDto> convKps});
+
+  /// Render this session's current state for UI presentation — mirrors
+  /// `moat_core::PairingSession::ui_state`. The single source of truth
+  /// every render/dispatch site (`PairingService.state`, `/pair/status`)
+  /// reads instead of deriving its own.
+  PairingUiStateDto uiState();
 }
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<RingDriverHandle>>
@@ -971,6 +988,44 @@ class PairingPayloadDto {
           runtimeType == other.runtimeType &&
           token == other.token &&
           secret == other.secret;
+}
+
+@freezed
+sealed class PairingUiStateDto with _$PairingUiStateDto {
+  const PairingUiStateDto._();
+
+  /// No pairing in flight. `PairingSessionHandle` itself never returns
+  /// this — see the doc on the core `Idle` variant.
+  const factory PairingUiStateDto.idle() = PairingUiStateDto_Idle;
+
+  /// New device: code generated, waiting for the peer to enter it.
+  const factory PairingUiStateDto.showingCode({
+    required String code,
+    required String uri,
+  }) = PairingUiStateDto_ShowingCode;
+
+  /// Existing device: code accepted, waiting for the peer's `Enroll`.
+  const factory PairingUiStateDto.awaitingPeer() =
+      PairingUiStateDto_AwaitingPeer;
+
+  /// Existing device: `Enroll` received, waiting on the approve/reject
+  /// decision.
+  const factory PairingUiStateDto.awaitingApproval({
+    required String deviceName,
+    required String did,
+  }) = PairingUiStateDto_AwaitingApproval;
+
+  /// Enroll/Admit exchange complete. Says nothing about history sync —
+  /// that stays observable via `syncStatus`.
+  const factory PairingUiStateDto.done({
+    required Uint8List ringId,
+  }) = PairingUiStateDto_Done;
+
+  /// Terminal failure, with a reason retained on the session rather than
+  /// thrown away.
+  const factory PairingUiStateDto.failed({
+    required String reason,
+  }) = PairingUiStateDto_Failed;
 }
 
 /// Reaction payload extracted from a Reaction event.

@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1024388455;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1904131698;
 
 // Section: executor
 
@@ -1360,6 +1360,52 @@ fn wire__crate__api__simple__PairingSessionHandle_approve_impl(
         },
     )
 }
+fn wire__crate__api__simple__PairingSessionHandle_cancel_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "PairingSessionHandle_cancel",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<PairingSessionHandle>,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, String>((move || {
+                let mut api_that_guard = None;
+                let decode_indices_ =
+                    flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                        flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                            &api_that, 0, false,
+                        ),
+                    ]);
+                for i in decode_indices_ {
+                    match i {
+                        0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                        _ => unreachable!(),
+                    }
+                }
+                let api_that_guard = api_that_guard.unwrap();
+                let output_ok = crate::api::simple::PairingSessionHandle::cancel(&*api_that_guard)?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__simple__PairingSessionHandle_channel_key_new_to_old_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1785,6 +1831,52 @@ fn wire__crate__api__simple__PairingSessionHandle_pending_enroll_impl(
         },
     )
 }
+fn wire__crate__api__simple__PairingSessionHandle_reject_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "PairingSessionHandle_reject",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<PairingSessionHandle>,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, String>((move || {
+                let mut api_that_guard = None;
+                let decode_indices_ =
+                    flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                        flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                            &api_that, 0, false,
+                        ),
+                    ]);
+                for i in decode_indices_ {
+                    match i {
+                        0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                        _ => unreachable!(),
+                    }
+                }
+                let api_that_guard = api_that_guard.unwrap();
+                let output_ok = crate::api::simple::PairingSessionHandle::reject(&*api_that_guard)?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__simple__PairingSessionHandle_ring_id_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1902,6 +1994,54 @@ fn wire__crate__api__simple__PairingSessionHandle_start_enroll_impl(
                     Ok(output_ok)
                 })())
             }
+        },
+    )
+}
+fn wire__crate__api__simple__PairingSessionHandle_ui_state_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "PairingSessionHandle_ui_state",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<PairingSessionHandle>,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let mut api_that_guard = None;
+                let decode_indices_ =
+                    flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                        flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                            &api_that, 0, false,
+                        ),
+                    ]);
+                for i in decode_indices_ {
+                    match i {
+                        0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                        _ => unreachable!(),
+                    }
+                }
+                let api_that_guard = api_that_guard.unwrap();
+                let output_ok = Result::<_, ()>::Ok(
+                    crate::api::simple::PairingSessionHandle::ui_state(&*api_that_guard),
+                )?;
+                Ok(output_ok)
+            })())
         },
     )
 }
@@ -4493,6 +4633,50 @@ impl SseDecode for crate::api::simple::PairingPayloadDto {
     }
 }
 
+impl SseDecode for crate::api::simple::PairingUiStateDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut tag_ = <i32>::sse_decode(deserializer);
+        match tag_ {
+            0 => {
+                return crate::api::simple::PairingUiStateDto::Idle;
+            }
+            1 => {
+                let mut var_code = <String>::sse_decode(deserializer);
+                let mut var_uri = <String>::sse_decode(deserializer);
+                return crate::api::simple::PairingUiStateDto::ShowingCode {
+                    code: var_code,
+                    uri: var_uri,
+                };
+            }
+            2 => {
+                return crate::api::simple::PairingUiStateDto::AwaitingPeer;
+            }
+            3 => {
+                let mut var_deviceName = <String>::sse_decode(deserializer);
+                let mut var_did = <String>::sse_decode(deserializer);
+                return crate::api::simple::PairingUiStateDto::AwaitingApproval {
+                    device_name: var_deviceName,
+                    did: var_did,
+                };
+            }
+            4 => {
+                let mut var_ringId = <Vec<u8>>::sse_decode(deserializer);
+                return crate::api::simple::PairingUiStateDto::Done {
+                    ring_id: var_ringId,
+                };
+            }
+            5 => {
+                let mut var_reason = <String>::sse_decode(deserializer);
+                return crate::api::simple::PairingUiStateDto::Failed { reason: var_reason };
+            }
+            _ => {
+                unimplemented!("");
+            }
+        }
+    }
+}
+
 impl SseDecode for crate::api::simple::ReactionPayloadDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -4890,104 +5074,104 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        33 => wire__crate__api__simple__PairingSessionHandle_on_frame_received_impl(
+        34 => wire__crate__api__simple__PairingSessionHandle_on_frame_received_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        36 => wire__crate__api__simple__PairingSessionHandle_start_enroll_impl(
+        38 => wire__crate__api__simple__PairingSessionHandle_start_enroll_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        40 => wire__crate__api__simple__RingDriverHandle_emit_kp_request_for_impl(
+        43 => wire__crate__api__simple__RingDriverHandle_emit_kp_request_for_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        41 => wire__crate__api__simple__RingDriverHandle_encrypt_user_conv_welcome_impl(
+        44 => wire__crate__api__simple__RingDriverHandle_encrypt_user_conv_welcome_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        42 => wire__crate__api__simple__RingDriverHandle_from_state_json_impl(
+        45 => wire__crate__api__simple__RingDriverHandle_from_state_json_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        46 => wire__crate__api__simple__RingDriverHandle_record_ring_membership_impl(
+        49 => wire__crate__api__simple__RingDriverHandle_record_ring_membership_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        49 => {
+        52 => {
             wire__crate__api__simple__RingDriverHandle_tick_impl(port, ptr, rust_vec_len, data_len)
         }
-        50 => wire__crate__api__simple__RingDriverHandle_to_state_json_impl(
+        53 => wire__crate__api__simple__RingDriverHandle_to_state_json_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        51 => wire__crate__api__simple__SyncSessionHandle_add_conv_plan_impl(
+        54 => wire__crate__api__simple__SyncSessionHandle_add_conv_plan_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        54 => wire__crate__api__simple__SyncSessionHandle_on_message_impl(
+        57 => wire__crate__api__simple__SyncSessionHandle_on_message_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        55 => wire__crate__api__simple__SyncSessionHandle_on_paired_impl(
+        58 => wire__crate__api__simple__SyncSessionHandle_on_paired_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        56 => wire__crate__api__simple__blob_decrypt_impl(port, ptr, rust_vec_len, data_len),
-        57 => wire__crate__api__simple__blob_encrypt_impl(port, ptr, rust_vec_len, data_len),
-        58 => wire__crate__api__simple__decode_thumbhash_impl(port, ptr, rust_vec_len, data_len),
-        59 => {
+        59 => wire__crate__api__simple__blob_decrypt_impl(port, ptr, rust_vec_len, data_len),
+        60 => wire__crate__api__simple__blob_encrypt_impl(port, ptr, rust_vec_len, data_len),
+        61 => wire__crate__api__simple__decode_thumbhash_impl(port, ptr, rust_vec_len, data_len),
+        62 => {
             wire__crate__api__simple__decrypt_push_payload_impl(port, ptr, rust_vec_len, data_len)
         }
-        61 => wire__crate__api__simple__encrypt_for_stealth_impl(port, ptr, rust_vec_len, data_len),
-        65 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
-        69 => wire__crate__api__simple__pairing_open_frame_impl(port, ptr, rust_vec_len, data_len),
-        70 => wire__crate__api__simple__pairing_payload_from_text_impl(
+        64 => wire__crate__api__simple__encrypt_for_stealth_impl(port, ptr, rust_vec_len, data_len),
+        68 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
+        72 => wire__crate__api__simple__pairing_open_frame_impl(port, ptr, rust_vec_len, data_len),
+        73 => wire__crate__api__simple__pairing_payload_from_text_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        71 => wire__crate__api__simple__pairing_payload_from_uri_impl(
+        74 => wire__crate__api__simple__pairing_payload_from_uri_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        72 => wire__crate__api__simple__pairing_payload_to_text_impl(
+        75 => wire__crate__api__simple__pairing_payload_to_text_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        73 => {
+        76 => {
             wire__crate__api__simple__pairing_payload_to_uri_impl(port, ptr, rust_vec_len, data_len)
         }
-        74 => wire__crate__api__simple__pairing_seal_frame_impl(port, ptr, rust_vec_len, data_len),
-        75 => {
+        77 => wire__crate__api__simple__pairing_seal_frame_impl(port, ptr, rust_vec_len, data_len),
+        78 => {
             wire__crate__api__simple__process_image_for_send_impl(port, ptr, rust_vec_len, data_len)
         }
-        76 => wire__crate__api__simple__sign_drawbridge_challenge_impl(
+        79 => wire__crate__api__simple__sign_drawbridge_challenge_impl(
             port,
             ptr,
             rust_vec_len,
@@ -5033,98 +5217,109 @@ fn pde_ffi_dispatcher_sync_impl(
             rust_vec_len,
             data_len,
         ),
-        26 => wire__crate__api__simple__PairingSessionHandle_channel_key_new_to_old_impl(
+        26 => {
+            wire__crate__api__simple__PairingSessionHandle_cancel_impl(ptr, rust_vec_len, data_len)
+        }
+        27 => wire__crate__api__simple__PairingSessionHandle_channel_key_new_to_old_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        27 => wire__crate__api__simple__PairingSessionHandle_channel_key_old_to_new_impl(
+        28 => wire__crate__api__simple__PairingSessionHandle_channel_key_old_to_new_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        28 => wire__crate__api__simple__PairingSessionHandle_existing_device_impl(
+        29 => wire__crate__api__simple__PairingSessionHandle_existing_device_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        29 => {
+        30 => {
             wire__crate__api__simple__PairingSessionHandle_is_done_impl(ptr, rust_vec_len, data_len)
         }
-        30 => wire__crate__api__simple__PairingSessionHandle_new_device_impl(
+        31 => wire__crate__api__simple__PairingSessionHandle_new_device_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        31 => wire__crate__api__simple__PairingSessionHandle_next_recv_counter_impl(
+        32 => wire__crate__api__simple__PairingSessionHandle_next_recv_counter_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        32 => wire__crate__api__simple__PairingSessionHandle_next_send_counter_impl(
+        33 => wire__crate__api__simple__PairingSessionHandle_next_send_counter_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        34 => wire__crate__api__simple__PairingSessionHandle_pending_enroll_impl(
+        35 => wire__crate__api__simple__PairingSessionHandle_pending_enroll_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        35 => {
+        36 => {
+            wire__crate__api__simple__PairingSessionHandle_reject_impl(ptr, rust_vec_len, data_len)
+        }
+        37 => {
             wire__crate__api__simple__PairingSessionHandle_ring_id_impl(ptr, rust_vec_len, data_len)
         }
-        37 => wire__crate__api__simple__RingDriverHandle_allocate_kp_seqs_impl(
+        39 => wire__crate__api__simple__PairingSessionHandle_ui_state_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        38 => wire__crate__api__simple__RingDriverHandle_claim_kp_impl(ptr, rust_vec_len, data_len),
-        39 => wire__crate__api__simple__RingDriverHandle_debug_summary_impl(
+        40 => wire__crate__api__simple__RingDriverHandle_allocate_kp_seqs_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        43 => wire__crate__api__simple__RingDriverHandle_ingest_kp_batch_impl(
+        41 => wire__crate__api__simple__RingDriverHandle_claim_kp_impl(ptr, rust_vec_len, data_len),
+        42 => wire__crate__api__simple__RingDriverHandle_debug_summary_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        44 => {
+        46 => wire__crate__api__simple__RingDriverHandle_ingest_kp_batch_impl(
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        47 => {
             wire__crate__api__simple__RingDriverHandle_new_empty_impl(ptr, rust_vec_len, data_len)
         }
-        45 => wire__crate__api__simple__RingDriverHandle_own_events_cursor_impl(
+        48 => wire__crate__api__simple__RingDriverHandle_own_events_cursor_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        47 => wire__crate__api__simple__RingDriverHandle_ring_group_id_impl(
+        50 => wire__crate__api__simple__RingDriverHandle_ring_group_id_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        48 => wire__crate__api__simple__RingDriverHandle_ring_joined_siblings_impl(
+        51 => wire__crate__api__simple__RingDriverHandle_ring_joined_siblings_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        52 => wire__crate__api__simple__SyncSessionHandle_is_done_impl(ptr, rust_vec_len, data_len),
-        53 => wire__crate__api__simple__SyncSessionHandle_new_session_impl(
+        55 => wire__crate__api__simple__SyncSessionHandle_is_done_impl(ptr, rust_vec_len, data_len),
+        56 => wire__crate__api__simple__SyncSessionHandle_new_session_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        60 => wire__crate__api__simple__derive_next_tag_impl(ptr, rust_vec_len, data_len),
-        62 => {
+        63 => wire__crate__api__simple__derive_next_tag_impl(ptr, rust_vec_len, data_len),
+        65 => {
             wire__crate__api__simple__event_dto_reaction_payload_impl(ptr, rust_vec_len, data_len)
         }
-        63 => wire__crate__api__simple__generate_candidate_tags_impl(ptr, rust_vec_len, data_len),
-        64 => wire__crate__api__simple__generate_stealth_keypair_impl(ptr, rust_vec_len, data_len),
-        66 => wire__crate__api__simple__kp_pool_target_impl(ptr, rust_vec_len, data_len),
-        67 => wire__crate__api__simple__pad_to_bucket_impl(ptr, rust_vec_len, data_len),
-        68 => wire__crate__api__simple__pairing_frame_is_done_impl(ptr, rust_vec_len, data_len),
-        77 => wire__crate__api__simple__try_decrypt_stealth_impl(ptr, rust_vec_len, data_len),
-        78 => wire__crate__api__simple__unpad_impl(ptr, rust_vec_len, data_len),
+        66 => wire__crate__api__simple__generate_candidate_tags_impl(ptr, rust_vec_len, data_len),
+        67 => wire__crate__api__simple__generate_stealth_keypair_impl(ptr, rust_vec_len, data_len),
+        69 => wire__crate__api__simple__kp_pool_target_impl(ptr, rust_vec_len, data_len),
+        70 => wire__crate__api__simple__pad_to_bucket_impl(ptr, rust_vec_len, data_len),
+        71 => wire__crate__api__simple__pairing_frame_is_done_impl(ptr, rust_vec_len, data_len),
+        80 => wire__crate__api__simple__try_decrypt_stealth_impl(ptr, rust_vec_len, data_len),
+        81 => wire__crate__api__simple__unpad_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -5596,6 +5791,47 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::simple::PairingPayloadDto>
     for crate::api::simple::PairingPayloadDto
 {
     fn into_into_dart(self) -> crate::api::simple::PairingPayloadDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::simple::PairingUiStateDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            crate::api::simple::PairingUiStateDto::Idle => [0.into_dart()].into_dart(),
+            crate::api::simple::PairingUiStateDto::ShowingCode { code, uri } => [
+                1.into_dart(),
+                code.into_into_dart().into_dart(),
+                uri.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::simple::PairingUiStateDto::AwaitingPeer => [2.into_dart()].into_dart(),
+            crate::api::simple::PairingUiStateDto::AwaitingApproval { device_name, did } => [
+                3.into_dart(),
+                device_name.into_into_dart().into_dart(),
+                did.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::simple::PairingUiStateDto::Done { ring_id } => {
+                [4.into_dart(), ring_id.into_into_dart().into_dart()].into_dart()
+            }
+            crate::api::simple::PairingUiStateDto::Failed { reason } => {
+                [5.into_dart(), reason.into_into_dart().into_dart()].into_dart()
+            }
+            _ => {
+                unimplemented!("");
+            }
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::simple::PairingUiStateDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::simple::PairingUiStateDto>
+    for crate::api::simple::PairingUiStateDto
+{
+    fn into_into_dart(self) -> crate::api::simple::PairingUiStateDto {
         self
     }
 }
@@ -6473,6 +6709,41 @@ impl SseEncode for crate::api::simple::PairingPayloadDto {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <Vec<u8>>::sse_encode(self.token, serializer);
         <Vec<u8>>::sse_encode(self.secret, serializer);
+    }
+}
+
+impl SseEncode for crate::api::simple::PairingUiStateDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        match self {
+            crate::api::simple::PairingUiStateDto::Idle => {
+                <i32>::sse_encode(0, serializer);
+            }
+            crate::api::simple::PairingUiStateDto::ShowingCode { code, uri } => {
+                <i32>::sse_encode(1, serializer);
+                <String>::sse_encode(code, serializer);
+                <String>::sse_encode(uri, serializer);
+            }
+            crate::api::simple::PairingUiStateDto::AwaitingPeer => {
+                <i32>::sse_encode(2, serializer);
+            }
+            crate::api::simple::PairingUiStateDto::AwaitingApproval { device_name, did } => {
+                <i32>::sse_encode(3, serializer);
+                <String>::sse_encode(device_name, serializer);
+                <String>::sse_encode(did, serializer);
+            }
+            crate::api::simple::PairingUiStateDto::Done { ring_id } => {
+                <i32>::sse_encode(4, serializer);
+                <Vec<u8>>::sse_encode(ring_id, serializer);
+            }
+            crate::api::simple::PairingUiStateDto::Failed { reason } => {
+                <i32>::sse_encode(5, serializer);
+                <String>::sse_encode(reason, serializer);
+            }
+            _ => {
+                unimplemented!("");
+            }
+        }
     }
 }
 

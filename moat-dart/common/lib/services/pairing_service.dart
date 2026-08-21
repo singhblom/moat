@@ -3,6 +3,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import '../rust/api/simple.dart' as ffi;
+import '../utils/value_listenable.dart';
 import 'auth_service.dart';
 import 'conversation_storage.dart';
 import 'debug_log.dart';
@@ -28,6 +29,13 @@ const _pairingUriScheme = 'moat-pair:';
 /// `interpret_pairing_commands`, `start_pairing_sync_session`,
 /// `process_pairing_sync_outputs`, `process_pairing_sync_frame`).
 ///
+/// [state] is the single source of truth for pairing progress — every
+/// screen renders off it rather than caching its own copy of the code, the
+/// pending prompt, or a done flag, mirroring moat-core's
+/// `PairingSession::ui_state`/moat-cli's `pairing_ui_state()`. No host,
+/// including the headless server, auto-approves an incoming `Enroll`
+/// anymore: approval is always an explicit [approvePending] call.
+///
 /// While a pairing is in flight this service temporarily takes over all
 /// four of [DrawbridgeService]'s pair-WS callbacks — it needs both the
 /// rendezvous (normally [DeviceRingService]'s job) and the attached-phase
@@ -51,10 +59,21 @@ class PairingService {
   /// post-Done sync phase.
   bool? _isNewDevice;
 
-  String? _pendingCode;
-  String? _pendingUri;
-  String? _pendingDeviceName;
-  String? _pendingDid;
+  final SimpleValueNotifier<ffi.PairingUiStateDto> _state =
+      SimpleValueNotifier(const ffi.PairingUiStateDto.idle());
+
+  /// The current pairing UI state — `idle` if no pairing is in flight,
+  /// otherwise the active session's `uiState()`. Left reporting `done`/
+  /// `failed` after completion, not just at the instant it happens (mirrors
+  /// `PairingSession::ui_state`'s retention of a terminal outcome).
+  ValueListenable<ffi.PairingUiStateDto> get state => _state;
+
+  /// Refresh [state] from the live session — call after every operation
+  /// that may have changed it (construction, `startEnroll`/`onFrameReceived`/
+  /// `approve`/`reject`/`cancel`, success or failure alike).
+  void _syncState() {
+    _state.value = _session?.uiState() ?? const ffi.PairingUiStateDto.idle();
+  }
 
   // ── Post-Done pairing-AEAD sync phase state ──────────────────────────────
   // Set by `_startPairingSyncSession`; cleared on `SyncOutput.complete`,
@@ -79,25 +98,13 @@ class PairingService {
   /// PairingMsg decoder and aborting the session.
   Future<void> _frameQueue = Future.value();
 
-  /// Bumped by [_supersedePreviousPairing] and [_abort]. Async call chains
-  /// capture the generation they started under and re-check it after each
-  /// await before mutating shared state or sending a frame — otherwise a
-  /// stale continuation left running when a pairing is aborted/superseded
-  /// (rather than cancelled) could still write into a since-replaced
-  /// session or a since-reopened pair WS.
+  /// Bumped by [_supersedePreviousPairing] and [_releaseTransport]. Async
+  /// call chains capture the generation they started under and re-check it
+  /// after each await before mutating shared state or sending a frame —
+  /// otherwise a stale continuation left running when a pairing is
+  /// aborted/superseded (rather than cancelled) could still write into a
+  /// since-replaced session or a since-reopened pair WS.
   int _generation = 0;
-
-  /// Auto-approve incoming Enroll requests without a user tap — set by the
-  /// headless server (`moat-dart/server`), left `false` for the
-  /// interactive Flutter app (which shows an approve screen instead).
-  bool autoApprove;
-
-  /// Existing device, interactive UI only: fired the moment an `Enroll`
-  /// arrives and needs a user decision — mirrors `moat-cli`'s TUI switching
-  /// `Focus::PairApprove` synchronously inside `interpret_pairing_commands`.
-  /// Not called when [autoApprove] is set (the headless server auto-accepts
-  /// instead, same as moat-cli's `--http` mode).
-  void Function()? onApprovalPending;
 
   PairingService({
     required AuthService auth,
@@ -106,7 +113,6 @@ class PairingService {
     required SyncService sync,
     required ConversationStorage conversationStorage,
     required MessageStorage messageStorage,
-    this.autoApprove = false,
   })  : _auth = auth,
         _drawbridge = drawbridge,
         _ring = ring,
@@ -114,58 +120,42 @@ class PairingService {
         _convStorage = conversationStorage,
         _messageStorage = messageStorage;
 
-  /// `true` once the active pairing session (if any) has reached its
-  /// terminal `Done` phase. Left in place (not cleared) once done —
-  /// `/pair/status` must keep reporting `done: true` after completion, not
-  /// just at the instant it happens.
-  bool get isDone => _session?.isDone() ?? false;
-
   /// The ring this session ended up in, once known.
   Uint8List? get ringId => _session?.ringId();
 
-  /// Existing device: name/DID of a peer whose `Enroll` has been received
-  /// but not yet approved.
-  String? get pendingDeviceName => _pendingDeviceName;
-  String? get pendingDid => _pendingDid;
-
-  /// New device: the text-form code returned by the most recent
-  /// `startEnroll()`, kept around for redisplay (manual entry / clipboard).
-  String? get pendingCode => _pendingCode;
-
-  /// New device: the `moat-pair:` URI form of the same code, for rendering
-  /// as a QR — qr-pairing.md §2: "so the app can register a handler and
-  /// reject foreign QRs cheaply", vs. the bare text form which round-trips
-  /// through manual entry and has no scheme to register.
-  String? get pendingUri => _pendingUri;
-
   /// New device: request a pairing code. Generates a fresh token+secret,
-  /// starts a `PairingSessionHandle.newDevice`, sends `pair_offer`, and
-  /// returns the text-form code for the UI to render as manually-typeable
-  /// text (render [pendingUri] as the QR).
+  /// starts a `PairingSessionHandle.newDevice` (which derives the code's
+  /// text/URI forms itself — see `moat_core::PairingSession::new_device`),
+  /// sends `pair_offer`, and returns the text-form code. Render `state`'s
+  /// `ShowingCode` for both the text and the `moat-pair:` URI form (QR).
   Future<String> startEnroll() async {
     _supersedePreviousPairing();
     final token = _randomBytes(16);
     final secret = _randomBytes(32);
 
-    final code = await ffi.pairingPayloadToText(token: token, secret: secret);
-    final uri = await ffi.pairingPayloadToUri(token: token, secret: secret);
-
-    _session = ffi.PairingSessionHandle.newDevice(secret: secret, token: token);
+    final session = ffi.PairingSessionHandle.newDevice(secret: secret, token: token);
+    _session = session;
     _isNewDevice = true;
-    _pendingCode = code;
-    _pendingUri = uri;
+    _syncState();
 
     _claimPairCallbacks();
     _drawbridge.sendPairOffer(token);
-    return code;
+
+    final uiState = session.uiState();
+    if (uiState is ffi.PairingUiStateDto_ShowingCode) {
+      return uiState.code;
+    }
+    // Unreachable: a freshly constructed new-device session is always
+    // ShowingCode (see moat-core's `PairingSession::new_device`).
+    throw StateError('pairing session did not start in ShowingCode');
   }
 
   /// Existing device: enter a pairing code scanned/typed elsewhere — either
   /// the bare text form (manual entry) or the `moat-pair:` URI form (QR
   /// scan result). Parses it, starts a `PairingSessionHandle.existingDevice`,
-  /// and sends `pair_join`. Approval of the resulting `Enroll` happens
-  /// later, once it arrives (auto-accepted when [autoApprove] is set, gated
-  /// on a user tap in the interactive UI otherwise).
+  /// and sends `pair_join`. Approval of the resulting `Enroll` is a
+  /// separate, explicit step (`approvePending`/`rejectPending`) once `state`
+  /// reports `AwaitingApproval` — `confirmCode` never implies it.
   Future<void> confirmCode(String code) async {
     _supersedePreviousPairing();
     final trimmed = code.trim();
@@ -177,16 +167,17 @@ class PairingService {
 
     _session = ffi.PairingSessionHandle.existingDevice(secret: secret, token: token);
     _isNewDevice = false;
+    _syncState();
 
     _claimPairCallbacks();
     _drawbridge.sendPairJoin(token);
   }
 
-  /// Existing device: called once the user taps Approve (interactive UI),
-  /// or automatically as soon as `Enroll` arrives when [autoApprove] is
-  /// set. Creates the ring (first pairing) or adds the joiner (subsequent
-  /// pairings), seeds the newcomer's KP pool, and emits the sealed `Admit`
-  /// frame.
+  /// Existing device: called once the user taps Approve, or `state` reports
+  /// `AwaitingApproval` and the caller (e.g. the headless server) decides to
+  /// approve. Creates the ring (first pairing) or adds the joiner
+  /// (subsequent pairings), seeds the newcomer's KP pool, and emits the
+  /// sealed `Admit` frame.
   Future<void> approvePending() async {
     final gen = _generation;
     final session = _session;
@@ -227,14 +218,16 @@ class PairingService {
         existingRingId: existingRingId,
       );
     } catch (e) {
+      // `approve()` already recorded `Failed { reason }` on the session
+      // itself before throwing (moat-core `PairingSession::fail`) — don't
+      // throw that state away; just release the transport and let `state`
+      // report why.
       moatLog('PairingService: approve failed: $e');
-      await _abort();
+      await _releaseTransport();
+      _syncState();
       return;
     }
     if (_generation != gen) return;
-
-    _pendingDeviceName = null;
-    _pendingDid = null;
 
     // approve() just performed create_device_ring/add_member — the
     // heaviest MLS mutations in this flow. Persist immediately rather
@@ -268,13 +261,37 @@ class PairingService {
     unawaited(_ring.tick());
   }
 
-  /// Existing device: reject a pending Enroll, aborting the pairing.
+  /// Existing device: reject the pending `Enroll`, moving the session to
+  /// `Failed` (via moat-core's `PairingSession::reject`) rather than
+  /// silently discarding it.
   Future<void> rejectPending() async {
-    await _abort();
+    try {
+      _session?.reject();
+    } catch (e) {
+      moatLog('PairingService: reject failed: $e');
+    }
+    await _releaseTransport();
+    _syncState();
+  }
+
+  /// Either role: abort an in-flight pairing before it reaches a terminal
+  /// state — e.g. the user backs out of the show-code or enter-code
+  /// screen. Moves the session to `Failed` (via moat-core's
+  /// `PairingSession::cancel`) rather than silently discarding it. A no-op
+  /// (logged) if the session has already reached a terminal state.
+  Future<void> cancel() async {
+    try {
+      _session?.cancel();
+    } catch (e) {
+      moatLog('PairingService: cancel failed: $e');
+    }
+    await _releaseTransport();
+    _syncState();
   }
 
   Future<void> dispose() async {
-    await _abort();
+    await cancel();
+    _state.dispose();
   }
 
   // ── Pair WS callback ownership ──────────────────────────────────────────
@@ -296,6 +313,9 @@ class PairingService {
   /// time, and leaving the old pairing-sync keys set would route this new
   /// pairing's incoming frames through the *old* AEAD channel's dispatch,
   /// misinterpreting them (see `_handleFrameReceived`'s dispatch note).
+  /// Unlike [_releaseTransport], this also drops `_session` itself —
+  /// starting a *new* pairing always supersedes whatever came before,
+  /// regardless of how it ended.
   void _supersedePreviousPairing() {
     _generation++;
     _drawbridge.clearPair();
@@ -303,11 +323,28 @@ class PairingService {
     _pairingSyncSession = null;
     _pairingSyncKeyNewToOld = null;
     _pairingSyncKeyOldToNew = null;
-    _pendingDeviceName = null;
-    _pendingDid = null;
-    _pendingCode = null;
-    _pendingUri = null;
     _frameQueue = Future.value();
+    _session = null;
+    _isNewDevice = null;
+    _syncState();
+  }
+
+  /// Release the pair-WS transport and this service's ownership of its
+  /// callbacks — needed once a pairing exchange has nothing left to send or
+  /// receive (terminal, or a lower-level connection failure). Deliberately
+  /// does *not* touch `_session` — its state (including `Failed { reason }`,
+  /// already recorded by whatever FFI call triggered this) is retained so
+  /// `state` keeps reporting the real outcome, exactly like moat-cli's
+  /// `interpret_pairing_commands` error paths.
+  Future<void> _releaseTransport() async {
+    _generation++;
+    _pairingSyncSession = null;
+    _pairingSyncKeyNewToOld = null;
+    _pairingSyncKeyOldToNew = null;
+    _frameQueue = Future.value();
+    await _drawbridge.clearPair();
+    _drawbridge.clearPendingPairRendezvous();
+    _releasePairCallbacks();
   }
 
   void _handlePairReady(DrawbridgePairReady ready) {
@@ -338,11 +375,18 @@ class PairingService {
     // leaves `PairingService` holding all four callback slots forever:
     // every subsequent unrelated pair session (an established-devices
     // reconnect sync) would silently route into `_handleFrameReceived`,
-    // which drops every frame since `_session` is stale/null, with no
-    // error surfaced anywhere. `_abort()` is idempotent-safe to call after
-    // a session already completed and released its own callbacks.
-    if (_session == null) return;
-    unawaited(_abort());
+    // which drops every frame since `_session` is stale, with no error
+    // surfaced anywhere.
+    final session = _session;
+    if (session == null) return;
+    // Cancel a still-in-flight session so `state` reports why instead of
+    // leaving it stuck forever in whatever phase it was in — a no-op
+    // (ignored) if it had already reached a terminal state.
+    try {
+      session.cancel();
+    } catch (_) {}
+    unawaited(_releaseTransport());
+    _syncState();
   }
 
   // ── Enroll / Admit / Done ────────────────────────────────────────────────
@@ -379,8 +423,12 @@ class PairingService {
         convKps: convKps,
       );
     } catch (e) {
+      // `start_enroll()` already recorded `Failed { reason }` on the
+      // session itself before throwing — see the matching note in
+      // `approvePending`.
       moatLog('PairingService: start_enroll failed: $e');
-      await _abort();
+      await _releaseTransport();
+      _syncState();
       return;
     }
     if (_generation != gen) return;
@@ -415,8 +463,12 @@ class PairingService {
         ciphertext: data,
       );
     } catch (e) {
+      // `on_frame_received()` already recorded `Failed { reason }` on the
+      // session itself before throwing — see the matching note in
+      // `approvePending`.
       moatLog('PairingService: frame rejected: $e');
-      await _abort();
+      await _releaseTransport();
+      _syncState();
       return;
     }
     if (_generation != gen) return;
@@ -432,7 +484,10 @@ class PairingService {
   /// (e.g. the new device's `Done`, which follows `startSync` in the
   /// Admit-processing command list) must reach the wire first — otherwise
   /// the peer receives frames out of counter order and rejects the
-  /// earlier one as undecryptable.
+  /// earlier one as undecryptable. `surfaceApprovalPrompt` is a no-op here
+  /// too, same as moat-cli: `pendingEnroll()` on the session already
+  /// carries `deviceName`/`did`, surfaced via `state`'s `AwaitingApproval`
+  /// — there's nothing further to cache, and no host auto-approves.
   Future<void> _interpretCommands(List<ffi.PairingCommandDto> cmds, int gen) async {
     var startSync = false;
     for (final cmd in cmds) {
@@ -452,16 +507,7 @@ class PairingService {
             moatLog('PairingService: publish ring commit failed: $e');
           }
         },
-        surfaceApprovalPrompt: (deviceName, did) async {
-          if (_generation != gen) return;
-          _pendingDeviceName = deviceName;
-          _pendingDid = did;
-          if (autoApprove) {
-            await approvePending();
-          } else {
-            onApprovalPending?.call();
-          }
-        },
+        surfaceApprovalPrompt: (deviceName, did) async {},
         persistRing: (ringId) async {
           await _ring.recordRingMembership(ringId);
           await _auth.populateConversationTags(ringId);
@@ -484,6 +530,9 @@ class PairingService {
           startSync = true;
         },
       );
+    }
+    if (_generation == gen) {
+      _syncState();
     }
     if (startSync && _generation == gen) {
       await _startPairingSyncSession(gen);
@@ -588,10 +637,11 @@ class PairingService {
   /// of the session, not just to itself. Every early return below that
   /// happens *before* the counter would advance is a safe drop (the peer's
   /// send counter and ours are still in lockstep); every failure *after*
-  /// [ffi.pairingOpenFrame] succeeds is unrecoverable and aborts instead of
-  /// returning silently, so a corrupt/out-of-order frame produces a clear
-  /// stall (`isDone` never flips) rather than a permanently wedged session
-  /// that looks alive.
+  /// [ffi.pairingOpenFrame] succeeds is unrecoverable and aborts the
+  /// transport instead of returning silently — the pairing itself already
+  /// reached `Done` at this point (this is the post-Done sync phase), so
+  /// unlike the other catch blocks here there's no session state left to
+  /// preserve, only the sync/transport state to tear down.
   Future<void> _processPairingSyncFrame(Uint8List data) async {
     final gen = _generation;
     final key = _isNewDevice == true ? _pairingSyncKeyOldToNew : _pairingSyncKeyNewToOld;
@@ -609,7 +659,7 @@ class PairingService {
     } catch (e) {
       moatLog('PairingService: pairing-sync failed to open frame: $e — aborting '
           '(the recv counter cannot safely skip a frame that failed to open)');
-      await _abort();
+      await _releaseTransport();
       return;
     }
     if (_generation != gen) return;
@@ -633,7 +683,7 @@ class PairingService {
       outputs = await syncSession.onMessage(msgBytes: plaintext, ourDid: did);
     } catch (e) {
       moatLog('PairingService: pairing-sync onMessage failed: $e — aborting');
-      await _abort();
+      await _releaseTransport();
       return;
     }
     if (_generation != gen) return;
@@ -641,23 +691,6 @@ class PairingService {
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
-
-  Future<void> _abort() async {
-    _generation++;
-    _session = null;
-    _isNewDevice = null;
-    _pendingDeviceName = null;
-    _pendingDid = null;
-    _pendingCode = null;
-    _pendingUri = null;
-    _pairingSyncSession = null;
-    _pairingSyncKeyNewToOld = null;
-    _pairingSyncKeyOldToNew = null;
-    _frameQueue = Future.value();
-    await _drawbridge.clearPair();
-    _drawbridge.clearPendingPairRendezvous();
-    _releasePairCallbacks();
-  }
 
   ffi.CredentialDto _ownCredential(ffi.MoatSessionHandle moatSession) {
     return ffi.CredentialDto(

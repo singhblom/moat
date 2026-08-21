@@ -427,11 +427,25 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
         conversationStorage: widget.convStorage,
         messageStorage: widget.msgStorage,
       );
-      PairingManager.instance.service!.onApprovalPending = () {
-        rootNavigatorKey.currentState?.push(
-          MaterialPageRoute(builder: (_) => const ApprovePairingScreen()),
-        );
-      };
+      // `init()` above just constructed a brand-new `PairingService` (and
+      // therefore a brand-new `state` notifier), so attaching a fresh
+      // listener here on every call is safe — no accumulation across
+      // login/logout cycles; the previous service (and its listeners)
+      // simply becomes unreferenced.
+      //
+      // TODO(pairing-ui-state Section D): this should become the screens'
+      // own `ValueListenableBuilder`s over `service.state`; pushing from a
+      // global listener is a minimal compile-preserving patch for Section
+      // C's PairingService API change (`onApprovalPending` deleted), not
+      // the real rewrite.
+      PairingManager.instance.service!.state.addListener(() {
+        final uiState = PairingManager.instance.service?.state.value;
+        if (uiState is PairingUiStateDto_AwaitingApproval) {
+          rootNavigatorKey.currentState?.push(
+            MaterialPageRoute(builder: (_) => const ApprovePairingScreen()),
+          );
+        }
+      });
 
       _pollingService!.onMessages = app_cm.ConversationManager.instance.notify;
       _pollingService!.onReaction = app_cm.ConversationManager.instance.notifyReaction;

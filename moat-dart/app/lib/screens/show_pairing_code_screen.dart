@@ -1,8 +1,14 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:moat_dart_common/moat_dart_common.dart' as ffi show PairingUiStateDto_ShowingCode, PairingUiStateDto_Done;
 import 'package:qr_flutter/qr_flutter.dart';
 import '../services/pairing_manager.dart';
+
+// TODO(pairing-ui-state Section D): replace this poll timer with a
+// ValueListenableBuilder over `service.state` — this is a minimal
+// compile-preserving patch for Section C's PairingService API change, not
+// the real rewrite.
 
 /// New device: requests a pairing code and displays it as a QR code (plus
 /// raw text as a manual-entry fallback), then waits for the existing
@@ -38,12 +44,13 @@ class _ShowPairingCodeScreenState extends State<ShowPairingCodeScreen> {
       // The QR carries the `moat-pair:` URI form (qr-pairing.md §2: lets a
       // handler reject foreign QRs cheaply); the text below stays in the
       // bare form since that's what a human types back on the other side.
+      final uiState = service.state.value;
       setState(() {
         _code = code;
-        _qrData = service.pendingUri ?? code;
+        _qrData = uiState is ffi.PairingUiStateDto_ShowingCode ? uiState.uri : code;
       });
       _pollTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
-        if (service.isDone && mounted) {
+        if (service.state.value is ffi.PairingUiStateDto_Done && mounted) {
           _pollTimer?.cancel();
           Navigator.of(context).pop(true);
         }

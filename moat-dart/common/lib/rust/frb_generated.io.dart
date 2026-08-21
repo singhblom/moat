@@ -275,6 +275,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PairingPayloadDto dco_decode_pairing_payload_dto(dynamic raw);
 
   @protected
+  PairingUiStateDto dco_decode_pairing_ui_state_dto(dynamic raw);
+
+  @protected
   ReactionPayloadDto dco_decode_reaction_payload_dto(dynamic raw);
 
   @protected
@@ -594,6 +597,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   PairingPayloadDto sse_decode_pairing_payload_dto(
+      SseDeserializer deserializer);
+
+  @protected
+  PairingUiStateDto sse_decode_pairing_ui_state_dto(
       SseDeserializer deserializer);
 
   @protected
@@ -929,6 +936,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_pairing_payload_dto(
       PairingPayloadDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_pairing_ui_state_dto(
+      PairingUiStateDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_reaction_payload_dto(

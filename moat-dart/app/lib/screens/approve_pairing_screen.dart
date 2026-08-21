@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:moat_dart_common/moat_dart_common.dart' as ffi show PairingUiStateDto_AwaitingApproval;
 import '../services/pairing_manager.dart';
 
 /// Existing device: shown the moment an incoming `Enroll` needs a user
-/// decision — pushed by [PairingManager]'s `onApprovalPending` callback
-/// (see `main.dart`), mirroring `moat-cli`'s TUI switching straight to
-/// `Focus::PairApprove` when `SurfaceApprovalPrompt` arrives.
+/// decision — pushed by a `state` listener in `main.dart`, mirroring
+/// `moat-cli`'s TUI switching straight to `Focus::PairApprove` when
+/// `SurfaceApprovalPrompt` arrives.
 class ApprovePairingScreen extends StatefulWidget {
   const ApprovePairingScreen({super.key});
 
@@ -43,8 +44,10 @@ class _ApprovePairingScreenState extends State<ApprovePairingScreen> {
   @override
   Widget build(BuildContext context) {
     final service = PairingManager.instance.service;
-    final deviceName = service?.pendingDeviceName;
-    final did = service?.pendingDid;
+    final uiState = service?.state.value;
+    final pending = uiState is ffi.PairingUiStateDto_AwaitingApproval ? uiState : null;
+    final deviceName = pending?.deviceName;
+    final did = pending?.did;
 
     return Scaffold(
       appBar: AppBar(title: const Text('New Device')),

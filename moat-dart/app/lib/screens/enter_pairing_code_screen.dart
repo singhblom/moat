@@ -2,13 +2,17 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:moat_dart_common/moat_dart_common.dart' as ffi show PairingUiStateDto_Done;
 import '../services/pairing_manager.dart';
+
+// TODO(pairing-ui-state Section D): replace this poll timer with a
+// ValueListenableBuilder over `service.state`, and push ApprovePairingScreen
+// on the `AwaitingApproval` transition — this is a minimal compile-preserving
+// patch for Section C's PairingService API change, not the real rewrite.
 
 /// Existing device: enter a pairing code either by scanning the other
 /// device's QR code or by typing it in. Once confirmed, waits for the
-/// other device's `Enroll` (which triggers [PairingManager]'s
-/// `onApprovalPending` navigation to `ApprovePairingScreen`, pushed on top
-/// of this screen) and for the pairing to complete.
+/// other device's `Enroll` and for the pairing to complete.
 class EnterPairingCodeScreen extends StatefulWidget {
   const EnterPairingCodeScreen({super.key});
 
@@ -60,7 +64,7 @@ class _EnterPairingCodeScreenState extends State<EnterPairingCodeScreen> {
         _confirmed = true;
       });
       _pollTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
-        if (service.isDone && mounted) {
+        if (service.state.value is ffi.PairingUiStateDto_Done && mounted) {
           _pollTimer?.cancel();
           Navigator.of(context).pop(true);
         }

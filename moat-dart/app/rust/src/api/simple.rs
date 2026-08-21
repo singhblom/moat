@@ -1624,6 +1624,46 @@ impl From<moat_core::PairingCommand> for PairingCommandDto {
     }
 }
 
+/// Mirrors `moat_core::PairingUiState` 1:1 — the presentation projection of
+/// `PairingSessionHandle::ui_state`. Every host (this Dart app, the
+/// headless server, moat-cli) renders this; none derives its own.
+pub enum PairingUiStateDto {
+    /// No pairing in flight. `PairingSessionHandle` itself never returns
+    /// this — see the doc on the core `Idle` variant.
+    Idle,
+    /// New device: code generated, waiting for the peer to enter it.
+    ShowingCode { code: String, uri: String },
+    /// Existing device: code accepted, waiting for the peer's `Enroll`.
+    AwaitingPeer,
+    /// Existing device: `Enroll` received, waiting on the approve/reject
+    /// decision.
+    AwaitingApproval { device_name: String, did: String },
+    /// Enroll/Admit exchange complete. Says nothing about history sync —
+    /// that stays observable via `syncStatus`.
+    Done { ring_id: Vec<u8> },
+    /// Terminal failure, with a reason retained on the session rather than
+    /// thrown away.
+    Failed { reason: String },
+}
+
+impl From<moat_core::PairingUiState> for PairingUiStateDto {
+    fn from(s: moat_core::PairingUiState) -> Self {
+        use moat_core::PairingUiState;
+        match s {
+            PairingUiState::Idle => PairingUiStateDto::Idle,
+            PairingUiState::ShowingCode { code, uri } => {
+                PairingUiStateDto::ShowingCode { code, uri }
+            }
+            PairingUiState::AwaitingPeer => PairingUiStateDto::AwaitingPeer,
+            PairingUiState::AwaitingApproval { device_name, did } => {
+                PairingUiStateDto::AwaitingApproval { device_name, did }
+            }
+            PairingUiState::Done { ring_id } => PairingUiStateDto::Done { ring_id },
+            PairingUiState::Failed { reason } => PairingUiStateDto::Failed { reason },
+        }
+    }
+}
+
 fn credential_from_dto(dto: CredentialDto) -> Result<MoatCredential, String> {
     let device_id: [u8; 16] = dto
         .device_id
@@ -1788,6 +1828,32 @@ impl PairingSessionHandle {
     #[frb(sync)]
     pub fn is_done(&self) -> bool {
         self.inner.lock().unwrap().is_done()
+    }
+
+    /// Render this session's current state for UI presentation — mirrors
+    /// `moat_core::PairingSession::ui_state`. The single source of truth
+    /// every render/dispatch site (`PairingService.state`, `/pair/status`)
+    /// reads instead of deriving its own.
+    #[frb(sync)]
+    pub fn ui_state(&self) -> PairingUiStateDto {
+        self.inner.lock().unwrap().ui_state().into()
+    }
+
+    /// Existing device only: decline a pending `Enroll`, moving the session
+    /// to `Failed`. Errors, without changing the session's state, if there
+    /// is no pending `Enroll` to reject (including an already-terminal
+    /// session).
+    #[frb(sync)]
+    pub fn reject(&self) -> Result<(), String> {
+        self.inner.lock().unwrap().reject().map_err(|e| e.to_string())
+    }
+
+    /// Either role: abort an in-flight pairing before it reaches a terminal
+    /// state, moving the session to `Failed`. Errors, without changing the
+    /// session's state, if it has already reached a terminal state.
+    #[frb(sync)]
+    pub fn cancel(&self) -> Result<(), String> {
+        self.inner.lock().unwrap().cancel().map_err(|e| e.to_string())
     }
 
     /// The new-device→existing-device directional AEAD key, for

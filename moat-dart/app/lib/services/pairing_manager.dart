@@ -34,7 +34,6 @@ class PairingManager {
       sync: sync,
       conversationStorage: conversationStorage,
       messageStorage: messageStorage,
-      autoApprove: false,
     );
   }
 

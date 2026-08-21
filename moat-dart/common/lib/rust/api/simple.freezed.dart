@@ -1467,6 +1467,1101 @@ abstract class PairingCommandDto_StartSync extends PairingCommandDto {
 }
 
 /// @nodoc
+mixin _$PairingUiStateDto {
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() idle,
+    required TResult Function(String code, String uri) showingCode,
+    required TResult Function() awaitingPeer,
+    required TResult Function(String deviceName, String did) awaitingApproval,
+    required TResult Function(Uint8List ringId) done,
+    required TResult Function(String reason) failed,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? idle,
+    TResult? Function(String code, String uri)? showingCode,
+    TResult? Function()? awaitingPeer,
+    TResult? Function(String deviceName, String did)? awaitingApproval,
+    TResult? Function(Uint8List ringId)? done,
+    TResult? Function(String reason)? failed,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? idle,
+    TResult Function(String code, String uri)? showingCode,
+    TResult Function()? awaitingPeer,
+    TResult Function(String deviceName, String did)? awaitingApproval,
+    TResult Function(Uint8List ringId)? done,
+    TResult Function(String reason)? failed,
+    required TResult orElse(),
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(PairingUiStateDto_Idle value) idle,
+    required TResult Function(PairingUiStateDto_ShowingCode value) showingCode,
+    required TResult Function(PairingUiStateDto_AwaitingPeer value)
+        awaitingPeer,
+    required TResult Function(PairingUiStateDto_AwaitingApproval value)
+        awaitingApproval,
+    required TResult Function(PairingUiStateDto_Done value) done,
+    required TResult Function(PairingUiStateDto_Failed value) failed,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(PairingUiStateDto_Idle value)? idle,
+    TResult? Function(PairingUiStateDto_ShowingCode value)? showingCode,
+    TResult? Function(PairingUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult? Function(PairingUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult? Function(PairingUiStateDto_Done value)? done,
+    TResult? Function(PairingUiStateDto_Failed value)? failed,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(PairingUiStateDto_Idle value)? idle,
+    TResult Function(PairingUiStateDto_ShowingCode value)? showingCode,
+    TResult Function(PairingUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult Function(PairingUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult Function(PairingUiStateDto_Done value)? done,
+    TResult Function(PairingUiStateDto_Failed value)? failed,
+    required TResult orElse(),
+  }) =>
+      throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class $PairingUiStateDtoCopyWith<$Res> {
+  factory $PairingUiStateDtoCopyWith(
+          PairingUiStateDto value, $Res Function(PairingUiStateDto) then) =
+      _$PairingUiStateDtoCopyWithImpl<$Res, PairingUiStateDto>;
+}
+
+/// @nodoc
+class _$PairingUiStateDtoCopyWithImpl<$Res, $Val extends PairingUiStateDto>
+    implements $PairingUiStateDtoCopyWith<$Res> {
+  _$PairingUiStateDtoCopyWithImpl(this._value, this._then);
+
+  // ignore: unused_field
+  final $Val _value;
+  // ignore: unused_field
+  final $Res Function($Val) _then;
+
+  /// Create a copy of PairingUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+}
+
+/// @nodoc
+abstract class _$$PairingUiStateDto_IdleImplCopyWith<$Res> {
+  factory _$$PairingUiStateDto_IdleImplCopyWith(
+          _$PairingUiStateDto_IdleImpl value,
+          $Res Function(_$PairingUiStateDto_IdleImpl) then) =
+      __$$PairingUiStateDto_IdleImplCopyWithImpl<$Res>;
+}
+
+/// @nodoc
+class __$$PairingUiStateDto_IdleImplCopyWithImpl<$Res>
+    extends _$PairingUiStateDtoCopyWithImpl<$Res, _$PairingUiStateDto_IdleImpl>
+    implements _$$PairingUiStateDto_IdleImplCopyWith<$Res> {
+  __$$PairingUiStateDto_IdleImplCopyWithImpl(
+      _$PairingUiStateDto_IdleImpl _value,
+      $Res Function(_$PairingUiStateDto_IdleImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of PairingUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+}
+
+/// @nodoc
+
+class _$PairingUiStateDto_IdleImpl extends PairingUiStateDto_Idle {
+  const _$PairingUiStateDto_IdleImpl() : super._();
+
+  @override
+  String toString() {
+    return 'PairingUiStateDto.idle()';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$PairingUiStateDto_IdleImpl);
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() idle,
+    required TResult Function(String code, String uri) showingCode,
+    required TResult Function() awaitingPeer,
+    required TResult Function(String deviceName, String did) awaitingApproval,
+    required TResult Function(Uint8List ringId) done,
+    required TResult Function(String reason) failed,
+  }) {
+    return idle();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? idle,
+    TResult? Function(String code, String uri)? showingCode,
+    TResult? Function()? awaitingPeer,
+    TResult? Function(String deviceName, String did)? awaitingApproval,
+    TResult? Function(Uint8List ringId)? done,
+    TResult? Function(String reason)? failed,
+  }) {
+    return idle?.call();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? idle,
+    TResult Function(String code, String uri)? showingCode,
+    TResult Function()? awaitingPeer,
+    TResult Function(String deviceName, String did)? awaitingApproval,
+    TResult Function(Uint8List ringId)? done,
+    TResult Function(String reason)? failed,
+    required TResult orElse(),
+  }) {
+    if (idle != null) {
+      return idle();
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(PairingUiStateDto_Idle value) idle,
+    required TResult Function(PairingUiStateDto_ShowingCode value) showingCode,
+    required TResult Function(PairingUiStateDto_AwaitingPeer value)
+        awaitingPeer,
+    required TResult Function(PairingUiStateDto_AwaitingApproval value)
+        awaitingApproval,
+    required TResult Function(PairingUiStateDto_Done value) done,
+    required TResult Function(PairingUiStateDto_Failed value) failed,
+  }) {
+    return idle(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(PairingUiStateDto_Idle value)? idle,
+    TResult? Function(PairingUiStateDto_ShowingCode value)? showingCode,
+    TResult? Function(PairingUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult? Function(PairingUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult? Function(PairingUiStateDto_Done value)? done,
+    TResult? Function(PairingUiStateDto_Failed value)? failed,
+  }) {
+    return idle?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(PairingUiStateDto_Idle value)? idle,
+    TResult Function(PairingUiStateDto_ShowingCode value)? showingCode,
+    TResult Function(PairingUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult Function(PairingUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult Function(PairingUiStateDto_Done value)? done,
+    TResult Function(PairingUiStateDto_Failed value)? failed,
+    required TResult orElse(),
+  }) {
+    if (idle != null) {
+      return idle(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class PairingUiStateDto_Idle extends PairingUiStateDto {
+  const factory PairingUiStateDto_Idle() = _$PairingUiStateDto_IdleImpl;
+  const PairingUiStateDto_Idle._() : super._();
+}
+
+/// @nodoc
+abstract class _$$PairingUiStateDto_ShowingCodeImplCopyWith<$Res> {
+  factory _$$PairingUiStateDto_ShowingCodeImplCopyWith(
+          _$PairingUiStateDto_ShowingCodeImpl value,
+          $Res Function(_$PairingUiStateDto_ShowingCodeImpl) then) =
+      __$$PairingUiStateDto_ShowingCodeImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({String code, String uri});
+}
+
+/// @nodoc
+class __$$PairingUiStateDto_ShowingCodeImplCopyWithImpl<$Res>
+    extends _$PairingUiStateDtoCopyWithImpl<$Res,
+        _$PairingUiStateDto_ShowingCodeImpl>
+    implements _$$PairingUiStateDto_ShowingCodeImplCopyWith<$Res> {
+  __$$PairingUiStateDto_ShowingCodeImplCopyWithImpl(
+      _$PairingUiStateDto_ShowingCodeImpl _value,
+      $Res Function(_$PairingUiStateDto_ShowingCodeImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of PairingUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? code = null,
+    Object? uri = null,
+  }) {
+    return _then(_$PairingUiStateDto_ShowingCodeImpl(
+      code: null == code
+          ? _value.code
+          : code // ignore: cast_nullable_to_non_nullable
+              as String,
+      uri: null == uri
+          ? _value.uri
+          : uri // ignore: cast_nullable_to_non_nullable
+              as String,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$PairingUiStateDto_ShowingCodeImpl
+    extends PairingUiStateDto_ShowingCode {
+  const _$PairingUiStateDto_ShowingCodeImpl(
+      {required this.code, required this.uri})
+      : super._();
+
+  @override
+  final String code;
+  @override
+  final String uri;
+
+  @override
+  String toString() {
+    return 'PairingUiStateDto.showingCode(code: $code, uri: $uri)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$PairingUiStateDto_ShowingCodeImpl &&
+            (identical(other.code, code) || other.code == code) &&
+            (identical(other.uri, uri) || other.uri == uri));
+  }
+
+  @override
+  int get hashCode => Object.hash(runtimeType, code, uri);
+
+  /// Create a copy of PairingUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$PairingUiStateDto_ShowingCodeImplCopyWith<
+          _$PairingUiStateDto_ShowingCodeImpl>
+      get copyWith => __$$PairingUiStateDto_ShowingCodeImplCopyWithImpl<
+          _$PairingUiStateDto_ShowingCodeImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() idle,
+    required TResult Function(String code, String uri) showingCode,
+    required TResult Function() awaitingPeer,
+    required TResult Function(String deviceName, String did) awaitingApproval,
+    required TResult Function(Uint8List ringId) done,
+    required TResult Function(String reason) failed,
+  }) {
+    return showingCode(code, uri);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? idle,
+    TResult? Function(String code, String uri)? showingCode,
+    TResult? Function()? awaitingPeer,
+    TResult? Function(String deviceName, String did)? awaitingApproval,
+    TResult? Function(Uint8List ringId)? done,
+    TResult? Function(String reason)? failed,
+  }) {
+    return showingCode?.call(code, uri);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? idle,
+    TResult Function(String code, String uri)? showingCode,
+    TResult Function()? awaitingPeer,
+    TResult Function(String deviceName, String did)? awaitingApproval,
+    TResult Function(Uint8List ringId)? done,
+    TResult Function(String reason)? failed,
+    required TResult orElse(),
+  }) {
+    if (showingCode != null) {
+      return showingCode(code, uri);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(PairingUiStateDto_Idle value) idle,
+    required TResult Function(PairingUiStateDto_ShowingCode value) showingCode,
+    required TResult Function(PairingUiStateDto_AwaitingPeer value)
+        awaitingPeer,
+    required TResult Function(PairingUiStateDto_AwaitingApproval value)
+        awaitingApproval,
+    required TResult Function(PairingUiStateDto_Done value) done,
+    required TResult Function(PairingUiStateDto_Failed value) failed,
+  }) {
+    return showingCode(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(PairingUiStateDto_Idle value)? idle,
+    TResult? Function(PairingUiStateDto_ShowingCode value)? showingCode,
+    TResult? Function(PairingUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult? Function(PairingUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult? Function(PairingUiStateDto_Done value)? done,
+    TResult? Function(PairingUiStateDto_Failed value)? failed,
+  }) {
+    return showingCode?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(PairingUiStateDto_Idle value)? idle,
+    TResult Function(PairingUiStateDto_ShowingCode value)? showingCode,
+    TResult Function(PairingUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult Function(PairingUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult Function(PairingUiStateDto_Done value)? done,
+    TResult Function(PairingUiStateDto_Failed value)? failed,
+    required TResult orElse(),
+  }) {
+    if (showingCode != null) {
+      return showingCode(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class PairingUiStateDto_ShowingCode extends PairingUiStateDto {
+  const factory PairingUiStateDto_ShowingCode(
+      {required final String code,
+      required final String uri}) = _$PairingUiStateDto_ShowingCodeImpl;
+  const PairingUiStateDto_ShowingCode._() : super._();
+
+  String get code;
+  String get uri;
+
+  /// Create a copy of PairingUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$PairingUiStateDto_ShowingCodeImplCopyWith<
+          _$PairingUiStateDto_ShowingCodeImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class _$$PairingUiStateDto_AwaitingPeerImplCopyWith<$Res> {
+  factory _$$PairingUiStateDto_AwaitingPeerImplCopyWith(
+          _$PairingUiStateDto_AwaitingPeerImpl value,
+          $Res Function(_$PairingUiStateDto_AwaitingPeerImpl) then) =
+      __$$PairingUiStateDto_AwaitingPeerImplCopyWithImpl<$Res>;
+}
+
+/// @nodoc
+class __$$PairingUiStateDto_AwaitingPeerImplCopyWithImpl<$Res>
+    extends _$PairingUiStateDtoCopyWithImpl<$Res,
+        _$PairingUiStateDto_AwaitingPeerImpl>
+    implements _$$PairingUiStateDto_AwaitingPeerImplCopyWith<$Res> {
+  __$$PairingUiStateDto_AwaitingPeerImplCopyWithImpl(
+      _$PairingUiStateDto_AwaitingPeerImpl _value,
+      $Res Function(_$PairingUiStateDto_AwaitingPeerImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of PairingUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+}
+
+/// @nodoc
+
+class _$PairingUiStateDto_AwaitingPeerImpl
+    extends PairingUiStateDto_AwaitingPeer {
+  const _$PairingUiStateDto_AwaitingPeerImpl() : super._();
+
+  @override
+  String toString() {
+    return 'PairingUiStateDto.awaitingPeer()';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$PairingUiStateDto_AwaitingPeerImpl);
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() idle,
+    required TResult Function(String code, String uri) showingCode,
+    required TResult Function() awaitingPeer,
+    required TResult Function(String deviceName, String did) awaitingApproval,
+    required TResult Function(Uint8List ringId) done,
+    required TResult Function(String reason) failed,
+  }) {
+    return awaitingPeer();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? idle,
+    TResult? Function(String code, String uri)? showingCode,
+    TResult? Function()? awaitingPeer,
+    TResult? Function(String deviceName, String did)? awaitingApproval,
+    TResult? Function(Uint8List ringId)? done,
+    TResult? Function(String reason)? failed,
+  }) {
+    return awaitingPeer?.call();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? idle,
+    TResult Function(String code, String uri)? showingCode,
+    TResult Function()? awaitingPeer,
+    TResult Function(String deviceName, String did)? awaitingApproval,
+    TResult Function(Uint8List ringId)? done,
+    TResult Function(String reason)? failed,
+    required TResult orElse(),
+  }) {
+    if (awaitingPeer != null) {
+      return awaitingPeer();
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(PairingUiStateDto_Idle value) idle,
+    required TResult Function(PairingUiStateDto_ShowingCode value) showingCode,
+    required TResult Function(PairingUiStateDto_AwaitingPeer value)
+        awaitingPeer,
+    required TResult Function(PairingUiStateDto_AwaitingApproval value)
+        awaitingApproval,
+    required TResult Function(PairingUiStateDto_Done value) done,
+    required TResult Function(PairingUiStateDto_Failed value) failed,
+  }) {
+    return awaitingPeer(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(PairingUiStateDto_Idle value)? idle,
+    TResult? Function(PairingUiStateDto_ShowingCode value)? showingCode,
+    TResult? Function(PairingUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult? Function(PairingUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult? Function(PairingUiStateDto_Done value)? done,
+    TResult? Function(PairingUiStateDto_Failed value)? failed,
+  }) {
+    return awaitingPeer?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(PairingUiStateDto_Idle value)? idle,
+    TResult Function(PairingUiStateDto_ShowingCode value)? showingCode,
+    TResult Function(PairingUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult Function(PairingUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult Function(PairingUiStateDto_Done value)? done,
+    TResult Function(PairingUiStateDto_Failed value)? failed,
+    required TResult orElse(),
+  }) {
+    if (awaitingPeer != null) {
+      return awaitingPeer(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class PairingUiStateDto_AwaitingPeer extends PairingUiStateDto {
+  const factory PairingUiStateDto_AwaitingPeer() =
+      _$PairingUiStateDto_AwaitingPeerImpl;
+  const PairingUiStateDto_AwaitingPeer._() : super._();
+}
+
+/// @nodoc
+abstract class _$$PairingUiStateDto_AwaitingApprovalImplCopyWith<$Res> {
+  factory _$$PairingUiStateDto_AwaitingApprovalImplCopyWith(
+          _$PairingUiStateDto_AwaitingApprovalImpl value,
+          $Res Function(_$PairingUiStateDto_AwaitingApprovalImpl) then) =
+      __$$PairingUiStateDto_AwaitingApprovalImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({String deviceName, String did});
+}
+
+/// @nodoc
+class __$$PairingUiStateDto_AwaitingApprovalImplCopyWithImpl<$Res>
+    extends _$PairingUiStateDtoCopyWithImpl<$Res,
+        _$PairingUiStateDto_AwaitingApprovalImpl>
+    implements _$$PairingUiStateDto_AwaitingApprovalImplCopyWith<$Res> {
+  __$$PairingUiStateDto_AwaitingApprovalImplCopyWithImpl(
+      _$PairingUiStateDto_AwaitingApprovalImpl _value,
+      $Res Function(_$PairingUiStateDto_AwaitingApprovalImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of PairingUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? deviceName = null,
+    Object? did = null,
+  }) {
+    return _then(_$PairingUiStateDto_AwaitingApprovalImpl(
+      deviceName: null == deviceName
+          ? _value.deviceName
+          : deviceName // ignore: cast_nullable_to_non_nullable
+              as String,
+      did: null == did
+          ? _value.did
+          : did // ignore: cast_nullable_to_non_nullable
+              as String,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$PairingUiStateDto_AwaitingApprovalImpl
+    extends PairingUiStateDto_AwaitingApproval {
+  const _$PairingUiStateDto_AwaitingApprovalImpl(
+      {required this.deviceName, required this.did})
+      : super._();
+
+  @override
+  final String deviceName;
+  @override
+  final String did;
+
+  @override
+  String toString() {
+    return 'PairingUiStateDto.awaitingApproval(deviceName: $deviceName, did: $did)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$PairingUiStateDto_AwaitingApprovalImpl &&
+            (identical(other.deviceName, deviceName) ||
+                other.deviceName == deviceName) &&
+            (identical(other.did, did) || other.did == did));
+  }
+
+  @override
+  int get hashCode => Object.hash(runtimeType, deviceName, did);
+
+  /// Create a copy of PairingUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$PairingUiStateDto_AwaitingApprovalImplCopyWith<
+          _$PairingUiStateDto_AwaitingApprovalImpl>
+      get copyWith => __$$PairingUiStateDto_AwaitingApprovalImplCopyWithImpl<
+          _$PairingUiStateDto_AwaitingApprovalImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() idle,
+    required TResult Function(String code, String uri) showingCode,
+    required TResult Function() awaitingPeer,
+    required TResult Function(String deviceName, String did) awaitingApproval,
+    required TResult Function(Uint8List ringId) done,
+    required TResult Function(String reason) failed,
+  }) {
+    return awaitingApproval(deviceName, did);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? idle,
+    TResult? Function(String code, String uri)? showingCode,
+    TResult? Function()? awaitingPeer,
+    TResult? Function(String deviceName, String did)? awaitingApproval,
+    TResult? Function(Uint8List ringId)? done,
+    TResult? Function(String reason)? failed,
+  }) {
+    return awaitingApproval?.call(deviceName, did);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? idle,
+    TResult Function(String code, String uri)? showingCode,
+    TResult Function()? awaitingPeer,
+    TResult Function(String deviceName, String did)? awaitingApproval,
+    TResult Function(Uint8List ringId)? done,
+    TResult Function(String reason)? failed,
+    required TResult orElse(),
+  }) {
+    if (awaitingApproval != null) {
+      return awaitingApproval(deviceName, did);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(PairingUiStateDto_Idle value) idle,
+    required TResult Function(PairingUiStateDto_ShowingCode value) showingCode,
+    required TResult Function(PairingUiStateDto_AwaitingPeer value)
+        awaitingPeer,
+    required TResult Function(PairingUiStateDto_AwaitingApproval value)
+        awaitingApproval,
+    required TResult Function(PairingUiStateDto_Done value) done,
+    required TResult Function(PairingUiStateDto_Failed value) failed,
+  }) {
+    return awaitingApproval(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(PairingUiStateDto_Idle value)? idle,
+    TResult? Function(PairingUiStateDto_ShowingCode value)? showingCode,
+    TResult? Function(PairingUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult? Function(PairingUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult? Function(PairingUiStateDto_Done value)? done,
+    TResult? Function(PairingUiStateDto_Failed value)? failed,
+  }) {
+    return awaitingApproval?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(PairingUiStateDto_Idle value)? idle,
+    TResult Function(PairingUiStateDto_ShowingCode value)? showingCode,
+    TResult Function(PairingUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult Function(PairingUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult Function(PairingUiStateDto_Done value)? done,
+    TResult Function(PairingUiStateDto_Failed value)? failed,
+    required TResult orElse(),
+  }) {
+    if (awaitingApproval != null) {
+      return awaitingApproval(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class PairingUiStateDto_AwaitingApproval extends PairingUiStateDto {
+  const factory PairingUiStateDto_AwaitingApproval(
+      {required final String deviceName,
+      required final String did}) = _$PairingUiStateDto_AwaitingApprovalImpl;
+  const PairingUiStateDto_AwaitingApproval._() : super._();
+
+  String get deviceName;
+  String get did;
+
+  /// Create a copy of PairingUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$PairingUiStateDto_AwaitingApprovalImplCopyWith<
+          _$PairingUiStateDto_AwaitingApprovalImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class _$$PairingUiStateDto_DoneImplCopyWith<$Res> {
+  factory _$$PairingUiStateDto_DoneImplCopyWith(
+          _$PairingUiStateDto_DoneImpl value,
+          $Res Function(_$PairingUiStateDto_DoneImpl) then) =
+      __$$PairingUiStateDto_DoneImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({Uint8List ringId});
+}
+
+/// @nodoc
+class __$$PairingUiStateDto_DoneImplCopyWithImpl<$Res>
+    extends _$PairingUiStateDtoCopyWithImpl<$Res, _$PairingUiStateDto_DoneImpl>
+    implements _$$PairingUiStateDto_DoneImplCopyWith<$Res> {
+  __$$PairingUiStateDto_DoneImplCopyWithImpl(
+      _$PairingUiStateDto_DoneImpl _value,
+      $Res Function(_$PairingUiStateDto_DoneImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of PairingUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? ringId = null,
+  }) {
+    return _then(_$PairingUiStateDto_DoneImpl(
+      ringId: null == ringId
+          ? _value.ringId
+          : ringId // ignore: cast_nullable_to_non_nullable
+              as Uint8List,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$PairingUiStateDto_DoneImpl extends PairingUiStateDto_Done {
+  const _$PairingUiStateDto_DoneImpl({required this.ringId}) : super._();
+
+  @override
+  final Uint8List ringId;
+
+  @override
+  String toString() {
+    return 'PairingUiStateDto.done(ringId: $ringId)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$PairingUiStateDto_DoneImpl &&
+            const DeepCollectionEquality().equals(other.ringId, ringId));
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(runtimeType, const DeepCollectionEquality().hash(ringId));
+
+  /// Create a copy of PairingUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$PairingUiStateDto_DoneImplCopyWith<_$PairingUiStateDto_DoneImpl>
+      get copyWith => __$$PairingUiStateDto_DoneImplCopyWithImpl<
+          _$PairingUiStateDto_DoneImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() idle,
+    required TResult Function(String code, String uri) showingCode,
+    required TResult Function() awaitingPeer,
+    required TResult Function(String deviceName, String did) awaitingApproval,
+    required TResult Function(Uint8List ringId) done,
+    required TResult Function(String reason) failed,
+  }) {
+    return done(ringId);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? idle,
+    TResult? Function(String code, String uri)? showingCode,
+    TResult? Function()? awaitingPeer,
+    TResult? Function(String deviceName, String did)? awaitingApproval,
+    TResult? Function(Uint8List ringId)? done,
+    TResult? Function(String reason)? failed,
+  }) {
+    return done?.call(ringId);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? idle,
+    TResult Function(String code, String uri)? showingCode,
+    TResult Function()? awaitingPeer,
+    TResult Function(String deviceName, String did)? awaitingApproval,
+    TResult Function(Uint8List ringId)? done,
+    TResult Function(String reason)? failed,
+    required TResult orElse(),
+  }) {
+    if (done != null) {
+      return done(ringId);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(PairingUiStateDto_Idle value) idle,
+    required TResult Function(PairingUiStateDto_ShowingCode value) showingCode,
+    required TResult Function(PairingUiStateDto_AwaitingPeer value)
+        awaitingPeer,
+    required TResult Function(PairingUiStateDto_AwaitingApproval value)
+        awaitingApproval,
+    required TResult Function(PairingUiStateDto_Done value) done,
+    required TResult Function(PairingUiStateDto_Failed value) failed,
+  }) {
+    return done(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(PairingUiStateDto_Idle value)? idle,
+    TResult? Function(PairingUiStateDto_ShowingCode value)? showingCode,
+    TResult? Function(PairingUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult? Function(PairingUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult? Function(PairingUiStateDto_Done value)? done,
+    TResult? Function(PairingUiStateDto_Failed value)? failed,
+  }) {
+    return done?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(PairingUiStateDto_Idle value)? idle,
+    TResult Function(PairingUiStateDto_ShowingCode value)? showingCode,
+    TResult Function(PairingUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult Function(PairingUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult Function(PairingUiStateDto_Done value)? done,
+    TResult Function(PairingUiStateDto_Failed value)? failed,
+    required TResult orElse(),
+  }) {
+    if (done != null) {
+      return done(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class PairingUiStateDto_Done extends PairingUiStateDto {
+  const factory PairingUiStateDto_Done({required final Uint8List ringId}) =
+      _$PairingUiStateDto_DoneImpl;
+  const PairingUiStateDto_Done._() : super._();
+
+  Uint8List get ringId;
+
+  /// Create a copy of PairingUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$PairingUiStateDto_DoneImplCopyWith<_$PairingUiStateDto_DoneImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class _$$PairingUiStateDto_FailedImplCopyWith<$Res> {
+  factory _$$PairingUiStateDto_FailedImplCopyWith(
+          _$PairingUiStateDto_FailedImpl value,
+          $Res Function(_$PairingUiStateDto_FailedImpl) then) =
+      __$$PairingUiStateDto_FailedImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({String reason});
+}
+
+/// @nodoc
+class __$$PairingUiStateDto_FailedImplCopyWithImpl<$Res>
+    extends _$PairingUiStateDtoCopyWithImpl<$Res,
+        _$PairingUiStateDto_FailedImpl>
+    implements _$$PairingUiStateDto_FailedImplCopyWith<$Res> {
+  __$$PairingUiStateDto_FailedImplCopyWithImpl(
+      _$PairingUiStateDto_FailedImpl _value,
+      $Res Function(_$PairingUiStateDto_FailedImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of PairingUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? reason = null,
+  }) {
+    return _then(_$PairingUiStateDto_FailedImpl(
+      reason: null == reason
+          ? _value.reason
+          : reason // ignore: cast_nullable_to_non_nullable
+              as String,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$PairingUiStateDto_FailedImpl extends PairingUiStateDto_Failed {
+  const _$PairingUiStateDto_FailedImpl({required this.reason}) : super._();
+
+  @override
+  final String reason;
+
+  @override
+  String toString() {
+    return 'PairingUiStateDto.failed(reason: $reason)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$PairingUiStateDto_FailedImpl &&
+            (identical(other.reason, reason) || other.reason == reason));
+  }
+
+  @override
+  int get hashCode => Object.hash(runtimeType, reason);
+
+  /// Create a copy of PairingUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$PairingUiStateDto_FailedImplCopyWith<_$PairingUiStateDto_FailedImpl>
+      get copyWith => __$$PairingUiStateDto_FailedImplCopyWithImpl<
+          _$PairingUiStateDto_FailedImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() idle,
+    required TResult Function(String code, String uri) showingCode,
+    required TResult Function() awaitingPeer,
+    required TResult Function(String deviceName, String did) awaitingApproval,
+    required TResult Function(Uint8List ringId) done,
+    required TResult Function(String reason) failed,
+  }) {
+    return failed(reason);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? idle,
+    TResult? Function(String code, String uri)? showingCode,
+    TResult? Function()? awaitingPeer,
+    TResult? Function(String deviceName, String did)? awaitingApproval,
+    TResult? Function(Uint8List ringId)? done,
+    TResult? Function(String reason)? failed,
+  }) {
+    return failed?.call(reason);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? idle,
+    TResult Function(String code, String uri)? showingCode,
+    TResult Function()? awaitingPeer,
+    TResult Function(String deviceName, String did)? awaitingApproval,
+    TResult Function(Uint8List ringId)? done,
+    TResult Function(String reason)? failed,
+    required TResult orElse(),
+  }) {
+    if (failed != null) {
+      return failed(reason);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(PairingUiStateDto_Idle value) idle,
+    required TResult Function(PairingUiStateDto_ShowingCode value) showingCode,
+    required TResult Function(PairingUiStateDto_AwaitingPeer value)
+        awaitingPeer,
+    required TResult Function(PairingUiStateDto_AwaitingApproval value)
+        awaitingApproval,
+    required TResult Function(PairingUiStateDto_Done value) done,
+    required TResult Function(PairingUiStateDto_Failed value) failed,
+  }) {
+    return failed(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(PairingUiStateDto_Idle value)? idle,
+    TResult? Function(PairingUiStateDto_ShowingCode value)? showingCode,
+    TResult? Function(PairingUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult? Function(PairingUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult? Function(PairingUiStateDto_Done value)? done,
+    TResult? Function(PairingUiStateDto_Failed value)? failed,
+  }) {
+    return failed?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(PairingUiStateDto_Idle value)? idle,
+    TResult Function(PairingUiStateDto_ShowingCode value)? showingCode,
+    TResult Function(PairingUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult Function(PairingUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult Function(PairingUiStateDto_Done value)? done,
+    TResult Function(PairingUiStateDto_Failed value)? failed,
+    required TResult orElse(),
+  }) {
+    if (failed != null) {
+      return failed(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class PairingUiStateDto_Failed extends PairingUiStateDto {
+  const factory PairingUiStateDto_Failed({required final String reason}) =
+      _$PairingUiStateDto_FailedImpl;
+  const PairingUiStateDto_Failed._() : super._();
+
+  String get reason;
+
+  /// Create a copy of PairingUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$PairingUiStateDto_FailedImplCopyWith<_$PairingUiStateDto_FailedImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
 mixin _$RingCommandDto {
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
