@@ -178,21 +178,34 @@ class PairingService {
   /// approve. Creates the ring (first pairing) or adds the joiner
   /// (subsequent pairings), seeds the newcomer's KP pool, and emits the
   /// sealed `Admit` frame.
+  ///
+  /// Throws on any failure — a precondition guard (no active session,
+  /// nothing pending, identity not ready) or the underlying `approve()`
+  /// call itself — so a caller that cares (`POST /pair/approve`) gets a
+  /// real signal, mirroring moat-cli's `Result`-returning
+  /// `api_pair_approve`. UI callers don't need to inspect it: `state`
+  /// already reflects the outcome (including `Failed { reason }` for a
+  /// protocol failure) by the time this returns or throws.
   Future<void> approvePending() async {
     final gen = _generation;
     final session = _session;
-    if (session == null) return;
+    if (session == null) {
+      throw StateError('no active pairing session');
+    }
     final pending = session.pendingEnroll();
-    if (pending == null) return;
+    if (pending == null) {
+      throw StateError('approvePending() called with no pending Enroll to approve');
+    }
     final moatSession = _auth.moatSession;
-    if (moatSession == null) return;
+    if (moatSession == null) {
+      throw StateError('no active MoatSession');
+    }
 
     final credential = _ownCredential(moatSession);
     final keyBundle = await _auth.secureStorage.loadKeyBundle();
     final stealthPubkey = await _auth.secureStorage.loadStealthPublicKey();
     if (keyBundle == null || stealthPubkey == null) {
-      moatLog('PairingService: cannot approve — identity not ready');
-      return;
+      throw StateError('cannot approve — identity not ready');
     }
 
     final existingRingId = await _ring.ringGroupId();
@@ -220,12 +233,13 @@ class PairingService {
     } catch (e) {
       // `approve()` already recorded `Failed { reason }` on the session
       // itself before throwing (moat-core `PairingSession::fail`) — don't
-      // throw that state away; just release the transport and let `state`
-      // report why.
+      // throw that state away; just release the transport, let `state`
+      // report why, and rethrow so a caller that checks (e.g.
+      // `POST /pair/approve`) sees the failure too.
       moatLog('PairingService: approve failed: $e');
       await _releaseTransport();
       _syncState();
-      return;
+      rethrow;
     }
     if (_generation != gen) return;
 
@@ -263,12 +277,20 @@ class PairingService {
 
   /// Existing device: reject the pending `Enroll`, moving the session to
   /// `Failed` (via moat-core's `PairingSession::reject`) rather than
-  /// silently discarding it.
+  /// silently discarding it. Throws if there's no active session or
+  /// nothing pending — see `approvePending`'s doc on why.
   Future<void> rejectPending() async {
+    final session = _session;
+    if (session == null) {
+      throw StateError('no active pairing session');
+    }
     try {
-      _session?.reject();
+      session.reject();
     } catch (e) {
       moatLog('PairingService: reject failed: $e');
+      await _releaseTransport();
+      _syncState();
+      rethrow;
     }
     await _releaseTransport();
     _syncState();
@@ -277,20 +299,34 @@ class PairingService {
   /// Either role: abort an in-flight pairing before it reaches a terminal
   /// state — e.g. the user backs out of the show-code or enter-code
   /// screen. Moves the session to `Failed` (via moat-core's
-  /// `PairingSession::cancel`) rather than silently discarding it. A no-op
-  /// (logged) if the session has already reached a terminal state.
+  /// `PairingSession::cancel`) rather than silently discarding it. Throws
+  /// if there's no active session, or it has already reached a terminal
+  /// state — see `approvePending`'s doc on why.
   Future<void> cancel() async {
+    final session = _session;
+    if (session == null) {
+      throw StateError('no active pairing session');
+    }
     try {
-      _session?.cancel();
+      session.cancel();
     } catch (e) {
       moatLog('PairingService: cancel failed: $e');
+      await _releaseTransport();
+      _syncState();
+      rethrow;
     }
     await _releaseTransport();
     _syncState();
   }
 
   Future<void> dispose() async {
-    await cancel();
+    if (_session != null) {
+      try {
+        await cancel();
+      } catch (e) {
+        moatLog('PairingService: dispose cancel failed: $e');
+      }
+    }
     _state.dispose();
   }
 

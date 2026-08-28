@@ -17,6 +17,37 @@ Uint8List _hexToBytes(String hex) {
   return result;
 }
 
+/// Serialize a `PairingUiStateDto` the same way moat-core's `#[serde(tag =
+/// "phase", rename_all = "snake_case")]` does on the Rust side, so
+/// `GET /pair/status` matches moat-cli's wire shape exactly regardless of
+/// which host answered it. `ring_id` is base64, mirroring the
+/// `#[serde_as(as = "Base64")]` on the Rust struct field.
+Map<String, dynamic> _pairingUiStateJson(PairingUiStateDto state) {
+  return state.when(
+    idle: () => {'phase': 'idle'},
+    showingCode: (code, uri) => {'phase': 'showing_code', 'code': code, 'uri': uri},
+    awaitingPeer: () => {'phase': 'awaiting_peer'},
+    awaitingApproval: (deviceName, did) =>
+        {'phase': 'awaiting_approval', 'device_name': deviceName, 'did': did},
+    done: (ringId) => {'phase': 'done', 'ring_id': base64Encode(ringId)},
+    failed: (reason) => {'phase': 'failed', 'reason': reason},
+  );
+}
+
+/// Shared response for `/pair/approve`, `/pair/reject`, `/pair/cancel`:
+/// `{"ok": true}` on success, or a 500 with the failure reason if the
+/// session landed in `Failed` as a result of the call (mirrors moat-cli's
+/// `app_err`-wrapped `Result<()>` handlers — a *reported* failure, not
+/// silently swallowed into a 200).
+Response _pairResultResponse(PairingService pairingService) {
+  final uiState = pairingService.state.value;
+  if (uiState is PairingUiStateDto_Failed) {
+    return Response(500,
+        body: jsonEncode({'error': uiState.reason}), headers: _jsonHeaders);
+  }
+  return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
+}
+
 /// Build the Shelf router with all moat-cli-compatible endpoints.
 Handler buildRouter({
   required AuthService authService,
@@ -462,7 +493,8 @@ Handler buildRouter({
     }
   });
 
-  // POST /pair/confirm — existing device enters a pairing code.
+  // POST /pair/confirm — existing device enters a pairing code. No longer
+  // implies approval of the resulting Enroll — see /pair/approve.
   router.post('/pair/confirm', (Request request) async {
     try {
       final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
@@ -476,18 +508,52 @@ Handler buildRouter({
     }
   });
 
-  // GET /pair/status
+  // POST /pair/approve — existing device: approve the pending Enroll
+  // `pairingService.state` reports as `awaiting_approval`. No host,
+  // including this headless server, auto-approves anymore.
+  router.post('/pair/approve', (Request request) async {
+    try {
+      await pairingService.approvePending();
+    } catch (e) {
+      moatLog('Server: pair/approve error: $e');
+      return Response(500,
+          body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
+    }
+    return _pairResultResponse(pairingService);
+  });
+
+  // POST /pair/reject — existing device: decline the pending Enroll.
+  router.post('/pair/reject', (Request request) async {
+    try {
+      await pairingService.rejectPending();
+    } catch (e) {
+      moatLog('Server: pair/reject error: $e');
+      return Response(500,
+          body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
+    }
+    return _pairResultResponse(pairingService);
+  });
+
+  // POST /pair/cancel — either role: abort an in-flight pairing before it
+  // reaches a terminal state.
+  router.post('/pair/cancel', (Request request) async {
+    try {
+      await pairingService.cancel();
+    } catch (e) {
+      moatLog('Server: pair/cancel error: $e');
+      return Response(500,
+          body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
+    }
+    return _pairResultResponse(pairingService);
+  });
+
+  // GET /pair/status — the serialized `PairingUiStateDto` verbatim, e.g.
+  // `{"phase":"showing_code","code":"...","uri":"..."}` or
+  // `{"phase":"failed","reason":"..."}` — matching moat-cli's
+  // `/pair/status` exactly. No host-specific shape on top.
   router.get('/pair/status', (Request request) async {
     return Response.ok(
-      jsonEncode({
-        'done': pairingService.isDone,
-        'ring_group_id': pairingService.ringId == null
-            ? null
-            : pairingService.ringId!
-                .map((b) => b.toRadixString(16).padLeft(2, '0'))
-                .join(),
-        'pending_device_name': pairingService.pendingDeviceName,
-      }),
+      jsonEncode(_pairingUiStateJson(pairingService.state.value)),
       headers: _jsonHeaders,
     );
   });

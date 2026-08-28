@@ -2,17 +2,16 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
-import 'package:moat_dart_common/moat_dart_common.dart' as ffi show PairingUiStateDto_Done;
+import 'package:moat_dart_common/moat_dart_common.dart' as common;
 import '../services/pairing_manager.dart';
-
-// TODO(pairing-ui-state Section D): replace this poll timer with a
-// ValueListenableBuilder over `service.state`, and push ApprovePairingScreen
-// on the `AwaitingApproval` transition — this is a minimal compile-preserving
-// patch for Section C's PairingService API change, not the real rewrite.
+import '../widgets/common_value_listenable_builder.dart';
 
 /// Existing device: enter a pairing code either by scanning the other
 /// device's QR code or by typing it in. Once confirmed, waits for the
-/// other device's `Enroll` and for the pairing to complete.
+/// other device's `Enroll` — which triggers `main.dart`'s `state` listener
+/// to push `ApprovePairingScreen` on top of this one — and for the
+/// pairing to complete. Renders straight off [PairingService.state] via
+/// [CommonValueListenableBuilder] rather than polling.
 class EnterPairingCodeScreen extends StatefulWidget {
   const EnterPairingCodeScreen({super.key});
 
@@ -26,14 +25,40 @@ class _EnterPairingCodeScreenState extends State<EnterPairingCodeScreen> {
   final _codeController = TextEditingController();
   bool _isLoading = false;
   bool _confirmed = false;
-  String? _error;
-  Timer? _pollTimer;
+  String? _confirmError;
+
+  @override
+  void initState() {
+    super.initState();
+    PairingManager.instance.service?.state.addListener(_onStateChange);
+  }
 
   @override
   void dispose() {
-    _pollTimer?.cancel();
+    PairingManager.instance.service?.state.removeListener(_onStateChange);
     _codeController.dispose();
     super.dispose();
+  }
+
+  void _onStateChange() {
+    if (!mounted) return;
+    final uiState = PairingManager.instance.service?.state.value;
+    if (uiState is common.PairingUiStateDto_Done) {
+      Navigator.of(context).pop(true);
+    }
+  }
+
+  /// Abort a still-in-flight pairing when the user backs out of this
+  /// screen after confirming a code but before it completes.
+  void _cancelIfInFlight() {
+    final service = PairingManager.instance.service;
+    final uiState = service?.state.value;
+    if (uiState is common.PairingUiStateDto_AwaitingPeer ||
+        uiState is common.PairingUiStateDto_AwaitingApproval) {
+      unawaited(service!.cancel().catchError((Object e) {
+        // Best-effort: the screen is already gone, nothing left to render.
+      }));
+    }
   }
 
   Future<void> _scan() async {
@@ -53,7 +78,7 @@ class _EnterPairingCodeScreenState extends State<EnterPairingCodeScreen> {
 
     setState(() {
       _isLoading = true;
-      _error = null;
+      _confirmError = null;
     });
 
     try {
@@ -63,15 +88,9 @@ class _EnterPairingCodeScreenState extends State<EnterPairingCodeScreen> {
         _isLoading = false;
         _confirmed = true;
       });
-      _pollTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
-        if (service.state.value is ffi.PairingUiStateDto_Done && mounted) {
-          _pollTimer?.cancel();
-          Navigator.of(context).pop(true);
-        }
-      });
     } catch (e) {
       setState(() {
-        _error = e.toString();
+        _confirmError = e.toString();
         _isLoading = false;
       });
     }
@@ -79,95 +98,155 @@ class _EnterPairingCodeScreenState extends State<EnterPairingCodeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Enter Pairing Code')),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                'Enter the code shown on your other device, or scan its QR code.',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-              ),
-              const SizedBox(height: 24),
-              TextFormField(
-                controller: _codeController,
-                decoration: InputDecoration(
-                  labelText: 'Pairing code',
-                  border: const OutlineInputBorder(),
-                  suffixIcon: IconButton(
-                    icon: const Icon(Icons.qr_code_scanner),
-                    tooltip: 'Scan QR code',
-                    onPressed: _isLoading || _confirmed ? null : _scan,
-                  ),
-                ),
-                maxLines: 3,
-                enabled: !_isLoading && !_confirmed,
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'Please enter a pairing code';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-              if (_error != null)
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.errorContainer,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    _error!,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.onErrorContainer,
-                    ),
-                  ),
-                ),
-              if (_confirmed)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                      const SizedBox(width: 12),
-                      Text(
-                        'Waiting for the other device to approve…',
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
-                    ],
-                  ),
-                ),
-              const Spacer(),
-              if (!_confirmed)
-                FilledButton(
-                  onPressed: _isLoading ? null : _confirm,
-                  child: _isLoading
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Text('Continue'),
-                ),
-            ],
-          ),
+    return PopScope(
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) _cancelIfInFlight();
+      },
+      child: Scaffold(
+        appBar: AppBar(title: const Text('Enter Pairing Code')),
+        body: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: _confirmed ? _buildWaitingOrFailed() : _buildForm(),
         ),
       ),
+    );
+  }
+
+  Widget _buildForm() {
+    return Form(
+      key: _formKey,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Enter the code shown on your other device, or scan its QR code.',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+          ),
+          const SizedBox(height: 24),
+          TextFormField(
+            controller: _codeController,
+            decoration: InputDecoration(
+              labelText: 'Pairing code',
+              border: const OutlineInputBorder(),
+              suffixIcon: IconButton(
+                icon: const Icon(Icons.qr_code_scanner),
+                tooltip: 'Scan QR code',
+                onPressed: _isLoading ? null : _scan,
+              ),
+            ),
+            maxLines: 3,
+            enabled: !_isLoading,
+            validator: (value) {
+              if (value == null || value.trim().isEmpty) {
+                return 'Please enter a pairing code';
+              }
+              return null;
+            },
+          ),
+          const SizedBox(height: 16),
+          if (_confirmError != null) ...[
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.errorContainer,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                _confirmError!,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onErrorContainer,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+          const Spacer(),
+          FilledButton(
+            onPressed: _isLoading ? null : _confirm,
+            child: _isLoading
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Text('Continue'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWaitingOrFailed() {
+    final service = PairingManager.instance.service;
+    if (service == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    return CommonValueListenableBuilder<common.PairingUiStateDto>(
+      valueListenable: service.state,
+      builder: (context, uiState) {
+        if (uiState is common.PairingUiStateDto_Failed) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.error_outline,
+                size: 48,
+                color: Theme.of(context).colorScheme.error,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Pairing failed',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.errorContainer,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  uiState.reason,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onErrorContainer,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('OK'),
+              ),
+            ],
+          );
+        }
+        // AwaitingPeer/AwaitingApproval (ApprovePairingScreen is pushed on
+        // top for the latter); Done is about to pop via `_onStateChange`.
+        return Center(
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'Waiting for the other device to approve…',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

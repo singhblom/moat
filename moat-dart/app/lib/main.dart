@@ -431,13 +431,10 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       // therefore a brand-new `state` notifier), so attaching a fresh
       // listener here on every call is safe — no accumulation across
       // login/logout cycles; the previous service (and its listeners)
-      // simply becomes unreferenced.
-      //
-      // TODO(pairing-ui-state Section D): this should become the screens'
-      // own `ValueListenableBuilder`s over `service.state`; pushing from a
-      // global listener is a minimal compile-preserving patch for Section
-      // C's PairingService API change (`onApprovalPending` deleted), not
-      // the real rewrite.
+      // simply becomes unreferenced. Pushing from a global listener
+      // (rather than a screen-local one) is deliberate: an incoming
+      // `Enroll` can arrive while the user is anywhere in the app, not
+      // just on `EnterPairingCodeScreen`.
       PairingManager.instance.service!.state.addListener(() {
         final uiState = PairingManager.instance.service?.state.value;
         if (uiState is PairingUiStateDto_AwaitingApproval) {
