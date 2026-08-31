@@ -30,10 +30,13 @@ pub(crate) fn run_boxed(
     Box::pin(run(verbose))
 }
 
-/// Drive one `/pair/new` (new device) + `/pair/confirm` (existing device)
-/// exchange to completion. Bounded so a stuck pairing fails the test
-/// instead of hanging it — see `crate::scenarios::two_device_pairing` for
-/// the two-device version this mirrors.
+/// Drive one `/pair/new` (new device) + `/pair/confirm` (existing device) +
+/// `/pair/approve` (existing device, once `awaiting_approval`) exchange to
+/// completion. Bounded so a stuck pairing fails the test instead of hanging
+/// it — see `crate::scenarios::two_device_pairing` for the two-device
+/// version this mirrors. Reused by every scenario that pairs a second or
+/// third device into D1's ring: `three_device_pairing_history_sync[_dr]`,
+/// `staggered_device_pairing`, `lost_device_pairing`.
 pub(crate) async fn pair_devices(
     existing: &MoatCliClient,
     new_device: &MoatCliClient,
@@ -45,6 +48,9 @@ pub(crate) async fn pair_devices(
     const TIMEOUT: Duration = Duration::from_secs(20);
     const POLL_INTERVAL: Duration = Duration::from_millis(200);
 
+    wait_for_drawbridge_authenticated(existing, TIMEOUT).await;
+    wait_for_drawbridge_authenticated(new_device, TIMEOUT).await;
+
     let pair_new = new_device.pair_new().await.expect("new device pair_new");
     vlog!("[pair] code = {}", pair_new.code);
     existing
@@ -52,15 +58,18 @@ pub(crate) async fn pair_devices(
         .await
         .expect("existing device pair_confirm");
 
+    vlog!("[pair] existing device approves...");
+    crate::scenarios::wait_for_awaiting_approval_and_approve(existing, TIMEOUT).await;
+
     let deadline = std::time::Instant::now() + TIMEOUT;
     loop {
         let existing_status = existing.pair_status().await.expect("existing pair_status");
         let new_status = new_device.pair_status().await.expect("new_device pair_status");
         vlog!(
             "[pair] existing.done={} new_device.done={}",
-            existing_status.done, new_status.done
+            existing_status.is_done(), new_status.is_done()
         );
-        if existing_status.done && new_status.done {
+        if existing_status.is_done() && new_status.is_done() {
             break;
         }
         assert!(
@@ -68,10 +77,30 @@ pub(crate) async fn pair_devices(
             "pairing did not complete within {TIMEOUT:?} \
              (existing.done={}, new_device.done={}); this must fail the \
              test, not hang it",
-            existing_status.done,
-            new_status.done,
+            existing_status.is_done(),
+            new_status.is_done(),
         );
         tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+/// A `pair_join` sent before the relay has authenticated the connection is
+/// rejected as "token not found", which is connection-fatal and forces a
+/// reconnect that can derail whichever round is in flight. Needed per-round,
+/// not just at setup: round 2 runs on a long-connected client.
+async fn wait_for_drawbridge_authenticated(client: &MoatCliClient, timeout: Duration) {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let status = client.status().await.expect("status");
+        if status.drawbridge_connected {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "client never reported drawbridge_connected within {timeout:?}; \
+             this must fail the test, not hang it",
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 

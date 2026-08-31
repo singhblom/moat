@@ -396,6 +396,8 @@ pub(crate) enum BgEvent {
     },
     /// A pairing session ended (either side closed).
     PairClosed {
+        /// `None` only if the relay omitted it.
+        session_token: Option<Vec<u8>>,
         reason: String,
     },
     /// Open and attach to the `/pair` WebSocket.
@@ -1877,17 +1879,32 @@ impl App {
                 });
             }
 
-            BgEvent::PairClosed { reason } => {
+            BgEvent::PairClosed { session_token, reason } => {
+                // A completed round's teardown notice routinely lands after
+                // the next round has started. The reconnect-sync path has no
+                // `PairingSession`, so fall back to `pending_pair_token`.
+                let live_session_token: Option<Vec<u8>> = match self.pairing_session.as_ref() {
+                    Some(s) => Some(s.rendezvous_token().to_vec()),
+                    None => self.pending_pair_token.clone(),
+                };
+                if let (Some(closed), Some(live)) =
+                    (session_token.as_ref(), live_session_token.as_ref())
+                {
+                    if closed != live {
+                        self.debug_log.log(&format!(
+                            "sync: ignoring pair_closed ({reason}) for a superseded session"
+                        ));
+                        return;
+                    }
+                }
+
                 self.debug_log.log(&format!("sync: pair WS closed: {reason}"));
                 self.drawbridge.clear_pair();
                 self.sync_session = None;
                 self.pending_pair_token = None;
                 self.pairing_sync_keys = None;
-                // The pair WS closed before a still-in-flight PairingSession
-                // reached a terminal state (peer walked away, relay TTL) —
-                // cancel() so `ui_state()` reports why instead of leaving
-                // the session stuck forever in whatever phase it was in.
-                // A no-op `Err` if the session was already terminal.
+                // Peer walked away / relay TTL: cancel so `ui_state()`
+                // reports why rather than stalling. No-op if terminal.
                 if let Some(session) = self.pairing_session.as_mut() {
                     let _ = session.cancel();
                 }
@@ -2166,11 +2183,8 @@ impl App {
                         self.debug_log.log(&format!("sync: pair WS connect failed: {e}"));
                         self.sync_session = None;
                         self.pending_pair_token = None;
-                        // Transport-level failure, external to
-                        // `PairingSession` (it never saw this) — `cancel()`
-                        // it explicitly so `ui_state()` reports `Failed`
-                        // instead of getting silently stuck in whatever
-                        // non-terminal phase it was in.
+                        // Transport failure the session never saw — cancel
+                        // explicitly so `ui_state()` reports `Failed`.
                         if let Some(session) = self.pairing_session.as_mut() {
                             let _ = session.cancel();
                         }
@@ -5286,16 +5300,19 @@ impl App {
             }
         };
 
-        let session = match self.sync_session.as_mut() {
+        // Take the session out for the duration of the call: `on_message`
+        // needs `&self.mls` alongside `&mut` the session, which can't both
+        // be borrowed from `self` at once.
+        let mut session = match self.sync_session.take() {
             Some(s) => s,
             None => {
                 self.debug_log.log("sync: frame received but no active session");
                 return;
             }
         };
+        let outputs = session.on_message(&self.mls, msg, &my_did);
+        self.sync_session = Some(session);
 
-        let outputs = session.on_message(msg, &my_did);
-        // Borrow checker: take the session out temporarily to call process_sync_outputs.
         let ring_id_clone = ring_id.clone();
         self.process_sync_outputs(outputs, &ring_id_clone, &key_bundle);
     }
@@ -5425,7 +5442,9 @@ impl App {
             }
         };
 
-        let session = match self.sync_session.as_mut() {
+        // Taken out for the call — see the matching note in
+        // `process_sync_frame`.
+        let mut session = match self.sync_session.take() {
             Some(s) => s,
             None => {
                 self.debug_log
@@ -5433,8 +5452,9 @@ impl App {
                 return;
             }
         };
+        let outputs = session.on_message(&self.mls, msg, &my_did);
+        self.sync_session = Some(session);
 
-        let outputs = session.on_message(msg, &my_did);
         self.process_pairing_sync_outputs(outputs);
     }
 
@@ -5506,9 +5526,7 @@ impl App {
             Ok(cmds) => cmds,
             Err(e) => {
                 // `start_enroll` already recorded `Failed { reason }` on
-                // the session itself before returning this error (moat-core
-                // `PairingSession::fail`) — don't throw that state away by
-                // nulling `pairing_session` here; `ui_state()` needs it.
+                // the session — don't null it out; `ui_state()` needs it.
                 self.debug_log.log(&format!("pairing: start_enroll failed: {e}"));
                 self.pending_pair_rendezvous_token = None;
                 self.drawbridge.clear_pair();
@@ -5690,9 +5708,7 @@ impl App {
             }
             Err(e) => {
                 // `approve()` already recorded `Failed { reason }` on the
-                // session itself before returning this error (moat-core
-                // `PairingSession::fail`) — don't throw that state away by
-                // nulling `pairing_session` here; `ui_state()` needs it.
+                // session — don't null it out; `ui_state()` needs it.
                 self.debug_log.log(&format!("pairing: approve failed: {e}"));
                 self.pending_pair_rendezvous_token = None;
                 self.drawbridge.clear_pair();
@@ -5733,14 +5749,10 @@ impl App {
                         .bg_tx
                         .send(BgEvent::PublishRingCommit { tag, ciphertext });
                 }
-                // No host branches on headless-vs-UI mode here anymore: the
-                // command only ever records that an `Enroll` arrived —
-                // `pending_enroll()` on the session already carries
-                // `device_name`/`did`, surfaced via `ui_state()`'s
-                // `AwaitingApproval` variant, so there's nothing further to
-                // cache. Approval (TUI tap or `POST /pair/approve`) is
-                // always a separate, explicit step; `sync_pairing_focus`
-                // below moves the TUI to the approve screen.
+                // Nothing to cache: `ui_state()`'s `AwaitingApproval`
+                // already carries device_name/did. Approval is always an
+                // explicit step (TUI tap or `POST /pair/approve`), and
+                // `sync_pairing_focus` below opens the TUI screen.
                 PairingCommand::SurfaceApprovalPrompt { .. } => {}
                 PairingCommand::PersistRing { ring_id } => {
                     let now_ms = chrono::Utc::now().timestamp_millis();
@@ -5802,15 +5814,11 @@ impl App {
         self.sync_pairing_focus();
     }
 
-    /// Keep the TUI's `Focus` synchronized with `ui_state()` rather than
-    /// having individual command handlers set `Focus::Pair*` imperatively.
-    /// Only `AwaitingApproval` needs an active transition — it's the one
-    /// state a host doesn't already have a screen open for (an incoming
-    /// `Enroll` can arrive while the user is anywhere in the TUI); every
-    /// other pairing screen's own key handler already renders and dismisses
-    /// off `ui_state()` directly (see `draw_pair_show_code_popup`,
-    /// `draw_pair_approve_popup`, `handle_pair_show_code_key`,
-    /// `handle_pair_approve_key`).
+    /// Derive `Focus` from `ui_state()` instead of setting it imperatively
+    /// per command. Only `AwaitingApproval` needs a transition — an
+    /// incoming `Enroll` can arrive while the user is anywhere in the TUI;
+    /// the other pairing screens already render and dismiss off
+    /// `ui_state()` in their own draw/key handlers.
     fn sync_pairing_focus(&mut self) {
         if matches!(self.pairing_ui_state(), PairingUiState::AwaitingApproval { .. }) {
             self.focus = Focus::PairApprove;

@@ -10,11 +10,8 @@ import '../widgets/common_value_listenable_builder.dart';
 /// raw text as a manual-entry fallback), then waits for the existing
 /// device to enter it and approve.
 ///
-/// Renders straight off [PairingService.state] via
-/// [CommonValueListenableBuilder] rather than polling — mirrors
-/// moat-cli's TUI, which derives its popup content from `ui_state()` the
-/// same way. Pops automatically once `state` reaches `Done`; on `Failed`,
-/// shows the reason and waits for the user to dismiss.
+/// Renders off [PairingService.state] rather than polling. Pops once
+/// `state` reaches `Done`; on `Failed`, shows the reason and waits.
 class ShowPairingCodeScreen extends StatefulWidget {
   const ShowPairingCodeScreen({super.key});
 
@@ -64,10 +61,8 @@ class _ShowPairingCodeScreenState extends State<ShowPairingCodeScreen> {
     }
   }
 
-  /// Abort a still-in-flight pairing when the user backs out of this
-  /// screen — previously there was no way to do this at all, so a
-  /// discarded QR left a pairing attempt running invisibly in the
-  /// background until it eventually timed out on its own.
+  /// Abort a still-in-flight pairing when the user backs out — previously
+  /// impossible, so a discarded QR left an attempt running invisibly.
   void _cancelIfInFlight() {
     final service = PairingManager.instance.service;
     final uiState = service?.state.value;

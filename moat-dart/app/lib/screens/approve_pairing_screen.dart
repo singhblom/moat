@@ -7,14 +7,10 @@ import '../services/pairing_manager.dart';
 /// `moat-cli`'s TUI switching straight to `Focus::PairApprove` when
 /// `SurfaceApprovalPrompt` arrives.
 ///
-/// Device name/DID come straight from [PairingService.state]'s
-/// `AwaitingApproval` variant rather than a cached copy. On approve
-/// success, unwinds back past `EnterPairingCodeScreen` too (both screens
-/// belong to one pairing attempt); on a genuine approve *failure*, stays
-/// here and renders `state`'s typed `Failed { reason }` — replacing the
-/// old untyped `catch (e)` string — so the user sees why before
-/// dismissing. A plain reject just leaves, same as before: the user
-/// already knows why.
+/// Device name/DID come from [PairingService.state]'s `AwaitingApproval`
+/// rather than a cached copy. On success (or a plain reject) this unwinds
+/// past `EnterPairingCodeScreen` too — both belong to one attempt. On an
+/// approve *failure* it stays and renders `Failed { reason }`.
 class ApprovePairingScreen extends StatefulWidget {
   const ApprovePairingScreen({super.key});
 

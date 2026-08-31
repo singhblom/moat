@@ -214,14 +214,27 @@ func (pr *PairRegistry) terminateSession(token, reason string) {
 
 // onMainWSDisconnect cancels pending pairing sessions where c is the offerer or
 // joiner and the pair WS has not yet been established.
+//
+// Skips fully-attached sessions (attachCount == 2): bulk transfer runs on
+// the separate /pair socket precisely so a main-WS blip can't abort a
+// minutes-long history sync. A peer that really left still gets cleaned up
+// when its /pair socket closes (servePairWS → terminateSession), with
+// cleanupExpired as the TTL backstop.
 func (pr *PairRegistry) onMainWSDisconnect(c *Client) {
 	pr.mu.Lock()
 	var victims []*PairSession
 	for token, sess := range pr.sessions {
-		if sess.Offerer == c || sess.Joiner == c {
-			delete(pr.sessions, token)
-			victims = append(victims, sess)
+		if sess.Offerer != c && sess.Joiner != c {
+			continue
 		}
+		sess.mu.Lock()
+		fullyAttached := sess.attachCount == 2
+		sess.mu.Unlock()
+		if fullyAttached {
+			continue
+		}
+		delete(pr.sessions, token)
+		victims = append(victims, sess)
 	}
 	pr.mu.Unlock()
 	for _, sess := range victims {
@@ -269,7 +282,7 @@ func (pr *PairRegistry) terminate(sess *PairSession, reason string) {
 	}
 
 	// Notify main-WS clients.
-	msg := PairClosedMsg{Type: "pair_closed", Reason: reason}
+	msg := PairClosedMsg{Type: "pair_closed", SessionToken: sess.Token, Reason: reason}
 	if sess.Offerer != nil {
 		sess.Offerer.sendMsg(msg)
 	}

@@ -1,12 +1,8 @@
-/// Minimal Flutter-independent stand-ins for `package:flutter/foundation.dart`'s
-/// `ValueListenable`/`ValueNotifier`. `moat_dart_common` has no Flutter
-/// dependency — it's shared with the headless `moat_dart_server`, which runs
-/// under plain `dart run` (see `ConversationRepository`'s "no ChangeNotifier"
-/// note) — so services that want to expose a "current value + change
-/// notifications" API to the Flutter app use this instead. Same shape as
-/// Flutter's real types, so app-layer code can adapt one with a few lines
-/// (e.g. forwarding into a local Flutter `ValueNotifier` via `addListener`)
-/// rather than reinventing the pattern per screen.
+/// Flutter-independent stand-ins for `ValueListenable`/`ValueNotifier`.
+/// `moat_dart_common` has no Flutter dependency (it's shared with the
+/// headless server), so services expose change notifications through these
+/// instead. Same shape as Flutter's, so the app can adapt one cheaply —
+/// see `CommonValueListenableBuilder`.
 abstract class ValueListenable<T> {
   T get value;
   void addListener(void Function() listener);

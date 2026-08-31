@@ -33,6 +33,7 @@ async fn postern_one_account() -> moat_postern::PosternHandle {
         accounts: vec![alice()],
         port: None,
         data_dir: None,
+        bind_addr: None,
     })
     .await
 }
@@ -385,6 +386,7 @@ async fn list_records_scoped_to_did() {
         accounts: vec![alice(), bob()],
         port: None,
         data_dir: None,
+        bind_addr: None,
     })
     .await;
     let http = reqwest::Client::new();
@@ -727,6 +729,7 @@ async fn blob_accessible_from_any_did() {
         accounts: vec![alice(), bob()],
         port: None,
         data_dir: None,
+        bind_addr: None,
     })
     .await;
     let http = reqwest::Client::new();

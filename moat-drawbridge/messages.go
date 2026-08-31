@@ -25,7 +25,7 @@ type ErrorMsg struct {
 }
 
 type NewEventMsg struct {
-	Type    string `json:"type"`              // "new_event"
+	Type    string `json:"type"` // "new_event"
 	Tag     string `json:"tag"`
 	RKey    string `json:"rkey"`
 	Payload string `json:"payload,omitempty"` // base64-encoded ciphertext
@@ -57,8 +57,8 @@ type UpdateTagsMsg struct {
 }
 
 type EventPostedMsg struct {
-	Type      string   `json:"type"`                 // "event_posted"
-	DID       string   `json:"did,omitempty"`        // sender DID, for PDS verification
+	Type      string   `json:"type"`          // "event_posted"
+	DID       string   `json:"did,omitempty"` // sender DID, for PDS verification
 	Tag       string   `json:"tag"`
 	RKey      string   `json:"rkey"`
 	Payload   string   `json:"payload,omitempty"`    // base64-encoded ciphertext
@@ -66,16 +66,16 @@ type EventPostedMsg struct {
 }
 
 type RegisterPushMsg struct {
-	Type      string   `json:"type"`               // "register_push"
+	Type      string   `json:"type"` // "register_push"
 	DeviceID  string   `json:"device_id"`
-	Platform  string   `json:"platform"`           // "fcm" or "apns"
+	Platform  string   `json:"platform"` // "fcm" or "apns"
 	Token     string   `json:"token"`
 	Tags      []string `json:"tags"`
 	ExpirySec int64    `json:"expiry_sec,omitempty"` // optional, defaults to 30 days
 }
 
 type UnregisterPushMsg struct {
-	Type     string `json:"type"`      // "unregister_push"
+	Type     string `json:"type"` // "unregister_push"
 	DeviceID string `json:"device_id"`
 }
 
@@ -98,7 +98,7 @@ type PairOfferMsg struct {
 }
 
 type PairJoinMsg struct {
-	Type  string `json:"type"`  // "pair_join"
+	Type  string `json:"type"` // "pair_join"
 	Token string `json:"token"`
 }
 
@@ -110,20 +110,21 @@ type PairPendingMsg struct {
 }
 
 type PairReadyMsg struct {
-	Type    string `json:"type"`     // "pair_ready"
+	Type    string `json:"type"` // "pair_ready"
 	Token   string `json:"token"`
 	PairURL string `json:"pair_url"` // wss://<relay>/pair — open a new WS here
 }
 
 type PairClosedMsg struct {
-	Type   string `json:"type"`   // "pair_closed"
-	Reason string `json:"reason"` // "peer_gone", "byte_cap", "ttl_expired", etc.
+	Type         string `json:"type"` // "pair_closed"
+	SessionToken string `json:"token"`
+	Reason       string `json:"reason"` // "peer_gone", "byte_cap", "ttl_expired", etc.
 }
 
 // Pair WS (Client → Relay, first and only JSON frame):
 
 type PairAttachMsg struct {
-	Type  string `json:"type"`  // "pair_attach"
+	Type  string `json:"type"` // "pair_attach"
 	Token string `json:"token"`
 }
 

@@ -74,9 +74,9 @@ pub async fn run(verbose: bool) {
 
     // ── Pairing ───────────────────────────────────────────────────────────────
     //
-    // The new device generates the code; the existing device enters it.
-    // Approval is auto-accepted in `--http` mode — interactive UIs gate
-    // this on a real user tap.
+    // The new device generates the code; the existing device enters it and
+    // approves. No host auto-approves the resulting `Enroll` anymore — see
+    // `crate::scenarios::wait_for_awaiting_approval_and_approve`.
     vlog!("[pair] new device requests a pairing code...");
     let pair_new = new_device.pair_new().await.expect("new device pair_new");
     vlog!("[pair] code = {}", pair_new.code);
@@ -86,6 +86,9 @@ pub async fn run(verbose: bool) {
         .pair_confirm(&pair_new.code)
         .await
         .expect("existing device pair_confirm");
+
+    vlog!("[pair] existing device approves...");
+    crate::scenarios::wait_for_awaiting_approval_and_approve(&existing, PAIR_STATUS_TIMEOUT).await;
 
     // ── Bounded convergence wait ─────────────────────────────────────────────
     //
@@ -98,10 +101,10 @@ pub async fn run(verbose: bool) {
 
         vlog!(
             "[pair] existing.done={} new_device.done={}",
-            existing_status.done, new_status.done
+            existing_status.is_done(), new_status.is_done()
         );
 
-        if existing_status.done && new_status.done {
+        if existing_status.is_done() && new_status.is_done() {
             break;
         }
 
@@ -110,8 +113,8 @@ pub async fn run(verbose: bool) {
             "pairing did not complete within {PAIR_STATUS_TIMEOUT:?} \
              (existing.done={}, new_device.done={}); this must fail the \
              test, not hang it",
-            existing_status.done,
-            new_status.done,
+            existing_status.is_done(),
+            new_status.is_done(),
         );
         tokio::time::sleep(PAIR_STATUS_POLL_INTERVAL).await;
     }

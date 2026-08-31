@@ -1353,15 +1353,17 @@ impl SyncSessionHandle {
     /// Feed a received and decrypted `SyncMsg` (JSON bytes) into the state machine.
     pub fn on_message(
         &self,
+        session: &MoatSessionHandle,
         msg_bytes: Vec<u8>,
         our_did: String,
     ) -> Result<Vec<SyncOutputDto>, String> {
         let msg = decode_sync_msg(&msg_bytes)?;
+        let session_lock = session.inner.lock().unwrap();
         Ok(self
             .inner
             .lock()
             .unwrap()
-            .on_message(msg, &our_did)
+            .on_message(&session_lock, msg, &our_did)
             .into_iter()
             .map(SyncOutputDto::from)
             .collect())

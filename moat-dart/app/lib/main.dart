@@ -24,10 +24,10 @@ import 'services/debug_log.dart';
 import 'services/push_service.dart';
 import 'firebase_options.dart';
 
-/// Lets `PairingManager`'s `onApprovalPending` callback push a screen from
-/// outside the widget tree — mirrors `moat-cli`'s TUI switching
-/// `Focus::PairApprove` synchronously the moment `SurfaceApprovalPrompt`
-/// arrives, rather than the enter-code screen having to poll for it.
+/// Lets the `PairingService.state` listener below push a screen from
+/// outside the widget tree — mirrors `moat-cli`'s TUI switching to
+/// `Focus::PairApprove` the moment the session reaches `AwaitingApproval`,
+/// rather than the enter-code screen having to poll for it.
 final rootNavigatorKey = GlobalKey<NavigatorState>();
 
 const _notificationChannelId = 'moat_messages';
@@ -192,6 +192,16 @@ TextTheme _applyFonts(TextTheme base) {
   );
 }
 
+// Dev-only overrides for pointing the app at a local Postern/Drawbridge
+// instead of real bsky.social — e.g. for testing pairing in an Android
+// emulator (see `crates/moat-postern/src/bin/dev_server.rs`). Empty by
+// default, so a normal `flutter run` is unaffected. Set via:
+//   flutter run \
+//     --dart-define=MOAT_PDS_URL=http://10.0.2.2:4000 \
+//     --dart-define=MOAT_DRAWBRIDGE_URL=ws://10.0.2.2:8081/ws
+const _devPdsUrl = String.fromEnvironment('MOAT_PDS_URL');
+const _devDrawbridgeUrl = String.fromEnvironment('MOAT_DRAWBRIDGE_URL');
+
 class MoatApp extends StatelessWidget {
   final DocumentBackend docBackend;
   final StorageBackend storageBackend;
@@ -205,11 +215,13 @@ class MoatApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final secureStorage = SecureStorageService(storage: storageBackend);
-    final atprotoClient = AtprotoClient();
+    final atprotoClient = AtprotoClient(
+      pdsOverride: _devPdsUrl.isEmpty ? null : _devPdsUrl,
+    );
     final authService = AuthService(
       atprotoClient: atprotoClient,
       secureStorage: secureStorage,
-      drawbridgeUrl: null,
+      drawbridgeUrl: _devDrawbridgeUrl.isEmpty ? null : _devDrawbridgeUrl,
     );
     final authProvider = AuthProvider(service: authService)..init();
 
@@ -427,14 +439,10 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
         conversationStorage: widget.convStorage,
         messageStorage: widget.msgStorage,
       );
-      // `init()` above just constructed a brand-new `PairingService` (and
-      // therefore a brand-new `state` notifier), so attaching a fresh
-      // listener here on every call is safe — no accumulation across
-      // login/logout cycles; the previous service (and its listeners)
-      // simply becomes unreferenced. Pushing from a global listener
-      // (rather than a screen-local one) is deliberate: an incoming
-      // `Enroll` can arrive while the user is anywhere in the app, not
-      // just on `EnterPairingCodeScreen`.
+      // `init()` just built a fresh service (and `state` notifier), so
+      // listeners can't accumulate across login cycles. Listening globally
+      // rather than per-screen is deliberate: an `Enroll` can arrive while
+      // the user is anywhere in the app.
       PairingManager.instance.service!.state.addListener(() {
         final uiState = PairingManager.instance.service?.state.value;
         if (uiState is PairingUiStateDto_AwaitingApproval) {

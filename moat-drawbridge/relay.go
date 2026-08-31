@@ -128,7 +128,10 @@ func NewRelay(publicURL, fallbackURL string, resolver DIDResolver, verifier PDSV
 //  1. RELAY_PUBLIC_URL (explicit config) — works everywhere, no header needed
 //  2. X-Forwarded-Proto + Host headers — works on Fly.io, AWS, Railway, Render,
 //     Traefik, Caddy, HAProxy, and any properly configured Nginx
-//  3. TLS-based fallback URL — used in local dev and when running without a proxy
+//  3. Host header, scheme from RELAY_TLS — local dev without a proxy, where
+//     clients may reach the same relay via different addresses (emulator on
+//     10.0.2.2, CLI on 127.0.0.1); one fixed string cannot match both.
+//  4. TLS-based fallback — only if the request carries no Host header.
 func (r *Relay) clientRelayURL(req *http.Request) string {
 	path := req.URL.Path
 	if r.publicURL != "" {
@@ -140,6 +143,13 @@ func (r *Relay) clientRelayURL(req *http.Request) string {
 		return "wss://" + host + path
 	case "http":
 		return "ws://" + host + path
+	}
+	if host != "" {
+		scheme := "ws"
+		if strings.HasPrefix(r.relayURL, "wss://") {
+			scheme = "wss"
+		}
+		return scheme + "://" + host + path
 	}
 	return r.relayURL + path
 }
@@ -696,10 +706,15 @@ func (r *Relay) handlePairJoin(c *Client, msg *PairJoinMsg) {
 		c.sendMsg(ErrorMsg{Type: "error", Message: err.Error()})
 		return
 	}
-	pairURL := pairWSURL(sess.Offerer.relayURL)
-	ready := PairReadyMsg{Type: "pair_ready", Token: msg.Token, PairURL: pairURL}
-	sess.Offerer.sendMsg(ready)
-	c.sendMsg(ready)
+	// Each side gets a /pair URL from *its own* relayURL — same reasoning as
+	// clientRelayURL. One shared URL taken from the offerer only works when
+	// every client reaches the relay at the same address.
+	sess.Offerer.sendMsg(PairReadyMsg{
+		Type: "pair_ready", Token: msg.Token, PairURL: pairWSURL(sess.Offerer.relayURL),
+	})
+	c.sendMsg(PairReadyMsg{
+		Type: "pair_ready", Token: msg.Token, PairURL: pairWSURL(c.relayURL),
+	})
 	r.log.Info("pair session ready")
 }
 

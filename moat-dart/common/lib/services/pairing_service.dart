@@ -29,12 +29,10 @@ const _pairingUriScheme = 'moat-pair:';
 /// `interpret_pairing_commands`, `start_pairing_sync_session`,
 /// `process_pairing_sync_outputs`, `process_pairing_sync_frame`).
 ///
-/// [state] is the single source of truth for pairing progress — every
-/// screen renders off it rather than caching its own copy of the code, the
-/// pending prompt, or a done flag, mirroring moat-core's
-/// `PairingSession::ui_state`/moat-cli's `pairing_ui_state()`. No host,
-/// including the headless server, auto-approves an incoming `Enroll`
-/// anymore: approval is always an explicit [approvePending] call.
+/// [state] is the single source of truth for pairing progress — screens
+/// render off it rather than caching the code, prompt or a done flag
+/// (mirroring `PairingSession::ui_state`). No host auto-approves an
+/// incoming `Enroll`: approval is always an explicit [approvePending].
 ///
 /// While a pairing is in flight this service temporarily takes over all
 /// four of [DrawbridgeService]'s pair-WS callbacks — it needs both the
@@ -179,13 +177,9 @@ class PairingService {
   /// (subsequent pairings), seeds the newcomer's KP pool, and emits the
   /// sealed `Admit` frame.
   ///
-  /// Throws on any failure — a precondition guard (no active session,
-  /// nothing pending, identity not ready) or the underlying `approve()`
-  /// call itself — so a caller that cares (`POST /pair/approve`) gets a
-  /// real signal, mirroring moat-cli's `Result`-returning
-  /// `api_pair_approve`. UI callers don't need to inspect it: `state`
-  /// already reflects the outcome (including `Failed { reason }` for a
-  /// protocol failure) by the time this returns or throws.
+  /// Throws on any failure — precondition guard or the `approve()` call
+  /// itself — so `POST /pair/approve` gets a real signal. UI callers can
+  /// ignore it: `state` already reflects the outcome either way.
   Future<void> approvePending() async {
     final gen = _generation;
     final session = _session;
@@ -231,11 +225,8 @@ class PairingService {
         existingRingId: existingRingId,
       );
     } catch (e) {
-      // `approve()` already recorded `Failed { reason }` on the session
-      // itself before throwing (moat-core `PairingSession::fail`) — don't
-      // throw that state away; just release the transport, let `state`
-      // report why, and rethrow so a caller that checks (e.g.
-      // `POST /pair/approve`) sees the failure too.
+      // `approve()` already recorded `Failed { reason }` on the session —
+      // keep it, release the transport, and rethrow for the HTTP caller.
       moatLog('PairingService: approve failed: $e');
       await _releaseTransport();
       _syncState();
@@ -365,13 +356,10 @@ class PairingService {
     _syncState();
   }
 
-  /// Release the pair-WS transport and this service's ownership of its
-  /// callbacks — needed once a pairing exchange has nothing left to send or
-  /// receive (terminal, or a lower-level connection failure). Deliberately
-  /// does *not* touch `_session` — its state (including `Failed { reason }`,
-  /// already recorded by whatever FFI call triggered this) is retained so
-  /// `state` keeps reporting the real outcome, exactly like moat-cli's
-  /// `interpret_pairing_commands` error paths.
+  /// Release the pair-WS transport and our ownership of its callbacks, once
+  /// the exchange has nothing left to send or receive. Deliberately leaves
+  /// `_session` alone: its state (including a just-recorded
+  /// `Failed { reason }`) is what `state` reports.
   Future<void> _releaseTransport() async {
     _generation++;
     _pairingSyncSession = null;
@@ -404,15 +392,10 @@ class PairingService {
 
   void _handlePairClosed(String reason) {
     moatLog('PairingService: pair WS closed: $reason');
-    // The pair WS dropped (peer walked away, relay TTL, byte cap) before
-    // this pairing reached `SyncOutput.complete` — which is the only other
-    // place that releases the pair-WS callbacks back to
-    // `SyncService`/`DeviceRingService`. Without this, a mid-exchange drop
-    // leaves `PairingService` holding all four callback slots forever:
-    // every subsequent unrelated pair session (an established-devices
-    // reconnect sync) would silently route into `_handleFrameReceived`,
-    // which drops every frame since `_session` is stale, with no error
-    // surfaced anywhere.
+    // The pair WS dropped before `SyncOutput.complete`, the only other
+    // place that hands the callbacks back to `SyncService`/`DeviceRingService`.
+    // Without this we'd hold all four slots forever, silently swallowing
+    // every later reconnect-sync frame.
     final session = _session;
     if (session == null) return;
     // Cancel a still-in-flight session so `state` reports why instead of
@@ -515,15 +498,11 @@ class PairingService {
 
   /// Mirrors `interpret_pairing_commands` in `crates/moat-cli/src/app.rs`.
   /// `startSync` is deferred to the end of the batch rather than acted on
-  /// where it appears: it immediately sends a sync `Hello` at the *next*
-  /// pairing-AEAD counter, so any `sendFrame` later in the same batch
-  /// (e.g. the new device's `Done`, which follows `startSync` in the
-  /// Admit-processing command list) must reach the wire first — otherwise
-  /// the peer receives frames out of counter order and rejects the
-  /// earlier one as undecryptable. `surfaceApprovalPrompt` is a no-op here
-  /// too, same as moat-cli: `pendingEnroll()` on the session already
-  /// carries `deviceName`/`did`, surfaced via `state`'s `AwaitingApproval`
-  /// — there's nothing further to cache, and no host auto-approves.
+  /// where it appears: it sends a sync `Hello` at the *next* pairing-AEAD
+  /// counter, so any `sendFrame` later in the same batch (e.g. the new
+  /// device's `Done`) must reach the wire first, or the peer sees frames
+  /// out of counter order. `surfaceApprovalPrompt` is a no-op, same as
+  /// moat-cli: `state`'s `AwaitingApproval` already carries deviceName/did.
   Future<void> _interpretCommands(List<ffi.PairingCommandDto> cmds, int gen) async {
     var startSync = false;
     for (final cmd in cmds) {
@@ -683,7 +662,10 @@ class PairingService {
     final key = _isNewDevice == true ? _pairingSyncKeyOldToNew : _pairingSyncKeyNewToOld;
     final did = _auth.did;
     final syncSession = _pairingSyncSession;
-    if (key == null || did == null || syncSession == null) return;
+    final moatSession = _auth.moatSession;
+    if (key == null || did == null || syncSession == null || moatSession == null) {
+      return;
+    }
 
     Uint8List plaintext;
     try {
@@ -716,7 +698,11 @@ class PairingService {
 
     List<ffi.SyncOutputDto> outputs;
     try {
-      outputs = await syncSession.onMessage(msgBytes: plaintext, ourDid: did);
+      outputs = await syncSession.onMessage(
+        session: moatSession,
+        msgBytes: plaintext,
+        ourDid: did,
+      );
     } catch (e) {
       moatLog('PairingService: pairing-sync onMessage failed: $e — aborting');
       await _releaseTransport();

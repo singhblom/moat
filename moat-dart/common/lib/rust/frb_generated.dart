@@ -310,6 +310,7 @@ abstract class RustLibApi extends BaseApi {
 
   Future<List<SyncOutputDto>> crateApiSimpleSyncSessionHandleOnMessage(
       {required SyncSessionHandle that,
+      required MoatSessionHandle session,
       required List<int> msgBytes,
       required String ourDid});
 
@@ -2156,6 +2157,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @override
   Future<List<SyncOutputDto>> crateApiSimpleSyncSessionHandleOnMessage(
       {required SyncSessionHandle that,
+      required MoatSessionHandle session,
       required List<int> msgBytes,
       required String ourDid}) {
     return handler.executeNormal(NormalTask(
@@ -2163,6 +2165,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncSessionHandle(
             that, serializer);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+            session, serializer);
         sse_encode_list_prim_u_8_loose(msgBytes, serializer);
         sse_encode_String(ourDid, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
@@ -2173,7 +2177,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeErrorData: sse_decode_String,
       ),
       constMeta: kCrateApiSimpleSyncSessionHandleOnMessageConstMeta,
-      argValues: [that, msgBytes, ourDid],
+      argValues: [that, session, msgBytes, ourDid],
       apiImpl: this,
     ));
   }
@@ -2181,7 +2185,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiSimpleSyncSessionHandleOnMessageConstMeta =>
       const TaskConstMeta(
         debugName: "SyncSessionHandle_on_message",
-        argNames: ["that", "msgBytes", "ourDid"],
+        argNames: ["that", "session", "msgBytes", "ourDid"],
       );
 
   @override
@@ -6133,9 +6137,11 @@ class SyncSessionHandleImpl extends RustOpaque implements SyncSessionHandle {
 
   /// Feed a received and decrypted `SyncMsg` (JSON bytes) into the state machine.
   Future<List<SyncOutputDto>> onMessage(
-          {required List<int> msgBytes, required String ourDid}) =>
+          {required MoatSessionHandle session,
+          required List<int> msgBytes,
+          required String ourDid}) =>
       RustLib.instance.api.crateApiSimpleSyncSessionHandleOnMessage(
-          that: this, msgBytes: msgBytes, ourDid: ourDid);
+          that: this, session: session, msgBytes: msgBytes, ourDid: ourDid);
 
   /// Called when the pair WS reaches the `paired` state.
   Future<List<SyncOutputDto>> onPaired(

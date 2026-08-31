@@ -481,19 +481,24 @@ enum ExistingDevicePhase {
 enum Phase {
     NewDevice(NewDevicePhase),
     ExistingDevice(ExistingDevicePhase),
-    /// Terminal failure. Carries the reason so it survives for
-    /// [`PairingSession::ui_state`] / status reporting — a failed pairing
-    /// must not be indistinguishable from a slow one.
+    /// Terminal failure. Retains the reason so a failed pairing is
+    /// distinguishable from a slow one.
     Failed { reason: String },
 }
 
-/// Presentation projection of [`PairingSession`]'s state, for UI rendering.
-/// Every host (moat-cli's TUI/HTTP, moat-dart's Flutter/server) renders
-/// this; none derives its own — see [`PairingSession::ui_state`].
-///
-/// Purely a projection of `Phase` plus the retained code/Enroll/ring-id
-/// data needed to fill in each variant: it is computed fresh on every call,
-/// never cached, so it cannot diverge from the underlying protocol state.
+/// The two rendered forms of a new device's pairing code.
+#[derive(Debug, Clone)]
+struct DisplayedCode {
+    /// Bare text, for manual entry on the peer.
+    text: String,
+    /// `moat-pair:` URI, for the QR.
+    uri: String,
+}
+
+/// Presentation projection of [`PairingSession`]'s state. Every host
+/// renders this; none derives its own — see [`PairingSession::ui_state`].
+/// Computed fresh on every call, never cached, so it cannot drift from the
+/// underlying protocol state.
 #[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "phase", rename_all = "snake_case")]
@@ -555,12 +560,11 @@ pub struct PairingSession {
     /// thread the second device's ring id into the next `approve()` call
     /// without a side channel.
     ring_id: Option<Vec<u8>>,
-    /// New-device only: the text and URI forms of this session's own
-    /// pairing code, computed once at construction from the
-    /// [`PairingPayload`] handed to [`new_device`](Self::new_device) — the
-    /// data [`PairingUiState::ShowingCode`] needs. `None` for an
-    /// existing-device session, which never shows a code of its own.
-    code: Option<(String, String)>,
+    /// `None` for an existing-device session, which shows no code.
+    displayed_code: Option<DisplayedCode>,
+    /// Retained (not just consumed by key derivation) so a host can tell a
+    /// `pair_closed` for this session from one for a superseded round.
+    rendezvous_token: [u8; PAIRING_TOKEN_LEN],
 }
 
 impl PairingSession {
@@ -578,7 +582,11 @@ impl PairingSession {
             recv_counter: 0,
             pending_enroll: None,
             ring_id: None,
-            code: Some((payload.to_text(), payload.to_uri())),
+            displayed_code: Some(DisplayedCode {
+                text: payload.to_text(),
+                uri: payload.to_uri(),
+            }),
+            rendezvous_token: payload.token,
         }
     }
 
@@ -595,15 +603,15 @@ impl PairingSession {
             recv_counter: 0,
             pending_enroll: None,
             ring_id: None,
-            code: None,
+            displayed_code: None,
+            rendezvous_token: *token,
         }
     }
 
     /// `true` once this session has reached a terminal phase (`Done`,
-    /// either role, or `Failed`) — used to guard [`fail`](Self::fail),
-    /// [`reject`](Self::reject), and [`cancel`](Self::cancel) so a
-    /// completed session's outcome is never overwritten by a later,
-    /// spurious call.
+    /// either role, or `Failed`). Guards [`fail`](Self::fail),
+    /// [`reject`](Self::reject) and [`cancel`](Self::cancel) so a completed
+    /// outcome is never overwritten by a later, spurious call.
     fn is_terminal(&self) -> bool {
         matches!(
             self.phase,
@@ -613,10 +621,9 @@ impl PairingSession {
         )
     }
 
-    /// Move this session to `Failed { reason }`, unless it has already
-    /// reached a terminal phase — a stray failure after `Done` must not
-    /// erase a real completion, and a session already `Failed` keeps its
-    /// original reason.
+    /// Move to `Failed { reason }` unless already terminal — a stray
+    /// failure must not erase a real `Done`, and an existing `Failed` keeps
+    /// its original reason.
     fn fail(&mut self, reason: String) {
         if !self.is_terminal() {
             self.phase = Phase::Failed { reason };
@@ -628,11 +635,11 @@ impl PairingSession {
     pub fn ui_state(&self) -> PairingUiState {
         match &self.phase {
             Phase::NewDevice(NewDevicePhase::Idle) | Phase::NewDevice(NewDevicePhase::AwaitingAdmit) => {
-                let (code, uri) = self
-                    .code
+                let code = self
+                    .displayed_code
                     .clone()
                     .expect("a new-device session always has a code, set at construction");
-                PairingUiState::ShowingCode { code, uri }
+                PairingUiState::ShowingCode { code: code.text, uri: code.uri }
             }
             Phase::NewDevice(NewDevicePhase::Done) => PairingUiState::Done {
                 ring_id: self
@@ -663,13 +670,9 @@ impl PairingSession {
         }
     }
 
-    /// Existing device only: decline a pending `Enroll` (`AwaitingApproval`)
-    /// after the user rejects the named peer. Moves the session to
-    /// `Failed` — a hard stop; no further frames should be sent or
-    /// accepted on this session. Errors, without changing the session's
-    /// phase, if there is no pending `Enroll` to reject — including when
-    /// the session has already reached a terminal state, so a completed
-    /// pairing's outcome is never overwritten by a stray reject.
+    /// Existing device only: decline the pending `Enroll`, moving the
+    /// session to `Failed` — a hard stop. Errors without changing phase if
+    /// there is nothing pending to reject (a terminal session included).
     pub fn reject(&mut self) -> Result<()> {
         if !matches!(
             self.phase,
@@ -686,13 +689,10 @@ impl PairingSession {
         Ok(())
     }
 
-    /// Either role: abort an in-flight pairing before it reaches a
-    /// terminal state — e.g. the user backs out of the show-code or
-    /// enter-code screen. Moves the session to `Failed`. Errors, without
-    /// changing the session's phase, if the session has already reached a
-    /// terminal state (`Done` or a prior `Failed`) — there is nothing left
-    /// to cancel, and a completed session must keep reporting its real
-    /// outcome.
+    /// Either role: abort an in-flight pairing — e.g. the user backs out of
+    /// the show-code screen. Moves the session to `Failed`. Errors without
+    /// changing phase if already terminal: there is nothing left to cancel,
+    /// and a completed session must keep reporting its real outcome.
     pub fn cancel(&mut self) -> Result<()> {
         if self.is_terminal() {
             return Err(Error::PairingProtocol(
@@ -933,6 +933,11 @@ impl PairingSession {
     /// see the field doc on `ring_id`.
     pub fn ring_id(&self) -> Option<&[u8]> {
         self.ring_id.as_deref()
+    }
+
+    /// See the field doc on `rendezvous_token`.
+    pub fn rendezvous_token(&self) -> &[u8; PAIRING_TOKEN_LEN] {
+        &self.rendezvous_token
     }
 
     /// The two directional AEAD keys this session derived at construction.

@@ -1,12 +1,9 @@
 import 'package:flutter/widgets.dart';
 import 'package:moat_dart_common/moat_dart_common.dart' as common;
 
-/// Bridges a `moat_dart_common` [common.ValueListenable] — Flutter-
-/// independent, since `common` has no Flutter dependency (it's shared with
-/// the headless `moat_dart_server`, which runs under plain `dart run`) —
-/// into a widget that rebuilds on change. Same shape and behavior as
-/// Flutter's real `ValueListenableBuilder`, just typed against `common`'s
-/// stand-in instead.
+/// Rebuilds on change from a `moat_dart_common` [common.ValueListenable].
+/// Same shape as Flutter's `ValueListenableBuilder`, just typed against
+/// `common`'s Flutter-independent stand-in.
 class CommonValueListenableBuilder<T> extends StatefulWidget {
   const CommonValueListenableBuilder({
     super.key,

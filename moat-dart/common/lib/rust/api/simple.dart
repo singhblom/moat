@@ -502,7 +502,9 @@ abstract class SyncSessionHandle implements RustOpaqueInterface {
 
   /// Feed a received and decrypted `SyncMsg` (JSON bytes) into the state machine.
   Future<List<SyncOutputDto>> onMessage(
-      {required List<int> msgBytes, required String ourDid});
+      {required MoatSessionHandle session,
+      required List<int> msgBytes,
+      required String ourDid});
 
   /// Called when the pair WS reaches the `paired` state.
   Future<List<SyncOutputDto>> onPaired(

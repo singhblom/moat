@@ -370,8 +370,9 @@ impl DrawbridgeManager {
 
         // Spawn binary read loop; store abort handle so clear_pair can stop it.
         let bg_tx = self.bg_tx.clone();
+        let session_token = token.to_vec();
         let task = tokio::spawn(async move {
-            pair_read_loop(reader, bg_tx).await;
+            pair_read_loop(reader, bg_tx, session_token).await;
         });
         self.pair_read_task = Some(task.abort_handle());
 
@@ -511,7 +512,11 @@ async fn own_read_loop(
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("unknown")
                                 .to_string();
-                            let _ = bg_tx.send(BgEvent::PairClosed { reason });
+                            let session_token = msg
+                                .get("token")
+                                .and_then(|v| v.as_str())
+                                .and_then(base64_decode);
+                            let _ = bg_tx.send(BgEvent::PairClosed { session_token, reason });
                         }
                         "error" => {
                             let err = msg
@@ -549,9 +554,14 @@ async fn own_read_loop(
 
 /// Read loop for the pair WebSocket. Forwards binary frames as `PairFrameReceived`
 /// and signals `PairClosed` on disconnect.
+///
+/// `clear_pair()` aborts this task, but not instantaneously: an
+/// already-observed close can still be queued after the session is
+/// superseded, hence `session_token`.
 async fn pair_read_loop(
     mut reader: futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>,
     bg_tx: mpsc::UnboundedSender<BgEvent>,
+    session_token: Vec<u8>,
 ) {
     loop {
         match reader.next().await {
@@ -561,12 +571,14 @@ async fn pair_read_loop(
             Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => continue,
             Some(Ok(Message::Close(_))) | None => {
                 let _ = bg_tx.send(BgEvent::PairClosed {
+                    session_token: Some(session_token),
                     reason: "connection closed".to_string(),
                 });
                 return;
             }
             Some(Err(e)) => {
                 let _ = bg_tx.send(BgEvent::PairClosed {
+                    session_token: Some(session_token),
                     reason: format!("read error: {e}"),
                 });
                 return;

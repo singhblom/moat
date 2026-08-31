@@ -12,6 +12,12 @@ import '../widgets/common_value_listenable_builder.dart';
 /// to push `ApprovePairingScreen` on top of this one — and for the
 /// pairing to complete. Renders straight off [PairingService.state] via
 /// [CommonValueListenableBuilder] rather than polling.
+///
+/// Deliberately does *not* pop itself on `Done`: `Navigator.pop()` removes
+/// whatever is on top, and `Done` is only reached via a successful approve
+/// inside `ApprovePairingScreen` — still on top at that instant. Popping
+/// here would remove *that* screen, and its own unwind would then overshoot.
+/// `ApprovePairingScreen._respond` is the sole place that unwinds.
 class EnterPairingCodeScreen extends StatefulWidget {
   const EnterPairingCodeScreen({super.key});
 
@@ -28,24 +34,9 @@ class _EnterPairingCodeScreenState extends State<EnterPairingCodeScreen> {
   String? _confirmError;
 
   @override
-  void initState() {
-    super.initState();
-    PairingManager.instance.service?.state.addListener(_onStateChange);
-  }
-
-  @override
   void dispose() {
-    PairingManager.instance.service?.state.removeListener(_onStateChange);
     _codeController.dispose();
     super.dispose();
-  }
-
-  void _onStateChange() {
-    if (!mounted) return;
-    final uiState = PairingManager.instance.service?.state.value;
-    if (uiState is common.PairingUiStateDto_Done) {
-      Navigator.of(context).pop(true);
-    }
   }
 
   /// Abort a still-in-flight pairing when the user backs out of this

@@ -26,6 +26,9 @@ pub mod dart_two_party_chat;
 pub mod mixed_push_latency;
 pub mod mixed_three_party_chat;
 pub mod mixed_two_party_chat;
+pub mod pairing_cancelled;
+pub mod pairing_rejected;
+pub mod pairing_retry_after_abandoned;
 pub mod push_latency;
 pub mod push_latency_restart;
 pub mod same_drawbridge_local;
@@ -583,6 +586,67 @@ pub async fn ensure_all_online_n(world: &mut TestWorld, env: &NPartyEnv<'_>) {
     }
 }
 
+/// Existing device only: wait for `client`'s pairing state to reach
+/// `awaiting_approval` — the state a peer's `Enroll` puts it in, where a
+/// real user would be looking at the approve/reject prompt.
+///
+/// Bounded so a peer that never sends `Enroll` fails the test instead of
+/// hanging it.
+pub async fn wait_for_awaiting_approval(client: &MoatCliClient, timeout: std::time::Duration) {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let status = client.pair_status().await.expect("pair_status");
+        if matches!(status, crate::client::PairingUiState::AwaitingApproval { .. }) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "pairing never reached awaiting_approval within {timeout:?} \
+             (status={status:?}); this must fail the test, not hang it",
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
+
+/// Existing device only: wait for `awaiting_approval`, then approve — the
+/// explicit step that replaces the deleted `event_broadcast.is_some()`
+/// auto-approve fork in `moat-cli` (and the `autoApprove` flag it mirrored
+/// in `moat_dart_server`; see pairing-ui-state.md §B/§D). No host
+/// auto-approves an incoming `Enroll` anymore, in any mode, so every
+/// pairing scenario must perform this step itself once it has confirmed a
+/// code.
+pub async fn wait_for_awaiting_approval_and_approve(
+    client: &MoatCliClient,
+    timeout: std::time::Duration,
+) {
+    wait_for_awaiting_approval(client, timeout).await;
+    client.pair_approve().await.expect("pair_approve");
+}
+
+/// Wait for `client`'s pairing state to reach the terminal `failed` phase,
+/// returning the reason. Bounded so a session that silently stalls in a
+/// non-terminal state fails the test instead of hanging it — the whole
+/// point of retaining `Failed { reason }` on the session is that a failed
+/// pairing is distinguishable from a slow one.
+pub async fn wait_for_pair_failed(
+    client: &MoatCliClient,
+    timeout: std::time::Duration,
+) -> String {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let status = client.pair_status().await.expect("pair_status");
+        if let crate::client::PairingUiState::Failed { reason } = status {
+            return reason;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "pairing never reached a terminal failed state within {timeout:?} \
+             (status={status:?}); this must fail the test, not hang it",
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
+
 /// Format an action for human-readable display.
 pub fn format_action(action: &Action) -> String {
     match action {
@@ -808,6 +872,27 @@ pub static SCENARIOS: &[Scenario] = &[
         name: "lost-device-pairing",
         description: "D1 is permanently lost after pairing D2; D2 alone pairs D3 and history survives",
         run_fn: lost_device_pairing::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "pairing-rejected",
+        description: "Existing device declines the Enroll — both sides fail, no ring is created",
+        run_fn: pairing_rejected::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "pairing-cancelled",
+        description: "New device backs out while showing its code — terminal failure, no ring",
+        run_fn: pairing_cancelled::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "pairing-retry-after-abandoned",
+        description: "A pairing abandoned at the approval prompt must not poison a fresh retry",
+        run_fn: pairing_retry_after_abandoned::run_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },

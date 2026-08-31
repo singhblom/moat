@@ -84,8 +84,7 @@ pub struct CreateConversationResponse {
     pub group_id: String,
 }
 
-/// Response to `POST /pair/new`. This endpoint does not exist on the
-/// server yet.
+/// Response to `POST /pair/new`.
 #[derive(Debug, Deserialize)]
 pub struct PairNewResponse {
     /// The text form of the pairing code (Crockford base32,
@@ -94,19 +93,44 @@ pub struct PairNewResponse {
     pub code: String,
 }
 
-/// Response to `GET /pair/status`. This endpoint does not exist on the
-/// server yet.
-#[derive(Debug, Default, Deserialize)]
-pub struct PairStatus {
-    /// `true` once this device has completed pairing (joined the ring, for
-    /// the new device; admitted the peer, for the existing device).
-    #[serde(default)]
-    pub done: bool,
-    /// Ring group id, once known.
-    pub ring_group_id: Option<String>,
-    /// Existing-device only: name of the peer awaiting an approval
-    /// decision, if `Enroll` has been received but not yet approved.
-    pub pending_device_name: Option<String>,
+/// Response to `GET /pair/status` — a tagged mirror of
+/// `moat_core::PairingUiState`, matching both `moat-cli` and
+/// `moat_dart_server`'s wire format exactly (`#[serde(tag = "phase",
+/// rename_all = "snake_case")]` on the Rust side — see
+/// `crates/moat-core/src/pairing.rs`). `ring_id` is a base64 string on the
+/// wire, matching that struct's `#[serde_as(as = "Base64")]` field.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "phase", rename_all = "snake_case")]
+pub enum PairingUiState {
+    /// No pairing in flight.
+    Idle,
+    /// New device: code generated, waiting for the peer to enter it.
+    ShowingCode { code: String, uri: String },
+    /// Existing device: code accepted, waiting for the peer's `Enroll`.
+    AwaitingPeer,
+    /// Existing device: `Enroll` received, waiting on the approve/reject
+    /// decision. No host — including this one — auto-approves anymore;
+    /// see `MoatCliClient::pair_approve`.
+    AwaitingApproval { device_name: String, did: String },
+    /// Enroll/Admit exchange complete. Says nothing about history sync —
+    /// see `GET /sync/status` for that.
+    Done { ring_id: String },
+    /// Terminal failure, with a reason retained on the session rather than
+    /// thrown away.
+    Failed { reason: String },
+}
+
+impl PairingUiState {
+    /// `true` once this session has reached its terminal `Done` phase.
+    /// Matches `PairingSession::is_done()`'s semantics.
+    pub fn is_done(&self) -> bool {
+        matches!(self, PairingUiState::Done { .. })
+    }
+
+    /// `true` once this session has reached a terminal `Failed` phase.
+    pub fn is_failed(&self) -> bool {
+        matches!(self, PairingUiState::Failed { .. })
+    }
 }
 
 // ── MoatCliClient impl ────────────────────────────────────────────────────────
@@ -394,8 +418,7 @@ impl MoatCliClient {
     }
 
     /// `POST /pair/new` — new device: generate a fresh pairing code and
-    /// start listening for the existing device's `Enroll`. Not yet
-    /// implemented on the server — calling this today fails with a 404.
+    /// start listening for the existing device's `Enroll`.
     pub async fn pair_new(&self) -> Result<PairNewResponse> {
         let resp = self
             .http
@@ -412,9 +435,8 @@ impl MoatCliClient {
     }
 
     /// `POST /pair/confirm` — existing device: enter a pairing code
-    /// (scanned or typed) and approve the peer once its `Enroll` arrives.
-    /// Approval is auto-accepted in `--http` mode — interactive UIs gate
-    /// this on a real user tap instead. Not yet implemented on the server.
+    /// (scanned or typed). No longer implies approval of the resulting
+    /// `Enroll` — see `pair_approve`.
     pub async fn pair_confirm(&self, code: &str) -> Result<()> {
         let resp = self
             .http
@@ -431,9 +453,63 @@ impl MoatCliClient {
         Ok(())
     }
 
-    /// `GET /pair/status` — poll pairing progress. Not yet implemented on
-    /// the server.
-    pub async fn pair_status(&self) -> Result<PairStatus> {
+    /// `POST /pair/approve` — existing device: approve the `Enroll`
+    /// `pair_status` reports as `awaiting_approval`. No host auto-approves
+    /// anymore — the deleted `event_broadcast.is_some()` fork in
+    /// `moat-cli` (and the `autoApprove` flag it mirrored in
+    /// `moat_dart_server`) used to; every scenario must call this
+    /// explicitly now.
+    pub async fn pair_approve(&self) -> Result<()> {
+        let resp = self
+            .http
+            .post(format!("{}/pair/approve", self.base_url))
+            .send()
+            .await
+            .context("POST /pair/approve")?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body: Value = resp.json().await.unwrap_or_default();
+            anyhow::bail!("pair_approve failed ({status}): {body}");
+        }
+        Ok(())
+    }
+
+    /// `POST /pair/reject` — existing device: decline the pending `Enroll`.
+    pub async fn pair_reject(&self) -> Result<()> {
+        let resp = self
+            .http
+            .post(format!("{}/pair/reject", self.base_url))
+            .send()
+            .await
+            .context("POST /pair/reject")?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body: Value = resp.json().await.unwrap_or_default();
+            anyhow::bail!("pair_reject failed ({status}): {body}");
+        }
+        Ok(())
+    }
+
+    /// `POST /pair/cancel` — either role: abort an in-flight pairing
+    /// before it reaches a terminal state.
+    pub async fn pair_cancel(&self) -> Result<()> {
+        let resp = self
+            .http
+            .post(format!("{}/pair/cancel", self.base_url))
+            .send()
+            .await
+            .context("POST /pair/cancel")?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body: Value = resp.json().await.unwrap_or_default();
+            anyhow::bail!("pair_cancel failed ({status}): {body}");
+        }
+        Ok(())
+    }
+
+    /// `GET /pair/status` — poll pairing progress. Returns the tagged
+    /// `PairingUiState` verbatim.
+    pub async fn pair_status(&self) -> Result<PairingUiState> {
         self.http
             .get(format!("{}/pair/status", self.base_url))
             .send()

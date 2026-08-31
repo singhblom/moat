@@ -2964,27 +2964,39 @@ fn wire__crate__api__simple__SyncSessionHandle_on_message_impl(
             let api_that = <RustOpaqueMoi<
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SyncSessionHandle>,
             >>::sse_decode(&mut deserializer);
+            let api_session = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MoatSessionHandle>,
+            >>::sse_decode(&mut deserializer);
             let api_msg_bytes = <Vec<u8>>::sse_decode(&mut deserializer);
             let api_our_did = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, String>((move || {
                     let mut api_that_guard = None;
+                    let mut api_session_guard = None;
                     let decode_indices_ =
                         flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
                             flutter_rust_bridge::for_generated::LockableOrderInfo::new(
                                 &api_that, 0, false,
                             ),
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_session,
+                                1,
+                                false,
+                            ),
                         ]);
                     for i in decode_indices_ {
                         match i {
                             0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                            1 => api_session_guard = Some(api_session.lockable_decode_sync_ref()),
                             _ => unreachable!(),
                         }
                     }
                     let api_that_guard = api_that_guard.unwrap();
+                    let api_session_guard = api_session_guard.unwrap();
                     let output_ok = crate::api::simple::SyncSessionHandle::on_message(
                         &*api_that_guard,
+                        &*api_session_guard,
                         api_msg_bytes,
                         api_our_did,
                     )?;

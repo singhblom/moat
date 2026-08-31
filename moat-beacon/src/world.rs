@@ -275,6 +275,7 @@ impl TestWorld {
             accounts,
             port: None,
             data_dir: None,
+            bind_addr: None,
         })
         .await;
         let postern_url = postern.url().to_string();
@@ -842,8 +843,12 @@ fn dart_server_binary() -> Result<(PathBuf, PathBuf)> {
     );
     let lib_path = rust_crate_dir.join("target").join(profile).join(&lib_name);
 
-    if !lib_path.exists() {
-        eprintln!("beacon: rust_lib_moat_flutter not found, building…");
+    // Always build, not just when missing: this crate wraps `moat-core`, so
+    // a change anywhere can leave the dylib stale — FRB then aborts the Dart
+    // server on its content-hash check, or worse the suite silently tests
+    // stale Rust. Cargo is the staleness oracle and a no-op when current.
+    {
+        eprintln!("beacon: building rust_lib_moat_flutter…");
         let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
         let mut cmd = Command::new(&cargo);
         cmd.arg("build")
