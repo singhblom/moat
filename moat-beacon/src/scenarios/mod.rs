@@ -33,6 +33,7 @@ pub mod push_latency;
 pub mod push_latency_restart;
 pub mod same_drawbridge_local;
 pub mod staggered_device_pairing;
+pub mod sync_request_history;
 pub mod three_device_pairing;
 pub mod three_device_pairing_history_sync;
 pub mod three_device_pairing_history_sync_dr;
@@ -865,6 +866,13 @@ pub static SCENARIOS: &[Scenario] = &[
         name: "staggered-device-pairing",
         description: "D2 is offline while D1 pairs D3; D2 must catch up on its own",
         run_fn: staggered_device_pairing::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "sync-request-history",
+        description: "D2 sleeps through a conversation, is fanned in with no history, and asks D1 for it",
+        run_fn: sync_request_history::run_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },

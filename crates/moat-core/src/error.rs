@@ -47,6 +47,8 @@ pub enum ErrorCode {
     PairingCodec = 300,
     PairingCrypto = 301,
     PairingProtocol = 302,
+    // Sync-request error codes
+    SyncRequestProtocol = 400,
 }
 
 /// Errors that can occur during MLS operations
@@ -141,6 +143,9 @@ pub enum Error {
 
     #[error("pairing protocol error: {0}")]
     PairingProtocol(String),
+
+    #[error("sync request protocol error: {0}")]
+    SyncRequestProtocol(String),
 }
 
 impl Error {
@@ -177,6 +182,7 @@ impl Error {
             Error::PairingCodec(_) => ErrorCode::PairingCodec,
             Error::PairingCrypto(_) => ErrorCode::PairingCrypto,
             Error::PairingProtocol(_) => ErrorCode::PairingProtocol,
+            Error::SyncRequestProtocol(_) => ErrorCode::SyncRequestProtocol,
         }
     }
 
@@ -212,7 +218,8 @@ impl Error {
             | Error::ContentHashMismatch(msg)
             | Error::PairingCodec(msg)
             | Error::PairingCrypto(msg)
-            | Error::PairingProtocol(msg) => msg,
+            | Error::PairingProtocol(msg)
+            | Error::SyncRequestProtocol(msg) => msg,
         }
     }
 }

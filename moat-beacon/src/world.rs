@@ -452,8 +452,9 @@ impl TestWorld {
             for p in &pending {
                 let client = p.client.clone();
                 let short = p.short_handle.clone();
+                let timeout = std::time::Duration::from_secs(10);
                 join_set.spawn(async move {
-                    wait_for_http(&client, std::time::Duration::from_secs(10))
+                    wait_for_http(&client, timeout)
                         .await
                         .with_context(|| format!("waiting for participant ({short}) to start"))
                 });

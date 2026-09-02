@@ -34,6 +34,7 @@ pub mod pairing;
 pub(crate) mod stealth;
 pub(crate) mod storage;
 pub mod sync;
+pub mod sync_request;
 pub(crate) mod tag;
 
 pub mod api;
@@ -79,6 +80,10 @@ pub use crate::digest::{diff_anchors, DigestAnchor, DiffRange};
 pub use crate::sync::{
     decode_sync_msg, encode_sync_msg, AnchorDto, ConvState, SyncDirection, SyncMessage, SyncMsg,
     SyncOutput, SyncSession,
+};
+pub use crate::sync_request::{
+    decode_ring_msg, encode_ring_msg, RingMsg, SyncRequestSession, SyncRequestUiState,
+    SYNC_REQUEST_TOKEN_LEN, SYNC_REQUEST_TTL_MS,
 };
 pub use crate::pairing::{
     crockford_decode, crockford_encode, decode_pairing_msg, derive_pairing_keys,

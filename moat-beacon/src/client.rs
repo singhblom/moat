@@ -133,6 +133,40 @@ impl PairingUiState {
     }
 }
 
+/// The `request` half of `GET /sync/status` — a tagged mirror of
+/// `moat_core::SyncRequestUiState` (see
+/// `crates/moat-core/src/sync_request.rs`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "phase", rename_all = "snake_case")]
+pub enum SyncRequestUiState {
+    /// No sync request in flight.
+    Idle,
+    /// Waiting on the rendezvous, in either role.
+    AwaitingPeer,
+    /// A sibling asked for history; this device's user has not decided.
+    AwaitingApproval { device_name: String },
+    /// Channel up, transfer running.
+    Active,
+    /// Transfer finished.
+    Complete,
+    /// Terminal failure, with the reason retained.
+    Failed { reason: String },
+}
+
+impl SyncRequestUiState {
+    pub fn is_complete(&self) -> bool {
+        matches!(self, SyncRequestUiState::Complete)
+    }
+
+    pub fn is_awaiting_approval(&self) -> bool {
+        matches!(self, SyncRequestUiState::AwaitingApproval { .. })
+    }
+
+    pub fn is_failed(&self) -> bool {
+        matches!(self, SyncRequestUiState::Failed { .. })
+    }
+}
+
 // ── MoatCliClient impl ────────────────────────────────────────────────────────
 
 impl MoatCliClient {
@@ -415,6 +449,76 @@ impl MoatCliClient {
             anyhow::bail!("sync_start failed ({status}): {body}");
         }
         Ok(())
+    }
+
+    /// `POST /sync/request` — ask the user's other devices for history
+    /// this one is missing. A sibling's user must accept
+    /// (`sync_accept`); no host answers automatically.
+    pub async fn sync_request(&self) -> Result<()> {
+        let resp = self
+            .http
+            .post(format!("{}/sync/request", self.base_url))
+            .send()
+            .await
+            .context("POST /sync/request")?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body: Value = resp.json().await.unwrap_or_default();
+            anyhow::bail!("sync_request failed ({status}): {body}");
+        }
+        Ok(())
+    }
+
+    /// `POST /sync/accept` — send this device's history to the sibling
+    /// that asked for it.
+    pub async fn sync_accept(&self) -> Result<()> {
+        let resp = self
+            .http
+            .post(format!("{}/sync/accept", self.base_url))
+            .send()
+            .await
+            .context("POST /sync/accept")?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body: Value = resp.json().await.unwrap_or_default();
+            anyhow::bail!("sync_accept failed ({status}): {body}");
+        }
+        Ok(())
+    }
+
+    /// `POST /sync/decline` — refuse a sibling's request. Local only: the
+    /// requester keeps waiting for another sibling.
+    pub async fn sync_decline(&self) -> Result<()> {
+        let resp = self
+            .http
+            .post(format!("{}/sync/decline", self.base_url))
+            .send()
+            .await
+            .context("POST /sync/decline")?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body: Value = resp.json().await.unwrap_or_default();
+            anyhow::bail!("sync_decline failed ({status}): {body}");
+        }
+        Ok(())
+    }
+
+    /// `GET /sync/status` — the sync-request projection, verbatim.
+    pub async fn sync_request_status(&self) -> Result<SyncRequestUiState> {
+        let val: serde_json::Value = self
+            .http
+            .get(format!("{}/sync/status", self.base_url))
+            .send()
+            .await
+            .context("GET /sync/status")?
+            .json()
+            .await
+            .context("parse sync/status response")?;
+        let request = val
+            .get("request")
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("sync/status carried no request state"))?;
+        serde_json::from_value(request).context("parse sync request state")
     }
 
     /// `POST /pair/new` — new device: generate a fresh pairing code and

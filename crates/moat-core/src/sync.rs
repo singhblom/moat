@@ -12,6 +12,8 @@
 //! transferred during sync. Hosts (moat-cli, moat-dart) adapt it to/from
 //! their own `StoredMessage` type at the FFI / state-machine boundary.
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 use serde_with::{base64::Base64, serde_as};
 
@@ -35,6 +37,21 @@ pub struct ConvState {
     pub tip_digest: Vec<u8>,
     /// Digest anchors at epoch boundaries.
     pub anchors: Vec<AnchorDto>,
+    /// Every rkey this side holds for the conversation, so the peer can
+    /// send exactly the complement.
+    ///
+    /// `oldest_rkey`/`newest_rkey` describe a span, and a span cannot
+    /// express a hole in the middle of it — which is precisely the shape
+    /// of the history a device ends up with after being offline past the
+    /// point where it can still decrypt what it missed. An inventory is
+    /// about 13 bytes per message against the messages themselves, so
+    /// exactness is cheaper here than any scheme that has to guess.
+    ///
+    /// `None` means "not declared" — over [`INVENTORY_CAP`], or a peer
+    /// that predates this field. The peer then falls back to serving its
+    /// whole history and letting rkey dedupe absorb the overlap.
+    #[serde(default)]
+    pub rkeys: Option<Vec<String>>,
 }
 
 /// Digest anchor in the on-wire form (DTO mirrors [`DigestAnchor`] but uses
@@ -221,6 +238,23 @@ impl Default for SyncSession {
 
 const BATCH_SIZE: usize = 50;
 
+/// Above this many messages in one conversation a host omits the rkey
+/// inventory from its [`ConvState`] and the peer falls back to serving
+/// everything. At ~13 bytes per rkey this is a little over 100 KB, which
+/// is still far below the cost of re-sending the messages themselves —
+/// the cap exists to bound the Hello frame, not because the diff stops
+/// paying for itself.
+pub const INVENTORY_CAP: usize = 10_000;
+
+/// Whether a peer's declared state holds no history at all. An explicit
+/// empty inventory is authoritative; without one, fall back to the range.
+fn peer_holds_nothing(state: &ConvState) -> bool {
+    match &state.rkeys {
+        Some(rkeys) => rkeys.is_empty(),
+        None => state.oldest_rkey.is_none(),
+    }
+}
+
 impl SyncSession {
     /// Create a new session in the `SendingHello` phase. Add per-conversation
     /// state via [`add_conv_plan`] before calling [`on_paired`].
@@ -300,15 +334,30 @@ impl SyncSession {
         self.phase = Phase::Active;
         let mut outputs = Vec::new();
 
-        for plan in &self.plans {
+        for plan in &mut self.plans {
             let peer_state = peer_convs.iter().find(|c| c.group_id == plan.group_id);
-            let peer_has_nothing = peer_state.map(|s| s.oldest_rkey.is_none()).unwrap_or(true);
+            let peer_has_nothing = peer_state.map(peer_holds_nothing).unwrap_or(true);
 
-            if peer_has_nothing && !plan.our_messages.is_empty() {
-                // Peer has no history — they will send us a BatchReq when
-                // they see our Hello with messages.
-            } else if !peer_has_nothing {
-                // Peer has history we might need — request it.
+            let want_batch = match peer_state.and_then(|s| s.rkeys.as_ref()) {
+                Some(peer_rkeys) => {
+                    // Both directions of the diff, from the one inventory:
+                    // drop what the peer already holds from what we will
+                    // serve, and ask only for what we are actually missing.
+                    let peer_set: HashSet<&str> =
+                        peer_rkeys.iter().map(String::as_str).collect();
+                    let ours: HashSet<&str> =
+                        plan.our_messages.iter().map(|m| m.rkey.as_str()).collect();
+                    let missing_here = peer_set.iter().any(|r| !ours.contains(r));
+                    plan.our_messages.retain(|m| !peer_set.contains(m.rkey.as_str()));
+                    missing_here
+                }
+                // No inventory to diff against: fall back to "ask whenever
+                // the peer holds anything", and serve our whole history.
+                None => !peer_has_nothing,
+            };
+
+            plan.expecting_batch = want_batch;
+            if want_batch {
                 outputs.push(SyncOutput::Send(SyncMsg::BatchReq {
                     group_id: plan.group_id.clone(),
                     from_rkey: None,
@@ -321,7 +370,7 @@ impl SyncSession {
         // Add plans for any peer convs we don't yet know about (new device that
         // hasn't joined those user conversations yet).
         for peer_state in &peer_convs {
-            if peer_state.oldest_rkey.is_none() {
+            if peer_holds_nothing(peer_state) {
                 continue;
             }
             if self.plans.iter().any(|p| p.group_id == peer_state.group_id) {
@@ -344,6 +393,11 @@ impl SyncSession {
             }));
         }
 
+        // Two devices that already agree have nothing to say to each other,
+        // and the Hello exchange is where that becomes knowable. Without
+        // this the session would sit in `Active` waiting on batches neither
+        // side intends to send.
+        outputs.extend(self.check_complete());
         outputs
     }
 
@@ -495,6 +549,9 @@ mod tests {
             newest_rkey: None,
             tip_digest: vec![0u8; 32],
             anchors: vec![],
+            // These pre-inventory helpers exercise the fallback path
+            // deliberately: a peer that declares no inventory.
+            rkeys: None,
         }
     }
 
@@ -505,6 +562,7 @@ mod tests {
             newest_rkey: Some("z".to_string()),
             tip_digest: vec![1u8; 32],
             anchors: vec![],
+            rkeys: None,
         }
     }
 

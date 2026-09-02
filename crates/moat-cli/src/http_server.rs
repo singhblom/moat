@@ -454,6 +454,27 @@ async fn get_pair_status(State(state): State<Arc<ServerState>>) -> Json<moat_cor
     Json(app.api_pair_status())
 }
 
+/// Ask the user's other devices for history this one is missing. The
+/// sibling's user must accept — no host auto-accepts, matching pairing's
+/// explicit-approval rule.
+async fn post_sync_request(State(state): State<Arc<ServerState>>) -> HandlerResult<Json<Value>> {
+    let mut app = state.app.lock().await;
+    app.api_sync_request().map_err(app_err)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn post_sync_accept(State(state): State<Arc<ServerState>>) -> HandlerResult<Json<Value>> {
+    let mut app = state.app.lock().await;
+    app.api_sync_accept().map_err(app_err)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn post_sync_decline(State(state): State<Arc<ServerState>>) -> HandlerResult<Json<Value>> {
+    let mut app = state.app.lock().await;
+    app.api_sync_decline().map_err(app_err)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
 async fn post_sync_start(State(state): State<Arc<ServerState>>) -> Json<Value> {
     let mut app = state.app.lock().await;
     app.do_ring_tick().await;
@@ -568,6 +589,9 @@ pub async fn run_http(
         .route("/pair/cancel", post(post_pair_cancel))
         .route("/pair/status", get(get_pair_status))
         .route("/sync/start", post(post_sync_start))
+        .route("/sync/request", post(post_sync_request))
+        .route("/sync/accept", post(post_sync_accept))
+        .route("/sync/decline", post(post_sync_decline))
         .route("/sync/status", get(get_sync_status))
         .route("/events", get(get_events))
         // TODO: .route("/debug-log/:lines", get(get_debug_log))

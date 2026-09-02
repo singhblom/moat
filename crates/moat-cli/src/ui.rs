@@ -1,7 +1,7 @@
 //! Terminal UI rendering with Ratatui
 
 use crate::app::{App, DeviceAlert, DisplayMessage, Focus, LoginField, QUICK_EMOJIS};
-use moat_core::PairingUiState;
+use moat_core::{PairingUiState, SyncRequestUiState};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -68,6 +68,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_pair_show_code_popup(frame, app);
     } else if app.focus == Focus::PairApprove {
         draw_pair_approve_popup(frame, app);
+    } else if app.focus == Focus::SyncApprove {
+        draw_sync_approve_popup(frame, app);
     }
 
     // Draw message info popup if toggled
@@ -792,6 +794,56 @@ fn draw_pair_approve_popup(frame: &mut Frame, app: &App) {
         PairingUiState::Idle | PairingUiState::ShowingCode { .. } | PairingUiState::AwaitingPeer => {
             vec![Line::from("")]
         }
+    };
+
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true });
+    frame.render_widget(paragraph, inner);
+}
+
+/// A sibling asked for history. Names the requesting device from its MLS
+/// leaf credential — the payload carries only a rendezvous token.
+fn draw_sync_approve_popup(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+
+    let popup_width = 60.min(area.width.saturating_sub(4));
+    let popup_height = 8;
+    let popup_x = (area.width - popup_width) / 2;
+    let popup_y = (area.height - popup_height) / 2;
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+    frame.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .title(" Send History? ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Magenta));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let lines: Vec<Line> = match app.sync_request_ui_state() {
+        SyncRequestUiState::AwaitingApproval { device_name } => vec![
+            Line::from(vec![
+                Span::styled("Device: ", Style::default().fg(Color::Yellow)),
+                Span::raw(device_name),
+            ]),
+            Line::from(""),
+            Line::from("is asking for message history."),
+            Line::from(""),
+            Line::from("Send it? (y/Enter to send, n/Esc to refuse)"),
+        ],
+        SyncRequestUiState::Failed { reason } => vec![
+            Line::from(Span::styled("Sync failed", Style::default().fg(Color::Red))),
+            Line::from(""),
+            Line::from(reason),
+            Line::from(""),
+            Line::from("Press any key to continue."),
+        ],
+        // The key handler dismisses this popup as soon as the state leaves
+        // `AwaitingApproval`, so these are transitional at most.
+        SyncRequestUiState::Idle
+        | SyncRequestUiState::AwaitingPeer
+        | SyncRequestUiState::Active
+        | SyncRequestUiState::Complete => vec![Line::from("")],
     };
 
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true });

@@ -15,8 +15,8 @@ use moat_core::{
     stealth_pubkey_from_privkey, try_decrypt_stealth, ControlKind, CoordMsg, DeviceRingState,
     Event, EventKind, ExternalBlob, GroupKind, LongTextMessage, MediaMessage, MessagePayload,
     MoatCredential, MoatSession, ModifierKind, PairingCommand, PairingPayload, PairingSession,
-    PairingUiState, ParsedMessagePayload, RingCommand, SiblingInfo, SiblingStealth, StepEnv,
-    CIPHERSUITE,
+    PairingUiState, ParsedMessagePayload, RingCommand, RingMsg, SiblingInfo, SiblingStealth,
+    StepEnv, SyncRequestSession, SyncRequestUiState, CIPHERSUITE,
 };
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::collections::{HashMap, HashSet};
@@ -167,6 +167,9 @@ pub enum Focus {
     /// Existing device: confirmation screen naming the peer awaiting an
     /// approval decision.
     PairApprove,
+    /// A sibling asked for history: confirmation screen naming it, awaiting
+    /// the decision to send.
+    SyncApprove,
 }
 
 /// Login form state
@@ -438,6 +441,10 @@ pub(crate) enum BgEvent {
     /// doc for why this is a second, PDS-borne path distinct from the
     /// `Welcome` riding the pair channel raw.
     PublishRingCommit { tag: [u8; 16], ciphertext: Vec<u8> },
+    /// Publish a ring application event (`EventKind::RingMsg`) to our own
+    /// repo and notify Drawbridge, so siblings holding a live relay
+    /// connection see it at once instead of on their next 30 s poll.
+    PublishRingEvent { tag: [u8; 16], ciphertext: Vec<u8> },
     /// A binary frame arrived on the pair WS.
     PairFrameReceived {
         data: Vec<u8>,
@@ -463,7 +470,8 @@ impl BgEvent {
             | BgEvent::DrawbridgeSendPairJoin { .. }
             | BgEvent::PollForNewDevicesNow
             | BgEvent::RingTickNow
-            | BgEvent::PublishRingCommit { .. } => true,
+            | BgEvent::PublishRingCommit { .. }
+            | BgEvent::PublishRingEvent { .. } => true,
 
             BgEvent::PollFetched { .. }
             | BgEvent::SendPublished { .. }
@@ -647,6 +655,13 @@ pub struct App {
     /// Next unused counter for pairing-AEAD sync frames *we* expect to
     /// receive, continuing `PairingSession::next_recv_counter`'s sequence.
     pairing_sync_recv_counter: u64,
+
+    // ── User-initiated sync between established devices ─────────────────────
+    /// The in-flight sync request, in either role: one we published
+    /// (`/sync/request`) or one a sibling published and we are being asked
+    /// to answer. Left in place once terminal so `/sync/status` reports the
+    /// outcome rather than silently reverting to idle.
+    sync_request: Option<SyncRequestSession>,
 }
 
 impl App {
@@ -775,6 +790,7 @@ impl App {
             cached_sibling_stealth: Vec::new(),
             pairing_session: None,
             pairing_is_new_device: None,
+            sync_request: None,
             pending_pair_rendezvous_token: None,
             pairing_sync_keys: None,
             pairing_sync_send_counter: 0,
@@ -1344,6 +1360,7 @@ impl App {
             Focus::PairShowCode => self.handle_pair_show_code_key(key), // sync — no await
             Focus::PairEnterCode => self.handle_pair_enter_code_key(key),
             Focus::PairApprove => self.handle_pair_approve_key(key), // sync — no await
+            Focus::SyncApprove => self.handle_sync_approve_key(key), // sync — no await
         }
     }
 
@@ -1861,7 +1878,8 @@ impl App {
             | BgEvent::DrawbridgeSendPairJoin { .. }
             | BgEvent::PollForNewDevicesNow
             | BgEvent::RingTickNow
-            | BgEvent::PublishRingCommit { .. } => {}
+            | BgEvent::PublishRingCommit { .. }
+            | BgEvent::PublishRingEvent { .. } => {}
 
             BgEvent::PairPending => {
                 self.debug_log.log("sync: pair offer registered, waiting for joiner");
@@ -1903,6 +1921,12 @@ impl App {
                 self.sync_session = None;
                 self.pending_pair_token = None;
                 self.pairing_sync_keys = None;
+                // A transfer cut short must say so. `fail` is a no-op once
+                // the session completed, which is the ordinary case: the
+                // relay closes the channel right after a successful sync.
+                if let Some(session) = self.sync_request.as_mut() {
+                    session.fail(format!("pair channel closed: {reason}"));
+                }
                 // Peer walked away / relay TTL: cancel so `ui_state()`
                 // reports why rather than stalling. No-op if terminal.
                 if let Some(session) = self.pairing_session.as_mut() {
@@ -1926,6 +1950,12 @@ impl App {
                     }
                     None => {
                         self.debug_log.log("sync: pair WS paired — starting sync session");
+                        if let Some(session) = self.sync_request.as_mut() {
+                            if let Err(e) = session.on_channel_up() {
+                                self.debug_log
+                                    .log(&format!("sync: channel up on a finished request: {e}"));
+                            }
+                        }
                         self.start_sync_session();
                     }
                 }
@@ -2234,6 +2264,42 @@ impl App {
                     Err(e) => self
                         .debug_log
                         .log(&format!("pairing: publish ring Add commit failed: {e}")),
+                }
+            }
+
+            BgEvent::PublishRingEvent { tag, ciphertext } => {
+                let Some(client) = self.client.clone() else { return };
+                match client.publish_event(&tag, &ciphertext, None).await {
+                    Ok(uri) => {
+                        self.debug_log.log("sync: published ring message");
+                        // `publish_event` hands back the record's AT URI;
+                        // the relay verifies against the bare rkey.
+                        let rkey = uri.split('/').next_back().unwrap_or("").to_string();
+                        // Siblings watch the ring's candidate tags, so the
+                        // relay can hand them this event immediately rather
+                        // than leaving it for the next poll.
+                        if self.drawbridge.has_own_connection() {
+                            let did = self
+                                .client
+                                .as_ref()
+                                .map(|c| c.did().to_string())
+                                .unwrap_or_default();
+                            let _ = self.bg_tx.send(BgEvent::DrawbridgeNotifyEventPosted {
+                                did,
+                                tag,
+                                rkey,
+                                payload: ciphertext,
+                                drawbridge_urls: Vec::new(),
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        self.debug_log
+                            .log(&format!("sync: publish ring message failed: {e}"));
+                        if let Some(session) = self.sync_request.as_mut() {
+                            session.fail(format!("could not publish the request: {e}"));
+                        }
+                    }
                 }
             }
             _ => {} // Non-async events handled by handle_bg_event
@@ -3405,6 +3471,31 @@ impl App {
                             }
                         }
                     }
+                    EventKind::RingMsg => {
+                        // Ring application traffic. The sender's identity is
+                        // whatever MLS says it is — the payload declares no
+                        // device of its own.
+                        let sender_name = decrypted
+                            .sender
+                            .as_ref()
+                            .map(|s| s.device_name.clone())
+                            .unwrap_or_else(|| "an unnamed device".to_string());
+                        let sender_did = decrypted.sender.as_ref().map(|s| s.did.clone());
+                        if sender_did.as_deref() != Some(my_did) {
+                            self.debug_log.log(
+                                "poll: ignoring a ring message whose sender is not us",
+                            );
+                        } else {
+                            match moat_core::decode_ring_msg(&decrypted.event.payload) {
+                                Ok(RingMsg::SyncRequest { token }) => {
+                                    self.on_sync_request_received(token, sender_name);
+                                }
+                                Err(e) => self
+                                    .debug_log
+                                    .log(&format!("poll: undecodable ring message: {e}")),
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -3750,6 +3841,12 @@ impl App {
                 self.focus = Focus::PairEnterCode;
                 self.pair_enter_code_input.clear();
             }
+            KeyCode::Char('s') => {
+                // Ask the user's other devices for history this one lacks.
+                if let Err(e) = self.api_sync_request() {
+                    self.set_error(format!("Sync history failed: {e}"));
+                }
+            }
             KeyCode::Up | KeyCode::Char('k') => {
                 if !self.conversations.is_empty() {
                     let current = self.active_conversation.unwrap_or(0);
@@ -3899,6 +3996,33 @@ impl App {
             }
             KeyCode::Esc | KeyCode::Char('n') => {
                 let _ = self.api_pair_reject();
+                self.focus = Focus::Conversations;
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    /// Approval screen for a sibling's sync request: `y`/Enter sends this
+    /// device's history, `n`/Esc refuses. Refusing is local — the sibling
+    /// keeps waiting for another device.
+    fn handle_sync_approve_key(&mut self, key: KeyEvent) -> Result<bool> {
+        if !matches!(
+            self.sync_request_ui_state(),
+            SyncRequestUiState::AwaitingApproval { .. }
+        ) {
+            self.focus = Focus::Conversations;
+            return Ok(false);
+        }
+        match key.code {
+            KeyCode::Enter | KeyCode::Char('y') => {
+                if let Err(e) = self.api_sync_accept() {
+                    self.set_error(format!("Send history failed: {e}"));
+                }
+                self.focus = Focus::Conversations;
+            }
+            KeyCode::Esc | KeyCode::Char('n') => {
+                let _ = self.api_sync_decline();
                 self.focus = Focus::Conversations;
             }
             _ => {}
@@ -5150,6 +5274,21 @@ impl App {
             let tip = self.mls.digest_tip(&group_id).unwrap_or([0u8; 32]);
             let anchors = self.mls.digest_anchors(&group_id);
             let range = self.mls.range(&group_id);
+
+            // The rkeys we hold, so the peer sends exactly the complement
+            // rather than its whole history. Omitted past the cap, where
+            // the peer falls back to serving everything (see
+            // `moat_core::sync::INVENTORY_CAP`).
+            let held: Vec<String> = self
+                .keys
+                .load_messages(conv_id)
+                .map(|cm| cm.messages)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|m| m.rkey != "pending")
+                .map(|m| m.rkey)
+                .collect();
+            let rkeys = (held.len() <= moat_core::sync::INVENTORY_CAP).then_some(held);
             let (oldest, newest) = match range {
                 Some((o, n)) => (Some(o), Some(n)),
                 None => {
@@ -5178,6 +5317,7 @@ impl App {
                 newest_rkey: newest,
                 tip_digest: tip.to_vec(),
                 anchors: anchors.iter().map(AnchorDto::from).collect(),
+                rkeys,
             })
         }).collect();
 
@@ -5255,6 +5395,9 @@ impl App {
                     self.sync_session = None;
                     self.pending_pair_token = None;
                     self.drawbridge.clear_pair();
+                    if let Some(session) = self.sync_request.as_mut() {
+                        session.on_complete();
+                    }
                 }
             }
         }
@@ -5460,10 +5603,151 @@ impl App {
 
     /// Return the current sync status for the HTTP API.
     pub fn sync_status(&self) -> serde_json::Value {
-        match &self.sync_session {
-            Some(_) => serde_json::json!({ "active": true }),
-            None => serde_json::json!({ "active": false }),
+        serde_json::json!({
+            "active": self.sync_session.is_some(),
+            "request": self.sync_request_ui_state(),
+        })
+    }
+
+    // ── User-initiated sync between established devices ─────────────────────
+
+    /// Projection of the sync-request gesture, for `/sync/status` and the
+    /// TUI. Never derived anywhere else — see [`SyncRequestSession`].
+    pub fn sync_request_ui_state(&self) -> SyncRequestUiState {
+        SyncRequestSession::ui_state_of(self.sync_request.as_ref())
+    }
+
+    /// HTTP `POST /sync/request` — ask the user's other devices for
+    /// history this one is missing.
+    ///
+    /// Publishes a `RingMsg::SyncRequest` on the device ring and registers
+    /// the same rendezvous token with the relay. Every online sibling
+    /// prompts its user; whichever one they approve joins the rendezvous,
+    /// and the transfer runs as an ordinary ring-encrypted
+    /// [`crate::sync::SyncSession`]. There is no election and no automatic
+    /// responder: the person holding the devices picks the one that has
+    /// the history.
+    pub fn api_sync_request(&mut self) -> Result<()> {
+        if self.client.is_none() {
+            return Err(AppError::NotLoggedIn);
         }
+        let ring_id = self
+            .ring_driver
+            .ring_id()
+            .map(<[u8]>::to_vec)
+            .ok_or_else(|| AppError::Other("no device ring — pair a device first".to_string()))?;
+        let key_bundle = self.keys.load_identity_key()?;
+
+        use rand::RngCore;
+        let mut token = [0u8; moat_core::SYNC_REQUEST_TOKEN_LEN];
+        rand::thread_rng().fill_bytes(&mut token);
+
+        // Seal the request to the ring first: if this fails there is no
+        // point registering a rendezvous nobody will ever be told about.
+        let epoch = self.mls.get_group_epoch(&ring_id).ok().flatten().unwrap_or(0);
+        let payload = moat_core::encode_ring_msg(&RingMsg::SyncRequest { token });
+        let event = Event::ring_msg(ring_id.clone(), epoch, payload);
+        let encrypted = self
+            .mls
+            .encrypt_event(&ring_id, &key_bundle, &event)
+            .map_err(AppError::Mls)?;
+        let _ = self.save_mls_state();
+        // Our own publishes never trial-decrypt as ours, so without this
+        // the poller would retry this event forever as "unprocessed".
+        self.own_published_tags.insert(encrypted.tag);
+
+        // Whatever occupied the pair channel before is superseded — a
+        // device drives one pair session at a time (see `api_pair_new`).
+        self.drawbridge.clear_pair();
+        self.sync_session = None;
+        self.pairing_sync_keys = None;
+        self.pairing_session = None;
+        // `None` routes `PairConnected` to `start_sync_session` — the
+        // ring-MLS-encrypted path, not the pairing AEAD.
+        self.pairing_is_new_device = None;
+        self.pending_pair_rendezvous_token = Some(token.to_vec());
+        self.sync_request = Some(SyncRequestSession::request(
+            token,
+            chrono::Utc::now().timestamp_millis(),
+        ));
+
+        let _ = self
+            .bg_tx
+            .send(BgEvent::DrawbridgeSendPairOffer { token: token.to_vec() });
+        let _ = self.bg_tx.send(BgEvent::PublishRingEvent {
+            tag: encrypted.tag,
+            ciphertext: encrypted.ciphertext,
+        });
+        Ok(())
+    }
+
+    /// HTTP `POST /sync/accept` — send this device's history to the
+    /// sibling that asked for it.
+    pub fn api_sync_accept(&mut self) -> Result<()> {
+        if self.client.is_none() {
+            return Err(AppError::NotLoggedIn);
+        }
+        let session = self
+            .sync_request
+            .as_mut()
+            .ok_or_else(|| AppError::Other("no sync request to accept".to_string()))?;
+        let token = session.accept().map_err(AppError::Mls)?;
+
+        self.drawbridge.clear_pair();
+        self.sync_session = None;
+        self.pairing_sync_keys = None;
+        self.pairing_session = None;
+        self.pairing_is_new_device = None;
+        self.pending_pair_rendezvous_token = Some(token.to_vec());
+
+        let _ = self
+            .bg_tx
+            .send(BgEvent::DrawbridgeSendPairJoin { token: token.to_vec() });
+        Ok(())
+    }
+
+    /// HTTP `POST /sync/decline` — refuse a sibling's request.
+    ///
+    /// Local only. With several siblings prompted, one refusal must not
+    /// cancel the requester's outstanding request; it keeps waiting for
+    /// another sibling or for its token to expire.
+    pub fn api_sync_decline(&mut self) -> Result<()> {
+        let session = self
+            .sync_request
+            .as_mut()
+            .ok_or_else(|| AppError::Other("no sync request to decline".to_string()))?;
+        session.decline();
+        Ok(())
+    }
+
+    /// A sibling's `RingMsg::SyncRequest` arrived on the ring.
+    ///
+    /// `device_name` comes from the sender's MLS leaf credential, which is
+    /// why this lane is the ring and not the stealth one: the prompt names
+    /// an authenticated device rather than a self-declared payload field.
+    fn on_sync_request_received(&mut self, token: [u8; 16], device_name: String) {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+
+        // One sync session at a time. A live request of our own, or a
+        // prompt the user is already looking at, outranks a new arrival —
+        // superseding either would yank a decision out from under them.
+        if let Some(existing) = self.sync_request.as_ref() {
+            if !existing.is_terminal() && !existing.is_expired(now_ms) {
+                self.debug_log
+                    .log("sync: ignoring a sibling's request — one is already in flight");
+                return;
+            }
+        }
+        if self.pairing_session.as_ref().is_some_and(|s| !s.is_done()) {
+            self.debug_log
+                .log("sync: ignoring a sibling's request — a pairing is in flight");
+            return;
+        }
+
+        self.debug_log
+            .log(&format!("sync: {device_name} is asking for history"));
+        self.sync_request = Some(SyncRequestSession::received(token, device_name, now_ms));
+        self.focus = Focus::SyncApprove;
     }
 
     // ── Live pairing (QR / text code) device onboarding ─────────────────────

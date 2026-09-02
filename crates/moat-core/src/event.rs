@@ -28,6 +28,13 @@ pub enum EventKind {
     /// order-insensitive. `group_id` and `epoch` are not meaningful
     /// (empty / 0).
     SiblingMsg,
+    /// Application message on the device ring, MLS-encrypted and published
+    /// to the PDS under a ring tag. The payload is a JSON-encoded
+    /// [`crate::RingMsg`]. Unlike [`EventKind::SiblingMsg`] this lane is
+    /// authenticated (the sender's identity comes from its MLS leaf
+    /// credential) and reaches every sibling from one publish, at the cost
+    /// of being epoch-bound like any MLS application message.
+    RingMsg,
     /// Legacy or unknown domain.
     Unknown(String),
 }
@@ -68,6 +75,7 @@ impl EventKind {
             EventKind::Modifier(kind) => kind.as_str_with_domain("modifier"),
             EventKind::SyncApp => "sync.app".to_string(),
             EventKind::SiblingMsg => "sibling.msg".to_string(),
+            EventKind::RingMsg => "ring.msg".to_string(),
             EventKind::Unknown(s) => s.clone(),
         }
     }
@@ -315,6 +323,23 @@ impl Event {
         }
     }
 
+    /// Create a device-ring application event carrying a JSON-encoded
+    /// [`crate::RingMsg`]. MLS-framed like any group message, so `group_id`
+    /// is the ring and `epoch` the ring's current epoch; the sender is
+    /// authenticated by MLS rather than declared in the payload.
+    pub fn ring_msg(group_id: Vec<u8>, epoch: u64, ring_msg_json: Vec<u8>) -> Self {
+        Self {
+            kind: EventKind::RingMsg,
+            group_id,
+            epoch,
+            payload: ring_msg_json,
+            message_id: None,
+            prev_event_hash: None,
+            epoch_fingerprint: None,
+            sender_device_id: None,
+        }
+    }
+
     /// Create a sibling coordination event carrying a JSON-encoded `CoordMsg`
     /// destined for a specific sibling via the stealth lane. `group_id` and
     /// `epoch` are unused (empty / `0`); the sender identifies itself via
@@ -523,6 +548,7 @@ impl<'de> Deserialize<'de> for EventKind {
                 "modifier" => EventKind::Modifier(ModifierKind::from_variant(variant)),
                 "sync" => EventKind::SyncApp,
                 "sibling" if variant == "msg" => EventKind::SiblingMsg,
+                "ring" if variant == "msg" => EventKind::RingMsg,
                 _ => EventKind::Unknown(raw),
             };
             Ok(kind)
