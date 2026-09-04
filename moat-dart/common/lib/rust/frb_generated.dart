@@ -70,7 +70,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -1904131698;
+  int get rustContentHash => -1779187887;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -297,6 +297,44 @@ abstract class RustLibApi extends BaseApi {
   Future<String> crateApiSimpleRingDriverHandleToStateJson(
       {required RingDriverHandle that});
 
+  Uint8List crateApiSimpleSyncRequestSessionHandleAccept(
+      {required SyncRequestSessionHandle that});
+
+  void crateApiSimpleSyncRequestSessionHandleDecline(
+      {required SyncRequestSessionHandle that});
+
+  bool crateApiSimpleSyncRequestSessionHandleExpireIfDue(
+      {required SyncRequestSessionHandle that, required PlatformInt64 nowMs});
+
+  void crateApiSimpleSyncRequestSessionHandleFail(
+      {required SyncRequestSessionHandle that, required SyncFailureDto reason});
+
+  bool crateApiSimpleSyncRequestSessionHandleIsExpired(
+      {required SyncRequestSessionHandle that, required PlatformInt64 nowMs});
+
+  bool crateApiSimpleSyncRequestSessionHandleIsTerminal(
+      {required SyncRequestSessionHandle that});
+
+  void crateApiSimpleSyncRequestSessionHandleOnChannelUp(
+      {required SyncRequestSessionHandle that});
+
+  void crateApiSimpleSyncRequestSessionHandleOnComplete(
+      {required SyncRequestSessionHandle that});
+
+  SyncRequestSessionHandle crateApiSimpleSyncRequestSessionHandleReceived(
+      {required List<int> token,
+      required String deviceName,
+      required PlatformInt64 nowMs});
+
+  SyncRequestSessionHandle crateApiSimpleSyncRequestSessionHandleRequest(
+      {required List<int> token, required PlatformInt64 nowMs});
+
+  Uint8List crateApiSimpleSyncRequestSessionHandleToken(
+      {required SyncRequestSessionHandle that});
+
+  SyncRequestUiStateDto crateApiSimpleSyncRequestSessionHandleUiState(
+      {required SyncRequestSessionHandle that});
+
   Future<void> crateApiSimpleSyncSessionHandleAddConvPlan(
       {required SyncSessionHandle that,
       required List<int> groupId,
@@ -392,8 +430,18 @@ abstract class RustLibApi extends BaseApi {
   Future<ImageProcessResult> crateApiSimpleProcessImageForSend(
       {required List<int> imageBytes});
 
+  Future<Uint8List> crateApiSimpleRingMsgDecodeSyncRequest(
+      {required List<int> payload});
+
+  Future<Uint8List> crateApiSimpleRingMsgEncodeSyncRequest(
+      {required List<int> token});
+
   Future<DrawbridgeChallengeSignature> crateApiSimpleSignDrawbridgeChallenge(
       {required List<int> keyBundle, required List<int> message});
+
+  int crateApiSimpleSyncInventoryCap();
+
+  PlatformInt64 crateApiSimpleSyncRequestTtlMs();
 
   Uint8List? crateApiSimpleTryDecryptStealth(
       {required List<int> scanPrivkey, required List<int> payload});
@@ -426,6 +474,15 @@ abstract class RustLibApi extends BaseApi {
 
   CrossPlatformFinalizerArg
       get rust_arc_decrement_strong_count_RingDriverHandlePtr;
+
+  RustArcIncrementStrongCountFnType
+      get rust_arc_increment_strong_count_SyncRequestSessionHandle;
+
+  RustArcDecrementStrongCountFnType
+      get rust_arc_decrement_strong_count_SyncRequestSessionHandle;
+
+  CrossPlatformFinalizerArg
+      get rust_arc_decrement_strong_count_SyncRequestSessionHandlePtr;
 
   RustArcIncrementStrongCountFnType
       get rust_arc_increment_strong_count_SyncSessionHandle;
@@ -2064,6 +2121,331 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Uint8List crateApiSimpleSyncRequestSessionHandleAccept(
+      {required SyncRequestSessionHandle that}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+            that, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 54)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_prim_u_8_strict,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiSimpleSyncRequestSessionHandleAcceptConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSimpleSyncRequestSessionHandleAcceptConstMeta =>
+      const TaskConstMeta(
+        debugName: "SyncRequestSessionHandle_accept",
+        argNames: ["that"],
+      );
+
+  @override
+  void crateApiSimpleSyncRequestSessionHandleDecline(
+      {required SyncRequestSessionHandle that}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+            that, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 55)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateApiSimpleSyncRequestSessionHandleDeclineConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSimpleSyncRequestSessionHandleDeclineConstMeta =>
+      const TaskConstMeta(
+        debugName: "SyncRequestSessionHandle_decline",
+        argNames: ["that"],
+      );
+
+  @override
+  bool crateApiSimpleSyncRequestSessionHandleExpireIfDue(
+      {required SyncRequestSessionHandle that, required PlatformInt64 nowMs}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+            that, serializer);
+        sse_encode_i_64(nowMs, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 56)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_bool,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateApiSimpleSyncRequestSessionHandleExpireIfDueConstMeta,
+      argValues: [that, nowMs],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta
+      get kCrateApiSimpleSyncRequestSessionHandleExpireIfDueConstMeta =>
+          const TaskConstMeta(
+            debugName: "SyncRequestSessionHandle_expire_if_due",
+            argNames: ["that", "nowMs"],
+          );
+
+  @override
+  void crateApiSimpleSyncRequestSessionHandleFail(
+      {required SyncRequestSessionHandle that,
+      required SyncFailureDto reason}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+            that, serializer);
+        sse_encode_box_autoadd_sync_failure_dto(reason, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 57)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateApiSimpleSyncRequestSessionHandleFailConstMeta,
+      argValues: [that, reason],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSimpleSyncRequestSessionHandleFailConstMeta =>
+      const TaskConstMeta(
+        debugName: "SyncRequestSessionHandle_fail",
+        argNames: ["that", "reason"],
+      );
+
+  @override
+  bool crateApiSimpleSyncRequestSessionHandleIsExpired(
+      {required SyncRequestSessionHandle that, required PlatformInt64 nowMs}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+            that, serializer);
+        sse_encode_i_64(nowMs, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 58)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_bool,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateApiSimpleSyncRequestSessionHandleIsExpiredConstMeta,
+      argValues: [that, nowMs],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSimpleSyncRequestSessionHandleIsExpiredConstMeta =>
+      const TaskConstMeta(
+        debugName: "SyncRequestSessionHandle_is_expired",
+        argNames: ["that", "nowMs"],
+      );
+
+  @override
+  bool crateApiSimpleSyncRequestSessionHandleIsTerminal(
+      {required SyncRequestSessionHandle that}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+            that, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 59)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_bool,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateApiSimpleSyncRequestSessionHandleIsTerminalConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta
+      get kCrateApiSimpleSyncRequestSessionHandleIsTerminalConstMeta =>
+          const TaskConstMeta(
+            debugName: "SyncRequestSessionHandle_is_terminal",
+            argNames: ["that"],
+          );
+
+  @override
+  void crateApiSimpleSyncRequestSessionHandleOnChannelUp(
+      {required SyncRequestSessionHandle that}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+            that, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 60)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiSimpleSyncRequestSessionHandleOnChannelUpConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta
+      get kCrateApiSimpleSyncRequestSessionHandleOnChannelUpConstMeta =>
+          const TaskConstMeta(
+            debugName: "SyncRequestSessionHandle_on_channel_up",
+            argNames: ["that"],
+          );
+
+  @override
+  void crateApiSimpleSyncRequestSessionHandleOnComplete(
+      {required SyncRequestSessionHandle that}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+            that, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 61)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateApiSimpleSyncRequestSessionHandleOnCompleteConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta
+      get kCrateApiSimpleSyncRequestSessionHandleOnCompleteConstMeta =>
+          const TaskConstMeta(
+            debugName: "SyncRequestSessionHandle_on_complete",
+            argNames: ["that"],
+          );
+
+  @override
+  SyncRequestSessionHandle crateApiSimpleSyncRequestSessionHandleReceived(
+      {required List<int> token,
+      required String deviceName,
+      required PlatformInt64 nowMs}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_list_prim_u_8_loose(token, serializer);
+        sse_encode_String(deviceName, serializer);
+        sse_encode_i_64(nowMs, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 62)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData:
+            sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiSimpleSyncRequestSessionHandleReceivedConstMeta,
+      argValues: [token, deviceName, nowMs],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSimpleSyncRequestSessionHandleReceivedConstMeta =>
+      const TaskConstMeta(
+        debugName: "SyncRequestSessionHandle_received",
+        argNames: ["token", "deviceName", "nowMs"],
+      );
+
+  @override
+  SyncRequestSessionHandle crateApiSimpleSyncRequestSessionHandleRequest(
+      {required List<int> token, required PlatformInt64 nowMs}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_list_prim_u_8_loose(token, serializer);
+        sse_encode_i_64(nowMs, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 63)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData:
+            sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiSimpleSyncRequestSessionHandleRequestConstMeta,
+      argValues: [token, nowMs],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSimpleSyncRequestSessionHandleRequestConstMeta =>
+      const TaskConstMeta(
+        debugName: "SyncRequestSessionHandle_request",
+        argNames: ["token", "nowMs"],
+      );
+
+  @override
+  Uint8List crateApiSimpleSyncRequestSessionHandleToken(
+      {required SyncRequestSessionHandle that}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+            that, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 64)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_prim_u_8_strict,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateApiSimpleSyncRequestSessionHandleTokenConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSimpleSyncRequestSessionHandleTokenConstMeta =>
+      const TaskConstMeta(
+        debugName: "SyncRequestSessionHandle_token",
+        argNames: ["that"],
+      );
+
+  @override
+  SyncRequestUiStateDto crateApiSimpleSyncRequestSessionHandleUiState(
+      {required SyncRequestSessionHandle that}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+            that, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 65)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_sync_request_ui_state_dto,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateApiSimpleSyncRequestSessionHandleUiStateConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSimpleSyncRequestSessionHandleUiStateConstMeta =>
+      const TaskConstMeta(
+        debugName: "SyncRequestSessionHandle_ui_state",
+        argNames: ["that"],
+      );
+
+  @override
   Future<void> crateApiSimpleSyncSessionHandleAddConvPlan(
       {required SyncSessionHandle that,
       required List<int> groupId,
@@ -2080,7 +2462,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_sync_message_dto(ourMessages, serializer);
         sse_encode_bool(expectingBatch, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 54, port: port_);
+            funcId: 66, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -2112,7 +2494,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncSessionHandle(
             that, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 55)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 67)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_bool,
@@ -2135,7 +2517,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 56)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 68)!;
       },
       codec: SseCodec(
         decodeSuccessData:
@@ -2170,7 +2552,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_prim_u_8_loose(msgBytes, serializer);
         sse_encode_String(ourDid, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 57, port: port_);
+            funcId: 69, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_sync_output_dto,
@@ -2201,7 +2583,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_conv_state_dto(ourConvs, serializer);
         sse_encode_u_64(ringEpoch, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 58, port: port_);
+            funcId: 70, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_sync_output_dto,
@@ -2233,7 +2615,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_prim_u_8_loose(ciphertextHash, serializer);
         sse_encode_list_prim_u_8_loose(contentHash, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 59, port: port_);
+            funcId: 71, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -2258,7 +2640,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_list_prim_u_8_loose(plaintext, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 60, port: port_);
+            funcId: 72, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_blob_encrypt_result,
@@ -2283,7 +2665,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_list_prim_u_8_loose(hash, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 61, port: port_);
+            funcId: 73, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_thumb_hash_result,
@@ -2315,7 +2697,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_prim_u_8_loose(tag, serializer);
         sse_encode_list_prim_u_8_loose(ciphertext, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 62, port: port_);
+            funcId: 74, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_decrypted_push,
@@ -2345,7 +2727,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             handle, serializer);
         sse_encode_list_prim_u_8_loose(groupId, serializer);
         sse_encode_list_prim_u_8_loose(keyBundle, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 63)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 75)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -2373,7 +2755,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_list_prim_u_8_strict(recipientScanPubkeys, serializer);
         sse_encode_list_prim_u_8_loose(welcomeBytes, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 64, port: port_);
+            funcId: 76, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -2398,7 +2780,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_box_autoadd_event_dto(that, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 65)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 77)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_opt_box_autoadd_reaction_payload_dto,
@@ -2434,7 +2816,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_prim_u_8_loose(senderDeviceId, serializer);
         sse_encode_u_64(fromCounter, serializer);
         sse_encode_u_64(count, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 66)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 78)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_list_prim_u_8_strict,
@@ -2471,7 +2853,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 67)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 79)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_stealth_keypair,
@@ -2495,7 +2877,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 68, port: port_);
+            funcId: 80, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -2517,7 +2899,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 69)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 81)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_u_64,
@@ -2540,7 +2922,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_list_prim_u_8_loose(plaintext, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 70)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 82)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -2563,7 +2945,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_list_prim_u_8_loose(plaintext, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 71)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 83)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_bool,
@@ -2593,7 +2975,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_u_64(counter, serializer);
         sse_encode_list_prim_u_8_loose(ciphertext, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 72, port: port_);
+            funcId: 84, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -2619,7 +3001,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(text, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 73, port: port_);
+            funcId: 85, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_pairing_payload_dto,
@@ -2645,7 +3027,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(uri, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 74, port: port_);
+            funcId: 86, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_pairing_payload_dto,
@@ -2672,7 +3054,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_prim_u_8_loose(token, serializer);
         sse_encode_list_prim_u_8_loose(secret, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 75, port: port_);
+            funcId: 87, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -2699,7 +3081,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_prim_u_8_loose(token, serializer);
         sse_encode_list_prim_u_8_loose(secret, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 76, port: port_);
+            funcId: 88, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -2729,7 +3111,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_u_64(counter, serializer);
         sse_encode_list_prim_u_8_loose(plaintext, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 77, port: port_);
+            funcId: 89, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -2755,7 +3137,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_list_prim_u_8_loose(imageBytes, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 78, port: port_);
+            funcId: 90, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_image_process_result,
@@ -2774,6 +3156,58 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<Uint8List> crateApiSimpleRingMsgDecodeSyncRequest(
+      {required List<int> payload}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_list_prim_u_8_loose(payload, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 91, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_prim_u_8_strict,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiSimpleRingMsgDecodeSyncRequestConstMeta,
+      argValues: [payload],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSimpleRingMsgDecodeSyncRequestConstMeta =>
+      const TaskConstMeta(
+        debugName: "ring_msg_decode_sync_request",
+        argNames: ["payload"],
+      );
+
+  @override
+  Future<Uint8List> crateApiSimpleRingMsgEncodeSyncRequest(
+      {required List<int> token}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_list_prim_u_8_loose(token, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 92, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_prim_u_8_strict,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiSimpleRingMsgEncodeSyncRequestConstMeta,
+      argValues: [token],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSimpleRingMsgEncodeSyncRequestConstMeta =>
+      const TaskConstMeta(
+        debugName: "ring_msg_encode_sync_request",
+        argNames: ["token"],
+      );
+
+  @override
   Future<DrawbridgeChallengeSignature> crateApiSimpleSignDrawbridgeChallenge(
       {required List<int> keyBundle, required List<int> message}) {
     return handler.executeNormal(NormalTask(
@@ -2782,7 +3216,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_prim_u_8_loose(keyBundle, serializer);
         sse_encode_list_prim_u_8_loose(message, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 79, port: port_);
+            funcId: 93, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_drawbridge_challenge_signature,
@@ -2801,6 +3235,52 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  int crateApiSimpleSyncInventoryCap() {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 94)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_u_32,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateApiSimpleSyncInventoryCapConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSimpleSyncInventoryCapConstMeta =>
+      const TaskConstMeta(
+        debugName: "sync_inventory_cap",
+        argNames: [],
+      );
+
+  @override
+  PlatformInt64 crateApiSimpleSyncRequestTtlMs() {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 95)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_i_64,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateApiSimpleSyncRequestTtlMsConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSimpleSyncRequestTtlMsConstMeta =>
+      const TaskConstMeta(
+        debugName: "sync_request_ttl_ms",
+        argNames: [],
+      );
+
+  @override
   Uint8List? crateApiSimpleTryDecryptStealth(
       {required List<int> scanPrivkey, required List<int> payload}) {
     return handler.executeSync(SyncTask(
@@ -2808,7 +3288,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_list_prim_u_8_loose(scanPrivkey, serializer);
         sse_encode_list_prim_u_8_loose(payload, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 80)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 96)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_opt_list_prim_u_8_strict,
@@ -2832,7 +3312,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_list_prim_u_8_loose(padded, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 81)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 97)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -2874,6 +3354,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRingDriverHandle;
 
   RustArcIncrementStrongCountFnType
+      get rust_arc_increment_strong_count_SyncRequestSessionHandle => wire
+          .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle;
+
+  RustArcDecrementStrongCountFnType
+      get rust_arc_decrement_strong_count_SyncRequestSessionHandle => wire
+          .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle;
+
+  RustArcIncrementStrongCountFnType
       get rust_arc_increment_strong_count_SyncSessionHandle => wire
           .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncSessionHandle;
 
@@ -2903,6 +3391,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return RingDriverHandleImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  SyncRequestSessionHandle
+      dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+          dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return SyncRequestSessionHandleImpl.frbInternalDcoDecode(
+        raw as List<dynamic>);
   }
 
   @protected
@@ -2938,6 +3435,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SyncRequestSessionHandle
+      dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+          dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return SyncRequestSessionHandleImpl.frbInternalDcoDecode(
+        raw as List<dynamic>);
+  }
+
+  @protected
   SyncSessionHandle
       dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncSessionHandle(
           dynamic raw) {
@@ -2967,6 +3473,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return RingDriverHandleImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  SyncRequestSessionHandle
+      dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+          dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return SyncRequestSessionHandleImpl.frbInternalDcoDecode(
+        raw as List<dynamic>);
   }
 
   @protected
@@ -3052,6 +3567,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SyncFailureDto dco_decode_box_autoadd_sync_failure_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_sync_failure_dto(raw);
+  }
+
+  @protected
   TickInputsDto dco_decode_box_autoadd_tick_inputs_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_tick_inputs_dto(raw);
@@ -3073,14 +3594,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ConvStateDto dco_decode_conv_state_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 5)
-      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    if (arr.length != 6)
+      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
     return ConvStateDto(
       groupId: dco_decode_list_prim_u_8_strict(arr[0]),
       oldestRkey: dco_decode_opt_String(arr[1]),
       newestRkey: dco_decode_opt_String(arr[2]),
       tipDigest: dco_decode_list_prim_u_8_strict(arr[3]),
       anchors: dco_decode_list_sync_anchor_dto(arr[4]),
+      rkeys: dco_decode_opt_list_String(arr[5]),
     );
   }
 
@@ -3408,6 +3930,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<String>? dco_decode_opt_list_String(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_list_String(raw);
+  }
+
+  @protected
   Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_list_prim_u_8_strict(raw);
@@ -3617,6 +4145,29 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SyncFailureDto dco_decode_sync_failure_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    switch (raw[0]) {
+      case 0:
+        return SyncFailureDto_NoAnswer();
+      case 1:
+        return SyncFailureDto_RequestExpired();
+      case 2:
+        return SyncFailureDto_Declined();
+      case 3:
+        return SyncFailureDto_ChannelClosed(
+          detail: dco_decode_String(raw[1]),
+        );
+      case 4:
+        return SyncFailureDto_PublishFailed(
+          detail: dco_decode_String(raw[1]),
+        );
+      default:
+        throw Exception("unreachable");
+    }
+  }
+
+  @protected
   SyncMessageDto dco_decode_sync_message_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -3656,6 +4207,31 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         );
       case 2:
         return SyncOutputDto_Complete();
+      default:
+        throw Exception("unreachable");
+    }
+  }
+
+  @protected
+  SyncRequestUiStateDto dco_decode_sync_request_ui_state_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    switch (raw[0]) {
+      case 0:
+        return SyncRequestUiStateDto_Idle();
+      case 1:
+        return SyncRequestUiStateDto_AwaitingPeer();
+      case 2:
+        return SyncRequestUiStateDto_AwaitingApproval(
+          deviceName: dco_decode_String(raw[1]),
+        );
+      case 3:
+        return SyncRequestUiStateDto_Active();
+      case 4:
+        return SyncRequestUiStateDto_Complete();
+      case 5:
+        return SyncRequestUiStateDto_Failed(
+          reason: dco_decode_box_autoadd_sync_failure_dto(raw[1]),
+        );
       default:
         throw Exception("unreachable");
     }
@@ -3764,6 +4340,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SyncRequestSessionHandle
+      sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+          SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return SyncRequestSessionHandleImpl.frbInternalSseDecode(
+        sse_decode_usize(deserializer), sse_decode_i_32(deserializer));
+  }
+
+  @protected
   SyncSessionHandle
       sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncSessionHandle(
           SseDeserializer deserializer) {
@@ -3800,6 +4385,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SyncRequestSessionHandle
+      sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+          SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return SyncRequestSessionHandleImpl.frbInternalSseDecode(
+        sse_decode_usize(deserializer), sse_decode_i_32(deserializer));
+  }
+
+  @protected
   SyncSessionHandle
       sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncSessionHandle(
           SseDeserializer deserializer) {
@@ -3832,6 +4426,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return RingDriverHandleImpl.frbInternalSseDecode(
+        sse_decode_usize(deserializer), sse_decode_i_32(deserializer));
+  }
+
+  @protected
+  SyncRequestSessionHandle
+      sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+          SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return SyncRequestSessionHandleImpl.frbInternalSseDecode(
         sse_decode_usize(deserializer), sse_decode_i_32(deserializer));
   }
 
@@ -3927,6 +4530,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SyncFailureDto sse_decode_box_autoadd_sync_failure_dto(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_sync_failure_dto(deserializer));
+  }
+
+  @protected
   TickInputsDto sse_decode_box_autoadd_tick_inputs_dto(
       SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -3953,12 +4563,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_newestRkey = sse_decode_opt_String(deserializer);
     var var_tipDigest = sse_decode_list_prim_u_8_strict(deserializer);
     var var_anchors = sse_decode_list_sync_anchor_dto(deserializer);
+    var var_rkeys = sse_decode_opt_list_String(deserializer);
     return ConvStateDto(
         groupId: var_groupId,
         oldestRkey: var_oldestRkey,
         newestRkey: var_newestRkey,
         tipDigest: var_tipDigest,
-        anchors: var_anchors);
+        anchors: var_anchors,
+        rkeys: var_rkeys);
   }
 
   @protected
@@ -4422,6 +5034,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<String>? sse_decode_opt_list_String(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_list_String(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
   Uint8List? sse_decode_opt_list_prim_u_8_strict(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -4612,6 +5235,29 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SyncFailureDto sse_decode_sync_failure_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var tag_ = sse_decode_i_32(deserializer);
+    switch (tag_) {
+      case 0:
+        return SyncFailureDto_NoAnswer();
+      case 1:
+        return SyncFailureDto_RequestExpired();
+      case 2:
+        return SyncFailureDto_Declined();
+      case 3:
+        var var_detail = sse_decode_String(deserializer);
+        return SyncFailureDto_ChannelClosed(detail: var_detail);
+      case 4:
+        var var_detail = sse_decode_String(deserializer);
+        return SyncFailureDto_PublishFailed(detail: var_detail);
+      default:
+        throw UnimplementedError('');
+    }
+  }
+
+  @protected
   SyncMessageDto sse_decode_sync_message_dto(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_rkey = sse_decode_String(deserializer);
@@ -4663,6 +5309,33 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         return SyncOutputDto_Store(convId: var_convId, messages: var_messages);
       case 2:
         return SyncOutputDto_Complete();
+      default:
+        throw UnimplementedError('');
+    }
+  }
+
+  @protected
+  SyncRequestUiStateDto sse_decode_sync_request_ui_state_dto(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var tag_ = sse_decode_i_32(deserializer);
+    switch (tag_) {
+      case 0:
+        return SyncRequestUiStateDto_Idle();
+      case 1:
+        return SyncRequestUiStateDto_AwaitingPeer();
+      case 2:
+        var var_deviceName = sse_decode_String(deserializer);
+        return SyncRequestUiStateDto_AwaitingApproval(
+            deviceName: var_deviceName);
+      case 3:
+        return SyncRequestUiStateDto_Active();
+      case 4:
+        return SyncRequestUiStateDto_Complete();
+      case 5:
+        var var_reason = sse_decode_box_autoadd_sync_failure_dto(deserializer);
+        return SyncRequestUiStateDto_Failed(reason: var_reason);
       default:
         throw UnimplementedError('');
     }
@@ -4775,6 +5448,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void
+      sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+          SyncRequestSessionHandle self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+        (self as SyncRequestSessionHandleImpl).frbInternalSseEncode(move: true),
+        serializer);
+  }
+
+  @protected
+  void
       sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncSessionHandle(
           SyncSessionHandle self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -4815,6 +5498,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void
+      sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+          SyncRequestSessionHandle self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+        (self as SyncRequestSessionHandleImpl)
+            .frbInternalSseEncode(move: false),
+        serializer);
+  }
+
+  @protected
+  void
       sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncSessionHandle(
           SyncSessionHandle self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -4850,6 +5544,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
         (self as RingDriverHandleImpl).frbInternalSseEncode(move: null),
+        serializer);
+  }
+
+  @protected
+  void
+      sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+          SyncRequestSessionHandle self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+        (self as SyncRequestSessionHandleImpl).frbInternalSseEncode(move: null),
         serializer);
   }
 
@@ -4942,6 +5646,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_sync_failure_dto(
+      SyncFailureDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_sync_failure_dto(self, serializer);
+  }
+
+  @protected
   void sse_encode_box_autoadd_tick_inputs_dto(
       TickInputsDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -4968,6 +5679,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_opt_String(self.newestRkey, serializer);
     sse_encode_list_prim_u_8_strict(self.tipDigest, serializer);
     sse_encode_list_sync_anchor_dto(self.anchors, serializer);
+    sse_encode_opt_list_String(self.rkeys, serializer);
   }
 
   @protected
@@ -5347,6 +6059,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_opt_list_String(
+      List<String>? self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_list_String(self, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_opt_list_prim_u_8_strict(
       Uint8List? self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -5527,6 +6250,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_sync_failure_dto(
+      SyncFailureDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    switch (self) {
+      case SyncFailureDto_NoAnswer():
+        sse_encode_i_32(0, serializer);
+      case SyncFailureDto_RequestExpired():
+        sse_encode_i_32(1, serializer);
+      case SyncFailureDto_Declined():
+        sse_encode_i_32(2, serializer);
+      case SyncFailureDto_ChannelClosed(detail: final detail):
+        sse_encode_i_32(3, serializer);
+        sse_encode_String(detail, serializer);
+      case SyncFailureDto_PublishFailed(detail: final detail):
+        sse_encode_i_32(4, serializer);
+        sse_encode_String(detail, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_sync_message_dto(
       SyncMessageDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -5561,6 +6304,28 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_sync_message_dto(messages, serializer);
       case SyncOutputDto_Complete():
         sse_encode_i_32(2, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_sync_request_ui_state_dto(
+      SyncRequestUiStateDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    switch (self) {
+      case SyncRequestUiStateDto_Idle():
+        sse_encode_i_32(0, serializer);
+      case SyncRequestUiStateDto_AwaitingPeer():
+        sse_encode_i_32(1, serializer);
+      case SyncRequestUiStateDto_AwaitingApproval(deviceName: final deviceName):
+        sse_encode_i_32(2, serializer);
+        sse_encode_String(deviceName, serializer);
+      case SyncRequestUiStateDto_Active():
+        sse_encode_i_32(3, serializer);
+      case SyncRequestUiStateDto_Complete():
+        sse_encode_i_32(4, serializer);
+      case SyncRequestUiStateDto_Failed(reason: final reason):
+        sse_encode_i_32(5, serializer);
+        sse_encode_box_autoadd_sync_failure_dto(reason, serializer);
     }
   }
 
@@ -6093,6 +6858,93 @@ class RingDriverHandleImpl extends RustOpaque implements RingDriverHandle {
   /// Serialise the current ring state as JSON.
   Future<String> toStateJson() =>
       RustLib.instance.api.crateApiSimpleRingDriverHandleToStateJson(
+        that: this,
+      );
+}
+
+@sealed
+class SyncRequestSessionHandleImpl extends RustOpaque
+    implements SyncRequestSessionHandle {
+  // Not to be used by end users
+  SyncRequestSessionHandleImpl.frbInternalDcoDecode(List<dynamic> wire)
+      : super.frbInternalDcoDecode(wire, _kStaticData);
+
+  // Not to be used by end users
+  SyncRequestSessionHandleImpl.frbInternalSseDecode(
+      BigInt ptr, int externalSizeOnNative)
+      : super.frbInternalSseDecode(ptr, externalSizeOnNative, _kStaticData);
+
+  static final _kStaticData = RustArcStaticData(
+    rustArcIncrementStrongCount: RustLib
+        .instance.api.rust_arc_increment_strong_count_SyncRequestSessionHandle,
+    rustArcDecrementStrongCount: RustLib
+        .instance.api.rust_arc_decrement_strong_count_SyncRequestSessionHandle,
+    rustArcDecrementStrongCountPtr: RustLib.instance.api
+        .rust_arc_decrement_strong_count_SyncRequestSessionHandlePtr,
+  );
+
+  /// The user approved a sibling's request. Returns the token to
+  /// `pair_join` with; errors if no decision is outstanding.
+  Uint8List accept() =>
+      RustLib.instance.api.crateApiSimpleSyncRequestSessionHandleAccept(
+        that: this,
+      );
+
+  /// The user declined. Local only — nothing goes on the wire, so one
+  /// refusal among several prompted siblings doesn't cancel the request.
+  void decline() =>
+      RustLib.instance.api.crateApiSimpleSyncRequestSessionHandleDecline(
+        that: this,
+      );
+
+  /// Move an unanswered session to `Failed` once its rendezvous has
+  /// outlived the relay's token TTL. Returns `true` only on the call
+  /// that changed the state, so a host driving this from a periodic
+  /// tick has exactly one edge to react to.
+  bool expireIfDue({required PlatformInt64 nowMs}) =>
+      RustLib.instance.api.crateApiSimpleSyncRequestSessionHandleExpireIfDue(
+          that: this, nowMs: nowMs);
+
+  /// Terminal failure. The first reason wins — a late teardown notice
+  /// never overwrites the failure that explains the outcome, nor a
+  /// completed transfer.
+  void fail({required SyncFailureDto reason}) => RustLib.instance.api
+      .crateApiSimpleSyncRequestSessionHandleFail(that: this, reason: reason);
+
+  /// `true` once the rendezvous token has outlived the relay's TTL. Only
+  /// the rendezvous is bounded; a session that reached the channel runs
+  /// to completion however long the transfer takes.
+  bool isExpired({required PlatformInt64 nowMs}) =>
+      RustLib.instance.api.crateApiSimpleSyncRequestSessionHandleIsExpired(
+          that: this, nowMs: nowMs);
+
+  /// `true` once the session can no longer change state.
+  bool isTerminal() =>
+      RustLib.instance.api.crateApiSimpleSyncRequestSessionHandleIsTerminal(
+        that: this,
+      );
+
+  /// The pair channel reached `paired`.
+  void onChannelUp() =>
+      RustLib.instance.api.crateApiSimpleSyncRequestSessionHandleOnChannelUp(
+        that: this,
+      );
+
+  /// The sync session running on this channel reported `Complete`.
+  void onComplete() =>
+      RustLib.instance.api.crateApiSimpleSyncRequestSessionHandleOnComplete(
+        that: this,
+      );
+
+  /// The rendezvous token this session is bound to.
+  Uint8List token() =>
+      RustLib.instance.api.crateApiSimpleSyncRequestSessionHandleToken(
+        that: this,
+      );
+
+  /// Current projection. Computed fresh, never cached.
+  SyncRequestUiStateDto uiState() =>
+      RustLib.instance.api.crateApiSimpleSyncRequestSessionHandleUiState(
         that: this,
       );
 }

@@ -11,8 +11,8 @@
 //! approves, exactly as with pairing: the human is the sequencer.
 
 use moat_core::sync_request::{
-    decode_ring_msg, encode_ring_msg, RingMsg, SyncRequestSession, SyncRequestUiState,
-    SYNC_REQUEST_TTL_MS,
+    decode_ring_msg, encode_ring_msg, RingMsg, SyncFailure, SyncRequestSession,
+    SyncRequestUiState, SYNC_REQUEST_TTL_MS,
 };
 
 fn token(b: u8) -> [u8; 16] {
@@ -114,7 +114,10 @@ fn declining_is_terminal_and_local() {
     // cancel the requester's outstanding request.
     let mut session = SyncRequestSession::received(token(2), "Alice's laptop".into(), 5_000);
     session.decline();
-    assert!(matches!(session.ui_state(), SyncRequestUiState::Failed { .. }));
+    assert_eq!(
+        session.ui_state(),
+        SyncRequestUiState::Failed { reason: SyncFailure::Declined }
+    );
     assert!(session.accept().is_err(), "a declined session must not be acceptable");
 }
 
@@ -136,10 +139,12 @@ fn an_unanswered_prompt_expires_with_the_token() {
 #[test]
 fn failure_retains_its_reason() {
     let mut session = SyncRequestSession::request(token(1), 1_000);
-    session.fail("relay refused the offer".into());
+    session.fail(SyncFailure::PublishFailed { detail: "relay refused".into() });
     assert_eq!(
         session.ui_state(),
-        SyncRequestUiState::Failed { reason: "relay refused the offer".into() }
+        SyncRequestUiState::Failed {
+            reason: SyncFailure::PublishFailed { detail: "relay refused".into() }
+        }
     );
 }
 
@@ -148,17 +153,80 @@ fn a_later_failure_does_not_overwrite_a_completed_session() {
     let mut session = SyncRequestSession::request(token(1), 1_000);
     session.on_channel_up().expect("channel up");
     session.on_complete();
-    session.fail("late teardown notice".into());
+    session.fail(SyncFailure::ChannelClosed { detail: "late teardown".into() });
     assert_eq!(session.ui_state(), SyncRequestUiState::Complete);
 }
 
 #[test]
 fn a_later_failure_does_not_overwrite_an_earlier_one() {
     let mut session = SyncRequestSession::request(token(1), 1_000);
-    session.fail("first".into());
-    session.fail("second".into());
+    session.fail(SyncFailure::NoAnswer);
+    session.fail(SyncFailure::Declined);
     assert_eq!(
         session.ui_state(),
-        SyncRequestUiState::Failed { reason: "first".into() }
+        SyncRequestUiState::Failed { reason: SyncFailure::NoAnswer }
     );
+}
+
+// ── The answer deadline ───────────────────────────────────────────────────────
+
+#[test]
+fn an_unanswered_request_fails_once_its_token_expires() {
+    let mut session = SyncRequestSession::request(token(1), 1_000);
+    assert!(!session.expire_if_due(1_000 + SYNC_REQUEST_TTL_MS - 1));
+    assert_eq!(session.ui_state(), SyncRequestUiState::AwaitingPeer);
+
+    assert!(session.expire_if_due(1_000 + SYNC_REQUEST_TTL_MS));
+    assert_eq!(
+        session.ui_state(),
+        SyncRequestUiState::Failed { reason: SyncFailure::NoAnswer },
+        "the device that asked hears that nobody answered"
+    );
+}
+
+#[test]
+fn an_unanswered_prompt_fails_once_its_token_expires() {
+    // The responder side times out too: a prompt whose token has died must
+    // not still offer to send, since the rendezvous can no longer be joined.
+    let mut session = SyncRequestSession::received(token(2), "Alice's laptop".into(), 5_000);
+    assert!(session.expire_if_due(5_000 + SYNC_REQUEST_TTL_MS));
+    assert_eq!(
+        session.ui_state(),
+        SyncRequestUiState::Failed { reason: SyncFailure::RequestExpired },
+        "the prompted device hears that the request expired, not that \
+         'no device answered' — it is the device with the history"
+    );
+    assert!(
+        session.accept().is_err(),
+        "an expired prompt must not be acceptable"
+    );
+}
+
+#[test]
+fn a_transfer_in_progress_is_never_expired() {
+    // Only the rendezvous is bounded. A large history can legitimately take
+    // longer to move than the relay allows for *finding* a peer.
+    let mut session = SyncRequestSession::request(token(1), 1_000);
+    session.on_channel_up().expect("channel up");
+    assert!(!session.expire_if_due(1_000 + SYNC_REQUEST_TTL_MS * 10));
+    assert_eq!(session.ui_state(), SyncRequestUiState::Active);
+}
+
+#[test]
+fn expiry_does_not_overwrite_a_completed_session() {
+    let mut session = SyncRequestSession::request(token(1), 1_000);
+    session.on_channel_up().expect("channel up");
+    session.on_complete();
+    assert!(!session.expire_if_due(1_000 + SYNC_REQUEST_TTL_MS * 10));
+    assert_eq!(session.ui_state(), SyncRequestUiState::Complete);
+}
+
+#[test]
+fn expiring_twice_reports_the_change_only_once() {
+    // Hosts call this from a periodic tick, so a second call must be a
+    // no-op rather than a fresh state change to react to.
+    let mut session = SyncRequestSession::request(token(1), 1_000);
+    let now = 1_000 + SYNC_REQUEST_TTL_MS;
+    assert!(session.expire_if_due(now));
+    assert!(!session.expire_if_due(now));
 }

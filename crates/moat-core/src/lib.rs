@@ -82,8 +82,8 @@ pub use crate::sync::{
     SyncOutput, SyncSession,
 };
 pub use crate::sync_request::{
-    decode_ring_msg, encode_ring_msg, RingMsg, SyncRequestSession, SyncRequestUiState,
-    SYNC_REQUEST_TOKEN_LEN, SYNC_REQUEST_TTL_MS,
+    decode_ring_msg, encode_ring_msg, RingMsg, SyncFailure, SyncRequestSession,
+    SyncRequestUiState, SYNC_REQUEST_TOKEN_LEN, SYNC_REQUEST_TTL_MS,
 };
 pub use crate::pairing::{
     crockford_decode, crockford_encode, decode_pairing_msg, derive_pairing_keys,

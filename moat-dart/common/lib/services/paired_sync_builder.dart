@@ -141,12 +141,17 @@ Future<ffi.ConvStateDto?> _convStateFor(
       oldestRkey = rkeys.first;
       newestRkey = rkeys.last;
     }
+    // The rkeys we hold, so the peer sends exactly the complement rather
+    // than its whole history. Omitted past the cap, where the peer falls
+    // back to serving everything (`ConvStateDto.rkeys`).
+    final rkeys = ourMessages.map((m) => m.rkey).toList(growable: false);
     return ffi.ConvStateDto(
       groupId: conv.groupId,
       oldestRkey: oldestRkey,
       newestRkey: newestRkey,
       tipDigest: tip ?? Uint8List(32),
       anchors: anchors,
+      rkeys: rkeys.length <= ffi.syncInventoryCap() ? rkeys : null,
     );
   } catch (e) {
     moatLog('buildPairedSyncSession: convState failed for ${conv.groupIdHex}: $e');

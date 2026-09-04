@@ -10,7 +10,7 @@ part 'simple.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `credential_from_dto`, `from_core`, `into_core`, `payload_from_core`, `payload_to_core`, `push_media_label`, `push_plaintext_preview`, `sibling_info_to_core`, `to_core_sibling_stealth`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `MoatError`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 /// Generate a stealth keypair. Returns (private_key, public_key) each 32 bytes.
 StealthKeypair generateStealthKeypair() =>
@@ -147,6 +147,26 @@ Future<String> pairingPayloadToUri(
 /// Decode a `moat-pair:` URI back into token+secret.
 Future<PairingPayloadDto> pairingPayloadFromUri({required String uri}) =>
     RustLib.instance.api.crateApiSimplePairingPayloadFromUri(uri: uri);
+
+/// Encode a `RingMsg::SyncRequest` for publication on the device ring as
+/// an `EventKindDto::RingMsg` event payload.
+Future<Uint8List> ringMsgEncodeSyncRequest({required List<int> token}) =>
+    RustLib.instance.api.crateApiSimpleRingMsgEncodeSyncRequest(token: token);
+
+/// Decode a `ring.msg` payload and return the sync request's rendezvous
+/// token. Errors on anything that is not a well-formed `RingMsg`.
+Future<Uint8List> ringMsgDecodeSyncRequest({required List<int> payload}) =>
+    RustLib.instance.api
+        .crateApiSimpleRingMsgDecodeSyncRequest(payload: payload);
+
+/// How long a published sync request stays valid, matching the relay's
+/// token TTL.
+PlatformInt64 syncRequestTtlMs() =>
+    RustLib.instance.api.crateApiSimpleSyncRequestTtlMs();
+
+/// Above this many messages in one conversation a host omits the rkey
+/// inventory from its `ConvStateDto` — see `ConvStateDto::rkeys`.
+int syncInventoryCap() => RustLib.instance.api.crateApiSimpleSyncInventoryCap();
 
 /// Seal a frame with AES-128-GCM under the pairing channel's directional
 /// key (`key` must be 16 bytes — one of `channel_key_new_to_old`/
@@ -484,6 +504,65 @@ abstract class RingDriverHandle implements RustOpaqueInterface {
   Future<String> toStateJson();
 }
 
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SyncRequestSessionHandle>>
+abstract class SyncRequestSessionHandle implements RustOpaqueInterface {
+  /// The user approved a sibling's request. Returns the token to
+  /// `pair_join` with; errors if no decision is outstanding.
+  Uint8List accept();
+
+  /// The user declined. Local only — nothing goes on the wire, so one
+  /// refusal among several prompted siblings doesn't cancel the request.
+  void decline();
+
+  /// Move an unanswered session to `Failed` once its rendezvous has
+  /// outlived the relay's token TTL. Returns `true` only on the call
+  /// that changed the state, so a host driving this from a periodic
+  /// tick has exactly one edge to react to.
+  bool expireIfDue({required PlatformInt64 nowMs});
+
+  /// Terminal failure. The first reason wins — a late teardown notice
+  /// never overwrites the failure that explains the outcome, nor a
+  /// completed transfer.
+  void fail({required SyncFailureDto reason});
+
+  /// `true` once the rendezvous token has outlived the relay's TTL. Only
+  /// the rendezvous is bounded; a session that reached the channel runs
+  /// to completion however long the transfer takes.
+  bool isExpired({required PlatformInt64 nowMs});
+
+  /// `true` once the session can no longer change state.
+  bool isTerminal();
+
+  /// The pair channel reached `paired`.
+  void onChannelUp();
+
+  /// The sync session running on this channel reported `Complete`.
+  void onComplete();
+
+  /// A sibling's request arrived on the ring. `device_name` must come
+  /// from the sender's MLS leaf credential, not from the payload.
+  static SyncRequestSessionHandle received(
+          {required List<int> token,
+          required String deviceName,
+          required PlatformInt64 nowMs}) =>
+      RustLib.instance.api.crateApiSimpleSyncRequestSessionHandleReceived(
+          token: token, deviceName: deviceName, nowMs: nowMs);
+
+  /// Start a request of our own. The caller publishes
+  /// `ring_msg_encode_sync_request(token)` on the ring and registers the
+  /// same token with the relay via `pair_offer`.
+  static SyncRequestSessionHandle request(
+          {required List<int> token, required PlatformInt64 nowMs}) =>
+      RustLib.instance.api.crateApiSimpleSyncRequestSessionHandleRequest(
+          token: token, nowMs: nowMs);
+
+  /// The rendezvous token this session is bound to.
+  Uint8List token();
+
+  /// Current projection. Computed fresh, never cached.
+  SyncRequestUiStateDto uiState();
+}
+
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SyncSessionHandle>>
 abstract class SyncSessionHandle implements RustOpaqueInterface {
   /// Populate the plan for one conversation before calling `on_paired`.
@@ -555,6 +634,7 @@ class ConvStateDto {
   final String? newestRkey;
   final Uint8List tipDigest;
   final List<SyncAnchorDto> anchors;
+  final List<String>? rkeys;
 
   const ConvStateDto({
     required this.groupId,
@@ -562,6 +642,7 @@ class ConvStateDto {
     this.newestRkey,
     required this.tipDigest,
     required this.anchors,
+    this.rkeys,
   });
 
   @override
@@ -570,7 +651,8 @@ class ConvStateDto {
       oldestRkey.hashCode ^
       newestRkey.hashCode ^
       tipDigest.hashCode ^
-      anchors.hashCode;
+      anchors.hashCode ^
+      rkeys.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -581,7 +663,8 @@ class ConvStateDto {
           oldestRkey == other.oldestRkey &&
           newestRkey == other.newestRkey &&
           tipDigest == other.tipDigest &&
-          anchors == other.anchors;
+          anchors == other.anchors &&
+          rkeys == other.rkeys;
 }
 
 /// Credential fields for a group member or key package.
@@ -825,6 +908,7 @@ enum EventKindDto {
   checkpoint,
   reaction,
   syncApp,
+  ringMsg,
   unknown,
   ;
 }
@@ -1192,6 +1276,30 @@ class SyncAnchorDto {
           digest == other.digest;
 }
 
+@freezed
+sealed class SyncFailureDto with _$SyncFailureDto {
+  const SyncFailureDto._();
+
+  /// Requester: nobody joined the rendezvous before it expired.
+  const factory SyncFailureDto.noAnswer() = SyncFailureDto_NoAnswer;
+
+  /// Responder: the request expired before this device answered it.
+  const factory SyncFailureDto.requestExpired() = SyncFailureDto_RequestExpired;
+
+  /// This device's user declined a sibling's request.
+  const factory SyncFailureDto.declined() = SyncFailureDto_Declined;
+
+  /// The pair channel closed before the transfer finished.
+  const factory SyncFailureDto.channelClosed({
+    required String detail,
+  }) = SyncFailureDto_ChannelClosed;
+
+  /// The request could not be published to the ring at all.
+  const factory SyncFailureDto.publishFailed({
+    required String detail,
+  }) = SyncFailureDto_PublishFailed;
+}
+
 class SyncMessageDto {
   final String rkey;
   final Uint8List? messageId;
@@ -1284,6 +1392,36 @@ sealed class SyncOutputDto with _$SyncOutputDto {
 
   /// Sync is complete; close the pair WS and tear down.
   const factory SyncOutputDto.complete() = SyncOutputDto_Complete;
+}
+
+@freezed
+sealed class SyncRequestUiStateDto with _$SyncRequestUiStateDto {
+  const SyncRequestUiStateDto._();
+
+  /// No sync request in flight. The handle itself never returns this;
+  /// a host wrapping an optional session reports it when there is none.
+  const factory SyncRequestUiStateDto.idle() = SyncRequestUiStateDto_Idle;
+
+  /// Waiting on the rendezvous, in either role.
+  const factory SyncRequestUiStateDto.awaitingPeer() =
+      SyncRequestUiStateDto_AwaitingPeer;
+
+  /// A sibling asked for history; this device's user has not decided.
+  const factory SyncRequestUiStateDto.awaitingApproval({
+    required String deviceName,
+  }) = SyncRequestUiStateDto_AwaitingApproval;
+
+  /// Channel up, transfer running.
+  const factory SyncRequestUiStateDto.active() = SyncRequestUiStateDto_Active;
+
+  /// Transfer finished.
+  const factory SyncRequestUiStateDto.complete() =
+      SyncRequestUiStateDto_Complete;
+
+  /// Terminal failure, with the structured reason retained.
+  const factory SyncRequestUiStateDto.failed({
+    required SyncFailureDto reason,
+  }) = SyncRequestUiStateDto_Failed;
 }
 
 class ThumbHashResult {

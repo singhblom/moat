@@ -217,9 +217,11 @@ Every event’s `kind` is now namespaced as `<domain>.<variant>`:
 | `control.*` | `control.commit`, `control.welcome`, `control.checkpoint` | MLS state management and coordination; payload is TLS-serialized bytes. No `message_id` is present. |
 | `message.*` | `message.short_text`, `message.medium_text`, `message.long_text`, `message.image` | User-visible content plus optional previews/external blobs. Each carries a 16-byte `message_id`. |
 | `modifier.*` | `modifier.reaction` (more to follow) | Small toggles or annotations that reference an existing `message_id`. |
-| `coord` | — | Multi-device coordination, as an MLS application message over a `DeviceCoord` group. Payload is `CoordMsg` JSON. See [Coordination Messages](#coordination-messages). |
 | `sync.app` | — | History-sync frames over the Drawbridge pair WebSocket, encrypted to the device ring. |
 | `sibling.msg` | — | Steady-state same-user coordination addressed to one sibling. Payload is `CoordMsg` JSON (`kp_batch` / `kp_request` / `user_conv_welcome`); the sender's device id travels in `Event.sender_device_id`. Stealth-encrypted, not MLS-framed. `group_id` empty, `epoch` 0. |
+| `ring.msg` | — | Same-user coordination broadcast to *every* sibling at once, as an MLS application message on the device ring and published to the PDS under a ring tag. Payload is `RingMsg` JSON (`sync_request`). The sender is authenticated by its MLS leaf credential, not declared in the payload. |
+
+The two same-user lanes differ deliberately. `sibling.msg` is unicast, stealth-addressed, epoch-free and order-insensitive, which is what key-package traffic needs because it peaks exactly when ring epochs churn. `ring.msg` is the opposite trade: one publish reaches every sibling and MLS authenticates the sender, at the cost of being epoch-bound like any group message — so it carries only traffic that a device far enough behind may simply miss.
 
 `sibling.msg` is the only event kind that is stealth-encrypted rather than MLS-framed, and the only one whose `group_id`/`epoch` carry no meaning. It is recognised by attempting stealth decryption during the [Own-PDS Stealth Scan](#own-pds-stealth-scan).
 
@@ -380,33 +382,37 @@ Each client uses two sockets simultaneously during a sync:
 #### Handshake
 
 1. Both clients are already authenticated on `/ws`.
-2. Out of band (via a ring MLS message in the device ring group), the offerer and joiner agree on a random 32-byte token (hex-encoded, 64 chars).
+2. Both sides already share a token: it is carried in the pairing code the user scanned or typed (see [Live Pairing](#live-pairing)). The relay treats it as an opaque string.
 3. On the main WS:
    - Offerer: `→ pair_offer{token}` / Relay: `→ pair_pending{token}`
    - Joiner: `→ pair_join{token}` / Relay: `→ pair_ready{token, pair_url}` (sent to both)
 4. Each client opens a new WebSocket to `pair_url` (`wss://<relay>/pair`).
 5. First frame on the pair WS (JSON): `pair_attach{token}`. No DID challenge — the token is the auth.
 6. Once both sides have attached, relay sends `paired` on both pair WSes. From then on, only opaque binary frames flow; the relay forwards them verbatim.
-7. Either side closing its pair WS ends the session. The relay sends `pair_closed{reason}` on the main WS to the surviving peer.
+7. Either side closing its pair WS ends the session. The relay sends `pair_closed{token, reason}` on the main WS to the surviving peer.
+
+`pair_ready.pair_url` is derived per recipient from the address that recipient used to reach the relay, not from a single relay-wide value: two devices on the same relay may legitimately reach it at different addresses (an Android emulator via `10.0.2.2` while a desktop client uses `127.0.0.1`).
+
+`pair_closed` carries the `token` of the session it refers to. A device pairs sequentially, and a close notice for round N-1 routinely arrives *after* round N has begun — it is emitted when the previous pair WS closes, which is part of normal completion. Clients MUST match the token against the session currently in flight and ignore non-matching notices; acting on a stale one tears down a healthy successor.
 
 #### Wire Schemas
 
 Main WS (client → relay):
 ```
-{ "type": "pair_offer", "token": "<64-hex>" }
-{ "type": "pair_join",  "token": "<64-hex>" }
+{ "type": "pair_offer", "token": "<base64-16-bytes>" }
+{ "type": "pair_join",  "token": "<base64-16-bytes>" }
 ```
 
 Main WS (relay → client):
 ```
-{ "type": "pair_pending", "token": "<64-hex>" }
-{ "type": "pair_ready",   "token": "<64-hex>", "pair_url": "wss://<relay>/pair" }
-{ "type": "pair_closed",  "reason": "<peer_gone|byte_cap|ttl_expired|...>" }
+{ "type": "pair_pending", "token": "<base64-16-bytes>" }
+{ "type": "pair_ready",   "token": "<base64-16-bytes>", "pair_url": "wss://<relay>/pair" }
+{ "type": "pair_closed",  "token": "<base64-16-bytes>", "reason": "<peer_gone|byte_cap|ttl_expired|...>" }
 ```
 
 Pair WS (client → relay, first frame only):
 ```
-{ "type": "pair_attach", "token": "<64-hex>" }
+{ "type": "pair_attach", "token": "<base64-16-bytes>" }
 ```
 
 Pair WS (relay → client, sent once both sides attached):
@@ -421,6 +427,7 @@ Pair WS (after `paired`): raw binary WebSocket frames forwarded verbatim.
 | Parameter | Value |
 |---|---|
 | Token TTL | 5 minutes from `pair_offer` |
+| Token length | 16 bytes (`PAIRING_TOKEN_LEN`), base64 on the wire |
 | Max attaches per token | 2 (offer + join) |
 | Max frame size (pair WS) | 1 MiB |
 | Max bytes per session | 256 MiB |
@@ -431,14 +438,15 @@ Exceeding the byte cap closes both pair WSes and delivers `pair_closed{reason:"b
 #### Security and Privacy
 
 - **Tokens are capabilities**: a 32-byte random token is issued only over an authenticated main WS and is valid for two attaches within 5 minutes. The relay does not verify that both sides share the same DID — that trust comes from the MLS device ring session layered on top.
-- **Content opacity**: the relay sees only opaque binary frames after `pair_attach`. All payload data is encrypted as MLS application messages inside the device ring before being handed to the pair WS.
+- **Content opacity**: the relay sees only opaque binary frames after `pair_attach`. Onboarding traffic is sealed under the pairing channel AEAD (see [Channel crypto](#channel-crypto)); traffic between already-established devices is encrypted as MLS application messages inside the device ring. Either way the relay holds no key.
 - **Tokens are never logged**: attach tokens are treated as credentials and omitted from relay logs at all severity levels.
 - **Byte metrics are aggregated**: per-session byte counts are tracked internally for cap enforcement but exposed only as relay-wide totals in `/metrics`, never per-session.
-- **TLS + MLS**: Drawbridge TLS protects against network observers; the device ring MLS session provides end-to-end confidentiality and mutual authentication between devices, protecting against the relay operator.
+- **TLS + end-to-end**: Drawbridge TLS protects against network observers; the pairing AEAD (onboarding) or the device ring MLS session (established devices) provides end-to-end confidentiality against the relay operator.
+- **Challenge binding**: the main-WS auth challenge is signed over the relay URL *as the client dialled it*. The relay reconstructs that string from `RELAY_PUBLIC_URL`, then proxy headers, then the request's own `Host` header — never a fixed relay-wide default, which would reject any client reaching the relay by another address.
 
 ## Multi-device
 
-A user may run Moat on multiple devices simultaneously. Each device has one MLS signing key, a stealth keypair, and a tag derivation stream, but they all share the same ATProto DID. The sections below describe how devices discover each other, establish shared encrypted channels, and coordinate without exposing the multi-device relationship to outside observers.
+A user may run Moat on multiple devices simultaneously. Each device has one MLS signing key, a stealth keypair, and a tag derivation stream, but they all share the same ATProto DID. A device joins the set through an explicit, user-driven pairing — there is no asynchronous discovery or negotiation between devices — after which they share a hidden MLS group and coordinate over it without exposing the multi-device relationship to outside observers.
 
 ### Signing-key Identity
 
@@ -446,8 +454,9 @@ A device has exactly **one** signing key, generated at first login and stored at
 
 | Lane | KeyPackage published to | Consumed by |
 |---|---|---|
-| Public pool | `social.moat.keyPackage` on the PDS (public) | Another user inviting us to a conversation, or a sibling opening a coord group / adding us to a ring |
+| Public pool | `social.moat.keyPackage` on the PDS (public) | Another user inviting us to a conversation |
 | Same-user KP lane | `CoordMsg::KpBatch` over stealth to one sibling | That sibling, to fan us into a conversation |
+| Pairing channel | `Enroll.ring_kp` / `Enroll.conv_kps`, handed over the pairing channel | The approving device, for the ring Add and conversation fan-out |
 
 Only the init and encryption keys are fresh per KeyPackage, which is what keeps every KeyPackage single-use and keeps two concurrent consumers from claiming the same one.
 
@@ -455,104 +464,214 @@ Reusing the signing key is required, not an optimization. A leaf's signing key i
 
 ### Device Ring
 
-The device ring is a hidden N-party MLS group that spans all devices registered under the same DID. It serves as the shared encrypted coordination channel for sync signals and future history transfer.
+The device ring is a hidden N-party MLS group spanning all devices registered under the same DID. It is the shared encrypted channel between a user's own devices, and the trust root mapping `device_id → signature key` for siblings.
 
-- **Group ID**: 32 random bytes generated by the creating device. The ID is not derived from the DID so that independent ring creations produce distinct MLS groups, making split-brain an application-layer problem.
-- **GroupKind tagging**: every MLS group is tagged locally with one of `{ User, Ring, DeviceCoord }` in group metadata. `list_conversations` filters to `User` only, so the ring and all coordination groups are invisible to the UI and to the beacon test's `list_conversations` assertion.
-- **Created once**: the ring is not created until at least two sibling devices have exchanged a `Hello` coordination message. A DID with a single active device has no ring.
-- **Lifecycle**: the ring is kept indefinitely. Device removal (future feature) issues an MLS Remove commit on the ring and all user conversations.
+- **Group ID**: 32 random bytes generated by the creating device — not derived from the DID.
+- **GroupKind tagging**: every MLS group is tagged locally as `User` or `Ring` in group metadata. `list_conversations` filters to `User`, so the ring is invisible to the UI.
+- **Created by the first pairing**: no ring exists while a DID has one device. The ring is created by the approving device inside `PairingSession::approve` (see [Live Pairing](#live-pairing)); every later device is added to that same ring by whichever device approves it.
+- **Lifecycle**: kept indefinitely. Device removal (future feature) issues an MLS Remove commit on the ring and all user conversations.
 
-### Device Coordination Groups
+Rings cannot compete. A ring only ever comes into existence through an approved pairing, and a device that pairs into an existing ring is *added* to it rather than forming its own — so there is no generation counter, no reconciliation ordering, and no supersession path. Concurrent commits on the single ring are the ordinary MLS case, handled by `PendingOperation` conflict recovery.
 
-For every pair of sibling devices, a hidden pairwise MLS group (`GroupKind::DeviceCoord`) is created on first discovery and kept indefinitely. Coordination groups serve as the reliable out-of-band bootstrap channel and survive arbitrary offline windows because the creator's Welcome is published as a stealth event on the PDS and persists until the sibling polls.
+### Live Pairing
 
-**Bootstrap sequence:**
+Onboarding a device is an explicit, user-driven act: the new device displays a code, the user enters it on a device already signed in, and that device approves. Both devices are in the user's hands at the same time, which is what lets the exchange be synchronous and authenticated without any prior shared channel.
 
-1. Device `D_new` publishes a key package on its PDS.
-2. On the next `ring_tick`, `D_new` fetches all key packages under its DID and discovers sibling devices `D1, D2, …` it has no coord group with yet.
-3. For each new sibling, `D_new` draws that sibling's newest unburned pool record (see [Bootstrap: drawing from the public pool](#bootstrap-drawing-from-the-public-pool)), calls `create_device_coord_group`, stealth-encrypts the Welcome (same stealth scheme as regular conversation invites), and publishes it to its own PDS with a random tag. This is the first of the two draws `D_new` makes against each sibling; the ring `add_device` is the second. Coord-group creation is always driven by the onboarding device: a device already in a ring never initiates one, because every member sees the identical pool and would race for the same record. Members record the new sibling as discovered and wait for its Welcome, then reply with `Hello` + `RingInfo`.
-4. `D_new` sends `CoordMsg::Hello` as an MLS application message in each new coord group (queued until the sibling joins).
-5. When the sibling polls its own PDS (`ring_tick` always includes the device's own DID in the polling set), it stealth-decrypts the coord Welcome, joins the coord group, sends its own `CoordMsg::Hello` back, and replenishes its key package.
-6. On the creator's next `ring_tick`, it processes the sibling's commit (joining the group) and the Hello, making the sibling "exchanged" in the driver's state.
-7. Ring creation or addition proceeds as described in the Ring Bootstrap section of MULTI_DEVICE.md.
+#### The pairing code
 
-**Classification rule**: a group is `DeviceCoord` iff all its members carry `my_did` in their MLS credential and its group ID does not equal `ring_group_id`. The check is done via `classify_group_kind` in `moat-core`.
+The code carries exactly two secrets — everything else either side needs is already known or derivable.
 
-### Coordination Messages
+| Field | Size | Purpose |
+|---|---|---|
+| version | 1 byte | `0x01`. A mismatch is rejected outright. |
+| token | 16 bytes | Drawbridge rendezvous identifier |
+| secret | 32 bytes | Channel key material |
 
-Coordination messages are MLS application messages sent over `DeviceCoord` groups. They use `EventKind::Coord` with a JSON payload. All variants are designed to fit within the 256 B (512 B bucket) padding budget.
+The 49-byte payload is Crockford base32-encoded (alphabet excludes `I`, `L`, `O`, `U` to avoid visual confusion on manual entry) and hyphen-grouped in fives, giving a 79-character text form:
 
-```json
-{ "type": "hello", "sender_device_id": "<base64-16-bytes>" }
-
-{ "type": "ring_info", "ring_id": "<base64>", "generation": 2, "created_at": 1234567890 }
-
-{ "type": "supersede", "old_ring_id": "<base64>" }
-
-{ "type": "ring_welcome", "ring_id": "<base64>", "welcome": "<base64-MLS-Welcome>", "generation": 2, "created_at": 1234567890 }
-
-{ "type": "sync_offer", "token": "<base64-32-bytes>", "target_device_id": "<base64-16-bytes>" }
+```
+07B16-BVNAM-CGZ4W-1MK0B-386NE-3E0NJ-7N6N8-BS46G-TCJ2T-JA40J-KEFCS-X0MR2-ZHTD7-Q089Q-9BZAN-JQXR
 ```
 
-| Variant | Sender | Purpose |
-|---------|--------|---------|
-| `hello` | coord group creator AND coord group joiner | Signals presence so each side can detect `Hello` exchange |
-| `ring_info` | ring member | Informs a sibling that a ring already exists, and at which generation. Emitted alongside every `Hello`. A device that learns of an existing ring it is not in creates the next generation rather than a competing one at the same level |
-| `supersede` | losing ring member | Tells the recipient to abandon an old ring during split-brain recovery |
-| `ring_welcome` | ring creator/adder | Delivers the MLS ring Welcome inline so the recipient can classify the group as `Ring` without a separate `RingInfo` round-trip. A Welcome for a higher generation displaces the recipient's current ring |
-| `sync_offer` | the smaller `device_id` of a pair | Carries the Drawbridge pairing token; `target_device_id` names the sole intended recipient and other ring members MUST ignore the offer |
+The QR form is that same text behind a `moat-pair:` URI scheme, so a scanner can reject foreign QRs cheaply. Decoding is case-insensitive and ignores hyphens and whitespace, so a user retyping the text form need not reproduce the grouping.
 
-Three further `CoordMsg` variants — `kp_batch`, `kp_request`, and `user_conv_welcome` — share this schema but travel the stealth lane as `sibling.msg` events; see [Same-user Key Distribution](#same-user-key-distribution). The handlers are transport-agnostic, which is why they share the enum.
+The code deliberately carries **no DID and no relay URL**. Both devices already know their own DID — equality is verified inside the encrypted channel — and the relay is discoverable from that DID's PDS.
 
-**Choosing which device acts.** Two rules, each scoped to a single pair:
+#### Channel crypto
 
-- **Sync offers**: within a pair, the device with the smaller `device_id` issues the offer. Both sides mark each other as owing one, so the tiebreak keeps a pair to a single session.
-- **First-ring formation**: when no ring exists for the DID, the device with the smallest `device_id` among those that have exchanged `Hello` creates it.
-- **Joining an existing ring**: the smallest-leaf member of the current ring adds the joiner to that ring; other members stand down. Only if no member acts does the onboarding device create the next generation itself.
+Both directional keys derive from the code alone:
 
-**Commit tags are derived at the pre-add epoch.** Receivers scan for tags at the epoch they are currently on, and candidate tags cover the current and prior epochs. Deriving the tag before the MLS add is what keeps the resulting commit findable by the members who still need to process it.
+```
+k_new_to_old = HKDF-SHA256(ikm = secret, salt = token, info = "moat-pair-v1 n2o")[0..16]
+k_old_to_new = HKDF-SHA256(ikm = secret, salt = token, info = "moat-pair-v1 o2n")[0..16]
+```
 
-**Why `RingWelcome` instead of stealth delivery for ring Welcomes**: delivering the ring Welcome over the ordered coord channel means the recipient always has the `ring_id` available at processing time, enabling correct `GroupKind::Ring` classification. Stealth delivery would arrive in an unordered namespace and could be processed before the recipient knows which group ID is the ring.
+Frames are AES-128-GCM. The 12-byte nonce is four zero bytes followed by a 64-bit big-endian counter, maintained per direction; a counter value is never reused under the same key. Each side seals with its own direction's key and opens with the peer's, so a reflected frame fails to open. The receiver advances its counter only on a successful open, so a rejected frame does not desynchronise a legitimate retry.
+
+The channel is **not** re-keyed to ring MLS once the exchange completes: the same AEAD carries the history sync that follows, continuing the same counter sequences. A newly-onboarded device has no ring-MLS traffic history to fall back on, and mixing two wire formats on one socket is the failure this avoids.
+
+#### Session protocol
+
+Three messages, JSON-encoded and then sealed whole:
+
+| Message | Direction | Contents |
+|---|---|---|
+| `Enroll` | new → existing | `credential`, `stealth_scan_pubkey`, `ring_kp` (fresh KeyPackage for the ring Add), `conv_kps` (seeded pool for conversation fan-out) |
+| `Admit` | existing → new | `ring_id`, `welcome`, `roster` |
+| `Done` | either | Teardown courtesy only |
+
+The exchange:
+
+1. Both devices attach to the pair WS (see [Pairing Mode](#pairing-mode-multi-device-history-sync)). The new device sends `Enroll`.
+2. The existing device checks the DID in `Enroll.credential` against its own — a mismatch is a hard abort — and surfaces an approval prompt naming the device.
+3. On approval it creates the ring (first pairing) or adds the joiner to the existing one, seeds the newcomer's KP pool from `conv_kps`, publishes the ring Add commit to the PDS, and sends `Admit`.
+4. The new device processes the Welcome, then verifies that every member credential in the resulting ring carries its own DID — the only anchor available, since `Admit` carries no DID field. It persists ring membership and replies `Done`.
+5. Both sides hand the open channel to history sync.
+
+`Done` marks the end of the Enroll/Admit exchange only. It says nothing about history sync, which completes independently and is observable separately.
+
+**Approval is always explicit.** No host auto-approves an incoming `Enroll` — not the TUI, not the headless HTTP servers used in testing. A session rests in its awaiting-approval state until a decision is made, and `reject` is a first-class outcome rather than a timeout.
+
+**The ring Add commit is published to the PDS** under a tag derived at the *pre-add* epoch. A sibling that was asleep during the pairing picks that commit up on its next poll and advances its own view; deriving the tag after the add would tag it at an epoch no bystander is scanning for.
+
+#### Roster
+
+`Admit.roster` is `[approver] ++ known_siblings`, each entry carrying `device_id`, `device_name`, and `stealth_pubkey`. It seeds the newcomer's sibling-stealth table so it can address same-user traffic to every sibling from its first tick, without waiting to discover `stealthAddress` records.
+
+Entries carry **no DID**. A same-user ring's DID is not roster data — it is an MLS-authenticated fact read from the ring's own member credentials once the Welcome is processed. A redundant unauthenticated copy would be a second, weaker source of the same truth.
+
+#### Session state
+
+A pairing session exposes one projection of its state, which every host renders and none re-derives:
+
+| Phase | Meaning |
+|---|---|
+| `idle` | No pairing in flight |
+| `showing_code` | New device: code generated, awaiting the peer (carries both text and URI forms) |
+| `awaiting_peer` | Existing device: code accepted, awaiting `Enroll` |
+| `awaiting_approval` | Existing device: `Enroll` received, awaiting the approve/reject decision (carries the peer's device name and DID) |
+| `done` | Enroll/Admit complete (carries `ring_id`) |
+| `failed` | Terminal failure, **carrying the reason** |
+
+`failed` is retained on the session rather than discarded. A failed pairing must be distinguishable from a slow one — reporting "not done" forever with no reason is the behaviour this replaces. Terminal states are final: a stray reject or cancel arriving after `done` does not overwrite it.
+
+### Requested Sync
+
+Pairing hands a new device its history over the pairing channel, and that
+covers a device's first moments only. A device already in the ring can
+still be missing history: the sibling it paired with may not have held all
+of it, a conversation may have reached it as a membership-only
+`user_conv_welcome` after its pairing sync had finished, or a transfer may
+have been cut short — and the pairing channel cannot be reopened, because
+its secret is ephemeral by design.
+
+Recovering that is an explicit gesture, shaped like pairing. There is no
+election, no liveness detector, and no policy guessing which sibling holds
+the deepest history: the person holding the devices decides.
+
+1. The device that wants history mints a 16-byte rendezvous token,
+   registers it with the relay (`pair_offer`), and publishes
+   `RingMsg::SyncRequest { token }` as a `ring.msg` event on the device
+   ring. Siblings watch the ring's tags with Drawbridge, so an online one
+   sees it at once rather than on its next poll.
+2. Every sibling that decrypts it prompts its user, naming the requesting
+   device **from its MLS leaf credential** — the payload carries only the
+   token. **No host auto-accepts**, matching pairing's rule.
+3. Whichever sibling the user approves calls `pair_join` with the token
+   and both ends run the ordinary history-sync session (below), encrypted
+   to the ring: both are already members, so unlike onboarding there is no
+   user-carried secret to derive a channel key from.
+
+Declining is local and sends nothing. With several siblings prompted, one
+refusal must not cancel the request — the requester keeps waiting for
+another sibling, or for the token to expire.
+
+The relay admits exactly two attaches per token, so if the user approves
+on two devices the second `pair_join` is refused. That refusal is
+ordinary, not a connection fault.
+
+A request expires with the relay's own 5-minute token TTL, since a prompt
+that outlived its token would offer a rendezvous nobody can join. Only the
+*rendezvous* is bounded: once the channel is up the transfer runs to
+completion however long it takes.
+
+Expiry is a real transition to `failed`, not merely a fact about elapsed
+time: a request nobody answers must say so rather than reporting "waiting"
+forever. Nobody answering is the most likely way a request ends — the other
+device is asleep, its app is closed, its user declined, or it was busy with
+another sync — and the protocol deliberately does not distinguish those,
+because the user's next move is the same for all of them. The session
+carries no clock, so each host drives the check from its own polling tick
+and from every read of the status.
+
+A failure carries a **structured reason**, not a message:
+
+| Reason | Meaning |
+|---|---|
+| `no_answer` | We asked; nobody joined the rendezvous before it expired |
+| `request_expired` | We were prompted; the request expired before we answered |
+| `declined` | This device's user refused a sibling's request |
+| `channel_closed` | The pair channel dropped before the transfer finished |
+| `publish_failed` | The request never reached the ring |
+
+The same underlying event reads differently depending on which device is
+looking at it — a rendezvous nobody joined is "no device answered" to the
+device that asked and "this expired before you answered it" to the device
+that was prompted — so the protocol carries the fact and each screen
+supplies its own wording. `no_answer` and `request_expired` are the two
+halves of one expiry, named for their reader. A device drives one sync session at a
+time; a request arriving while one is in flight, or while a pairing is,
+is ignored rather than allowed to supersede a decision the user is
+already looking at.
+
+Because the lane is `ring.msg`, a device that has fallen too far behind
+the ring's epochs to send or read ring traffic cannot use this. Its
+recourse is to pair again, which is a first-class affordance.
+
+### History Sync
+
+Both onboarding sync and requested sync run the same session. Each side
+opens with a `Hello` declaring, per conversation, the rkeys it holds; each
+then sends the peer exactly the complement. Both directions run in the one
+session, so a laptop with deep old history and a phone with a recent week
+converge on the union without either being designated donor.
+
+The inventory is deliberately exact rather than clever. A
+`(oldest_rkey, newest_rkey)` span cannot describe a hole in the *middle*
+of a device's history, which is the shape a device ends up with after
+being offline past the point where it can still decrypt what it missed.
+At roughly 13 bytes per rkey an inventory is far cheaper than re-sending
+the messages it saves, so no digest comparison or bisection is needed to
+decide what to transfer. Above 10,000 messages in one conversation the
+inventory is omitted and the peer serves its whole history instead,
+letting rkey dedupe absorb the overlap.
+
+Two devices whose inventories already agree exchange nothing and finish on
+the `Hello`.
+
+An implementation that declares no inventory at all is interoperable: its
+peer serves whole histories and rkey dedupe absorbs the overlap. That
+fallback is what `rkeys: null` means on the wire.
 
 ### Same-user Key Distribution
 
-Adding a sibling device to the ring, and later to every existing user conversation, requires a fresh MLS KeyPackage from that sibling for each add — and each KeyPackage must have exactly one consumer, since MLS burns the init secret on the first successful `process_welcome` and any second Welcome against it is permanently undeliverable.
-
-Two lanes exist:
+Adding a sibling device to a conversation requires a fresh MLS KeyPackage from that sibling for each add, and each KeyPackage must have exactly one consumer — MLS burns the init secret on the first successful `process_welcome`, and any second Welcome against it is permanently undeliverable.
 
 | Scope | Transport | KeyPackage source |
 |---|---|---|
 | Cross-user (bob ↔ alice) | Stealth event under a random tag | Public `social.moat.keyPackage` pool |
-| Same-user bootstrap (opening a coord group, joining a ring) | Stealth event under a random tag | Public `social.moat.keyPackage` pool |
-| Same-user steady state (fanning a sibling into conversations) | Stealth event addressed to one sibling | Consumer-held pool, refilled via `kp_batch` |
+| Same-user onboarding | Pairing channel | `Enroll.ring_kp` (ring Add) and `Enroll.conv_kps` (seed pool) |
+| Same-user steady state | Stealth event addressed to one sibling | Consumer-held pool, refilled via `kp_batch` |
 
-Bootstrap has no lane of its own. Before two sibling devices share a ring there is no authenticated channel between them, so the only KeyPackage source available is the same public pool a cross-user inviter reads. Once they do share a ring, the steady-state lane takes over and gives each KeyPackage a single named consumer.
+Onboarding needs no pool draw at all: the joining device mints its own KeyPackages and hands them over the authenticated pairing channel, to a single named consumer. This is what removes the concurrent-draw hazard that a shared public pool creates — two readers seeing the identical pool would select the identical record, and only one of the resulting Welcomes would be processable.
 
-#### Why the stealth lane carries this traffic
+#### Why the stealth lane carries steady-state traffic
 
-Every message in this lane is **unicast** — addressed to one sibling, dropped by everyone else — and its payloads need no MLS confidentiality: KeyPackages are public values, and MLS Welcomes are already encrypted to the target's init key. What the lane needs is addressing, authenticity, and single-use accounting, and the stealth transport supplies all three while remaining epoch-free and order-insensitive. Order-insensitivity is the decisive property here: ring epochs churn precisely when key-package traffic peaks, since a join triggers an Add commit immediately followed by fan-out in both directions.
-
-The ring's own roles are device-set membership, the trust root mapping `device_id → signature key` for siblings, the session layer for bulk history sync over the live ordered pair WebSocket, and loss-tolerant broadcast state sync.
-
-#### Bootstrap: drawing from the public pool
-
-When a device first comes online and discovers siblings, it reads the public `social.moat.keyPackage` pool under its own DID. Two rules govern every draw:
-
-1. **Take the newest record for that device.** The pool accumulates — records are created with `createRecord` and never deleted, because a `deleteRecord` shortly after would be a distinctive firehose pattern. A spent record therefore stays visible next to its replacement, and nothing on the wire distinguishes them. Older records are the likely-spent ones.
-2. **Skip records this device has already burned.** A device needs *two* KeyPackages from each sibling during bootstrap — one to open the pairwise coord group, one for the ring `add_device` — and rule 1 alone would hand back the record the first draw killed. Implementations MUST persist the burned set (`used_pool_kps`, keyed by a hash of the record bytes); losing it across a restart re-creates exactly this failure.
-
-A draw that finds nothing usable is an ordinary wait, not an error: the owner replenishes on every consumption, including on processing the coord Welcome, so a fresh record normally lands within a tick or two and the caller retries.
-
-Neither rule makes **concurrent** draws by different devices safe, and no local rule can: two readers see the identical pool and select the identical record, so only one of the resulting Welcomes is processable and the other fails permanently and silently. Two different mechanisms keep draws serialised:
-
-- **Coord-group creation**: only the onboarding device draws. A device already in a ring never initiates a coord group with a new sibling, so there is no race to arbitrate.
-- **Ring `add_device`**: the smallest-leaf ring member is elected. Here the race cannot be designed away — an established member reaches the add path for an onboarding peer over the coord group that peer created, and a ring creator legitimately adds late-arriving peers — so multiple potential adders genuinely coexist and one is chosen.
-
-Before any ring exists neither applies, and the symmetric two-device race resolves by ring reconciliation instead.
+Every message in this lane is **unicast** — addressed to one sibling, dropped by everyone else — and its payloads need no MLS confidentiality: KeyPackages are public values, and MLS Welcomes are already encrypted to the target's init key. What the lane needs is addressing, authenticity, and single-use accounting, and the stealth transport supplies all three while remaining epoch-free and order-insensitive. Order-insensitivity is decisive: ring epochs churn precisely when key-package traffic peaks, since a join triggers an Add commit immediately followed by fan-out in both directions.
 
 #### Steady state
 
-Once a sibling is in the ring, key packages flow as `sibling.msg` events carrying `CoordMsg` JSON, addressed per sibling via the `scan_pubkey` from its `stealthAddress` record. Ring membership still gates the lane: batches are only shipped to and accepted from confirmed ring members.
+Key packages flow as `sibling.msg` events carrying `CoordMsg` JSON, addressed per sibling via the `scan_pubkey` from its `stealthAddress` record. Ring membership gates the lane: batches are only shipped to and accepted from confirmed ring members.
 
 ```json
 {
@@ -577,7 +696,7 @@ Once a sibling is in the ring, key packages flow as `sibling.msg` events carryin
 | `kp_request` | Consumer | Asks the owner to top up the consumer's pool when it runs low |
 | `user_conv_welcome` | Consumer | Delivers a Welcome built from a pool KeyPackage, addressed to that KeyPackage's owner |
 
-**Pool maintenance.** Each consumer keeps a pool per owner, targeting `KP_POOL_TARGET` = 8 entries and refilling when it drops to `KP_POOL_LOW_WATER` = 2. A single `kp_batch` carries at most `KP_BATCH_CAP` = 4 entries so it fits the 4 KB control bucket; larger refills split across several messages. Refill is consumer-driven only — there is no owner-side wake-up top-up and no pre-emptive high-water trigger, because user-visible latency is dominated by MLS Add work and PDS propagation, not by refill.
+**Pool maintenance.** Each consumer keeps a pool per owner, targeting `KP_POOL_TARGET` = 8 entries and refilling when it drops to `KP_POOL_LOW_WATER` = 2. A single `kp_batch` carries at most `KP_BATCH_CAP` = 4 entries so it fits the 4 KB control bucket; larger refills split across several messages. Refill is consumer-driven only — user-visible latency is dominated by MLS Add work and PDS propagation, not by refill.
 
 **Consumer-side state**, per `(consumer, owner)` pair:
 
@@ -597,34 +716,15 @@ Once a sibling is in the ring, key packages flow as `sibling.msg` events carryin
 
 **Delivery properties.** Decryption is a single ECDH against the recipient's scan key: no epoch binding, no ordering requirement, no mark-own bookkeeping (one's own publishes simply fail to trial-decrypt). Duplicates and replays are absorbed by `highest_seq_observed`, `used_kps`, and MLS's own consume-once init-key semantics.
 
-### Ring Generations and Reconciliation
-
-Rings carry a monotonic `generation`. A device forming the first ring for a DID uses generation 1. A device joining a DID that already has a ring *can* create generation `N+1` containing every sibling it knows of and invite them — it is the only participant guaranteed to be online, which is what lets onboarding complete while an existing device is asleep or permanently lost. It does so only after waiting for an established member to add it first (see [Ring Generations and Reconciliation](#ring-generations-and-reconciliation) on which path is normal).
-
-Reconciliation, whether from a `RingInfo` exchange or an incoming `RingWelcome`, applies the same ordering:
-
-- **Highest generation wins.**
-- **Tiebreaker**: equal generations are broken by the earlier `created_at` (Unix timestamp, milliseconds), then by the lexicographically smallest `ring_id`. This is the case of two devices independently forming a *first* ring after a partition.
-- **`Supersede`**: a device on a losing ring receives `CoordMsg::Supersede { old_ring_id }`, drops that ring's MLS state locally, and joins the winning ring. A `RingWelcome` for a superseding generation displaces the current ring directly; one for a lower generation is ignored.
-- **`generation` / `created_at` propagation**: set at ring-creation time, persisted alongside `ring_group_id`, and carried in both `CoordMsg::RingInfo` and `CoordMsg::RingWelcome`.
-
-Supersession is the **recovery** path, not the normal one. In the ordinary case — an existing ring member online and responsive — that member adds the joiner to the current generation and no new generation is formed at all; the joiner waits. Generation N+1 is created by the joiner only when no established member acts, which is exactly the case where the device that would have added it is asleep or permanently gone. If the member is merely slow, both can happen and the two rings are reconciled by the ordering above.
-
-A device that stops responding leaves its leaf in an abandoned ring, and the next generation forms without it.
-
 ### Own-PDS Stealth Scan
 
-Every `ring_tick` call polls the device's own PDS for stealth-encrypted events (in addition to the normal per-conversation polling of contacts' PDS records). This is the mechanism by which:
+Every `ring_tick` polls the device's own PDS for stealth-encrypted events, in addition to the normal per-conversation polling of contacts' records. This is how `sibling.msg` events (`kp_batch` / `kp_request` / `user_conv_welcome`) are found. The device's own DID is always in the polling set, even with no user conversations.
 
-- Coord group Welcomes (published by a sibling discovering this device) are found and joined.
-- `sibling.msg` events (`kp_batch` / `kp_request` / `user_conv_welcome`) are found.
-- The device's own DID is always included in the polling set, even when the device has no user conversations.
+These carry random tags, identical in form to stealth invite tags, and are identified by attempting stealth decryption and dispatching on the decrypted event's kind. A device's own publishes do not trial-decrypt as its own, so no mark-own bookkeeping is needed here.
 
-All of these carry random tags (same as stealth invite tags in regular conversation flow) and are identified by attempting stealth decryption, then dispatching on the decrypted event's `kind`. Because a device's own publishes do not trial-decrypt as its own, no mark-own bookkeeping is needed on this path. Successfully decrypted coord Welcomes are processed, the joining device sends `CoordMsg::Hello`, and key packages are replenished immediately to avoid exhaustion on the next cycle.
+The scan is cursor-based (`own_events_cursor`, an rkey), so events are fetched incrementally. Delivery is order-insensitive by construction: a `sibling.msg` arriving before or after unrelated ring commits decrypts identically.
 
-The scan is cursor-based (`own_events_cursor`, an rkey), so events are fetched incrementally rather than re-scanned. Delivery here is order-insensitive by construction: a `sibling.msg` arriving before or after unrelated ring commits decrypts identically.
-
-Ring Welcomes are delivered via `CoordMsg::RingWelcome` over the coord channel, not via the stealth scan. This ensures the `ring_id` is present at processing time.
+Ring Welcomes do **not** travel this lane. They ride the pairing channel raw, inside `Admit`, where the `ring_id` is present at processing time and the group can be classified correctly on arrival.
 
 ## Transcript Integrity
 
@@ -752,7 +852,9 @@ Versions 1 and 2 are rejected with a `StateVersionMismatch` error. Older v3/v4 s
 
 ### Conversation Digest
 
-Each device maintains a running SHA-256 digest chain per user conversation for efficient sync comparison with sibling devices.
+Each device maintains a running SHA-256 digest chain per user conversation, as a compact statement of what it holds.
+
+It is carried in each `Hello` alongside the rkey inventory, but **sync planning does not consult it** — the inventory answers the same question exactly, and cheaply enough that a hash comparison buys nothing (see [History Sync](#history-sync)). Note also that history received through sync is deliberately *not* appended to the chain: the chain is ordered rkey-ascending while backward sync delivers newest-first, so appending on arrival would corrupt it. A device that has been backfilled therefore has a digest that will not match a peer's, which is another reason planning does not lean on it.
 
 **Chain formula:**
 ```
@@ -762,14 +864,14 @@ digest_n = SHA256(digest_{n-1} || rkey_n || message_id_n)
 
 Only events whose kind starts with `message.` (user-visible content) contribute to the digest. Control events (commits, welcomes) and reaction modifiers are excluded.
 
-**Anchors:** A `DigestAnchor { rkey, digest }` is saved every `DIGEST_ANCHOR_STRIDE = 64` appended messages and immediately after the first append in a new MLS epoch. Per-group anchor lists are capped at 256 entries (oldest dropped on overflow). Anchors allow fast bisection when comparing two devices' histories without a full message scan.
+**Anchors:** A `DigestAnchor { rkey, digest }` is saved every `DIGEST_ANCHOR_STRIDE = 64` appended messages and immediately after the first append in a new MLS epoch. Per-group anchor lists are capped at 256 entries (oldest dropped on overflow). Anchors were introduced to allow bisecting two devices' histories without a full message scan; the inventory diff supersedes that use, and they are retained as coarse epoch-boundary checkpoints.
 
 **`diff_anchors(ours, theirs) -> DiffRange`:** Compares two anchor lists pairwise from the start and returns:
 - `common_prefix_rkey` — `rkey` of the last matching anchor (`None` if no common prefix)
 - `our_tail` — anchors we hold beyond the common prefix
 - `their_tail` — anchors they hold beyond the common prefix
 
-**Watermark:** A per-conversation `watermark` is the `rkey` of the oldest message successfully received from a sync peer. On reconnect, the peer resumes transfer from the watermark rather than restarting.
+**Watermark:** A per-conversation `watermark` is the `rkey` of the oldest message successfully received from a sync peer, recorded as each batch lands so an interrupted transfer has a durable resume point. Because it only ever moves backwards, a late or duplicated newer batch cannot drag it forwards.
 
 **Inbox range:** `(oldest_rkey, newest_rkey)` tracks the local history span per conversation. Updated on every `append_to_digest` call.
 
@@ -784,11 +886,11 @@ All private material stays on the device, never on the PDS:
     ├── credentials.json # ATProto session tokens
     ├── identity.key     # MLS signing key bundle (one per device, reused by every KeyPackage)
     ├── stealth.key      # X25519 stealth private key
-    ├── ring.json        # Device ring state: peers, ring membership, KP pools, used_kps
+    ├── ring.json        # Device ring state: ring membership, KP pools, used_kps, scan cursor
     └── conversations/   # Per-group metadata and sent message history
 ```
 
-`ring.json` holds the single-use accounting described in [Same-user Key Distribution](#same-user-key-distribution). Losing it does not compromise confidentiality, but it discards `used_kps` and `used_pool_kps`, so a device that restores an older copy can re-consume a key package it has already used and emit an undeliverable Welcome.
+`ring.json` holds the single-use accounting described in [Same-user Key Distribution](#same-user-key-distribution). Losing it does not compromise confidentiality, but it discards `used_kps`, so a device that restores an older copy can re-consume a key package it has already used and emit an undeliverable Welcome.
 
 ## What Goes Where
 

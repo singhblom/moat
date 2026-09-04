@@ -10,6 +10,8 @@ import 'package:provider/provider.dart';
 import 'package:moat_dart_common/moat_dart_common.dart' hide DebugLog;
 import 'services/conversation_manager.dart' as app_cm;
 import 'services/pairing_manager.dart';
+import 'services/sync_request_manager.dart';
+import 'services/device_ring_manager.dart';
 import 'providers/auth_provider.dart';
 import 'providers/conversations_provider.dart';
 import 'providers/profile_provider.dart';
@@ -18,6 +20,7 @@ import 'providers/watch_list_provider.dart';
 import 'screens/login_screen.dart';
 import 'screens/conversations_screen.dart';
 import 'screens/approve_pairing_screen.dart';
+import 'screens/approve_sync_request_screen.dart';
 import 'services/flutter_storage_backend.dart';
 import 'services/flutter_storage_factory.dart';
 import 'services/debug_log.dart';
@@ -439,6 +442,13 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
         conversationStorage: widget.convStorage,
         messageStorage: widget.msgStorage,
       );
+      DeviceRingManager.instance.init(ringService);
+      SyncRequestManager.instance.init(
+        authService: auth.service,
+        drawbridge: DrawbridgeService.instance,
+        ring: ringService,
+        sync: syncService,
+      );
       // `init()` just built a fresh service (and `state` notifier), so
       // listeners can't accumulate across login cycles. Listening globally
       // rather than per-screen is deliberate: an `Enroll` can arrive while
@@ -451,6 +461,24 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
           );
         }
       });
+
+      // Same reasoning as the pairing listener above: a sibling's request
+      // can arrive while the user is anywhere in the app.
+      SyncRequestManager.instance.service!.state.addListener(() {
+        final uiState = SyncRequestManager.instance.service?.state.value;
+        if (uiState is SyncRequestUiStateDto_AwaitingApproval) {
+          rootNavigatorKey.currentState?.push(
+            MaterialPageRoute(builder: (_) => const ApproveSyncRequestScreen()),
+          );
+        }
+      });
+      // A sibling's `ring.msg` reaches the service through the poller,
+      // which is what decrypts ring traffic.
+      _pollingService!.onRingSyncRequest =
+          SyncRequestManager.instance.service!.onRingSyncRequest;
+      // The sync-request session has no clock of its own.
+      _pollingService!.onPollTick =
+          SyncRequestManager.instance.service!.expireIfDue;
 
       _pollingService!.onMessages = app_cm.ConversationManager.instance.notify;
       _pollingService!.onReaction = app_cm.ConversationManager.instance.notifyReaction;
@@ -470,6 +498,8 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       ConversationManager.instance.clear();
       app_cm.ConversationManager.instance.clear();
       PairingManager.instance.clear();
+      SyncRequestManager.instance.clear();
+      DeviceRingManager.instance.clear();
       DrawbridgeService.instance.reset();
       debugPrint('PollingService stopped, Drawbridge reset');
     }

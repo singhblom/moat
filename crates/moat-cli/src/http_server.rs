@@ -400,11 +400,12 @@ async fn get_ring_status(State(state): State<Arc<ServerState>>) -> Json<Value> {
         "ring_group_id": ring_group_id,
         "coord_group_count": coord_group_count,
         "ring_member_count": ring_member_count,
+        "devices": app.api_ring_devices(),
     }))
 }
 
 async fn get_sync_status(State(state): State<Arc<ServerState>>) -> Json<Value> {
-    let app = state.app.lock().await;
+    let mut app = state.app.lock().await;
     Json(app.sync_status())
 }
 

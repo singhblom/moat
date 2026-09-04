@@ -15,6 +15,8 @@ import 'new_conversation_screen.dart';
 import 'show_pairing_code_screen.dart';
 import 'enter_pairing_code_screen.dart';
 import 'watch_list_screen.dart';
+import '../services/device_ring_manager.dart';
+import 'devices_screen.dart';
 
 class ConversationsScreen extends StatelessWidget {
   const ConversationsScreen({super.key});
@@ -54,6 +56,17 @@ class ConversationsScreen extends StatelessWidget {
                 Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (context) => const EnterPairingCodeScreen(),
+                  ),
+                );
+              } else if (value == 'devices') {
+                final ring = DeviceRingManager.instance.service;
+                if (ring == null) return;
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => DevicesScreen(
+                      authService: auth.service,
+                      ringService: ring,
+                    ),
                   ),
                 );
               }
@@ -100,6 +113,16 @@ class ConversationsScreen extends StatelessWidget {
                       Icon(Icons.qr_code_scanner),
                       SizedBox(width: 8),
                       Text('Enter a pairing code'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'devices',
+                  child: Row(
+                    children: [
+                      Icon(Icons.devices_other),
+                      SizedBox(width: 8),
+                      Text('Linked devices'),
                     ],
                   ),
                 ),

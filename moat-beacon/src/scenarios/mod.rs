@@ -34,6 +34,9 @@ pub mod push_latency_restart;
 pub mod same_drawbridge_local;
 pub mod staggered_device_pairing;
 pub mod sync_request_history;
+pub mod sync_request_history_dd;
+pub mod sync_request_history_dr;
+pub mod sync_request_history_rd;
 pub mod three_device_pairing;
 pub mod three_device_pairing_history_sync;
 pub mod three_device_pairing_history_sync_dr;
@@ -873,6 +876,27 @@ pub static SCENARIOS: &[Scenario] = &[
         name: "sync-request-history",
         description: "D2 sleeps through a conversation, is fanned in with no history, and asks D1 for it",
         run_fn: sync_request_history::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "sync-request-history-dd",
+        description: "Same as sync-request-history, but both devices Dart",
+        run_fn: sync_request_history_dd::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "sync-request-history-rd",
+        description: "Same as sync-request-history, but Dart requester, Rust donor",
+        run_fn: sync_request_history_rd::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "sync-request-history-dr",
+        description: "Same as sync-request-history, but Rust requester, Dart donor",
+        run_fn: sync_request_history_dr::run_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },

@@ -21,13 +21,18 @@ use std::time::Duration;
 use crate::client::MoatCliClient;
 use crate::scenarios::three_device_pairing::pair_devices;
 use crate::scenarios::Action;
-use crate::world::TestWorld;
+use crate::world::{ParticipantKind, TestWorld};
 
 pub(crate) fn run_boxed(
     _actions: Vec<Action>,
     verbose: bool,
 ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
     Box::pin(run(verbose))
+}
+
+/// All-Rust cell.
+pub async fn run(verbose: bool) {
+    run_with(ParticipantKind::RustCli, ParticipantKind::RustCli, "rr", verbose).await
 }
 
 const TIMEOUT: Duration = Duration::from_secs(30);
@@ -71,26 +76,44 @@ async fn wait_for_membership(
     }
 }
 
-pub async fn run(verbose: bool) {
+/// The scenario body, parameterised by which runtime each of Alice's two
+/// devices uses.
+///
+/// Unlike the pairing cells — which are full copies of one another — the
+/// runtime mix here is a parameter, because the two axes that matter
+/// (`donor` serves the history, `requester` asks for it) are the *only*
+/// difference between the cells, and the assertions around them are
+/// long enough that three copies would drift.
+pub async fn run_with(
+    donor_kind: ParticipantKind,
+    requester_kind: ParticipantKind,
+    cell: &str,
+    verbose: bool,
+) {
     macro_rules! vlog {
         ($($t:tt)*) => { if verbose { eprintln!($($t)*); } }
     }
 
-    vlog!("=== Scenario: sync-request-history ===");
+    vlog!("=== Scenario: sync-request-history ({cell}) ===");
 
     // Live pairing and the sync rendezvous both need a real Drawbridge
     // relay — see the note in `two_device_pairing.rs`'s prologue.
-    let mut world =
-        TestWorld::new_with_drawbridge(&[("alice", "alice"), ("bob", "bob")], ".postern.test")
-            .await
-            .expect("world setup");
+    let mut world = TestWorld::new_with_kinds_and_drawbridge(
+        &[("alice", "alice"), ("bob", "bob")],
+        // Bob is only ever a cross-user counterparty here, so he stays on
+        // the Rust CLI regardless of the cell.
+        &[donor_kind, ParticipantKind::RustCli],
+        ".postern.test",
+    )
+    .await
+    .expect("world setup");
     let d1 = world.client("alice").clone();
     let bob = world.client("bob").clone();
     d1.login("alice.postern.test", "any-password").await.expect("d1 login");
     bob.login("bob.postern.test", "any-password").await.expect("bob login");
 
     let d2 = world
-        .spawn_nth_device("alice-d2", crate::world::ParticipantKind::RustCli)
+        .spawn_nth_device("alice-d2", requester_kind)
         .await
         .expect("spawn d2");
     d2.login("alice.postern.test", "any-password").await.expect("d2 login");
@@ -202,7 +225,7 @@ pub async fn run(verbose: bool) {
         tokio::time::sleep(POLL_INTERVAL).await;
     }
 
-    vlog!("[check] sync request history... ok");
+    vlog!("[check] sync request history ({cell})... ok");
     if verbose {
         eprintln!("\n=== PASSED ===");
     }

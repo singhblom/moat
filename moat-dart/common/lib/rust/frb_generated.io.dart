@@ -31,6 +31,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           ._rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRingDriverHandlePtr;
 
   CrossPlatformFinalizerArg
+      get rust_arc_decrement_strong_count_SyncRequestSessionHandlePtr => wire
+          ._rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandlePtr;
+
+  CrossPlatformFinalizerArg
       get rust_arc_decrement_strong_count_SyncSessionHandlePtr => wire
           ._rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncSessionHandlePtr;
 
@@ -47,6 +51,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   RingDriverHandle
       dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRingDriverHandle(
+          dynamic raw);
+
+  @protected
+  SyncRequestSessionHandle
+      dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
           dynamic raw);
 
   @protected
@@ -70,6 +79,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           dynamic raw);
 
   @protected
+  SyncRequestSessionHandle
+      dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+          dynamic raw);
+
+  @protected
   SyncSessionHandle
       dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncSessionHandle(
           dynamic raw);
@@ -87,6 +101,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   RingDriverHandle
       dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRingDriverHandle(
+          dynamic raw);
+
+  @protected
+  SyncRequestSessionHandle
+      dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
           dynamic raw);
 
   @protected
@@ -126,6 +145,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SenderInfoDto dco_decode_box_autoadd_sender_info_dto(dynamic raw);
+
+  @protected
+  SyncFailureDto dco_decode_box_autoadd_sync_failure_dto(dynamic raw);
 
   @protected
   TickInputsDto dco_decode_box_autoadd_tick_inputs_dto(dynamic raw);
@@ -263,6 +285,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   BigInt? dco_decode_opt_box_autoadd_u_64(dynamic raw);
 
   @protected
+  List<String>? dco_decode_opt_list_String(dynamic raw);
+
+  @protected
   Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw);
 
   @protected
@@ -302,10 +327,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   SyncAnchorDto dco_decode_sync_anchor_dto(dynamic raw);
 
   @protected
+  SyncFailureDto dco_decode_sync_failure_dto(dynamic raw);
+
+  @protected
   SyncMessageDto dco_decode_sync_message_dto(dynamic raw);
 
   @protected
   SyncOutputDto dco_decode_sync_output_dto(dynamic raw);
+
+  @protected
+  SyncRequestUiStateDto dco_decode_sync_request_ui_state_dto(dynamic raw);
 
   @protected
   ThumbHashResult dco_decode_thumb_hash_result(dynamic raw);
@@ -347,6 +378,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           SseDeserializer deserializer);
 
   @protected
+  SyncRequestSessionHandle
+      sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+          SseDeserializer deserializer);
+
+  @protected
   SyncSessionHandle
       sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncSessionHandle(
           SseDeserializer deserializer);
@@ -367,6 +403,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           SseDeserializer deserializer);
 
   @protected
+  SyncRequestSessionHandle
+      sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+          SseDeserializer deserializer);
+
+  @protected
   SyncSessionHandle
       sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncSessionHandle(
           SseDeserializer deserializer);
@@ -384,6 +425,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   RingDriverHandle
       sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRingDriverHandle(
+          SseDeserializer deserializer);
+
+  @protected
+  SyncRequestSessionHandle
+      sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
           SseDeserializer deserializer);
 
   @protected
@@ -429,6 +475,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SenderInfoDto sse_decode_box_autoadd_sender_info_dto(
+      SseDeserializer deserializer);
+
+  @protected
+  SyncFailureDto sse_decode_box_autoadd_sync_failure_dto(
       SseDeserializer deserializer);
 
   @protected
@@ -586,6 +636,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   BigInt? sse_decode_opt_box_autoadd_u_64(SseDeserializer deserializer);
 
   @protected
+  List<String>? sse_decode_opt_list_String(SseDeserializer deserializer);
+
+  @protected
   Uint8List? sse_decode_opt_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
@@ -631,10 +684,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   SyncAnchorDto sse_decode_sync_anchor_dto(SseDeserializer deserializer);
 
   @protected
+  SyncFailureDto sse_decode_sync_failure_dto(SseDeserializer deserializer);
+
+  @protected
   SyncMessageDto sse_decode_sync_message_dto(SseDeserializer deserializer);
 
   @protected
   SyncOutputDto sse_decode_sync_output_dto(SseDeserializer deserializer);
+
+  @protected
+  SyncRequestUiStateDto sse_decode_sync_request_ui_state_dto(
+      SseDeserializer deserializer);
 
   @protected
   ThumbHashResult sse_decode_thumb_hash_result(SseDeserializer deserializer);
@@ -677,6 +737,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
+      sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+          SyncRequestSessionHandle self, SseSerializer serializer);
+
+  @protected
+  void
       sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncSessionHandle(
           SyncSessionHandle self, SseSerializer serializer);
 
@@ -697,6 +762,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
+      sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+          SyncRequestSessionHandle self, SseSerializer serializer);
+
+  @protected
+  void
       sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncSessionHandle(
           SyncSessionHandle self, SseSerializer serializer);
 
@@ -714,6 +784,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
       sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRingDriverHandle(
           RingDriverHandle self, SseSerializer serializer);
+
+  @protected
+  void
+      sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+          SyncRequestSessionHandle self, SseSerializer serializer);
 
   @protected
   void
@@ -761,6 +836,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_box_autoadd_sender_info_dto(
       SenderInfoDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_sync_failure_dto(
+      SyncFailureDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_box_autoadd_tick_inputs_dto(
@@ -922,6 +1001,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_opt_box_autoadd_u_64(BigInt? self, SseSerializer serializer);
 
   @protected
+  void sse_encode_opt_list_String(List<String>? self, SseSerializer serializer);
+
+  @protected
   void sse_encode_opt_list_prim_u_8_strict(
       Uint8List? self, SseSerializer serializer);
 
@@ -972,11 +1054,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_sync_anchor_dto(SyncAnchorDto self, SseSerializer serializer);
 
   @protected
+  void sse_encode_sync_failure_dto(
+      SyncFailureDto self, SseSerializer serializer);
+
+  @protected
   void sse_encode_sync_message_dto(
       SyncMessageDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_sync_output_dto(SyncOutputDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_sync_request_ui_state_dto(
+      SyncRequestUiStateDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_thumb_hash_result(
@@ -1113,6 +1203,38 @@ class RustLibWire implements BaseWire {
           'frbgen_moat_dart_common_rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRingDriverHandle');
   late final _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRingDriverHandle =
       _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRingDriverHandlePtr
+          .asFunction<void Function(ffi.Pointer<ffi.Void>)>();
+
+  void
+      rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+    ffi.Pointer<ffi.Void> ptr,
+  ) {
+    return _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+      ptr,
+    );
+  }
+
+  late final _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandlePtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Void>)>>(
+          'frbgen_moat_dart_common_rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle');
+  late final _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle =
+      _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandlePtr
+          .asFunction<void Function(ffi.Pointer<ffi.Void>)>();
+
+  void
+      rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+    ffi.Pointer<ffi.Void> ptr,
+  ) {
+    return _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle(
+      ptr,
+    );
+  }
+
+  late final _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandlePtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Void>)>>(
+          'frbgen_moat_dart_common_rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle');
+  late final _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandle =
+      _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSyncRequestSessionHandlePtr
           .asFunction<void Function(ffi.Pointer<ffi.Void>)>();
 
   void

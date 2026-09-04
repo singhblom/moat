@@ -85,6 +85,16 @@ Future<void> main(List<String> args) async {
     messageStorage: msgStorage,
   );
 
+  // Requested sync between established devices. Like pairing, the
+  // sibling's user must accept explicitly — Beacon calls
+  // `POST /sync/accept`.
+  final syncRequestService = SyncRequestService(
+    auth: authService,
+    drawbridge: DrawbridgeService.instance,
+    ring: ringService,
+    sync: syncService,
+  );
+
   final pollingService = PollingService(
     authService: authService,
     conversationsService: convsService,
@@ -92,6 +102,8 @@ Future<void> main(List<String> args) async {
     secureStorage: secureStorage,
     ringService: ringService,
   );
+  pollingService.onRingSyncRequest = syncRequestService.onRingSyncRequest;
+  pollingService.onPollTick = syncRequestService.expireIfDue;
 
   // Wire ConversationManager.
   ConversationManager.instance.init(
@@ -122,6 +134,7 @@ Future<void> main(List<String> args) async {
     ringService: ringService,
     syncService: syncService,
     pairingService: pairingService,
+    syncRequestService: syncRequestService,
     messageStorage: msgStorage,
   );
 

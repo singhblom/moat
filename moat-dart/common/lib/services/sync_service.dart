@@ -27,6 +27,13 @@ class SyncService {
 
   ffi.SyncSessionHandle? _session;
   bool _active = false;
+
+  /// Lifecycle hooks for whoever *opened* this channel — today
+  /// `SyncRequestService`, which needs them to keep its own projection
+  /// honest. The transfer itself stays entirely this service's business.
+  void Function()? onSessionStarted;
+  void Function()? onSessionComplete;
+  void Function(String reason)? onSessionAborted;
   // Frames that arrive during the async setup window (before onPaired is called)
   // are buffered here and replayed after onPaired completes.
   List<Uint8List>? _pendingFrames;
@@ -82,6 +89,7 @@ class SyncService {
 
   void _handlePairClosed(String reason) {
     moatLog('SyncService: pair closed: $reason');
+    onSessionAborted?.call(reason);
     unawaited(_reset());
   }
 
@@ -95,6 +103,7 @@ class SyncService {
     }
     _active = true;
     _pendingFrames = [];
+    onSessionStarted?.call();
 
     final session = _auth.moatSession;
     final did = _auth.did;
@@ -221,6 +230,7 @@ class SyncService {
         },
         complete: () async {
           moatLog('SyncService: session complete — closing pair WS');
+          onSessionComplete?.call();
           await _reset();
           await _drawbridge.clearPair();
         },

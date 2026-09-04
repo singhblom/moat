@@ -448,6 +448,7 @@ pub enum EventKindDto {
     Checkpoint,
     Reaction,
     SyncApp,
+    RingMsg,
     Unknown,
 }
 
@@ -488,6 +489,7 @@ impl EventDto {
                 event
             }
             EventKindDto::SyncApp => Event::sync_app(self.group_id, self.epoch, self.payload),
+            EventKindDto::RingMsg => Event::ring_msg(self.group_id, self.epoch, self.payload),
             EventKindDto::Unknown => {
                 panic!("cannot convert Unknown event to core Event")
             }
@@ -503,8 +505,7 @@ impl EventDto {
                 EventKind::Control(ControlKind::Checkpoint) => EventKindDto::Checkpoint,
                 EventKind::Modifier(ModifierKind::Reaction) => EventKindDto::Reaction,
                 EventKind::SyncApp => EventKindDto::SyncApp,
-                // Ring-lane events (SiblingMsg) are consumed by the ring
-                // driver, not by Dart's event surface — no DTO.
+                EventKind::RingMsg => EventKindDto::RingMsg,
                 EventKind::Modifier(_)
                 | EventKind::Control(_)
                 | EventKind::SiblingMsg
@@ -1455,6 +1456,7 @@ pub struct ConvStateDto {
     pub newest_rkey: Option<String>,
     pub tip_digest: Vec<u8>,
     pub anchors: Vec<SyncAnchorDto>,
+    pub rkeys: Option<Vec<String>>,
 }
 
 impl From<ConvStateDto> for ConvState {
@@ -1465,6 +1467,7 @@ impl From<ConvStateDto> for ConvState {
             newest_rkey: c.newest_rkey,
             tip_digest: c.tip_digest,
             anchors: c.anchors.into_iter().map(CoreAnchorDto::from).collect(),
+            rkeys: c.rkeys,
         }
     }
 }
@@ -1672,6 +1675,236 @@ fn credential_from_dto(dto: CredentialDto) -> Result<MoatCredential, String> {
         .try_into()
         .map_err(|_| "device_id must be 16 bytes".to_string())?;
     Ok(MoatCredential::new(&dto.did, &dto.device_name, device_id))
+}
+
+// ── Requested sync between established devices ───────────────────────────────
+
+/// Encode a `RingMsg::SyncRequest` for publication on the device ring as
+/// an `EventKindDto::RingMsg` event payload.
+pub fn ring_msg_encode_sync_request(token: Vec<u8>) -> Result<Vec<u8>, String> {
+    let token: [u8; moat_core::SYNC_REQUEST_TOKEN_LEN] = token
+        .try_into()
+        .map_err(|_| "token must be 16 bytes".to_string())?;
+    Ok(moat_core::encode_ring_msg(&moat_core::RingMsg::SyncRequest { token }))
+}
+
+/// Decode a `ring.msg` payload and return the sync request's rendezvous
+/// token. Errors on anything that is not a well-formed `RingMsg`.
+pub fn ring_msg_decode_sync_request(payload: Vec<u8>) -> Result<Vec<u8>, String> {
+    match moat_core::decode_ring_msg(&payload).map_err(|e| e.to_string())? {
+        moat_core::RingMsg::SyncRequest { token } => Ok(token.to_vec()),
+    }
+}
+
+/// How long a published sync request stays valid, matching the relay's
+/// token TTL.
+#[frb(sync)]
+pub fn sync_request_ttl_ms() -> i64 {
+    moat_core::SYNC_REQUEST_TTL_MS
+}
+
+/// Above this many messages in one conversation a host omits the rkey
+/// inventory from its `ConvStateDto` — see `ConvStateDto::rkeys`.
+#[frb(sync)]
+pub fn sync_inventory_cap() -> u32 {
+    moat_core::sync::INVENTORY_CAP as u32
+}
+
+/// Presentation projection of a `SyncRequestSessionHandle` — mirrors
+/// `moat_core::SyncRequestUiState`.
+/// Why a sync session ended badly — mirrors `moat_core::SyncFailure`.
+///
+/// An enum rather than a message, because the same fact reads differently
+/// on each side: a rendezvous nobody joined is "no device answered" to the
+/// device that asked and "this expired before you answered" to the device
+/// that was prompted. Each screen supplies its own words.
+pub enum SyncFailureDto {
+    /// Requester: nobody joined the rendezvous before it expired.
+    NoAnswer,
+    /// Responder: the request expired before this device answered it.
+    RequestExpired,
+    /// This device's user declined a sibling's request.
+    Declined,
+    /// The pair channel closed before the transfer finished.
+    ChannelClosed { detail: String },
+    /// The request could not be published to the ring at all.
+    PublishFailed { detail: String },
+}
+
+impl From<SyncFailureDto> for moat_core::SyncFailure {
+    fn from(f: SyncFailureDto) -> Self {
+        use moat_core::SyncFailure as F;
+        match f {
+            SyncFailureDto::NoAnswer => F::NoAnswer,
+            SyncFailureDto::RequestExpired => F::RequestExpired,
+            SyncFailureDto::Declined => F::Declined,
+            SyncFailureDto::ChannelClosed { detail } => F::ChannelClosed { detail },
+            SyncFailureDto::PublishFailed { detail } => F::PublishFailed { detail },
+        }
+    }
+}
+
+impl From<moat_core::SyncFailure> for SyncFailureDto {
+    fn from(f: moat_core::SyncFailure) -> Self {
+        use moat_core::SyncFailure as F;
+        match f {
+            F::NoAnswer => SyncFailureDto::NoAnswer,
+            F::RequestExpired => SyncFailureDto::RequestExpired,
+            F::Declined => SyncFailureDto::Declined,
+            F::ChannelClosed { detail } => SyncFailureDto::ChannelClosed { detail },
+            F::PublishFailed { detail } => SyncFailureDto::PublishFailed { detail },
+        }
+    }
+}
+
+pub enum SyncRequestUiStateDto {
+    /// No sync request in flight. The handle itself never returns this;
+    /// a host wrapping an optional session reports it when there is none.
+    Idle,
+    /// Waiting on the rendezvous, in either role.
+    AwaitingPeer,
+    /// A sibling asked for history; this device's user has not decided.
+    AwaitingApproval { device_name: String },
+    /// Channel up, transfer running.
+    Active,
+    /// Transfer finished.
+    Complete,
+    /// Terminal failure, with the structured reason retained.
+    Failed { reason: SyncFailureDto },
+}
+
+impl From<moat_core::SyncRequestUiState> for SyncRequestUiStateDto {
+    fn from(s: moat_core::SyncRequestUiState) -> Self {
+        use moat_core::SyncRequestUiState as S;
+        match s {
+            S::Idle => SyncRequestUiStateDto::Idle,
+            S::AwaitingPeer => SyncRequestUiStateDto::AwaitingPeer,
+            S::AwaitingApproval { device_name } => {
+                SyncRequestUiStateDto::AwaitingApproval { device_name }
+            }
+            S::Active => SyncRequestUiStateDto::Active,
+            S::Complete => SyncRequestUiStateDto::Complete,
+            S::Failed { reason } => {
+                SyncRequestUiStateDto::Failed { reason: reason.into() }
+            }
+        }
+    }
+}
+
+/// Opaque handle to a `SyncRequestSession`, thread-safe via Mutex. Both
+/// roles (requester / responder) live in one type, selected at
+/// construction — mirrors `moat_core::sync_request::SyncRequestSession`.
+pub struct SyncRequestSessionHandle {
+    inner: Mutex<moat_core::SyncRequestSession>,
+}
+
+impl SyncRequestSessionHandle {
+    /// Start a request of our own. The caller publishes
+    /// `ring_msg_encode_sync_request(token)` on the ring and registers the
+    /// same token with the relay via `pair_offer`.
+    #[frb(sync)]
+    pub fn request(token: Vec<u8>, now_ms: i64) -> Result<SyncRequestSessionHandle, String> {
+        let token: [u8; moat_core::SYNC_REQUEST_TOKEN_LEN] = token
+            .try_into()
+            .map_err(|_| "token must be 16 bytes".to_string())?;
+        Ok(SyncRequestSessionHandle {
+            inner: Mutex::new(moat_core::SyncRequestSession::request(token, now_ms)),
+        })
+    }
+
+    /// A sibling's request arrived on the ring. `device_name` must come
+    /// from the sender's MLS leaf credential, not from the payload.
+    #[frb(sync)]
+    pub fn received(
+        token: Vec<u8>,
+        device_name: String,
+        now_ms: i64,
+    ) -> Result<SyncRequestSessionHandle, String> {
+        let token: [u8; moat_core::SYNC_REQUEST_TOKEN_LEN] = token
+            .try_into()
+            .map_err(|_| "token must be 16 bytes".to_string())?;
+        Ok(SyncRequestSessionHandle {
+            inner: Mutex::new(moat_core::SyncRequestSession::received(
+                token,
+                device_name,
+                now_ms,
+            )),
+        })
+    }
+
+    /// The rendezvous token this session is bound to.
+    #[frb(sync)]
+    pub fn token(&self) -> Vec<u8> {
+        self.inner.lock().unwrap().token().to_vec()
+    }
+
+    /// Current projection. Computed fresh, never cached.
+    #[frb(sync)]
+    pub fn ui_state(&self) -> SyncRequestUiStateDto {
+        self.inner.lock().unwrap().ui_state().into()
+    }
+
+    /// The user approved a sibling's request. Returns the token to
+    /// `pair_join` with; errors if no decision is outstanding.
+    #[frb(sync)]
+    pub fn accept(&self) -> Result<Vec<u8>, String> {
+        self.inner
+            .lock()
+            .unwrap()
+            .accept()
+            .map(|t| t.to_vec())
+            .map_err(|e| e.to_string())
+    }
+
+    /// The user declined. Local only — nothing goes on the wire, so one
+    /// refusal among several prompted siblings doesn't cancel the request.
+    #[frb(sync)]
+    pub fn decline(&self) {
+        self.inner.lock().unwrap().decline();
+    }
+
+    /// The pair channel reached `paired`.
+    #[frb(sync)]
+    pub fn on_channel_up(&self) -> Result<(), String> {
+        self.inner.lock().unwrap().on_channel_up().map_err(|e| e.to_string())
+    }
+
+    /// The sync session running on this channel reported `Complete`.
+    #[frb(sync)]
+    pub fn on_complete(&self) {
+        self.inner.lock().unwrap().on_complete();
+    }
+
+    /// Terminal failure. The first reason wins — a late teardown notice
+    /// never overwrites the failure that explains the outcome, nor a
+    /// completed transfer.
+    #[frb(sync)]
+    pub fn fail(&self, reason: SyncFailureDto) {
+        self.inner.lock().unwrap().fail(reason.into());
+    }
+
+    /// `true` once the session can no longer change state.
+    #[frb(sync)]
+    pub fn is_terminal(&self) -> bool {
+        self.inner.lock().unwrap().is_terminal()
+    }
+
+    /// Move an unanswered session to `Failed` once its rendezvous has
+    /// outlived the relay's token TTL. Returns `true` only on the call
+    /// that changed the state, so a host driving this from a periodic
+    /// tick has exactly one edge to react to.
+    #[frb(sync)]
+    pub fn expire_if_due(&self, now_ms: i64) -> bool {
+        self.inner.lock().unwrap().expire_if_due(now_ms)
+    }
+
+    /// `true` once the rendezvous token has outlived the relay's TTL. Only
+    /// the rendezvous is bounded; a session that reached the channel runs
+    /// to completion however long the transfer takes.
+    #[frb(sync)]
+    pub fn is_expired(&self, now_ms: i64) -> bool {
+        self.inner.lock().unwrap().is_expired(now_ms)
+    }
 }
 
 /// Opaque handle to a `PairingSession`, thread-safe via Mutex. Both roles

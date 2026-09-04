@@ -38,6 +38,8 @@ export 'services/member_adder.dart';
 export 'services/drawbridge_service.dart';
 export 'services/device_ring_service.dart';
 export 'services/sync_service.dart';
+export 'services/sync_request_service.dart';
+export 'utils/sync_failure_text.dart';
 export 'services/paired_sync_builder.dart';
 export 'services/pairing_service.dart';
 export 'services/profile_cache_service.dart';

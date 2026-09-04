@@ -3285,6 +3285,809 @@ abstract class RingCommandDto_PollForNewDevices extends RingCommandDto {
 }
 
 /// @nodoc
+mixin _$SyncFailureDto {
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() noAnswer,
+    required TResult Function() requestExpired,
+    required TResult Function() declined,
+    required TResult Function(String detail) channelClosed,
+    required TResult Function(String detail) publishFailed,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? noAnswer,
+    TResult? Function()? requestExpired,
+    TResult? Function()? declined,
+    TResult? Function(String detail)? channelClosed,
+    TResult? Function(String detail)? publishFailed,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? noAnswer,
+    TResult Function()? requestExpired,
+    TResult Function()? declined,
+    TResult Function(String detail)? channelClosed,
+    TResult Function(String detail)? publishFailed,
+    required TResult orElse(),
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(SyncFailureDto_NoAnswer value) noAnswer,
+    required TResult Function(SyncFailureDto_RequestExpired value)
+        requestExpired,
+    required TResult Function(SyncFailureDto_Declined value) declined,
+    required TResult Function(SyncFailureDto_ChannelClosed value) channelClosed,
+    required TResult Function(SyncFailureDto_PublishFailed value) publishFailed,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(SyncFailureDto_NoAnswer value)? noAnswer,
+    TResult? Function(SyncFailureDto_RequestExpired value)? requestExpired,
+    TResult? Function(SyncFailureDto_Declined value)? declined,
+    TResult? Function(SyncFailureDto_ChannelClosed value)? channelClosed,
+    TResult? Function(SyncFailureDto_PublishFailed value)? publishFailed,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(SyncFailureDto_NoAnswer value)? noAnswer,
+    TResult Function(SyncFailureDto_RequestExpired value)? requestExpired,
+    TResult Function(SyncFailureDto_Declined value)? declined,
+    TResult Function(SyncFailureDto_ChannelClosed value)? channelClosed,
+    TResult Function(SyncFailureDto_PublishFailed value)? publishFailed,
+    required TResult orElse(),
+  }) =>
+      throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class $SyncFailureDtoCopyWith<$Res> {
+  factory $SyncFailureDtoCopyWith(
+          SyncFailureDto value, $Res Function(SyncFailureDto) then) =
+      _$SyncFailureDtoCopyWithImpl<$Res, SyncFailureDto>;
+}
+
+/// @nodoc
+class _$SyncFailureDtoCopyWithImpl<$Res, $Val extends SyncFailureDto>
+    implements $SyncFailureDtoCopyWith<$Res> {
+  _$SyncFailureDtoCopyWithImpl(this._value, this._then);
+
+  // ignore: unused_field
+  final $Val _value;
+  // ignore: unused_field
+  final $Res Function($Val) _then;
+
+  /// Create a copy of SyncFailureDto
+  /// with the given fields replaced by the non-null parameter values.
+}
+
+/// @nodoc
+abstract class _$$SyncFailureDto_NoAnswerImplCopyWith<$Res> {
+  factory _$$SyncFailureDto_NoAnswerImplCopyWith(
+          _$SyncFailureDto_NoAnswerImpl value,
+          $Res Function(_$SyncFailureDto_NoAnswerImpl) then) =
+      __$$SyncFailureDto_NoAnswerImplCopyWithImpl<$Res>;
+}
+
+/// @nodoc
+class __$$SyncFailureDto_NoAnswerImplCopyWithImpl<$Res>
+    extends _$SyncFailureDtoCopyWithImpl<$Res, _$SyncFailureDto_NoAnswerImpl>
+    implements _$$SyncFailureDto_NoAnswerImplCopyWith<$Res> {
+  __$$SyncFailureDto_NoAnswerImplCopyWithImpl(
+      _$SyncFailureDto_NoAnswerImpl _value,
+      $Res Function(_$SyncFailureDto_NoAnswerImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of SyncFailureDto
+  /// with the given fields replaced by the non-null parameter values.
+}
+
+/// @nodoc
+
+class _$SyncFailureDto_NoAnswerImpl extends SyncFailureDto_NoAnswer {
+  const _$SyncFailureDto_NoAnswerImpl() : super._();
+
+  @override
+  String toString() {
+    return 'SyncFailureDto.noAnswer()';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$SyncFailureDto_NoAnswerImpl);
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() noAnswer,
+    required TResult Function() requestExpired,
+    required TResult Function() declined,
+    required TResult Function(String detail) channelClosed,
+    required TResult Function(String detail) publishFailed,
+  }) {
+    return noAnswer();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? noAnswer,
+    TResult? Function()? requestExpired,
+    TResult? Function()? declined,
+    TResult? Function(String detail)? channelClosed,
+    TResult? Function(String detail)? publishFailed,
+  }) {
+    return noAnswer?.call();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? noAnswer,
+    TResult Function()? requestExpired,
+    TResult Function()? declined,
+    TResult Function(String detail)? channelClosed,
+    TResult Function(String detail)? publishFailed,
+    required TResult orElse(),
+  }) {
+    if (noAnswer != null) {
+      return noAnswer();
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(SyncFailureDto_NoAnswer value) noAnswer,
+    required TResult Function(SyncFailureDto_RequestExpired value)
+        requestExpired,
+    required TResult Function(SyncFailureDto_Declined value) declined,
+    required TResult Function(SyncFailureDto_ChannelClosed value) channelClosed,
+    required TResult Function(SyncFailureDto_PublishFailed value) publishFailed,
+  }) {
+    return noAnswer(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(SyncFailureDto_NoAnswer value)? noAnswer,
+    TResult? Function(SyncFailureDto_RequestExpired value)? requestExpired,
+    TResult? Function(SyncFailureDto_Declined value)? declined,
+    TResult? Function(SyncFailureDto_ChannelClosed value)? channelClosed,
+    TResult? Function(SyncFailureDto_PublishFailed value)? publishFailed,
+  }) {
+    return noAnswer?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(SyncFailureDto_NoAnswer value)? noAnswer,
+    TResult Function(SyncFailureDto_RequestExpired value)? requestExpired,
+    TResult Function(SyncFailureDto_Declined value)? declined,
+    TResult Function(SyncFailureDto_ChannelClosed value)? channelClosed,
+    TResult Function(SyncFailureDto_PublishFailed value)? publishFailed,
+    required TResult orElse(),
+  }) {
+    if (noAnswer != null) {
+      return noAnswer(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class SyncFailureDto_NoAnswer extends SyncFailureDto {
+  const factory SyncFailureDto_NoAnswer() = _$SyncFailureDto_NoAnswerImpl;
+  const SyncFailureDto_NoAnswer._() : super._();
+}
+
+/// @nodoc
+abstract class _$$SyncFailureDto_RequestExpiredImplCopyWith<$Res> {
+  factory _$$SyncFailureDto_RequestExpiredImplCopyWith(
+          _$SyncFailureDto_RequestExpiredImpl value,
+          $Res Function(_$SyncFailureDto_RequestExpiredImpl) then) =
+      __$$SyncFailureDto_RequestExpiredImplCopyWithImpl<$Res>;
+}
+
+/// @nodoc
+class __$$SyncFailureDto_RequestExpiredImplCopyWithImpl<$Res>
+    extends _$SyncFailureDtoCopyWithImpl<$Res,
+        _$SyncFailureDto_RequestExpiredImpl>
+    implements _$$SyncFailureDto_RequestExpiredImplCopyWith<$Res> {
+  __$$SyncFailureDto_RequestExpiredImplCopyWithImpl(
+      _$SyncFailureDto_RequestExpiredImpl _value,
+      $Res Function(_$SyncFailureDto_RequestExpiredImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of SyncFailureDto
+  /// with the given fields replaced by the non-null parameter values.
+}
+
+/// @nodoc
+
+class _$SyncFailureDto_RequestExpiredImpl
+    extends SyncFailureDto_RequestExpired {
+  const _$SyncFailureDto_RequestExpiredImpl() : super._();
+
+  @override
+  String toString() {
+    return 'SyncFailureDto.requestExpired()';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$SyncFailureDto_RequestExpiredImpl);
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() noAnswer,
+    required TResult Function() requestExpired,
+    required TResult Function() declined,
+    required TResult Function(String detail) channelClosed,
+    required TResult Function(String detail) publishFailed,
+  }) {
+    return requestExpired();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? noAnswer,
+    TResult? Function()? requestExpired,
+    TResult? Function()? declined,
+    TResult? Function(String detail)? channelClosed,
+    TResult? Function(String detail)? publishFailed,
+  }) {
+    return requestExpired?.call();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? noAnswer,
+    TResult Function()? requestExpired,
+    TResult Function()? declined,
+    TResult Function(String detail)? channelClosed,
+    TResult Function(String detail)? publishFailed,
+    required TResult orElse(),
+  }) {
+    if (requestExpired != null) {
+      return requestExpired();
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(SyncFailureDto_NoAnswer value) noAnswer,
+    required TResult Function(SyncFailureDto_RequestExpired value)
+        requestExpired,
+    required TResult Function(SyncFailureDto_Declined value) declined,
+    required TResult Function(SyncFailureDto_ChannelClosed value) channelClosed,
+    required TResult Function(SyncFailureDto_PublishFailed value) publishFailed,
+  }) {
+    return requestExpired(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(SyncFailureDto_NoAnswer value)? noAnswer,
+    TResult? Function(SyncFailureDto_RequestExpired value)? requestExpired,
+    TResult? Function(SyncFailureDto_Declined value)? declined,
+    TResult? Function(SyncFailureDto_ChannelClosed value)? channelClosed,
+    TResult? Function(SyncFailureDto_PublishFailed value)? publishFailed,
+  }) {
+    return requestExpired?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(SyncFailureDto_NoAnswer value)? noAnswer,
+    TResult Function(SyncFailureDto_RequestExpired value)? requestExpired,
+    TResult Function(SyncFailureDto_Declined value)? declined,
+    TResult Function(SyncFailureDto_ChannelClosed value)? channelClosed,
+    TResult Function(SyncFailureDto_PublishFailed value)? publishFailed,
+    required TResult orElse(),
+  }) {
+    if (requestExpired != null) {
+      return requestExpired(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class SyncFailureDto_RequestExpired extends SyncFailureDto {
+  const factory SyncFailureDto_RequestExpired() =
+      _$SyncFailureDto_RequestExpiredImpl;
+  const SyncFailureDto_RequestExpired._() : super._();
+}
+
+/// @nodoc
+abstract class _$$SyncFailureDto_DeclinedImplCopyWith<$Res> {
+  factory _$$SyncFailureDto_DeclinedImplCopyWith(
+          _$SyncFailureDto_DeclinedImpl value,
+          $Res Function(_$SyncFailureDto_DeclinedImpl) then) =
+      __$$SyncFailureDto_DeclinedImplCopyWithImpl<$Res>;
+}
+
+/// @nodoc
+class __$$SyncFailureDto_DeclinedImplCopyWithImpl<$Res>
+    extends _$SyncFailureDtoCopyWithImpl<$Res, _$SyncFailureDto_DeclinedImpl>
+    implements _$$SyncFailureDto_DeclinedImplCopyWith<$Res> {
+  __$$SyncFailureDto_DeclinedImplCopyWithImpl(
+      _$SyncFailureDto_DeclinedImpl _value,
+      $Res Function(_$SyncFailureDto_DeclinedImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of SyncFailureDto
+  /// with the given fields replaced by the non-null parameter values.
+}
+
+/// @nodoc
+
+class _$SyncFailureDto_DeclinedImpl extends SyncFailureDto_Declined {
+  const _$SyncFailureDto_DeclinedImpl() : super._();
+
+  @override
+  String toString() {
+    return 'SyncFailureDto.declined()';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$SyncFailureDto_DeclinedImpl);
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() noAnswer,
+    required TResult Function() requestExpired,
+    required TResult Function() declined,
+    required TResult Function(String detail) channelClosed,
+    required TResult Function(String detail) publishFailed,
+  }) {
+    return declined();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? noAnswer,
+    TResult? Function()? requestExpired,
+    TResult? Function()? declined,
+    TResult? Function(String detail)? channelClosed,
+    TResult? Function(String detail)? publishFailed,
+  }) {
+    return declined?.call();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? noAnswer,
+    TResult Function()? requestExpired,
+    TResult Function()? declined,
+    TResult Function(String detail)? channelClosed,
+    TResult Function(String detail)? publishFailed,
+    required TResult orElse(),
+  }) {
+    if (declined != null) {
+      return declined();
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(SyncFailureDto_NoAnswer value) noAnswer,
+    required TResult Function(SyncFailureDto_RequestExpired value)
+        requestExpired,
+    required TResult Function(SyncFailureDto_Declined value) declined,
+    required TResult Function(SyncFailureDto_ChannelClosed value) channelClosed,
+    required TResult Function(SyncFailureDto_PublishFailed value) publishFailed,
+  }) {
+    return declined(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(SyncFailureDto_NoAnswer value)? noAnswer,
+    TResult? Function(SyncFailureDto_RequestExpired value)? requestExpired,
+    TResult? Function(SyncFailureDto_Declined value)? declined,
+    TResult? Function(SyncFailureDto_ChannelClosed value)? channelClosed,
+    TResult? Function(SyncFailureDto_PublishFailed value)? publishFailed,
+  }) {
+    return declined?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(SyncFailureDto_NoAnswer value)? noAnswer,
+    TResult Function(SyncFailureDto_RequestExpired value)? requestExpired,
+    TResult Function(SyncFailureDto_Declined value)? declined,
+    TResult Function(SyncFailureDto_ChannelClosed value)? channelClosed,
+    TResult Function(SyncFailureDto_PublishFailed value)? publishFailed,
+    required TResult orElse(),
+  }) {
+    if (declined != null) {
+      return declined(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class SyncFailureDto_Declined extends SyncFailureDto {
+  const factory SyncFailureDto_Declined() = _$SyncFailureDto_DeclinedImpl;
+  const SyncFailureDto_Declined._() : super._();
+}
+
+/// @nodoc
+abstract class _$$SyncFailureDto_ChannelClosedImplCopyWith<$Res> {
+  factory _$$SyncFailureDto_ChannelClosedImplCopyWith(
+          _$SyncFailureDto_ChannelClosedImpl value,
+          $Res Function(_$SyncFailureDto_ChannelClosedImpl) then) =
+      __$$SyncFailureDto_ChannelClosedImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({String detail});
+}
+
+/// @nodoc
+class __$$SyncFailureDto_ChannelClosedImplCopyWithImpl<$Res>
+    extends _$SyncFailureDtoCopyWithImpl<$Res,
+        _$SyncFailureDto_ChannelClosedImpl>
+    implements _$$SyncFailureDto_ChannelClosedImplCopyWith<$Res> {
+  __$$SyncFailureDto_ChannelClosedImplCopyWithImpl(
+      _$SyncFailureDto_ChannelClosedImpl _value,
+      $Res Function(_$SyncFailureDto_ChannelClosedImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of SyncFailureDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? detail = null,
+  }) {
+    return _then(_$SyncFailureDto_ChannelClosedImpl(
+      detail: null == detail
+          ? _value.detail
+          : detail // ignore: cast_nullable_to_non_nullable
+              as String,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$SyncFailureDto_ChannelClosedImpl extends SyncFailureDto_ChannelClosed {
+  const _$SyncFailureDto_ChannelClosedImpl({required this.detail}) : super._();
+
+  @override
+  final String detail;
+
+  @override
+  String toString() {
+    return 'SyncFailureDto.channelClosed(detail: $detail)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$SyncFailureDto_ChannelClosedImpl &&
+            (identical(other.detail, detail) || other.detail == detail));
+  }
+
+  @override
+  int get hashCode => Object.hash(runtimeType, detail);
+
+  /// Create a copy of SyncFailureDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$SyncFailureDto_ChannelClosedImplCopyWith<
+          _$SyncFailureDto_ChannelClosedImpl>
+      get copyWith => __$$SyncFailureDto_ChannelClosedImplCopyWithImpl<
+          _$SyncFailureDto_ChannelClosedImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() noAnswer,
+    required TResult Function() requestExpired,
+    required TResult Function() declined,
+    required TResult Function(String detail) channelClosed,
+    required TResult Function(String detail) publishFailed,
+  }) {
+    return channelClosed(detail);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? noAnswer,
+    TResult? Function()? requestExpired,
+    TResult? Function()? declined,
+    TResult? Function(String detail)? channelClosed,
+    TResult? Function(String detail)? publishFailed,
+  }) {
+    return channelClosed?.call(detail);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? noAnswer,
+    TResult Function()? requestExpired,
+    TResult Function()? declined,
+    TResult Function(String detail)? channelClosed,
+    TResult Function(String detail)? publishFailed,
+    required TResult orElse(),
+  }) {
+    if (channelClosed != null) {
+      return channelClosed(detail);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(SyncFailureDto_NoAnswer value) noAnswer,
+    required TResult Function(SyncFailureDto_RequestExpired value)
+        requestExpired,
+    required TResult Function(SyncFailureDto_Declined value) declined,
+    required TResult Function(SyncFailureDto_ChannelClosed value) channelClosed,
+    required TResult Function(SyncFailureDto_PublishFailed value) publishFailed,
+  }) {
+    return channelClosed(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(SyncFailureDto_NoAnswer value)? noAnswer,
+    TResult? Function(SyncFailureDto_RequestExpired value)? requestExpired,
+    TResult? Function(SyncFailureDto_Declined value)? declined,
+    TResult? Function(SyncFailureDto_ChannelClosed value)? channelClosed,
+    TResult? Function(SyncFailureDto_PublishFailed value)? publishFailed,
+  }) {
+    return channelClosed?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(SyncFailureDto_NoAnswer value)? noAnswer,
+    TResult Function(SyncFailureDto_RequestExpired value)? requestExpired,
+    TResult Function(SyncFailureDto_Declined value)? declined,
+    TResult Function(SyncFailureDto_ChannelClosed value)? channelClosed,
+    TResult Function(SyncFailureDto_PublishFailed value)? publishFailed,
+    required TResult orElse(),
+  }) {
+    if (channelClosed != null) {
+      return channelClosed(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class SyncFailureDto_ChannelClosed extends SyncFailureDto {
+  const factory SyncFailureDto_ChannelClosed({required final String detail}) =
+      _$SyncFailureDto_ChannelClosedImpl;
+  const SyncFailureDto_ChannelClosed._() : super._();
+
+  String get detail;
+
+  /// Create a copy of SyncFailureDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$SyncFailureDto_ChannelClosedImplCopyWith<
+          _$SyncFailureDto_ChannelClosedImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class _$$SyncFailureDto_PublishFailedImplCopyWith<$Res> {
+  factory _$$SyncFailureDto_PublishFailedImplCopyWith(
+          _$SyncFailureDto_PublishFailedImpl value,
+          $Res Function(_$SyncFailureDto_PublishFailedImpl) then) =
+      __$$SyncFailureDto_PublishFailedImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({String detail});
+}
+
+/// @nodoc
+class __$$SyncFailureDto_PublishFailedImplCopyWithImpl<$Res>
+    extends _$SyncFailureDtoCopyWithImpl<$Res,
+        _$SyncFailureDto_PublishFailedImpl>
+    implements _$$SyncFailureDto_PublishFailedImplCopyWith<$Res> {
+  __$$SyncFailureDto_PublishFailedImplCopyWithImpl(
+      _$SyncFailureDto_PublishFailedImpl _value,
+      $Res Function(_$SyncFailureDto_PublishFailedImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of SyncFailureDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? detail = null,
+  }) {
+    return _then(_$SyncFailureDto_PublishFailedImpl(
+      detail: null == detail
+          ? _value.detail
+          : detail // ignore: cast_nullable_to_non_nullable
+              as String,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$SyncFailureDto_PublishFailedImpl extends SyncFailureDto_PublishFailed {
+  const _$SyncFailureDto_PublishFailedImpl({required this.detail}) : super._();
+
+  @override
+  final String detail;
+
+  @override
+  String toString() {
+    return 'SyncFailureDto.publishFailed(detail: $detail)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$SyncFailureDto_PublishFailedImpl &&
+            (identical(other.detail, detail) || other.detail == detail));
+  }
+
+  @override
+  int get hashCode => Object.hash(runtimeType, detail);
+
+  /// Create a copy of SyncFailureDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$SyncFailureDto_PublishFailedImplCopyWith<
+          _$SyncFailureDto_PublishFailedImpl>
+      get copyWith => __$$SyncFailureDto_PublishFailedImplCopyWithImpl<
+          _$SyncFailureDto_PublishFailedImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() noAnswer,
+    required TResult Function() requestExpired,
+    required TResult Function() declined,
+    required TResult Function(String detail) channelClosed,
+    required TResult Function(String detail) publishFailed,
+  }) {
+    return publishFailed(detail);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? noAnswer,
+    TResult? Function()? requestExpired,
+    TResult? Function()? declined,
+    TResult? Function(String detail)? channelClosed,
+    TResult? Function(String detail)? publishFailed,
+  }) {
+    return publishFailed?.call(detail);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? noAnswer,
+    TResult Function()? requestExpired,
+    TResult Function()? declined,
+    TResult Function(String detail)? channelClosed,
+    TResult Function(String detail)? publishFailed,
+    required TResult orElse(),
+  }) {
+    if (publishFailed != null) {
+      return publishFailed(detail);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(SyncFailureDto_NoAnswer value) noAnswer,
+    required TResult Function(SyncFailureDto_RequestExpired value)
+        requestExpired,
+    required TResult Function(SyncFailureDto_Declined value) declined,
+    required TResult Function(SyncFailureDto_ChannelClosed value) channelClosed,
+    required TResult Function(SyncFailureDto_PublishFailed value) publishFailed,
+  }) {
+    return publishFailed(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(SyncFailureDto_NoAnswer value)? noAnswer,
+    TResult? Function(SyncFailureDto_RequestExpired value)? requestExpired,
+    TResult? Function(SyncFailureDto_Declined value)? declined,
+    TResult? Function(SyncFailureDto_ChannelClosed value)? channelClosed,
+    TResult? Function(SyncFailureDto_PublishFailed value)? publishFailed,
+  }) {
+    return publishFailed?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(SyncFailureDto_NoAnswer value)? noAnswer,
+    TResult Function(SyncFailureDto_RequestExpired value)? requestExpired,
+    TResult Function(SyncFailureDto_Declined value)? declined,
+    TResult Function(SyncFailureDto_ChannelClosed value)? channelClosed,
+    TResult Function(SyncFailureDto_PublishFailed value)? publishFailed,
+    required TResult orElse(),
+  }) {
+    if (publishFailed != null) {
+      return publishFailed(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class SyncFailureDto_PublishFailed extends SyncFailureDto {
+  const factory SyncFailureDto_PublishFailed({required final String detail}) =
+      _$SyncFailureDto_PublishFailedImpl;
+  const SyncFailureDto_PublishFailed._() : super._();
+
+  String get detail;
+
+  /// Create a copy of SyncFailureDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$SyncFailureDto_PublishFailedImplCopyWith<
+          _$SyncFailureDto_PublishFailedImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
 mixin _$SyncOutputDto {
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
@@ -3789,4 +4592,1025 @@ class _$SyncOutputDto_CompleteImpl extends SyncOutputDto_Complete {
 abstract class SyncOutputDto_Complete extends SyncOutputDto {
   const factory SyncOutputDto_Complete() = _$SyncOutputDto_CompleteImpl;
   const SyncOutputDto_Complete._() : super._();
+}
+
+/// @nodoc
+mixin _$SyncRequestUiStateDto {
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() idle,
+    required TResult Function() awaitingPeer,
+    required TResult Function(String deviceName) awaitingApproval,
+    required TResult Function() active,
+    required TResult Function() complete,
+    required TResult Function(SyncFailureDto reason) failed,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? idle,
+    TResult? Function()? awaitingPeer,
+    TResult? Function(String deviceName)? awaitingApproval,
+    TResult? Function()? active,
+    TResult? Function()? complete,
+    TResult? Function(SyncFailureDto reason)? failed,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? idle,
+    TResult Function()? awaitingPeer,
+    TResult Function(String deviceName)? awaitingApproval,
+    TResult Function()? active,
+    TResult Function()? complete,
+    TResult Function(SyncFailureDto reason)? failed,
+    required TResult orElse(),
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(SyncRequestUiStateDto_Idle value) idle,
+    required TResult Function(SyncRequestUiStateDto_AwaitingPeer value)
+        awaitingPeer,
+    required TResult Function(SyncRequestUiStateDto_AwaitingApproval value)
+        awaitingApproval,
+    required TResult Function(SyncRequestUiStateDto_Active value) active,
+    required TResult Function(SyncRequestUiStateDto_Complete value) complete,
+    required TResult Function(SyncRequestUiStateDto_Failed value) failed,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(SyncRequestUiStateDto_Idle value)? idle,
+    TResult? Function(SyncRequestUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult? Function(SyncRequestUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult? Function(SyncRequestUiStateDto_Active value)? active,
+    TResult? Function(SyncRequestUiStateDto_Complete value)? complete,
+    TResult? Function(SyncRequestUiStateDto_Failed value)? failed,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(SyncRequestUiStateDto_Idle value)? idle,
+    TResult Function(SyncRequestUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult Function(SyncRequestUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult Function(SyncRequestUiStateDto_Active value)? active,
+    TResult Function(SyncRequestUiStateDto_Complete value)? complete,
+    TResult Function(SyncRequestUiStateDto_Failed value)? failed,
+    required TResult orElse(),
+  }) =>
+      throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class $SyncRequestUiStateDtoCopyWith<$Res> {
+  factory $SyncRequestUiStateDtoCopyWith(SyncRequestUiStateDto value,
+          $Res Function(SyncRequestUiStateDto) then) =
+      _$SyncRequestUiStateDtoCopyWithImpl<$Res, SyncRequestUiStateDto>;
+}
+
+/// @nodoc
+class _$SyncRequestUiStateDtoCopyWithImpl<$Res,
+        $Val extends SyncRequestUiStateDto>
+    implements $SyncRequestUiStateDtoCopyWith<$Res> {
+  _$SyncRequestUiStateDtoCopyWithImpl(this._value, this._then);
+
+  // ignore: unused_field
+  final $Val _value;
+  // ignore: unused_field
+  final $Res Function($Val) _then;
+
+  /// Create a copy of SyncRequestUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+}
+
+/// @nodoc
+abstract class _$$SyncRequestUiStateDto_IdleImplCopyWith<$Res> {
+  factory _$$SyncRequestUiStateDto_IdleImplCopyWith(
+          _$SyncRequestUiStateDto_IdleImpl value,
+          $Res Function(_$SyncRequestUiStateDto_IdleImpl) then) =
+      __$$SyncRequestUiStateDto_IdleImplCopyWithImpl<$Res>;
+}
+
+/// @nodoc
+class __$$SyncRequestUiStateDto_IdleImplCopyWithImpl<$Res>
+    extends _$SyncRequestUiStateDtoCopyWithImpl<$Res,
+        _$SyncRequestUiStateDto_IdleImpl>
+    implements _$$SyncRequestUiStateDto_IdleImplCopyWith<$Res> {
+  __$$SyncRequestUiStateDto_IdleImplCopyWithImpl(
+      _$SyncRequestUiStateDto_IdleImpl _value,
+      $Res Function(_$SyncRequestUiStateDto_IdleImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of SyncRequestUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+}
+
+/// @nodoc
+
+class _$SyncRequestUiStateDto_IdleImpl extends SyncRequestUiStateDto_Idle {
+  const _$SyncRequestUiStateDto_IdleImpl() : super._();
+
+  @override
+  String toString() {
+    return 'SyncRequestUiStateDto.idle()';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$SyncRequestUiStateDto_IdleImpl);
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() idle,
+    required TResult Function() awaitingPeer,
+    required TResult Function(String deviceName) awaitingApproval,
+    required TResult Function() active,
+    required TResult Function() complete,
+    required TResult Function(SyncFailureDto reason) failed,
+  }) {
+    return idle();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? idle,
+    TResult? Function()? awaitingPeer,
+    TResult? Function(String deviceName)? awaitingApproval,
+    TResult? Function()? active,
+    TResult? Function()? complete,
+    TResult? Function(SyncFailureDto reason)? failed,
+  }) {
+    return idle?.call();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? idle,
+    TResult Function()? awaitingPeer,
+    TResult Function(String deviceName)? awaitingApproval,
+    TResult Function()? active,
+    TResult Function()? complete,
+    TResult Function(SyncFailureDto reason)? failed,
+    required TResult orElse(),
+  }) {
+    if (idle != null) {
+      return idle();
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(SyncRequestUiStateDto_Idle value) idle,
+    required TResult Function(SyncRequestUiStateDto_AwaitingPeer value)
+        awaitingPeer,
+    required TResult Function(SyncRequestUiStateDto_AwaitingApproval value)
+        awaitingApproval,
+    required TResult Function(SyncRequestUiStateDto_Active value) active,
+    required TResult Function(SyncRequestUiStateDto_Complete value) complete,
+    required TResult Function(SyncRequestUiStateDto_Failed value) failed,
+  }) {
+    return idle(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(SyncRequestUiStateDto_Idle value)? idle,
+    TResult? Function(SyncRequestUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult? Function(SyncRequestUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult? Function(SyncRequestUiStateDto_Active value)? active,
+    TResult? Function(SyncRequestUiStateDto_Complete value)? complete,
+    TResult? Function(SyncRequestUiStateDto_Failed value)? failed,
+  }) {
+    return idle?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(SyncRequestUiStateDto_Idle value)? idle,
+    TResult Function(SyncRequestUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult Function(SyncRequestUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult Function(SyncRequestUiStateDto_Active value)? active,
+    TResult Function(SyncRequestUiStateDto_Complete value)? complete,
+    TResult Function(SyncRequestUiStateDto_Failed value)? failed,
+    required TResult orElse(),
+  }) {
+    if (idle != null) {
+      return idle(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class SyncRequestUiStateDto_Idle extends SyncRequestUiStateDto {
+  const factory SyncRequestUiStateDto_Idle() = _$SyncRequestUiStateDto_IdleImpl;
+  const SyncRequestUiStateDto_Idle._() : super._();
+}
+
+/// @nodoc
+abstract class _$$SyncRequestUiStateDto_AwaitingPeerImplCopyWith<$Res> {
+  factory _$$SyncRequestUiStateDto_AwaitingPeerImplCopyWith(
+          _$SyncRequestUiStateDto_AwaitingPeerImpl value,
+          $Res Function(_$SyncRequestUiStateDto_AwaitingPeerImpl) then) =
+      __$$SyncRequestUiStateDto_AwaitingPeerImplCopyWithImpl<$Res>;
+}
+
+/// @nodoc
+class __$$SyncRequestUiStateDto_AwaitingPeerImplCopyWithImpl<$Res>
+    extends _$SyncRequestUiStateDtoCopyWithImpl<$Res,
+        _$SyncRequestUiStateDto_AwaitingPeerImpl>
+    implements _$$SyncRequestUiStateDto_AwaitingPeerImplCopyWith<$Res> {
+  __$$SyncRequestUiStateDto_AwaitingPeerImplCopyWithImpl(
+      _$SyncRequestUiStateDto_AwaitingPeerImpl _value,
+      $Res Function(_$SyncRequestUiStateDto_AwaitingPeerImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of SyncRequestUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+}
+
+/// @nodoc
+
+class _$SyncRequestUiStateDto_AwaitingPeerImpl
+    extends SyncRequestUiStateDto_AwaitingPeer {
+  const _$SyncRequestUiStateDto_AwaitingPeerImpl() : super._();
+
+  @override
+  String toString() {
+    return 'SyncRequestUiStateDto.awaitingPeer()';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$SyncRequestUiStateDto_AwaitingPeerImpl);
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() idle,
+    required TResult Function() awaitingPeer,
+    required TResult Function(String deviceName) awaitingApproval,
+    required TResult Function() active,
+    required TResult Function() complete,
+    required TResult Function(SyncFailureDto reason) failed,
+  }) {
+    return awaitingPeer();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? idle,
+    TResult? Function()? awaitingPeer,
+    TResult? Function(String deviceName)? awaitingApproval,
+    TResult? Function()? active,
+    TResult? Function()? complete,
+    TResult? Function(SyncFailureDto reason)? failed,
+  }) {
+    return awaitingPeer?.call();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? idle,
+    TResult Function()? awaitingPeer,
+    TResult Function(String deviceName)? awaitingApproval,
+    TResult Function()? active,
+    TResult Function()? complete,
+    TResult Function(SyncFailureDto reason)? failed,
+    required TResult orElse(),
+  }) {
+    if (awaitingPeer != null) {
+      return awaitingPeer();
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(SyncRequestUiStateDto_Idle value) idle,
+    required TResult Function(SyncRequestUiStateDto_AwaitingPeer value)
+        awaitingPeer,
+    required TResult Function(SyncRequestUiStateDto_AwaitingApproval value)
+        awaitingApproval,
+    required TResult Function(SyncRequestUiStateDto_Active value) active,
+    required TResult Function(SyncRequestUiStateDto_Complete value) complete,
+    required TResult Function(SyncRequestUiStateDto_Failed value) failed,
+  }) {
+    return awaitingPeer(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(SyncRequestUiStateDto_Idle value)? idle,
+    TResult? Function(SyncRequestUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult? Function(SyncRequestUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult? Function(SyncRequestUiStateDto_Active value)? active,
+    TResult? Function(SyncRequestUiStateDto_Complete value)? complete,
+    TResult? Function(SyncRequestUiStateDto_Failed value)? failed,
+  }) {
+    return awaitingPeer?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(SyncRequestUiStateDto_Idle value)? idle,
+    TResult Function(SyncRequestUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult Function(SyncRequestUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult Function(SyncRequestUiStateDto_Active value)? active,
+    TResult Function(SyncRequestUiStateDto_Complete value)? complete,
+    TResult Function(SyncRequestUiStateDto_Failed value)? failed,
+    required TResult orElse(),
+  }) {
+    if (awaitingPeer != null) {
+      return awaitingPeer(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class SyncRequestUiStateDto_AwaitingPeer
+    extends SyncRequestUiStateDto {
+  const factory SyncRequestUiStateDto_AwaitingPeer() =
+      _$SyncRequestUiStateDto_AwaitingPeerImpl;
+  const SyncRequestUiStateDto_AwaitingPeer._() : super._();
+}
+
+/// @nodoc
+abstract class _$$SyncRequestUiStateDto_AwaitingApprovalImplCopyWith<$Res> {
+  factory _$$SyncRequestUiStateDto_AwaitingApprovalImplCopyWith(
+          _$SyncRequestUiStateDto_AwaitingApprovalImpl value,
+          $Res Function(_$SyncRequestUiStateDto_AwaitingApprovalImpl) then) =
+      __$$SyncRequestUiStateDto_AwaitingApprovalImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({String deviceName});
+}
+
+/// @nodoc
+class __$$SyncRequestUiStateDto_AwaitingApprovalImplCopyWithImpl<$Res>
+    extends _$SyncRequestUiStateDtoCopyWithImpl<$Res,
+        _$SyncRequestUiStateDto_AwaitingApprovalImpl>
+    implements _$$SyncRequestUiStateDto_AwaitingApprovalImplCopyWith<$Res> {
+  __$$SyncRequestUiStateDto_AwaitingApprovalImplCopyWithImpl(
+      _$SyncRequestUiStateDto_AwaitingApprovalImpl _value,
+      $Res Function(_$SyncRequestUiStateDto_AwaitingApprovalImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of SyncRequestUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? deviceName = null,
+  }) {
+    return _then(_$SyncRequestUiStateDto_AwaitingApprovalImpl(
+      deviceName: null == deviceName
+          ? _value.deviceName
+          : deviceName // ignore: cast_nullable_to_non_nullable
+              as String,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$SyncRequestUiStateDto_AwaitingApprovalImpl
+    extends SyncRequestUiStateDto_AwaitingApproval {
+  const _$SyncRequestUiStateDto_AwaitingApprovalImpl({required this.deviceName})
+      : super._();
+
+  @override
+  final String deviceName;
+
+  @override
+  String toString() {
+    return 'SyncRequestUiStateDto.awaitingApproval(deviceName: $deviceName)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$SyncRequestUiStateDto_AwaitingApprovalImpl &&
+            (identical(other.deviceName, deviceName) ||
+                other.deviceName == deviceName));
+  }
+
+  @override
+  int get hashCode => Object.hash(runtimeType, deviceName);
+
+  /// Create a copy of SyncRequestUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$SyncRequestUiStateDto_AwaitingApprovalImplCopyWith<
+          _$SyncRequestUiStateDto_AwaitingApprovalImpl>
+      get copyWith =>
+          __$$SyncRequestUiStateDto_AwaitingApprovalImplCopyWithImpl<
+              _$SyncRequestUiStateDto_AwaitingApprovalImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() idle,
+    required TResult Function() awaitingPeer,
+    required TResult Function(String deviceName) awaitingApproval,
+    required TResult Function() active,
+    required TResult Function() complete,
+    required TResult Function(SyncFailureDto reason) failed,
+  }) {
+    return awaitingApproval(deviceName);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? idle,
+    TResult? Function()? awaitingPeer,
+    TResult? Function(String deviceName)? awaitingApproval,
+    TResult? Function()? active,
+    TResult? Function()? complete,
+    TResult? Function(SyncFailureDto reason)? failed,
+  }) {
+    return awaitingApproval?.call(deviceName);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? idle,
+    TResult Function()? awaitingPeer,
+    TResult Function(String deviceName)? awaitingApproval,
+    TResult Function()? active,
+    TResult Function()? complete,
+    TResult Function(SyncFailureDto reason)? failed,
+    required TResult orElse(),
+  }) {
+    if (awaitingApproval != null) {
+      return awaitingApproval(deviceName);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(SyncRequestUiStateDto_Idle value) idle,
+    required TResult Function(SyncRequestUiStateDto_AwaitingPeer value)
+        awaitingPeer,
+    required TResult Function(SyncRequestUiStateDto_AwaitingApproval value)
+        awaitingApproval,
+    required TResult Function(SyncRequestUiStateDto_Active value) active,
+    required TResult Function(SyncRequestUiStateDto_Complete value) complete,
+    required TResult Function(SyncRequestUiStateDto_Failed value) failed,
+  }) {
+    return awaitingApproval(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(SyncRequestUiStateDto_Idle value)? idle,
+    TResult? Function(SyncRequestUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult? Function(SyncRequestUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult? Function(SyncRequestUiStateDto_Active value)? active,
+    TResult? Function(SyncRequestUiStateDto_Complete value)? complete,
+    TResult? Function(SyncRequestUiStateDto_Failed value)? failed,
+  }) {
+    return awaitingApproval?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(SyncRequestUiStateDto_Idle value)? idle,
+    TResult Function(SyncRequestUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult Function(SyncRequestUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult Function(SyncRequestUiStateDto_Active value)? active,
+    TResult Function(SyncRequestUiStateDto_Complete value)? complete,
+    TResult Function(SyncRequestUiStateDto_Failed value)? failed,
+    required TResult orElse(),
+  }) {
+    if (awaitingApproval != null) {
+      return awaitingApproval(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class SyncRequestUiStateDto_AwaitingApproval
+    extends SyncRequestUiStateDto {
+  const factory SyncRequestUiStateDto_AwaitingApproval(
+          {required final String deviceName}) =
+      _$SyncRequestUiStateDto_AwaitingApprovalImpl;
+  const SyncRequestUiStateDto_AwaitingApproval._() : super._();
+
+  String get deviceName;
+
+  /// Create a copy of SyncRequestUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$SyncRequestUiStateDto_AwaitingApprovalImplCopyWith<
+          _$SyncRequestUiStateDto_AwaitingApprovalImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class _$$SyncRequestUiStateDto_ActiveImplCopyWith<$Res> {
+  factory _$$SyncRequestUiStateDto_ActiveImplCopyWith(
+          _$SyncRequestUiStateDto_ActiveImpl value,
+          $Res Function(_$SyncRequestUiStateDto_ActiveImpl) then) =
+      __$$SyncRequestUiStateDto_ActiveImplCopyWithImpl<$Res>;
+}
+
+/// @nodoc
+class __$$SyncRequestUiStateDto_ActiveImplCopyWithImpl<$Res>
+    extends _$SyncRequestUiStateDtoCopyWithImpl<$Res,
+        _$SyncRequestUiStateDto_ActiveImpl>
+    implements _$$SyncRequestUiStateDto_ActiveImplCopyWith<$Res> {
+  __$$SyncRequestUiStateDto_ActiveImplCopyWithImpl(
+      _$SyncRequestUiStateDto_ActiveImpl _value,
+      $Res Function(_$SyncRequestUiStateDto_ActiveImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of SyncRequestUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+}
+
+/// @nodoc
+
+class _$SyncRequestUiStateDto_ActiveImpl extends SyncRequestUiStateDto_Active {
+  const _$SyncRequestUiStateDto_ActiveImpl() : super._();
+
+  @override
+  String toString() {
+    return 'SyncRequestUiStateDto.active()';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$SyncRequestUiStateDto_ActiveImpl);
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() idle,
+    required TResult Function() awaitingPeer,
+    required TResult Function(String deviceName) awaitingApproval,
+    required TResult Function() active,
+    required TResult Function() complete,
+    required TResult Function(SyncFailureDto reason) failed,
+  }) {
+    return active();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? idle,
+    TResult? Function()? awaitingPeer,
+    TResult? Function(String deviceName)? awaitingApproval,
+    TResult? Function()? active,
+    TResult? Function()? complete,
+    TResult? Function(SyncFailureDto reason)? failed,
+  }) {
+    return active?.call();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? idle,
+    TResult Function()? awaitingPeer,
+    TResult Function(String deviceName)? awaitingApproval,
+    TResult Function()? active,
+    TResult Function()? complete,
+    TResult Function(SyncFailureDto reason)? failed,
+    required TResult orElse(),
+  }) {
+    if (active != null) {
+      return active();
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(SyncRequestUiStateDto_Idle value) idle,
+    required TResult Function(SyncRequestUiStateDto_AwaitingPeer value)
+        awaitingPeer,
+    required TResult Function(SyncRequestUiStateDto_AwaitingApproval value)
+        awaitingApproval,
+    required TResult Function(SyncRequestUiStateDto_Active value) active,
+    required TResult Function(SyncRequestUiStateDto_Complete value) complete,
+    required TResult Function(SyncRequestUiStateDto_Failed value) failed,
+  }) {
+    return active(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(SyncRequestUiStateDto_Idle value)? idle,
+    TResult? Function(SyncRequestUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult? Function(SyncRequestUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult? Function(SyncRequestUiStateDto_Active value)? active,
+    TResult? Function(SyncRequestUiStateDto_Complete value)? complete,
+    TResult? Function(SyncRequestUiStateDto_Failed value)? failed,
+  }) {
+    return active?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(SyncRequestUiStateDto_Idle value)? idle,
+    TResult Function(SyncRequestUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult Function(SyncRequestUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult Function(SyncRequestUiStateDto_Active value)? active,
+    TResult Function(SyncRequestUiStateDto_Complete value)? complete,
+    TResult Function(SyncRequestUiStateDto_Failed value)? failed,
+    required TResult orElse(),
+  }) {
+    if (active != null) {
+      return active(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class SyncRequestUiStateDto_Active extends SyncRequestUiStateDto {
+  const factory SyncRequestUiStateDto_Active() =
+      _$SyncRequestUiStateDto_ActiveImpl;
+  const SyncRequestUiStateDto_Active._() : super._();
+}
+
+/// @nodoc
+abstract class _$$SyncRequestUiStateDto_CompleteImplCopyWith<$Res> {
+  factory _$$SyncRequestUiStateDto_CompleteImplCopyWith(
+          _$SyncRequestUiStateDto_CompleteImpl value,
+          $Res Function(_$SyncRequestUiStateDto_CompleteImpl) then) =
+      __$$SyncRequestUiStateDto_CompleteImplCopyWithImpl<$Res>;
+}
+
+/// @nodoc
+class __$$SyncRequestUiStateDto_CompleteImplCopyWithImpl<$Res>
+    extends _$SyncRequestUiStateDtoCopyWithImpl<$Res,
+        _$SyncRequestUiStateDto_CompleteImpl>
+    implements _$$SyncRequestUiStateDto_CompleteImplCopyWith<$Res> {
+  __$$SyncRequestUiStateDto_CompleteImplCopyWithImpl(
+      _$SyncRequestUiStateDto_CompleteImpl _value,
+      $Res Function(_$SyncRequestUiStateDto_CompleteImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of SyncRequestUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+}
+
+/// @nodoc
+
+class _$SyncRequestUiStateDto_CompleteImpl
+    extends SyncRequestUiStateDto_Complete {
+  const _$SyncRequestUiStateDto_CompleteImpl() : super._();
+
+  @override
+  String toString() {
+    return 'SyncRequestUiStateDto.complete()';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$SyncRequestUiStateDto_CompleteImpl);
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() idle,
+    required TResult Function() awaitingPeer,
+    required TResult Function(String deviceName) awaitingApproval,
+    required TResult Function() active,
+    required TResult Function() complete,
+    required TResult Function(SyncFailureDto reason) failed,
+  }) {
+    return complete();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? idle,
+    TResult? Function()? awaitingPeer,
+    TResult? Function(String deviceName)? awaitingApproval,
+    TResult? Function()? active,
+    TResult? Function()? complete,
+    TResult? Function(SyncFailureDto reason)? failed,
+  }) {
+    return complete?.call();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? idle,
+    TResult Function()? awaitingPeer,
+    TResult Function(String deviceName)? awaitingApproval,
+    TResult Function()? active,
+    TResult Function()? complete,
+    TResult Function(SyncFailureDto reason)? failed,
+    required TResult orElse(),
+  }) {
+    if (complete != null) {
+      return complete();
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(SyncRequestUiStateDto_Idle value) idle,
+    required TResult Function(SyncRequestUiStateDto_AwaitingPeer value)
+        awaitingPeer,
+    required TResult Function(SyncRequestUiStateDto_AwaitingApproval value)
+        awaitingApproval,
+    required TResult Function(SyncRequestUiStateDto_Active value) active,
+    required TResult Function(SyncRequestUiStateDto_Complete value) complete,
+    required TResult Function(SyncRequestUiStateDto_Failed value) failed,
+  }) {
+    return complete(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(SyncRequestUiStateDto_Idle value)? idle,
+    TResult? Function(SyncRequestUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult? Function(SyncRequestUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult? Function(SyncRequestUiStateDto_Active value)? active,
+    TResult? Function(SyncRequestUiStateDto_Complete value)? complete,
+    TResult? Function(SyncRequestUiStateDto_Failed value)? failed,
+  }) {
+    return complete?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(SyncRequestUiStateDto_Idle value)? idle,
+    TResult Function(SyncRequestUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult Function(SyncRequestUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult Function(SyncRequestUiStateDto_Active value)? active,
+    TResult Function(SyncRequestUiStateDto_Complete value)? complete,
+    TResult Function(SyncRequestUiStateDto_Failed value)? failed,
+    required TResult orElse(),
+  }) {
+    if (complete != null) {
+      return complete(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class SyncRequestUiStateDto_Complete extends SyncRequestUiStateDto {
+  const factory SyncRequestUiStateDto_Complete() =
+      _$SyncRequestUiStateDto_CompleteImpl;
+  const SyncRequestUiStateDto_Complete._() : super._();
+}
+
+/// @nodoc
+abstract class _$$SyncRequestUiStateDto_FailedImplCopyWith<$Res> {
+  factory _$$SyncRequestUiStateDto_FailedImplCopyWith(
+          _$SyncRequestUiStateDto_FailedImpl value,
+          $Res Function(_$SyncRequestUiStateDto_FailedImpl) then) =
+      __$$SyncRequestUiStateDto_FailedImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({SyncFailureDto reason});
+
+  $SyncFailureDtoCopyWith<$Res> get reason;
+}
+
+/// @nodoc
+class __$$SyncRequestUiStateDto_FailedImplCopyWithImpl<$Res>
+    extends _$SyncRequestUiStateDtoCopyWithImpl<$Res,
+        _$SyncRequestUiStateDto_FailedImpl>
+    implements _$$SyncRequestUiStateDto_FailedImplCopyWith<$Res> {
+  __$$SyncRequestUiStateDto_FailedImplCopyWithImpl(
+      _$SyncRequestUiStateDto_FailedImpl _value,
+      $Res Function(_$SyncRequestUiStateDto_FailedImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of SyncRequestUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? reason = null,
+  }) {
+    return _then(_$SyncRequestUiStateDto_FailedImpl(
+      reason: null == reason
+          ? _value.reason
+          : reason // ignore: cast_nullable_to_non_nullable
+              as SyncFailureDto,
+    ));
+  }
+
+  /// Create a copy of SyncRequestUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+  @override
+  @pragma('vm:prefer-inline')
+  $SyncFailureDtoCopyWith<$Res> get reason {
+    return $SyncFailureDtoCopyWith<$Res>(_value.reason, (value) {
+      return _then(_value.copyWith(reason: value));
+    });
+  }
+}
+
+/// @nodoc
+
+class _$SyncRequestUiStateDto_FailedImpl extends SyncRequestUiStateDto_Failed {
+  const _$SyncRequestUiStateDto_FailedImpl({required this.reason}) : super._();
+
+  @override
+  final SyncFailureDto reason;
+
+  @override
+  String toString() {
+    return 'SyncRequestUiStateDto.failed(reason: $reason)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$SyncRequestUiStateDto_FailedImpl &&
+            (identical(other.reason, reason) || other.reason == reason));
+  }
+
+  @override
+  int get hashCode => Object.hash(runtimeType, reason);
+
+  /// Create a copy of SyncRequestUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$SyncRequestUiStateDto_FailedImplCopyWith<
+          _$SyncRequestUiStateDto_FailedImpl>
+      get copyWith => __$$SyncRequestUiStateDto_FailedImplCopyWithImpl<
+          _$SyncRequestUiStateDto_FailedImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() idle,
+    required TResult Function() awaitingPeer,
+    required TResult Function(String deviceName) awaitingApproval,
+    required TResult Function() active,
+    required TResult Function() complete,
+    required TResult Function(SyncFailureDto reason) failed,
+  }) {
+    return failed(reason);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? idle,
+    TResult? Function()? awaitingPeer,
+    TResult? Function(String deviceName)? awaitingApproval,
+    TResult? Function()? active,
+    TResult? Function()? complete,
+    TResult? Function(SyncFailureDto reason)? failed,
+  }) {
+    return failed?.call(reason);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? idle,
+    TResult Function()? awaitingPeer,
+    TResult Function(String deviceName)? awaitingApproval,
+    TResult Function()? active,
+    TResult Function()? complete,
+    TResult Function(SyncFailureDto reason)? failed,
+    required TResult orElse(),
+  }) {
+    if (failed != null) {
+      return failed(reason);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(SyncRequestUiStateDto_Idle value) idle,
+    required TResult Function(SyncRequestUiStateDto_AwaitingPeer value)
+        awaitingPeer,
+    required TResult Function(SyncRequestUiStateDto_AwaitingApproval value)
+        awaitingApproval,
+    required TResult Function(SyncRequestUiStateDto_Active value) active,
+    required TResult Function(SyncRequestUiStateDto_Complete value) complete,
+    required TResult Function(SyncRequestUiStateDto_Failed value) failed,
+  }) {
+    return failed(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(SyncRequestUiStateDto_Idle value)? idle,
+    TResult? Function(SyncRequestUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult? Function(SyncRequestUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult? Function(SyncRequestUiStateDto_Active value)? active,
+    TResult? Function(SyncRequestUiStateDto_Complete value)? complete,
+    TResult? Function(SyncRequestUiStateDto_Failed value)? failed,
+  }) {
+    return failed?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(SyncRequestUiStateDto_Idle value)? idle,
+    TResult Function(SyncRequestUiStateDto_AwaitingPeer value)? awaitingPeer,
+    TResult Function(SyncRequestUiStateDto_AwaitingApproval value)?
+        awaitingApproval,
+    TResult Function(SyncRequestUiStateDto_Active value)? active,
+    TResult Function(SyncRequestUiStateDto_Complete value)? complete,
+    TResult Function(SyncRequestUiStateDto_Failed value)? failed,
+    required TResult orElse(),
+  }) {
+    if (failed != null) {
+      return failed(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class SyncRequestUiStateDto_Failed extends SyncRequestUiStateDto {
+  const factory SyncRequestUiStateDto_Failed(
+          {required final SyncFailureDto reason}) =
+      _$SyncRequestUiStateDto_FailedImpl;
+  const SyncRequestUiStateDto_Failed._() : super._();
+
+  SyncFailureDto get reason;
+
+  /// Create a copy of SyncRequestUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$SyncRequestUiStateDto_FailedImplCopyWith<
+          _$SyncRequestUiStateDto_FailedImpl>
+      get copyWith => throw _privateConstructorUsedError;
 }

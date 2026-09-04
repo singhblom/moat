@@ -73,6 +73,23 @@ pub fn decode_ring_msg(bytes: &[u8]) -> Result<RingMsg> {
 
 // ── Session state ─────────────────────────────────────────────────────────────
 
+/// Why a sync session ended badly.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SyncFailure {
+    NoAnswer,
+    RequestExpired,
+    Declined,
+    ChannelClosed { detail: String },
+    PublishFailed { detail: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Role {
+    Requester,
+    Responder,
+}
+
 /// Presentation projection of [`SyncRequestSession`]. Every host renders
 /// this; none derives its own — the same contract [`crate::PairingUiState`]
 /// holds for pairing.
@@ -92,9 +109,9 @@ pub enum SyncRequestUiState {
     Active,
     /// Transfer finished.
     Complete,
-    /// Terminal failure, carrying the reason. Retained rather than
-    /// discarded so a failed sync is distinguishable from a slow one.
-    Failed { reason: String },
+    /// Terminal failure, carrying a structured reason. Retained rather
+    /// than discarded so a failed sync is distinguishable from a slow one.
+    Failed { reason: SyncFailure },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,7 +124,7 @@ enum Phase {
     /// Pair channel established.
     Active,
     Complete,
-    Failed { reason: String },
+    Failed { reason: SyncFailure },
 }
 
 /// The sync-request gesture as a small state machine.
@@ -120,6 +137,7 @@ enum Phase {
 #[derive(Debug, Clone)]
 pub struct SyncRequestSession {
     phase: Phase,
+    role: Role,
     token: [u8; SYNC_REQUEST_TOKEN_LEN],
     /// When the request was published or received, for TTL comparison.
     started_at_ms: i64,
@@ -130,7 +148,12 @@ impl SyncRequestSession {
     /// [`RingMsg::SyncRequest`] with this token on the ring and registers
     /// the same token with the relay via `pair_offer`.
     pub fn request(token: [u8; SYNC_REQUEST_TOKEN_LEN], now_ms: i64) -> Self {
-        Self { phase: Phase::AwaitingPeer, token, started_at_ms: now_ms }
+        Self {
+            phase: Phase::AwaitingPeer,
+            role: Role::Requester,
+            token,
+            started_at_ms: now_ms,
+        }
     }
 
     /// A sibling's request arrived on the ring. `device_name` must come
@@ -142,6 +165,7 @@ impl SyncRequestSession {
     ) -> Self {
         Self {
             phase: Phase::AwaitingApproval { device_name },
+            role: Role::Responder,
             token,
             started_at_ms: now_ms,
         }
@@ -195,7 +219,7 @@ impl SyncRequestSession {
     /// so nothing goes on the wire. The requester simply keeps waiting
     /// until another sibling accepts or the token expires.
     pub fn decline(&mut self) {
-        self.fail("declined on this device".to_string());
+        self.fail(SyncFailure::Declined);
     }
 
     /// The pair channel reached `paired`.
@@ -220,7 +244,7 @@ impl SyncRequestSession {
     /// Terminal failure. The first reason wins: a late teardown notice
     /// must not overwrite the failure that actually explains the outcome,
     /// nor a completed transfer.
-    pub fn fail(&mut self, reason: String) {
+    pub fn fail(&mut self, reason: SyncFailure) {
         if !self.is_terminal() {
             self.phase = Phase::Failed { reason };
         }
@@ -229,6 +253,30 @@ impl SyncRequestSession {
     /// `true` once the session can no longer change state.
     pub fn is_terminal(&self) -> bool {
         matches!(self.phase, Phase::Complete | Phase::Failed { .. })
+    }
+
+    /// Move an unanswered session to `Failed`, if its rendezvous has
+    /// outlived the relay's token TTL. Returns `true` only on the call
+    /// that actually changed the state, so a host driving this from a
+    /// periodic tick has exactly one edge to react to.
+    ///
+    /// Without this the session sits in `AwaitingPeer` for as long as the
+    /// process lives: the state and the TTL both exist, but a clock only
+    /// the host has must supply the "now". Nobody answering is by far the
+    /// most likely way this ends — the other device is asleep, its app is
+    /// closed, its user declined, or it was busy with another sync — and
+    /// none of those need telling apart, because the user's next move is
+    /// the same for all of them.
+    pub fn expire_if_due(&mut self, now_ms: i64) -> bool {
+        if !self.is_expired(now_ms) {
+            return false;
+        }
+        // The same expiry, named for whoever is reading it.
+        self.fail(match self.role {
+            Role::Requester => SyncFailure::NoAnswer,
+            Role::Responder => SyncFailure::RequestExpired,
+        });
+        true
     }
 
     /// `true` once the rendezvous token has outlived the relay's TTL.

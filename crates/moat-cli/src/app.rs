@@ -170,6 +170,9 @@ pub enum Focus {
     /// A sibling asked for history: confirmation screen naming it, awaiting
     /// the decision to send.
     SyncApprove,
+    /// The linked-device list: who else can read this account's messages,
+    /// and the state of any sync in flight.
+    Devices,
 }
 
 /// Login form state
@@ -1197,6 +1200,36 @@ impl App {
     /// convergence (or lack of it) after another device's pairing is
     /// observable at all; before this, `RingStatus` could only confirm
     /// "some ring exists," not who's actually in it.
+    /// One linked device, as the Devices screen renders it. Names come
+    /// from the ring's own MLS leaf credentials — the authenticated
+    /// `device_id -> signature key` map the ring exists to be — so this
+    /// list is exactly "who can read your messages", not a self-reported
+    /// roster.
+    pub fn api_ring_devices(&self) -> Vec<serde_json::Value> {
+        let Some(ring_id) = self.ring_driver.ring_id() else {
+            return Vec::new();
+        };
+        let Ok(members) = self.mls.get_group_members(ring_id) else {
+            return Vec::new();
+        };
+        let my_device_id = *self.mls.device_id();
+        let mut devices: Vec<serde_json::Value> = members
+            .into_iter()
+            .filter_map(|(leaf, cred)| {
+                let cred = cred?;
+                Some(serde_json::json!({
+                    "leaf": leaf,
+                    "device_id": hex::encode(cred.device_id()),
+                    "device_name": cred.device_name(),
+                    "is_self": cred.device_id() == &my_device_id,
+                }))
+            })
+            .collect();
+        // Stable order so the list doesn't reshuffle between polls.
+        devices.sort_by_key(|d| d["leaf"].as_u64().unwrap_or(0));
+        devices
+    }
+
     pub fn api_ring_status(&self) -> (Option<String>, usize, usize) {
         let ring_group_id = self.ring_driver.ring_id();
         let coord_count = self.ring_driver.coord_group_count();
@@ -1361,6 +1394,7 @@ impl App {
             Focus::PairEnterCode => self.handle_pair_enter_code_key(key),
             Focus::PairApprove => self.handle_pair_approve_key(key), // sync — no await
             Focus::SyncApprove => self.handle_sync_approve_key(key), // sync — no await
+            Focus::Devices => self.handle_devices_key(key), // sync — no await
         }
     }
 
@@ -1925,7 +1959,9 @@ impl App {
                 // the session completed, which is the ordinary case: the
                 // relay closes the channel right after a successful sync.
                 if let Some(session) = self.sync_request.as_mut() {
-                    session.fail(format!("pair channel closed: {reason}"));
+                    session.fail(moat_core::SyncFailure::ChannelClosed {
+                        detail: reason.clone(),
+                    });
                 }
                 // Peer walked away / relay TTL: cancel so `ui_state()`
                 // reports why rather than stalling. No-op if terminal.
@@ -2297,7 +2333,9 @@ impl App {
                         self.debug_log
                             .log(&format!("sync: publish ring message failed: {e}"));
                         if let Some(session) = self.sync_request.as_mut() {
-                            session.fail(format!("could not publish the request: {e}"));
+                            session.fail(moat_core::SyncFailure::PublishFailed {
+                                detail: e.to_string(),
+                            });
                         }
                     }
                 }
@@ -3841,11 +3879,9 @@ impl App {
                 self.focus = Focus::PairEnterCode;
                 self.pair_enter_code_input.clear();
             }
-            KeyCode::Char('s') => {
-                // Ask the user's other devices for history this one lacks.
-                if let Err(e) = self.api_sync_request() {
-                    self.set_error(format!("Sync history failed: {e}"));
-                }
+            KeyCode::Char('d') => {
+                // Linked devices, and the state of any sync in flight.
+                self.focus = Focus::Devices;
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 if !self.conversations.is_empty() {
@@ -3996,6 +4032,27 @@ impl App {
             }
             KeyCode::Esc | KeyCode::Char('n') => {
                 let _ = self.api_pair_reject();
+                self.focus = Focus::Conversations;
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    /// Devices screen: `s` asks the other devices for history, Esc leaves.
+    ///
+    /// Requesting from here rather than from a bare keystroke on the
+    /// conversation list is deliberate — this is the screen that then
+    /// *shows* what the request is doing, which a fire-and-forget key
+    /// press never did.
+    fn handle_devices_key(&mut self, key: KeyEvent) -> Result<bool> {
+        match key.code {
+            KeyCode::Char('s') => {
+                if let Err(e) = self.api_sync_request() {
+                    self.set_error(format!("Sync history failed: {e}"));
+                }
+            }
+            KeyCode::Esc | KeyCode::Char('q') => {
                 self.focus = Focus::Conversations;
             }
             _ => {}
@@ -4996,6 +5053,9 @@ impl App {
 
     /// Periodic ring driver tick. Called from the main loop every ~30 s.
     pub async fn do_ring_tick(&mut self) {
+        // The session has no clock of its own; this is the tick that
+        // supplies one on the TUI, where nothing polls `/sync/status`.
+        self.expire_sync_request_if_due();
         self.last_ring_tick = Some(Instant::now());
         if let Err(e) = self.ring_tick_inner().await {
             self.debug_log.log(&format!("ring_tick: {e}"));
@@ -5602,7 +5662,13 @@ impl App {
     }
 
     /// Return the current sync status for the HTTP API.
-    pub fn sync_status(&self) -> serde_json::Value {
+    ///
+    /// Takes `&mut self` so a request whose rendezvous has expired is
+    /// reported as failed the moment it is *read*, not on the next 30s
+    /// tick — a poller watching this endpoint would otherwise see
+    /// `awaiting_peer` for up to half a minute after the token died.
+    pub fn sync_status(&mut self) -> serde_json::Value {
+        self.expire_sync_request_if_due();
         serde_json::json!({
             "active": self.sync_session.is_some(),
             "request": self.sync_request_ui_state(),
@@ -5610,6 +5676,19 @@ impl App {
     }
 
     // ── User-initiated sync between established devices ─────────────────────
+
+    /// Move an unanswered sync request to `Failed` once its rendezvous
+    /// token has expired. Driven from the periodic tick and from every
+    /// read of the status, since the session has no clock of its own.
+    pub fn expire_sync_request_if_due(&mut self) {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        if let Some(session) = self.sync_request.as_mut() {
+            if session.expire_if_due(now_ms) {
+                self.debug_log
+                    .log("sync: request expired with no device answering");
+            }
+        }
+    }
 
     /// Projection of the sync-request gesture, for `/sync/status` and the
     /// TUI. Never derived anywhere else — see [`SyncRequestSession`].

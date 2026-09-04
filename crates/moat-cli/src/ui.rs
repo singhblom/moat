@@ -1,7 +1,7 @@
 //! Terminal UI rendering with Ratatui
 
 use crate::app::{App, DeviceAlert, DisplayMessage, Focus, LoginField, QUICK_EMOJIS};
-use moat_core::{PairingUiState, SyncRequestUiState};
+use moat_core::{PairingUiState, SyncFailure, SyncRequestUiState};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -70,6 +70,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_pair_approve_popup(frame, app);
     } else if app.focus == Focus::SyncApprove {
         draw_sync_approve_popup(frame, app);
+    } else if app.focus == Focus::Devices {
+        draw_devices_popup(frame, app);
     }
 
     // Draw message info popup if toggled
@@ -249,10 +251,14 @@ fn draw_conversations(frame: &mut Frame, app: &App, area: Rect) {
     let style = Style::default().fg(color);
 
     let relay_count = app.drawbridge.active_connection_count();
+    // Key hints live in the title, matching the Messages pane, because the
+    // help text below only renders while there are no conversations — so
+    // every hint it carries vanishes the moment the user has one.
+    let hints = if is_focused { "  [n]ew [d]evices" } else { "" };
     let title = if relay_count > 0 {
-        format!(" Conversations  [relay:{}] ", relay_count)
+        format!(" Conversations{hints}  [relay:{relay_count}] ")
     } else {
-        " Conversations ".to_string()
+        format!(" Conversations{hints} ")
     };
 
     let block = Block::default()
@@ -294,7 +300,10 @@ fn draw_conversations(frame: &mut Frame, app: &App, area: Rect) {
     if app.conversations.is_empty() {
         let inner = block.inner(area);
         frame.render_widget(block, area);
-        let help = Paragraph::new("'n' new conversation\n'w' watch for invites\n'q' to quit")
+        let help = Paragraph::new(
+            "'n' new conversation\n'w' watch for invites\n'd' linked devices\n\
+             'p' show pairing code\n'P' enter pairing code\n'q' to quit",
+        )
             .style(Style::default().fg(Color::Gray));
         frame.render_widget(help, inner);
     } else {
@@ -800,6 +809,137 @@ fn draw_pair_approve_popup(frame: &mut Frame, app: &App) {
     frame.render_widget(paragraph, inner);
 }
 
+/// The linked devices, and what any in-flight sync is doing.
+///
+/// This is the requester's surface: every other sync screen belongs to the
+/// device being *asked*, so before this existed a device that requested
+/// history showed nothing at all — not while waiting, not on success, and
+/// not on failure.
+fn draw_devices_popup(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+
+    let popup_width = 64.min(area.width.saturating_sub(4));
+    let popup_height = 16.min(area.height.saturating_sub(4));
+    let popup_x = (area.width - popup_width) / 2;
+    let popup_y = (area.height - popup_height) / 2;
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+    frame.render_widget(Clear, popup_area);
+    let block = Block::default()
+        .title(" Linked Devices ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    let devices = app.api_ring_devices();
+    if devices.is_empty() {
+        lines.push(Line::from("No linked devices."));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Press p on the new device to show a pairing code.",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        for device in &devices {
+            let name = device["device_name"].as_str().unwrap_or("Unnamed device");
+            let is_self = device["is_self"].as_bool().unwrap_or(false);
+            lines.push(Line::from(vec![
+                Span::styled(
+                    if is_self { "• " } else { "  " },
+                    Style::default().fg(Color::Cyan),
+                ),
+                Span::raw(name.to_string()),
+                Span::styled(
+                    if is_self { "  (this device)" } else { "" },
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(""));
+    // The sync line is the whole point of the screen: it is where a
+    // request that nobody answered finally becomes visible.
+    let (label, style) = match app.sync_request_ui_state() {
+        SyncRequestUiState::Idle => (
+            "No sync in progress.".to_string(),
+            Style::default().fg(Color::DarkGray),
+        ),
+        SyncRequestUiState::AwaitingPeer => (
+            "Waiting for another device to answer…".to_string(),
+            Style::default().fg(Color::Yellow),
+        ),
+        SyncRequestUiState::AwaitingApproval { device_name } => (
+            format!("{device_name} is asking you for history."),
+            Style::default().fg(Color::Yellow),
+        ),
+        SyncRequestUiState::Active => (
+            "Transferring history…".to_string(),
+            Style::default().fg(Color::Green),
+        ),
+        SyncRequestUiState::Complete => (
+            "History sync complete.".to_string(),
+            Style::default().fg(Color::Green),
+        ),
+        SyncRequestUiState::Failed { reason } => (
+            requester_failure_text(&reason),
+            Style::default().fg(Color::Red),
+        ),
+    };
+    lines.push(Line::from(Span::styled(label, style)));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "s: ask for history   Esc: close",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true });
+    frame.render_widget(paragraph, inner);
+}
+
+/// How a [`SyncFailure`] reads on the device that was *asked* for history.
+/// Its counterpart on the asking side is [`requester_failure_text`]; core
+/// deliberately carries the fact rather than either wording.
+fn responder_failure_text(reason: &SyncFailure) -> String {
+    match reason {
+        SyncFailure::RequestExpired => {
+            "The request expired before you answered it.".to_string()
+        }
+        SyncFailure::Declined => "You declined this request.".to_string(),
+        SyncFailure::ChannelClosed { detail } => {
+            format!("The connection closed before the transfer finished ({detail}).")
+        }
+        // Neither can arise on this side; rendered rather than hidden so a
+        // logic slip surfaces instead of showing a blank failure.
+        SyncFailure::NoAnswer => "The other device stopped waiting.".to_string(),
+        SyncFailure::PublishFailed { detail } => {
+            format!("The request could not be sent ({detail}).")
+        }
+    }
+}
+
+/// How a [`SyncFailure`] reads on the device that *asked* for history.
+fn requester_failure_text(reason: &SyncFailure) -> String {
+    match reason {
+        SyncFailure::NoAnswer => {
+            "No device answered. Open Moat on the device that has your history              and try again."
+                .to_string()
+        }
+        SyncFailure::ChannelClosed { detail } => {
+            format!("The connection closed before the transfer finished ({detail}).")
+        }
+        SyncFailure::PublishFailed { detail } => {
+            format!("The request could not be sent ({detail}).")
+        }
+        // Responder-side outcomes; see the note in `responder_failure_text`.
+        SyncFailure::RequestExpired => "This request expired.".to_string(),
+        SyncFailure::Declined => "Declined on this device.".to_string(),
+    }
+}
+
 /// A sibling asked for history. Names the requesting device from its MLS
 /// leaf credential — the payload carries only a rendezvous token.
 fn draw_sync_approve_popup(frame: &mut Frame, app: &App) {
@@ -834,7 +974,10 @@ fn draw_sync_approve_popup(frame: &mut Frame, app: &App) {
         SyncRequestUiState::Failed { reason } => vec![
             Line::from(Span::styled("Sync failed", Style::default().fg(Color::Red))),
             Line::from(""),
-            Line::from(reason),
+            // Worded for *this* screen's role — the device that was asked.
+            // `NoAnswer`'s requester-side wording ("no device answered")
+            // would be nonsense here: this is the device with the history.
+            Line::from(responder_failure_text(&reason)),
             Line::from(""),
             Line::from("Press any key to continue."),
         ],

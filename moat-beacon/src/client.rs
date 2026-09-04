@@ -149,8 +149,21 @@ pub enum SyncRequestUiState {
     Active,
     /// Transfer finished.
     Complete,
-    /// Terminal failure, with the reason retained.
-    Failed { reason: String },
+    /// Terminal failure, with the structured reason retained.
+    Failed { reason: SyncFailure },
+}
+
+/// Mirror of `moat_core::SyncFailure` — a tagged object rather than prose,
+/// so a scenario matches on the outcome instead of parsing a message that
+/// is deliberately worded differently on each side.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SyncFailure {
+    NoAnswer,
+    RequestExpired,
+    Declined,
+    ChannelClosed { detail: String },
+    PublishFailed { detail: String },
 }
 
 impl SyncRequestUiState {

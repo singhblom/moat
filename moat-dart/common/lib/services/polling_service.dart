@@ -46,6 +46,19 @@ class PollingService {
   /// Defaults to [ConversationManager.instance.notifyReaction] if not set.
   void Function(Conversation, List<int>, String, String)? onReaction;
 
+  /// Callback fired at the start of every poll cycle, for state that needs
+  /// a clock the services themselves don't have — today, expiring an
+  /// unanswered sync request.
+  void Function()? onPollTick;
+
+  /// Callback when a sibling asks for history on the ring
+  /// (`EventKindDto.ringMsg`). Wired to
+  /// `SyncRequestService.onRingSyncRequest`; the second argument is the
+  /// sender's device name, taken from its MLS leaf credential. Unset means
+  /// the host doesn't support requested sync and the message is dropped.
+  Future<void> Function(Uint8List payload, String deviceName)?
+      onRingSyncRequest;
+
   PollingService({
     required AuthService authService,
     required ConversationsService conversationsService,
@@ -80,6 +93,10 @@ class PollingService {
   /// Perform a single poll cycle and return stats.
   /// Used by the HTTP server's POST /poll endpoint.
   Future<PollStats> pollOnce() async {
+    // Runs before the early returns: a sync request whose rendezvous has
+    // expired must be reported as failed even while polling is suppressed
+    // or the device is logged out mid-request.
+    onPollTick?.call();
     if (_isPolling) return const PollStats(newMessages: 0, newConversations: 0);
     if (!_authService.isAuthenticated) {
       return const PollStats(newMessages: 0, newConversations: 0);
@@ -437,6 +454,9 @@ class PollingService {
         case EventKindDto.welcome:
         case EventKindDto.checkpoint:
         case EventKindDto.syncApp:
+        // Ring application traffic never appears in a user conversation —
+        // it is handled in `_processRingEvent`.
+        case EventKindDto.ringMsg:
         case EventKindDto.unknown:
           return false;
       }
@@ -446,8 +466,8 @@ class PollingService {
     }
   }
 
-  /// Decrypt a ring-group event. Only commits (membership/epoch changes)
-  /// are meaningful here; the ring group carries no application messages.
+  /// Decrypt a ring-group event: membership/epoch commits, plus the
+  /// `ring.msg` application lane a sibling uses to ask for history.
   Future<void> _processRingEvent(
     EventRecord event,
     Uint8List ringGroupId,
@@ -463,6 +483,23 @@ class PollingService {
       if (result.event.kind == EventKindDto.commit) {
         // Ring epoch advanced — refresh tag map for the new epoch.
         await _authService.populateConversationTags(ringGroupId);
+        return;
+      }
+
+      if (result.event.kind == EventKindDto.ringMsg) {
+        // The sender's identity is whatever MLS says it is; the payload
+        // declares no device of its own.
+        final senderDid = result.sender?.did;
+        if (senderDid != _authService.did) {
+          moatLog('PollingService: ignoring a ring message whose sender is not us');
+          return;
+        }
+        final handler = onRingSyncRequest;
+        if (handler == null) return;
+        await handler(
+          Uint8List.fromList(result.event.payload),
+          result.sender?.deviceName ?? 'an unnamed device',
+        );
       }
     } catch (e) {
       moatLog('PollingService: Failed to decrypt ring event ${event.rkey}: $e');
