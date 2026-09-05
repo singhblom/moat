@@ -228,13 +228,16 @@ class SyncService {
               await storeSyncOutputMessages(_messageStorage, convId, messages, did);
           moatLog('SyncService: stored $count message(s) for $convId');
         },
-        complete: () async {
-          moatLog('SyncService: session complete — closing pair WS');
-          onSessionComplete?.call();
-          await _reset();
-          await _drawbridge.clearPair();
-        },
       );
+    }
+
+    // Teardown happens after every output has been applied, never as one of
+    // them: closing the channel mid-list would strand whatever followed.
+    if (await _session?.isDone() ?? false) {
+      moatLog('SyncService: session complete — closing pair WS');
+      onSessionComplete?.call();
+      await _reset();
+      await _drawbridge.clearPair();
     }
   }
 

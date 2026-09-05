@@ -12,7 +12,10 @@
 //! sends the complement. No digests, no anchors, no bisection: an
 //! inventory is ~13 bytes per message, against the messages themselves.
 
-use moat_core::{ConvState, MoatSession, SyncMessage, SyncMsg, SyncOutput, SyncSession};
+use moat_core::{
+    fit_hello_inventories, ConvInventory, ConvState, MoatSession, SyncMessage, SyncMsg,
+    SyncOutput, SyncSession, HELLO_INVENTORY_BUDGET_BYTES,
+};
 
 fn msg(rkey: &str) -> SyncMessage {
     SyncMessage {
@@ -34,29 +37,28 @@ fn msg(rkey: &str) -> SyncMessage {
     }
 }
 
-/// A `ConvState` declaring an explicit inventory.
+/// A `ConvState` enumerating exactly what its side holds.
 fn state_with(group_id: &[u8], rkeys: &[&str]) -> ConvState {
-    let rkeys: Vec<String> = rkeys.iter().map(|r| r.to_string()).collect();
     ConvState {
         group_id: group_id.to_vec(),
-        oldest_rkey: rkeys.iter().min().cloned(),
-        newest_rkey: rkeys.iter().max().cloned(),
         tip_digest: vec![0u8; 32],
         anchors: vec![],
-        rkeys: Some(rkeys),
+        inventory: ConvInventory::of(rkeys.iter().map(|r| r.to_string()).collect()),
     }
 }
 
-/// A `ConvState` from a peer that declined to send an inventory (over the
-/// cap, or an older build).
-fn state_without_inventory(group_id: &[u8], oldest: &str, newest: &str) -> ConvState {
+/// A `ConvState` from a peer whose list did not fit the Hello budget, so
+/// it declared only its span.
+fn state_with_range(group_id: &[u8], oldest: &str, newest: &str, count: u64) -> ConvState {
     ConvState {
         group_id: group_id.to_vec(),
-        oldest_rkey: Some(oldest.to_string()),
-        newest_rkey: Some(newest.to_string()),
         tip_digest: vec![0u8; 32],
         anchors: vec![],
-        rkeys: None,
+        inventory: ConvInventory::Range {
+            oldest: oldest.to_string(),
+            newest: newest.to_string(),
+            count,
+        },
     }
 }
 
@@ -103,12 +105,12 @@ fn a_donor_withholds_messages_the_peer_already_holds() {
         &mls,
         SyncMsg::Hello { convs: vec![state_with(&g, &["r1", "r2"])], ring_epoch: 0 },
         "did:plc:alice",
-    );
+    ).unwrap();
     let outs = donor.on_message(
         &mls,
         SyncMsg::BatchReq { group_id: g.clone(), from_rkey: None, to_rkey: None, cursor: None },
         "did:plc:alice",
-    );
+    ).unwrap();
 
     let batches = sent_batches(&outs);
     assert_eq!(batches.len(), 1, "expected one batch, got {}", batches.len());
@@ -141,19 +143,19 @@ fn a_donor_fills_a_hole_in_the_middle_of_the_peers_history() {
             ring_epoch: 0,
         },
         "did:plc:alice",
-    );
+    ).unwrap();
     let outs = donor.on_message(
         &mls,
         SyncMsg::BatchReq { group_id: g.clone(), from_rkey: None, to_rkey: None, cursor: None },
         "did:plc:alice",
-    );
+    ).unwrap();
 
     let batches = sent_batches(&outs);
     assert_eq!(batch_rkeys(batches[0]), vec!["r3".to_string()]);
 }
 
 #[test]
-fn a_donor_without_a_peer_inventory_sends_everything() {
+fn a_donor_serves_outside_a_peers_declared_span() {
     // Fallback path: no inventory declared, so the donor cannot compute a
     // complement and must not guess from the range.
     let mls = MoatSession::new();
@@ -164,19 +166,20 @@ fn a_donor_without_a_peer_inventory_sends_everything() {
     let _ = donor.on_paired(vec![state_with(&g, &["r1", "r2"])], 0);
     let _ = donor.on_message(
         &mls,
-        SyncMsg::Hello { convs: vec![state_without_inventory(&g, "r1", "r1")], ring_epoch: 0 },
+        SyncMsg::Hello { convs: vec![state_with_range(&g, "r1", "r1", 1)], ring_epoch: 0 },
         "did:plc:alice",
-    );
+    ).unwrap();
     let outs = donor.on_message(
         &mls,
         SyncMsg::BatchReq { group_id: g.clone(), from_rkey: None, to_rkey: None, cursor: None },
         "did:plc:alice",
-    );
+    ).unwrap();
 
     assert_eq!(
         batch_rkeys(sent_batches(&outs)[0]),
-        vec!["r1".to_string(), "r2".to_string()],
-        "with no inventory to diff against, the whole history is served"
+        vec!["r2".to_string()],
+        "only what falls outside the peer's span is served — a span cannot \
+         reveal holes inside itself, but it still narrows the transfer"
     );
 }
 
@@ -195,7 +198,7 @@ fn no_request_is_sent_when_the_peer_holds_nothing_new() {
         &mls,
         SyncMsg::Hello { convs: vec![state_with(&g, &["r1", "r2"])], ring_epoch: 0 },
         "did:plc:alice",
-    );
+    ).unwrap();
     assert_eq!(
         batch_req_count(&outs),
         0,
@@ -215,13 +218,16 @@ fn two_identical_devices_complete_without_transferring_anything() {
         &mls,
         SyncMsg::Hello { convs: vec![state_with(&g, &["r1"])], ring_epoch: 0 },
         "did:plc:alice",
-    );
+    ).unwrap();
 
     assert!(
-        outs.iter().any(|o| matches!(o, SyncOutput::Complete)),
+        outs.is_empty(),
+        "completion is a state, not an output — nothing to send or store"
+    );
+    assert!(
+        s.is_done(),
         "a session with no delta in either direction is finished on the spot"
     );
-    assert!(s.is_done());
 }
 
 #[test]
@@ -237,7 +243,7 @@ fn a_request_is_sent_when_the_peer_holds_something_we_lack() {
         &mls,
         SyncMsg::Hello { convs: vec![state_with(&g, &["r1", "r2"])], ring_epoch: 0 },
         "did:plc:alice",
-    );
+    ).unwrap();
     assert_eq!(batch_req_count(&outs), 1, "r2 is missing locally, so ask for it");
 }
 
@@ -261,7 +267,7 @@ fn a_conversation_the_peer_alone_knows_about_is_still_requested() {
             ring_epoch: 0,
         },
         "did:plc:alice",
-    );
+    ).unwrap();
     assert_eq!(batch_req_count(&outs), 1, "the unknown conversation must be requested");
 }
 
@@ -289,17 +295,148 @@ fn each_side_serves_the_other_in_the_same_session() {
         &mls,
         SyncMsg::Hello { convs: vec![state_with(&g, &["r3", "r4", "r5"])], ring_epoch: 0 },
         "did:plc:alice",
-    );
+    ).unwrap();
     assert_eq!(batch_req_count(&outs), 1, "the laptop wants r4 and r5");
 
     let outs = laptop.on_message(
         &mls,
         SyncMsg::BatchReq { group_id: g.clone(), from_rkey: None, to_rkey: None, cursor: None },
         "did:plc:alice",
-    );
+    ).unwrap();
     assert_eq!(
         batch_rkeys(sent_batches(&outs)[0]),
         vec!["r1".to_string(), "r2".to_string()],
         "and serves the phone only r1 and r2"
     );
+}
+
+#[test]
+fn a_session_with_no_conversations_does_not_declare_itself_complete() {
+    // `check_complete` folds over the plan list, so an empty list is
+    // vacuously "all done". Reporting `Complete` here makes the host close
+    // the pair channel — and a host that opened a plan-less session while
+    // another was mid-transfer would truncate it. Having nothing to offer
+    // is not the same as the exchange being finished.
+    let mls = MoatSession::new();
+    let g = vec![1u8; 32];
+
+    let mut s = SyncSession::new();
+    let outs = s.on_paired(vec![], 0);
+    assert!(!s.is_done());
+    assert_eq!(outs.len(), 1, "just the Hello");
+
+    let outs = s.on_message(
+        &mls,
+        SyncMsg::Hello { convs: vec![state_with(&g, &["r1"])], ring_epoch: 0 },
+        "did:plc:alice",
+    ).unwrap();
+    assert!(
+        !s.is_done(),
+        "a session that knows about no conversations must not declare itself \
+         finished on the strength of an empty plan list — the host closes \
+         the channel when it does"
+    );
+    assert_eq!(
+        batch_req_count(&outs),
+        1,
+        "and it should adopt the peer's conversation rather than ignore it"
+    );
+}
+
+// ── The Hello frame budget ────────────────────────────────────────────────────
+//
+// The pair WS closes the connection outright on a frame over 1 MiB, and a
+// Hello carries every conversation at once. A per-conversation cap guards
+// the wrong dimension: many mid-sized conversations blow the frame while
+// none of them is individually large.
+
+#[test]
+fn a_small_hello_keeps_every_inventory_intact() {
+    let mut convs: Vec<ConvState> = (0..5u8)
+        .map(|i| state_with(&[i; 32], &["r1", "r2", "r3"]))
+        .collect();
+    fit_hello_inventories(&mut convs);
+    assert!(
+        convs
+            .iter()
+            .all(|c| matches!(c.inventory, ConvInventory::Complete { .. })),
+        "nothing should be downgraded when the whole frame fits"
+    );
+}
+
+#[test]
+fn an_oversized_hello_is_brought_under_budget() {
+    // Fifty conversations of two thousand messages: no single conversation
+    // is remarkable, and together they are far past the frame limit.
+    let mut convs: Vec<ConvState> = (0..50u8)
+        .map(|i| {
+            let rkeys: Vec<String> = (0..2000).map(|n| format!("3l6yq2{i:02}{n:06}")).collect();
+            ConvState {
+                group_id: vec![i; 32],
+                tip_digest: vec![0u8; 32],
+                anchors: vec![],
+                inventory: ConvInventory::of(rkeys),
+            }
+        })
+        .collect();
+
+    let before: usize = convs.iter().map(encoded_len).sum();
+    assert!(
+        before > HELLO_INVENTORY_BUDGET_BYTES,
+        "the fixture must actually be over budget to be testing anything"
+    );
+
+    fit_hello_inventories(&mut convs);
+
+    let after: usize = convs.iter().map(encoded_len).sum();
+    assert!(
+        after <= HELLO_INVENTORY_BUDGET_BYTES,
+        "still {after} bytes after fitting, budget is {HELLO_INVENTORY_BUDGET_BYTES}"
+    );
+    assert!(
+        convs
+            .iter()
+            .any(|c| matches!(c.inventory, ConvInventory::Range { .. })),
+        "fitting happens by downgrading to spans, not by dropping conversations"
+    );
+    assert_eq!(convs.len(), 50, "no conversation may be dropped outright");
+    assert!(
+        convs.iter().all(|c| !c.inventory.is_empty()),
+        "a downgraded conversation must not come out looking empty — the \
+         peer would then think we hold nothing and send us everything"
+    );
+}
+
+#[test]
+fn fitting_downgrades_the_largest_first() {
+    // Fewest conversations lose precision.
+    let big: Vec<String> = (0..60_000).map(|n| format!("bigbigbig{n:06}")).collect();
+    let mut convs = vec![
+        state_with(&[1u8; 32], &["r1", "r2"]),
+        ConvState {
+            group_id: vec![2u8; 32],
+            tip_digest: vec![0u8; 32],
+            anchors: vec![],
+            inventory: ConvInventory::of(big),
+        },
+    ];
+    fit_hello_inventories(&mut convs);
+
+    assert!(
+        matches!(convs[0].inventory, ConvInventory::Complete { .. }),
+        "the small conversation keeps its enumeration"
+    );
+    assert!(
+        matches!(convs[1].inventory, ConvInventory::Range { .. }),
+        "the one actually costing the bytes is the one that gives them up"
+    );
+}
+
+/// Mirrors the budgeting cost model closely enough to assert against.
+fn encoded_len(c: &ConvState) -> usize {
+    match &c.inventory {
+        ConvInventory::Complete { rkeys } => rkeys.iter().map(|r| r.len() + 3).sum::<usize>() + 32,
+        ConvInventory::Range { oldest, newest, .. } => oldest.len() + newest.len() + 64,
+        ConvInventory::Empty => 16,
+    }
 }

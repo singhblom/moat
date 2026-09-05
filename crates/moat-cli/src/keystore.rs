@@ -359,6 +359,24 @@ impl KeyStore {
     /// the blob metadata fields are updated before returning `Ok(false)`.
     pub fn append_message(&self, conv_id: &str, message: StoredMessage) -> Result<bool> {
         let mut messages = self.load_messages(conv_id)?;
+        // An optimistic row is identified by its `message_id`, not its
+        // rkey — "pending" is a placeholder every unsent message shares.
+        // The image path writes twice under it: once for the immediate
+        // placeholder, then again with the blob metadata once the upload
+        // finishes. Without matching on the id, the second write inserts a
+        // duplicate instead of completing the row, leaving a permanent
+        // "[image — processing…]" beside the real message.
+        if message.rkey == "pending" {
+            if let Some(mid) = message.message_id.clone() {
+                if let Some(existing) = messages.messages.iter_mut().find(|m| {
+                    m.rkey == "pending" && m.message_id.as_deref() == Some(mid.as_slice())
+                }) {
+                    *existing = message;
+                    self.store_messages(conv_id, &messages)?;
+                    return Ok(false);
+                }
+            }
+        }
         if message.rkey != "pending" {
             if let Some(existing) = messages.messages.iter_mut().find(|m| m.rkey == message.rkey) {
                 // Update blob metadata if the existing entry is missing it.
@@ -670,6 +688,68 @@ pub mod hex {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    fn pending_msg(message_id: &[u8], content: &str) -> StoredMessage {
+        StoredMessage {
+            rkey: "pending".to_string(),
+            content: content.to_string(),
+            timestamp: chrono::Utc::now(),
+            is_own: true,
+            message_id: Some(message_id.to_vec()),
+            sender_did: None,
+            sender_device: None,
+            blob_uri: None,
+            blob_key: None,
+            blob_ciphertext_hash: None,
+            blob_ciphertext_size: None,
+            blob_content_hash: None,
+            blob_mime: None,
+            blob_width: None,
+            blob_height: None,
+        }
+    }
+
+    /// A send deferred behind a blob upload writes its optimistic row
+    /// twice: once as a placeholder, then again with the real preview and
+    /// blob metadata. Both carry rkey "pending", so identity has to come
+    /// from the message id — otherwise the second write inserts a
+    /// duplicate and the user is left staring at a permanent
+    /// "processing…" row beside the real message.
+    #[test]
+    fn a_second_pending_write_completes_the_row_instead_of_duplicating_it() {
+        let dir = tempdir().unwrap();
+        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+        let id = [7u8; 16];
+
+        assert!(store
+            .append_message("conv", pending_msg(&id, "[image — processing…]"))
+            .unwrap());
+
+        let mut finished = pending_msg(&id, "[image image/png 16x16]");
+        finished.blob_uri = Some("at://did:plc:alice/cid".to_string());
+        assert!(!store.append_message("conv", finished).unwrap());
+
+        let stored = store.load_messages("conv").unwrap().messages;
+        assert_eq!(stored.len(), 1, "the row must be completed, not duplicated");
+        assert_eq!(stored[0].content, "[image image/png 16x16]");
+        assert_eq!(
+            stored[0].blob_uri.as_deref(),
+            Some("at://did:plc:alice/cid"),
+            "the completing write carries the blob metadata"
+        );
+    }
+
+    /// Two genuinely different unsent messages must still both be kept.
+    #[test]
+    fn pending_rows_with_different_ids_coexist() {
+        let dir = tempdir().unwrap();
+        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+
+        store.append_message("conv", pending_msg(&[1u8; 16], "first")).unwrap();
+        store.append_message("conv", pending_msg(&[2u8; 16], "second")).unwrap();
+
+        assert_eq!(store.load_messages("conv").unwrap().messages.len(), 2);
+    }
 
     #[test]
     fn test_identity_key_roundtrip() {

@@ -49,7 +49,11 @@ Future<PairedSyncSetup> buildPairedSyncSession({
     if (state != null) convStates.add(state);
   }
 
-  final outputs = await syncSession.onPaired(ourConvs: convStates, ringEpoch: ringEpoch);
+  // One Hello carries every conversation, against a hard 1 MiB frame limit
+  // that closes the connection rather than truncating — so the inventory
+  // budget has to be spent across the whole message, not per conversation.
+  final fitted = await ffi.fitHelloInventories(convs: convStates);
+  final outputs = await syncSession.onPaired(ourConvs: fitted, ringEpoch: ringEpoch);
   return PairedSyncSetup(session: syncSession, outputs: outputs);
 }
 
@@ -86,6 +90,41 @@ Message _messageFromSyncDto(ffi.SyncMessageDto m, Uint8List groupId, String myDi
     isOwn: isOwn,
     epoch: 0,
     messageId: m.messageId,
+    attachment: _attachmentFromSyncDto(m),
+  );
+}
+
+/// Rebuild an [ImageAttachment] from a synced message's blob reference.
+///
+/// All five required fields must be present — a partial reference cannot
+/// be fetched or integrity-checked, so it is dropped rather than turned
+/// into an attachment that fails on open.
+///
+/// `thumbhash` is absent by design: it lives in the message payload rather
+/// than in stored metadata, so neither runtime carries it through sync.
+/// The image still loads; only the blurry placeholder is missing.
+Attachment? _attachmentFromSyncDto(ffi.SyncMessageDto m) {
+  final uri = m.blobUri;
+  final key = m.blobKey;
+  final ciphertextHash = m.blobCiphertextHash;
+  final ciphertextSize = m.blobCiphertextSize;
+  final contentHash = m.blobContentHash;
+  if (uri == null ||
+      key == null ||
+      ciphertextHash == null ||
+      ciphertextSize == null ||
+      contentHash == null) {
+    return null;
+  }
+  return ImageAttachment(
+    uri: uri,
+    key: key,
+    ciphertextHash: ciphertextHash,
+    ciphertextSize: ciphertextSize.toInt(),
+    contentHash: contentHash,
+    mime: m.blobMime,
+    width: m.blobWidth,
+    height: m.blobHeight,
   );
 }
 
@@ -109,6 +148,9 @@ Future<List<ffi.SyncMessageDto>> _loadSyncMessagesFor(
   for (final m in messages) {
     // Skip optimistic/local-only messages: they have no rkey assigned yet.
     if (m.localId != null && m.rkey == 'pending') continue;
+    final image = m.attachment is ImageAttachment
+        ? m.attachment as ImageAttachment
+        : null;
     out.add(ffi.SyncMessageDto(
       rkey: m.rkey,
       messageId: m.messageId,
@@ -117,8 +159,20 @@ Future<List<ffi.SyncMessageDto>> _loadSyncMessagesFor(
       timestampMs: toPlatformInt64(m.timestamp.millisecondsSinceEpoch),
       content: m.content,
       isOwn: m.isOwn,
-      // Attachments are not yet round-tripped through sync; keep null for
-      // text-only messages and rely on the original PDS publish for media.
+      // The attachment *reference*, not its bytes: the blob stays on the
+      // PDS and is fetched when the user opens it. Without these fields a
+      // synced image has nothing to open, and the original PDS record is
+      // no help — a device receiving history predating its membership
+      // cannot decrypt it.
+      blobUri: image?.uri,
+      blobKey: image?.key,
+      blobCiphertextHash: image?.ciphertextHash,
+      blobCiphertextSize:
+          image == null ? null : BigInt.from(image.ciphertextSize),
+      blobContentHash: image?.contentHash,
+      blobMime: image?.mime,
+      blobWidth: image?.width,
+      blobHeight: image?.height,
     ));
   }
   return out;
@@ -132,26 +186,18 @@ Future<ffi.ConvStateDto?> _convStateFor(
   try {
     final tip = await session.digestTip(groupId: conv.groupId);
     final anchors = await session.digestAnchors(groupId: conv.groupId);
-    // digestRange relies on append_to_digest which is not called in the Dart
-    // path. Derive oldest/newest directly from the messages we loaded.
-    String? oldestRkey;
-    String? newestRkey;
-    if (ourMessages.isNotEmpty) {
-      final rkeys = ourMessages.map((m) => m.rkey).toList()..sort();
-      oldestRkey = rkeys.first;
-      newestRkey = rkeys.last;
-    }
     // The rkeys we hold, so the peer sends exactly the complement rather
-    // than its whole history. Omitted past the cap, where the peer falls
-    // back to serving everything (`ConvStateDto.rkeys`).
-    final rkeys = ourMessages.map((m) => m.rkey).toList(growable: false);
+    // than its whole history. Enumerating is the normal case; the budget
+    // pass above downgrades to a span only where the frame demands it.
     return ffi.ConvStateDto(
       groupId: conv.groupId,
-      oldestRkey: oldestRkey,
-      newestRkey: newestRkey,
       tipDigest: tip ?? Uint8List(32),
       anchors: anchors,
-      rkeys: rkeys.length <= ffi.syncInventoryCap() ? rkeys : null,
+      inventory: ourMessages.isEmpty
+          ? const ffi.ConvInventoryDto.empty()
+          : ffi.ConvInventoryDto.complete(
+              rkeys: ourMessages.map((m) => m.rkey).toList(growable: false),
+            ),
     );
   } catch (e) {
     moatLog('buildPairedSyncSession: convState failed for ${conv.groupIdHex}: $e');

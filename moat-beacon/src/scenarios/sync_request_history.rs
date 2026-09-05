@@ -38,6 +38,17 @@ pub async fn run(verbose: bool) {
 const TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_INTERVAL: Duration = Duration::from_millis(300);
 
+/// A minimal valid 16x16 RGBA PNG, so the conversation contains a real
+/// attachment rather than only text.
+fn make_test_png() -> Vec<u8> {
+    use image::{DynamicImage, ImageFormat};
+    let img = DynamicImage::new_rgba8(16, 16);
+    let mut buf = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut buf), ImageFormat::Png)
+        .expect("encode test png");
+    buf
+}
+
 /// Bounded wait for `client` to see `group_id` at all — membership, not
 /// history. Drives both tick paths, since a conversation that arrives via
 /// `UserConvWelcome` is only discovered by the ring tick's own-PDS stealth
@@ -142,12 +153,58 @@ pub async fn run_with(
         d1.send_message(&group_id, text).await.expect("d1 send");
         let _ = bob.poll().await;
     }
-    let d1_before = d1.get_messages(&group_id).await.expect("d1 messages");
-    assert_eq!(
-        d1_before.len(),
-        history.len(),
-        "d1 should hold the whole conversation before d2 returns"
-    );
+    // Plus one image, sent by Bob. Sync carries the attachment *reference*
+    // — the blob stays on the PDS and is fetched when the user opens it —
+    // and a device receiving history from before it joined cannot recover
+    // that reference any other way, since the original event is not
+    // decryptable to it. Including one is what makes the two runtimes'
+    // idea of a `SyncMessage` testable: a text-only scenario passes just
+    // as happily when a host silently drops every blob field.
+    //
+    // Bob's, received by d1 through the ordinary poll path.
+    //
+    // A *self-sent* image would also be worth covering — it is published
+    // behind a blob upload, and only reaches a real rkey because the
+    // deferred publish now reuses its optimistic row's message id — but
+    // adding a second image reliably trips a separate teardown race (the
+    // donor closes the channel on "I have sent everything" rather than on
+    // any acknowledgement, so a larger transfer can be truncated). Keeping
+    // one image here holds this scenario deterministic; the self-sent path
+    // is covered by the keystore unit tests until that race is fixed.
+    bob.send_image(&group_id, &make_test_png())
+        .await
+        .expect("bob send image");
+    d1.send_image(&group_id, &make_test_png())
+        .await
+        .expect("d1 send image");
+
+    // Both sends are non-blocking — the blob has to upload before the
+    // message is published at all — so wait until d1 holds two settled
+    // attachments. Without this the assertions below could pass vacuously
+    // on history that simply hadn't been written yet.
+    let expected_total = history.len() + 2;
+    let deadline = std::time::Instant::now() + TIMEOUT;
+    loop {
+        let msgs = d1.get_messages(&group_id).await.expect("d1 messages");
+        let attachments = msgs.iter().filter(|m| m.attachment.is_some()).count();
+        let settled = msgs.len() == expected_total
+            && attachments == 2
+            && msgs.iter().all(|m| !m.content.contains("processing"));
+        if settled {
+            break;
+        }
+        let contents: Vec<&str> = msgs.iter().map(|m| m.content.as_str()).collect();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "d1's own history never settled within {TIMEOUT:?} \
+             ({attachments} of 1 attachment); a leftover \
+             \"processing…\" row means a deferred publish never \
+             reconciled with its optimistic row; got {contents:?}"
+        );
+        let _ = bob.poll().await;
+        let _ = d1.poll().await;
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
 
     // ── D2 returns: it gets membership, and nothing else ─────────────────────
     vlog!("[online] d2 back up");
@@ -194,8 +251,8 @@ pub async fn run_with(
     loop {
         let _ = d2.poll().await;
         let msgs = d2.get_messages(&group_id).await.unwrap_or_default();
-        vlog!("[sync] d2 has {}/{} messages", msgs.len(), history.len());
-        if msgs.len() >= history.len() {
+        vlog!("[sync] d2 has {}/{} messages", msgs.len(), expected_total);
+        if msgs.len() >= expected_total {
             let contents: Vec<&str> = msgs.iter().map(|m| m.content.as_str()).collect();
             for want in &history {
                 assert!(
@@ -205,8 +262,39 @@ pub async fn run_with(
             }
             assert_eq!(
                 msgs.len(),
-                history.len(),
+                expected_total,
                 "d2 must hold each message exactly once; got {contents:?}"
+            );
+
+            // The attachment reference must survive the transfer, or the
+            // image is unopenable on this device: the blob is still on the
+            // PDS, but without uri/key/hashes there is no way to ask for
+            // it, and the original event predates d2's membership so it
+            // cannot be decrypted either.
+            let images: Vec<_> = msgs.iter().filter(|m| m.attachment.is_some()).collect();
+            assert_eq!(
+                images.len(),
+                2,
+                "d2 must receive both attachments — Bob's (arrived on d1 by \
+                 poll) and d1's own (published behind a blob upload, and \
+                 skipped entirely while it kept its \"pending\" rkey). \
+                 Dropping the blob fields leaves the image unopenable here \
+                 too, since the original event predates d2's membership and \
+                 cannot be decrypted; got {contents:?}"
+            );
+            let attachment = images[0].attachment.as_ref().expect("checked above");
+            assert!(!attachment.uri.is_empty(), "blob URI must survive sync");
+            assert!(!attachment.key.is_empty(), "blob key must survive sync");
+            assert!(
+                !attachment.ciphertext_hash.is_empty(),
+                "ciphertext hash must survive sync — without it the fetched \
+                 blob cannot be integrity-checked"
+            );
+            assert!(
+                attachment.width.unwrap_or(0) > 0 && attachment.height.unwrap_or(0) > 0,
+                "image dimensions must survive sync; got {:?}x{:?}",
+                attachment.width,
+                attachment.height
             );
             break;
         }
@@ -220,7 +308,7 @@ pub async fn run_with(
             "d2 never received the history within {TIMEOUT:?} \
              (has {} of {}); this must fail the test, not hang it",
             msgs.len(),
-            history.len()
+            expected_total
         );
         tokio::time::sleep(POLL_INTERVAL).await;
     }

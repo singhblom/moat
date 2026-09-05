@@ -446,21 +446,58 @@ impl TestWorld {
             });
         }
 
-        // Phase 2: wait for all HTTP servers to come up concurrently.
+        // Phase 2: wait for every HTTP server to come up.
+        //
+        // Polls the child processes alongside their sockets. A process that
+        // died on startup is indistinguishable from a slow one if you only
+        // watch the socket — which is how "did not start within 10s" came
+        // to be reported for failures that had nothing to do with the
+        // budget. Checking liveness turns those into an immediate, named
+        // error instead of a ten-second stall and a guess.
         {
-            let mut join_set: tokio::task::JoinSet<Result<()>> = tokio::task::JoinSet::new();
-            for p in &pending {
-                let client = p.client.clone();
-                let short = p.short_handle.clone();
-                let timeout = std::time::Duration::from_secs(10);
-                join_set.spawn(async move {
-                    wait_for_http(&client, timeout)
-                        .await
-                        .with_context(|| format!("waiting for participant ({short}) to start"))
-                });
-            }
-            while let Some(res) = join_set.join_next().await {
-                res??;
+            let timeout = std::time::Duration::from_secs(10);
+            let deadline = std::time::Instant::now() + timeout;
+            let mut ready = vec![false; pending.len()];
+
+            loop {
+                for (i, p) in pending.iter_mut().enumerate() {
+                    if ready[i] {
+                        continue;
+                    }
+                    if let Ok(Some(status)) = p.child.try_wait() {
+                        anyhow::bail!(
+                            "participant ({}) exited during startup with {status}\n{}",
+                            p.short_handle,
+                            log_tail(&p.log_path)
+                        );
+                    }
+                    if p.client.status().await.is_ok() {
+                        ready[i] = true;
+                    }
+                }
+                if ready.iter().all(|r| *r) {
+                    break;
+                }
+                if std::time::Instant::now() >= deadline {
+                    let stalled: Vec<&str> = pending
+                        .iter()
+                        .zip(&ready)
+                        .filter(|(_, r)| !**r)
+                        .map(|(p, _)| p.short_handle.as_str())
+                        .collect();
+                    let details: String = pending
+                        .iter()
+                        .zip(&ready)
+                        .filter(|(_, r)| !**r)
+                        .map(|(p, _)| format!("\n- {}\n{}", p.short_handle, log_tail(&p.log_path)))
+                        .collect();
+                    anyhow::bail!(
+                        "participant(s) {stalled:?} were still alive but not \
+                         serving HTTP after {timeout:?} — the process is up, \
+                         so this is a real stall rather than a crash{details}"
+                    );
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
         }
 
@@ -556,9 +593,18 @@ impl TestWorld {
         proc.child = Some(child);
         proc.log_path = log_path;
 
-        wait_for_http(&proc.client, std::time::Duration::from_secs(10))
-            .await
-            .with_context(|| format!("waiting for participant ({handle}) to restart"))?;
+        let child = proc
+            .child
+            .as_mut()
+            .expect("child was just set by the spawn above");
+        wait_for_http(
+            &proc.client,
+            child,
+            &proc.log_path,
+            std::time::Duration::from_secs(10),
+        )
+        .await
+        .with_context(|| format!("waiting for participant ({handle}) to restart"))?;
         Ok(())
     }
 
@@ -632,9 +678,15 @@ impl TestWorld {
             .with_context(|| format!("spawn second device ({kind:?}) for {label}"))?;
 
         let client = MoatCliClient::new(format!("http://{http_addr}"));
-        wait_for_http(&client, std::time::Duration::from_secs(10))
-            .await
-            .with_context(|| format!("waiting for second device ({label}) to start"))?;
+        let mut child = child;
+        wait_for_http(
+            &client,
+            &mut child,
+            &log_path,
+            std::time::Duration::from_secs(10),
+        )
+        .await
+        .with_context(|| format!("waiting for second device ({label}) to start"))?;
 
         self.participants.insert(
             label.to_string(),
@@ -916,14 +968,48 @@ fn dart_server_binary() -> Result<(PathBuf, PathBuf)> {
     Ok((dart_bin, lib_path))
 }
 
-/// Poll `GET /status` until it returns 200 or the timeout elapses.
-async fn wait_for_http(client: &MoatCliClient, timeout: std::time::Duration) -> Result<()> {
+/// Last few lines a participant wrote to stderr, for startup post-mortems.
+fn log_tail(path: &std::path::Path) -> String {
+    match std::fs::read_to_string(path) {
+        Ok(log) => {
+            let lines: Vec<String> =
+                log.lines().rev().take(8).map(|l| format!("  | {l}")).collect();
+            if lines.is_empty() {
+                format!("  | <stderr empty> ({})", path.display())
+            } else {
+                lines.into_iter().rev().collect::<Vec<_>>().join("\n")
+            }
+        }
+        Err(e) => format!("  | <log unreadable: {e}> ({})", path.display()),
+    }
+}
+
+/// Poll `GET /status` until it returns 200, the child dies, or the timeout
+/// elapses.
+///
+/// Watching the child matters as much as watching the socket: a process
+/// that exited on startup looks exactly like a slow one from the outside,
+/// and reporting the timeout for it sends you looking for a budget to
+/// widen instead of the error it actually printed.
+async fn wait_for_http(
+    client: &MoatCliClient,
+    child: &mut Child,
+    log_path: &std::path::Path,
+    timeout: std::time::Duration,
+) -> Result<()> {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
+        if let Ok(Some(status)) = child.try_wait() {
+            anyhow::bail!("process exited during startup with {status}\n{}", log_tail(log_path));
+        }
         if client.status().await.is_ok() {
             return Ok(());
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
-    anyhow::bail!("moat-cli HTTP server did not start within {:?}", timeout)
+    anyhow::bail!(
+        "process is alive but did not serve HTTP within {timeout:?} — a real \
+         stall, not a crash\n{}",
+        log_tail(log_path)
+    )
 }

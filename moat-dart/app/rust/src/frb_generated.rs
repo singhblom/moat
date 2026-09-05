@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1779187887;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1793515213;
 
 // Section: executor
 
@@ -3890,6 +3890,40 @@ fn wire__crate__api__simple__event_dto_reaction_payload_impl(
         },
     )
 }
+fn wire__crate__api__simple__fit_hello_inventories_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "fit_hello_inventories",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_convs = <Vec<crate::api::simple::ConvStateDto>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok =
+                        Result::<_, ()>::Ok(crate::api::simple::fit_hello_inventories(api_convs))?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__simple__generate_candidate_tags_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -3975,6 +4009,36 @@ fn wire__crate__api__simple__generate_stealth_keypair_impl(
             transform_result_sse::<_, ()>((move || {
                 let output_ok =
                     Result::<_, ()>::Ok(crate::api::simple::generate_stealth_keypair())?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__simple__hello_inventory_budget_bytes_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "hello_inventory_budget_bytes",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok =
+                    Result::<_, ()>::Ok(crate::api::simple::hello_inventory_budget_bytes())?;
                 Ok(output_ok)
             })())
         },
@@ -4453,35 +4517,6 @@ fn wire__crate__api__simple__sign_drawbridge_challenge_impl(
         },
     )
 }
-fn wire__crate__api__simple__sync_inventory_cap_impl(
-    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
-    rust_vec_len_: i32,
-    data_len_: i32,
-) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
-        flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "sync_inventory_cap",
-            port: None,
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
-        },
-        move || {
-            let message = unsafe {
-                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
-                    ptr_,
-                    rust_vec_len_,
-                    data_len_,
-                )
-            };
-            let mut deserializer =
-                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            deserializer.end();
-            transform_result_sse::<_, ()>((move || {
-                let output_ok = Result::<_, ()>::Ok(crate::api::simple::sync_inventory_cap())?;
-                Ok(output_ok)
-            })())
-        },
-    )
-}
 fn wire__crate__api__simple__sync_request_ttl_ms_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -4729,22 +4764,47 @@ impl SseDecode for bool {
     }
 }
 
+impl SseDecode for crate::api::simple::ConvInventoryDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut tag_ = <i32>::sse_decode(deserializer);
+        match tag_ {
+            0 => {
+                let mut var_rkeys = <Vec<String>>::sse_decode(deserializer);
+                return crate::api::simple::ConvInventoryDto::Complete { rkeys: var_rkeys };
+            }
+            1 => {
+                let mut var_oldest = <String>::sse_decode(deserializer);
+                let mut var_newest = <String>::sse_decode(deserializer);
+                let mut var_count = <u64>::sse_decode(deserializer);
+                return crate::api::simple::ConvInventoryDto::Range {
+                    oldest: var_oldest,
+                    newest: var_newest,
+                    count: var_count,
+                };
+            }
+            2 => {
+                return crate::api::simple::ConvInventoryDto::Empty;
+            }
+            _ => {
+                unimplemented!("");
+            }
+        }
+    }
+}
+
 impl SseDecode for crate::api::simple::ConvStateDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_groupId = <Vec<u8>>::sse_decode(deserializer);
-        let mut var_oldestRkey = <Option<String>>::sse_decode(deserializer);
-        let mut var_newestRkey = <Option<String>>::sse_decode(deserializer);
         let mut var_tipDigest = <Vec<u8>>::sse_decode(deserializer);
         let mut var_anchors = <Vec<crate::api::simple::SyncAnchorDto>>::sse_decode(deserializer);
-        let mut var_rkeys = <Option<Vec<String>>>::sse_decode(deserializer);
+        let mut var_inventory = <crate::api::simple::ConvInventoryDto>::sse_decode(deserializer);
         return crate::api::simple::ConvStateDto {
             group_id: var_groupId,
-            oldest_rkey: var_oldestRkey,
-            newest_rkey: var_newestRkey,
             tip_digest: var_tipDigest,
             anchors: var_anchors,
-            rkeys: var_rkeys,
+            inventory: var_inventory,
         };
     }
 }
@@ -5261,17 +5321,6 @@ impl SseDecode for Option<u64> {
     }
 }
 
-impl SseDecode for Option<Vec<String>> {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        if (<bool>::sse_decode(deserializer)) {
-            return Some(<Vec<String>>::sse_decode(deserializer));
-        } else {
-            return None;
-        }
-    }
-}
-
 impl SseDecode for Option<Vec<u8>> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -5613,9 +5662,6 @@ impl SseDecode for crate::api::simple::SyncOutputDto {
                     messages: var_messages,
                 };
             }
-            2 => {
-                return crate::api::simple::SyncOutputDto::Complete;
-            }
             _ => {
                 unimplemented!("");
             }
@@ -5939,46 +5985,49 @@ fn pde_ffi_dispatcher_primary_impl(
             wire__crate__api__simple__decrypt_push_payload_impl(port, ptr, rust_vec_len, data_len)
         }
         76 => wire__crate__api__simple__encrypt_for_stealth_impl(port, ptr, rust_vec_len, data_len),
-        80 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
-        84 => wire__crate__api__simple__pairing_open_frame_impl(port, ptr, rust_vec_len, data_len),
-        85 => wire__crate__api__simple__pairing_payload_from_text_impl(
+        78 => {
+            wire__crate__api__simple__fit_hello_inventories_impl(port, ptr, rust_vec_len, data_len)
+        }
+        82 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
+        86 => wire__crate__api__simple__pairing_open_frame_impl(port, ptr, rust_vec_len, data_len),
+        87 => wire__crate__api__simple__pairing_payload_from_text_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        86 => wire__crate__api__simple__pairing_payload_from_uri_impl(
+        88 => wire__crate__api__simple__pairing_payload_from_uri_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        87 => wire__crate__api__simple__pairing_payload_to_text_impl(
+        89 => wire__crate__api__simple__pairing_payload_to_text_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        88 => {
+        90 => {
             wire__crate__api__simple__pairing_payload_to_uri_impl(port, ptr, rust_vec_len, data_len)
         }
-        89 => wire__crate__api__simple__pairing_seal_frame_impl(port, ptr, rust_vec_len, data_len),
-        90 => {
+        91 => wire__crate__api__simple__pairing_seal_frame_impl(port, ptr, rust_vec_len, data_len),
+        92 => {
             wire__crate__api__simple__process_image_for_send_impl(port, ptr, rust_vec_len, data_len)
         }
-        91 => wire__crate__api__simple__ring_msg_decode_sync_request_impl(
+        93 => wire__crate__api__simple__ring_msg_decode_sync_request_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        92 => wire__crate__api__simple__ring_msg_encode_sync_request_impl(
+        94 => wire__crate__api__simple__ring_msg_encode_sync_request_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        93 => wire__crate__api__simple__sign_drawbridge_challenge_impl(
+        95 => wire__crate__api__simple__sign_drawbridge_challenge_impl(
             port,
             ptr,
             rust_vec_len,
@@ -6180,15 +6229,17 @@ fn pde_ffi_dispatcher_sync_impl(
         77 => {
             wire__crate__api__simple__event_dto_reaction_payload_impl(ptr, rust_vec_len, data_len)
         }
-        78 => wire__crate__api__simple__generate_candidate_tags_impl(ptr, rust_vec_len, data_len),
-        79 => wire__crate__api__simple__generate_stealth_keypair_impl(ptr, rust_vec_len, data_len),
-        81 => wire__crate__api__simple__kp_pool_target_impl(ptr, rust_vec_len, data_len),
-        82 => wire__crate__api__simple__pad_to_bucket_impl(ptr, rust_vec_len, data_len),
-        83 => wire__crate__api__simple__pairing_frame_is_done_impl(ptr, rust_vec_len, data_len),
-        94 => wire__crate__api__simple__sync_inventory_cap_impl(ptr, rust_vec_len, data_len),
-        95 => wire__crate__api__simple__sync_request_ttl_ms_impl(ptr, rust_vec_len, data_len),
-        96 => wire__crate__api__simple__try_decrypt_stealth_impl(ptr, rust_vec_len, data_len),
-        97 => wire__crate__api__simple__unpad_impl(ptr, rust_vec_len, data_len),
+        79 => wire__crate__api__simple__generate_candidate_tags_impl(ptr, rust_vec_len, data_len),
+        80 => wire__crate__api__simple__generate_stealth_keypair_impl(ptr, rust_vec_len, data_len),
+        81 => {
+            wire__crate__api__simple__hello_inventory_budget_bytes_impl(ptr, rust_vec_len, data_len)
+        }
+        83 => wire__crate__api__simple__kp_pool_target_impl(ptr, rust_vec_len, data_len),
+        84 => wire__crate__api__simple__pad_to_bucket_impl(ptr, rust_vec_len, data_len),
+        85 => wire__crate__api__simple__pairing_frame_is_done_impl(ptr, rust_vec_len, data_len),
+        96 => wire__crate__api__simple__sync_request_ttl_ms_impl(ptr, rust_vec_len, data_len),
+        97 => wire__crate__api__simple__try_decrypt_stealth_impl(ptr, rust_vec_len, data_len),
+        98 => wire__crate__api__simple__unpad_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -6302,15 +6353,49 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::simple::BlobEncryptResult>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::simple::ConvInventoryDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            crate::api::simple::ConvInventoryDto::Complete { rkeys } => {
+                [0.into_dart(), rkeys.into_into_dart().into_dart()].into_dart()
+            }
+            crate::api::simple::ConvInventoryDto::Range {
+                oldest,
+                newest,
+                count,
+            } => [
+                1.into_dart(),
+                oldest.into_into_dart().into_dart(),
+                newest.into_into_dart().into_dart(),
+                count.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::simple::ConvInventoryDto::Empty => [2.into_dart()].into_dart(),
+            _ => {
+                unimplemented!("");
+            }
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::simple::ConvInventoryDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::simple::ConvInventoryDto>
+    for crate::api::simple::ConvInventoryDto
+{
+    fn into_into_dart(self) -> crate::api::simple::ConvInventoryDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::simple::ConvStateDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.group_id.into_into_dart().into_dart(),
-            self.oldest_rkey.into_into_dart().into_dart(),
-            self.newest_rkey.into_into_dart().into_dart(),
             self.tip_digest.into_into_dart().into_dart(),
             self.anchors.into_into_dart().into_dart(),
-            self.rkeys.into_into_dart().into_dart(),
+            self.inventory.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -6966,7 +7051,6 @@ impl flutter_rust_bridge::IntoDart for crate::api::simple::SyncOutputDto {
                 messages.into_into_dart().into_dart(),
             ]
             .into_dart(),
-            crate::api::simple::SyncOutputDto::Complete => [2.into_dart()].into_dart(),
             _ => {
                 unimplemented!("");
             }
@@ -7214,15 +7298,41 @@ impl SseEncode for bool {
     }
 }
 
+impl SseEncode for crate::api::simple::ConvInventoryDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        match self {
+            crate::api::simple::ConvInventoryDto::Complete { rkeys } => {
+                <i32>::sse_encode(0, serializer);
+                <Vec<String>>::sse_encode(rkeys, serializer);
+            }
+            crate::api::simple::ConvInventoryDto::Range {
+                oldest,
+                newest,
+                count,
+            } => {
+                <i32>::sse_encode(1, serializer);
+                <String>::sse_encode(oldest, serializer);
+                <String>::sse_encode(newest, serializer);
+                <u64>::sse_encode(count, serializer);
+            }
+            crate::api::simple::ConvInventoryDto::Empty => {
+                <i32>::sse_encode(2, serializer);
+            }
+            _ => {
+                unimplemented!("");
+            }
+        }
+    }
+}
+
 impl SseEncode for crate::api::simple::ConvStateDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <Vec<u8>>::sse_encode(self.group_id, serializer);
-        <Option<String>>::sse_encode(self.oldest_rkey, serializer);
-        <Option<String>>::sse_encode(self.newest_rkey, serializer);
         <Vec<u8>>::sse_encode(self.tip_digest, serializer);
         <Vec<crate::api::simple::SyncAnchorDto>>::sse_encode(self.anchors, serializer);
-        <Option<Vec<String>>>::sse_encode(self.rkeys, serializer);
+        <crate::api::simple::ConvInventoryDto>::sse_encode(self.inventory, serializer);
     }
 }
 
@@ -7624,16 +7734,6 @@ impl SseEncode for Option<u64> {
     }
 }
 
-impl SseEncode for Option<Vec<String>> {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <bool>::sse_encode(self.is_some(), serializer);
-        if let Some(value) = self {
-            <Vec<String>>::sse_encode(value, serializer);
-        }
-    }
-}
-
 impl SseEncode for Option<Vec<u8>> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -7882,9 +7982,6 @@ impl SseEncode for crate::api::simple::SyncOutputDto {
                 <i32>::sse_encode(1, serializer);
                 <String>::sse_encode(conv_id, serializer);
                 <Vec<crate::api::simple::SyncMessageDto>>::sse_encode(messages, serializer);
-            }
-            crate::api::simple::SyncOutputDto::Complete => {
-                <i32>::sse_encode(2, serializer);
             }
             _ => {
                 unimplemented!("");

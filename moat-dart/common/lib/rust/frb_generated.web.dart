@@ -161,6 +161,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   BigInt dco_decode_box_autoadd_u_64(dynamic raw);
 
   @protected
+  ConvInventoryDto dco_decode_conv_inventory_dto(dynamic raw);
+
+  @protected
   ConvStateDto dco_decode_conv_state_dto(dynamic raw);
 
   @protected
@@ -285,9 +288,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   BigInt? dco_decode_opt_box_autoadd_u_64(dynamic raw);
-
-  @protected
-  List<String>? dco_decode_opt_list_String(dynamic raw);
 
   @protected
   Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw);
@@ -494,6 +494,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   BigInt sse_decode_box_autoadd_u_64(SseDeserializer deserializer);
 
   @protected
+  ConvInventoryDto sse_decode_conv_inventory_dto(SseDeserializer deserializer);
+
+  @protected
   ConvStateDto sse_decode_conv_state_dto(SseDeserializer deserializer);
 
   @protected
@@ -636,9 +639,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   BigInt? sse_decode_opt_box_autoadd_u_64(SseDeserializer deserializer);
-
-  @protected
-  List<String>? sse_decode_opt_list_String(SseDeserializer deserializer);
 
   @protected
   Uint8List? sse_decode_opt_list_prim_u_8_strict(SseDeserializer deserializer);
@@ -854,6 +854,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_box_autoadd_u_64(BigInt self, SseSerializer serializer);
 
   @protected
+  void sse_encode_conv_inventory_dto(
+      ConvInventoryDto self, SseSerializer serializer);
+
+  @protected
   void sse_encode_conv_state_dto(ConvStateDto self, SseSerializer serializer);
 
   @protected
@@ -1001,9 +1005,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_opt_box_autoadd_u_64(BigInt? self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_opt_list_String(List<String>? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_list_prim_u_8_strict(

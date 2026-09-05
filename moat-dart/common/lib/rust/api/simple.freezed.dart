@@ -15,6 +15,523 @@ final _privateConstructorUsedError = UnsupportedError(
     'It seems like you constructed your class using `MyClass._()`. This constructor is only meant to be used by freezed and you are not supposed to need it nor use it.\nPlease check the documentation here for more information: https://github.com/rrousselGit/freezed#adding-getters-and-methods-to-our-models');
 
 /// @nodoc
+mixin _$ConvInventoryDto {
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(List<String> rkeys) complete,
+    required TResult Function(String oldest, String newest, BigInt count) range,
+    required TResult Function() empty,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(List<String> rkeys)? complete,
+    TResult? Function(String oldest, String newest, BigInt count)? range,
+    TResult? Function()? empty,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(List<String> rkeys)? complete,
+    TResult Function(String oldest, String newest, BigInt count)? range,
+    TResult Function()? empty,
+    required TResult orElse(),
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(ConvInventoryDto_Complete value) complete,
+    required TResult Function(ConvInventoryDto_Range value) range,
+    required TResult Function(ConvInventoryDto_Empty value) empty,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(ConvInventoryDto_Complete value)? complete,
+    TResult? Function(ConvInventoryDto_Range value)? range,
+    TResult? Function(ConvInventoryDto_Empty value)? empty,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(ConvInventoryDto_Complete value)? complete,
+    TResult Function(ConvInventoryDto_Range value)? range,
+    TResult Function(ConvInventoryDto_Empty value)? empty,
+    required TResult orElse(),
+  }) =>
+      throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class $ConvInventoryDtoCopyWith<$Res> {
+  factory $ConvInventoryDtoCopyWith(
+          ConvInventoryDto value, $Res Function(ConvInventoryDto) then) =
+      _$ConvInventoryDtoCopyWithImpl<$Res, ConvInventoryDto>;
+}
+
+/// @nodoc
+class _$ConvInventoryDtoCopyWithImpl<$Res, $Val extends ConvInventoryDto>
+    implements $ConvInventoryDtoCopyWith<$Res> {
+  _$ConvInventoryDtoCopyWithImpl(this._value, this._then);
+
+  // ignore: unused_field
+  final $Val _value;
+  // ignore: unused_field
+  final $Res Function($Val) _then;
+
+  /// Create a copy of ConvInventoryDto
+  /// with the given fields replaced by the non-null parameter values.
+}
+
+/// @nodoc
+abstract class _$$ConvInventoryDto_CompleteImplCopyWith<$Res> {
+  factory _$$ConvInventoryDto_CompleteImplCopyWith(
+          _$ConvInventoryDto_CompleteImpl value,
+          $Res Function(_$ConvInventoryDto_CompleteImpl) then) =
+      __$$ConvInventoryDto_CompleteImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({List<String> rkeys});
+}
+
+/// @nodoc
+class __$$ConvInventoryDto_CompleteImplCopyWithImpl<$Res>
+    extends _$ConvInventoryDtoCopyWithImpl<$Res,
+        _$ConvInventoryDto_CompleteImpl>
+    implements _$$ConvInventoryDto_CompleteImplCopyWith<$Res> {
+  __$$ConvInventoryDto_CompleteImplCopyWithImpl(
+      _$ConvInventoryDto_CompleteImpl _value,
+      $Res Function(_$ConvInventoryDto_CompleteImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of ConvInventoryDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? rkeys = null,
+  }) {
+    return _then(_$ConvInventoryDto_CompleteImpl(
+      rkeys: null == rkeys
+          ? _value._rkeys
+          : rkeys // ignore: cast_nullable_to_non_nullable
+              as List<String>,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$ConvInventoryDto_CompleteImpl extends ConvInventoryDto_Complete {
+  const _$ConvInventoryDto_CompleteImpl({required final List<String> rkeys})
+      : _rkeys = rkeys,
+        super._();
+
+  final List<String> _rkeys;
+  @override
+  List<String> get rkeys {
+    if (_rkeys is EqualUnmodifiableListView) return _rkeys;
+    // ignore: implicit_dynamic_type
+    return EqualUnmodifiableListView(_rkeys);
+  }
+
+  @override
+  String toString() {
+    return 'ConvInventoryDto.complete(rkeys: $rkeys)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$ConvInventoryDto_CompleteImpl &&
+            const DeepCollectionEquality().equals(other._rkeys, _rkeys));
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(runtimeType, const DeepCollectionEquality().hash(_rkeys));
+
+  /// Create a copy of ConvInventoryDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$ConvInventoryDto_CompleteImplCopyWith<_$ConvInventoryDto_CompleteImpl>
+      get copyWith => __$$ConvInventoryDto_CompleteImplCopyWithImpl<
+          _$ConvInventoryDto_CompleteImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(List<String> rkeys) complete,
+    required TResult Function(String oldest, String newest, BigInt count) range,
+    required TResult Function() empty,
+  }) {
+    return complete(rkeys);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(List<String> rkeys)? complete,
+    TResult? Function(String oldest, String newest, BigInt count)? range,
+    TResult? Function()? empty,
+  }) {
+    return complete?.call(rkeys);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(List<String> rkeys)? complete,
+    TResult Function(String oldest, String newest, BigInt count)? range,
+    TResult Function()? empty,
+    required TResult orElse(),
+  }) {
+    if (complete != null) {
+      return complete(rkeys);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(ConvInventoryDto_Complete value) complete,
+    required TResult Function(ConvInventoryDto_Range value) range,
+    required TResult Function(ConvInventoryDto_Empty value) empty,
+  }) {
+    return complete(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(ConvInventoryDto_Complete value)? complete,
+    TResult? Function(ConvInventoryDto_Range value)? range,
+    TResult? Function(ConvInventoryDto_Empty value)? empty,
+  }) {
+    return complete?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(ConvInventoryDto_Complete value)? complete,
+    TResult Function(ConvInventoryDto_Range value)? range,
+    TResult Function(ConvInventoryDto_Empty value)? empty,
+    required TResult orElse(),
+  }) {
+    if (complete != null) {
+      return complete(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class ConvInventoryDto_Complete extends ConvInventoryDto {
+  const factory ConvInventoryDto_Complete({required final List<String> rkeys}) =
+      _$ConvInventoryDto_CompleteImpl;
+  const ConvInventoryDto_Complete._() : super._();
+
+  List<String> get rkeys;
+
+  /// Create a copy of ConvInventoryDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$ConvInventoryDto_CompleteImplCopyWith<_$ConvInventoryDto_CompleteImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class _$$ConvInventoryDto_RangeImplCopyWith<$Res> {
+  factory _$$ConvInventoryDto_RangeImplCopyWith(
+          _$ConvInventoryDto_RangeImpl value,
+          $Res Function(_$ConvInventoryDto_RangeImpl) then) =
+      __$$ConvInventoryDto_RangeImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({String oldest, String newest, BigInt count});
+}
+
+/// @nodoc
+class __$$ConvInventoryDto_RangeImplCopyWithImpl<$Res>
+    extends _$ConvInventoryDtoCopyWithImpl<$Res, _$ConvInventoryDto_RangeImpl>
+    implements _$$ConvInventoryDto_RangeImplCopyWith<$Res> {
+  __$$ConvInventoryDto_RangeImplCopyWithImpl(
+      _$ConvInventoryDto_RangeImpl _value,
+      $Res Function(_$ConvInventoryDto_RangeImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of ConvInventoryDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? oldest = null,
+    Object? newest = null,
+    Object? count = null,
+  }) {
+    return _then(_$ConvInventoryDto_RangeImpl(
+      oldest: null == oldest
+          ? _value.oldest
+          : oldest // ignore: cast_nullable_to_non_nullable
+              as String,
+      newest: null == newest
+          ? _value.newest
+          : newest // ignore: cast_nullable_to_non_nullable
+              as String,
+      count: null == count
+          ? _value.count
+          : count // ignore: cast_nullable_to_non_nullable
+              as BigInt,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$ConvInventoryDto_RangeImpl extends ConvInventoryDto_Range {
+  const _$ConvInventoryDto_RangeImpl(
+      {required this.oldest, required this.newest, required this.count})
+      : super._();
+
+  @override
+  final String oldest;
+  @override
+  final String newest;
+  @override
+  final BigInt count;
+
+  @override
+  String toString() {
+    return 'ConvInventoryDto.range(oldest: $oldest, newest: $newest, count: $count)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$ConvInventoryDto_RangeImpl &&
+            (identical(other.oldest, oldest) || other.oldest == oldest) &&
+            (identical(other.newest, newest) || other.newest == newest) &&
+            (identical(other.count, count) || other.count == count));
+  }
+
+  @override
+  int get hashCode => Object.hash(runtimeType, oldest, newest, count);
+
+  /// Create a copy of ConvInventoryDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$ConvInventoryDto_RangeImplCopyWith<_$ConvInventoryDto_RangeImpl>
+      get copyWith => __$$ConvInventoryDto_RangeImplCopyWithImpl<
+          _$ConvInventoryDto_RangeImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(List<String> rkeys) complete,
+    required TResult Function(String oldest, String newest, BigInt count) range,
+    required TResult Function() empty,
+  }) {
+    return range(oldest, newest, count);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(List<String> rkeys)? complete,
+    TResult? Function(String oldest, String newest, BigInt count)? range,
+    TResult? Function()? empty,
+  }) {
+    return range?.call(oldest, newest, count);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(List<String> rkeys)? complete,
+    TResult Function(String oldest, String newest, BigInt count)? range,
+    TResult Function()? empty,
+    required TResult orElse(),
+  }) {
+    if (range != null) {
+      return range(oldest, newest, count);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(ConvInventoryDto_Complete value) complete,
+    required TResult Function(ConvInventoryDto_Range value) range,
+    required TResult Function(ConvInventoryDto_Empty value) empty,
+  }) {
+    return range(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(ConvInventoryDto_Complete value)? complete,
+    TResult? Function(ConvInventoryDto_Range value)? range,
+    TResult? Function(ConvInventoryDto_Empty value)? empty,
+  }) {
+    return range?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(ConvInventoryDto_Complete value)? complete,
+    TResult Function(ConvInventoryDto_Range value)? range,
+    TResult Function(ConvInventoryDto_Empty value)? empty,
+    required TResult orElse(),
+  }) {
+    if (range != null) {
+      return range(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class ConvInventoryDto_Range extends ConvInventoryDto {
+  const factory ConvInventoryDto_Range(
+      {required final String oldest,
+      required final String newest,
+      required final BigInt count}) = _$ConvInventoryDto_RangeImpl;
+  const ConvInventoryDto_Range._() : super._();
+
+  String get oldest;
+  String get newest;
+  BigInt get count;
+
+  /// Create a copy of ConvInventoryDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$ConvInventoryDto_RangeImplCopyWith<_$ConvInventoryDto_RangeImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class _$$ConvInventoryDto_EmptyImplCopyWith<$Res> {
+  factory _$$ConvInventoryDto_EmptyImplCopyWith(
+          _$ConvInventoryDto_EmptyImpl value,
+          $Res Function(_$ConvInventoryDto_EmptyImpl) then) =
+      __$$ConvInventoryDto_EmptyImplCopyWithImpl<$Res>;
+}
+
+/// @nodoc
+class __$$ConvInventoryDto_EmptyImplCopyWithImpl<$Res>
+    extends _$ConvInventoryDtoCopyWithImpl<$Res, _$ConvInventoryDto_EmptyImpl>
+    implements _$$ConvInventoryDto_EmptyImplCopyWith<$Res> {
+  __$$ConvInventoryDto_EmptyImplCopyWithImpl(
+      _$ConvInventoryDto_EmptyImpl _value,
+      $Res Function(_$ConvInventoryDto_EmptyImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of ConvInventoryDto
+  /// with the given fields replaced by the non-null parameter values.
+}
+
+/// @nodoc
+
+class _$ConvInventoryDto_EmptyImpl extends ConvInventoryDto_Empty {
+  const _$ConvInventoryDto_EmptyImpl() : super._();
+
+  @override
+  String toString() {
+    return 'ConvInventoryDto.empty()';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$ConvInventoryDto_EmptyImpl);
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(List<String> rkeys) complete,
+    required TResult Function(String oldest, String newest, BigInt count) range,
+    required TResult Function() empty,
+  }) {
+    return empty();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(List<String> rkeys)? complete,
+    TResult? Function(String oldest, String newest, BigInt count)? range,
+    TResult? Function()? empty,
+  }) {
+    return empty?.call();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(List<String> rkeys)? complete,
+    TResult Function(String oldest, String newest, BigInt count)? range,
+    TResult Function()? empty,
+    required TResult orElse(),
+  }) {
+    if (empty != null) {
+      return empty();
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(ConvInventoryDto_Complete value) complete,
+    required TResult Function(ConvInventoryDto_Range value) range,
+    required TResult Function(ConvInventoryDto_Empty value) empty,
+  }) {
+    return empty(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(ConvInventoryDto_Complete value)? complete,
+    TResult? Function(ConvInventoryDto_Range value)? range,
+    TResult? Function(ConvInventoryDto_Empty value)? empty,
+  }) {
+    return empty?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(ConvInventoryDto_Complete value)? complete,
+    TResult Function(ConvInventoryDto_Range value)? range,
+    TResult Function(ConvInventoryDto_Empty value)? empty,
+    required TResult orElse(),
+  }) {
+    if (empty != null) {
+      return empty(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class ConvInventoryDto_Empty extends ConvInventoryDto {
+  const factory ConvInventoryDto_Empty() = _$ConvInventoryDto_EmptyImpl;
+  const ConvInventoryDto_Empty._() : super._();
+}
+
+/// @nodoc
 mixin _$PairingCommandDto {
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
@@ -4094,21 +4611,18 @@ mixin _$SyncOutputDto {
     required TResult Function(Uint8List bytes) send,
     required TResult Function(String convId, List<SyncMessageDto> messages)
         store,
-    required TResult Function() complete,
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
     TResult? Function(Uint8List bytes)? send,
     TResult? Function(String convId, List<SyncMessageDto> messages)? store,
-    TResult? Function()? complete,
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
     TResult Function(Uint8List bytes)? send,
     TResult Function(String convId, List<SyncMessageDto> messages)? store,
-    TResult Function()? complete,
     required TResult orElse(),
   }) =>
       throw _privateConstructorUsedError;
@@ -4116,21 +4630,18 @@ mixin _$SyncOutputDto {
   TResult map<TResult extends Object?>({
     required TResult Function(SyncOutputDto_Send value) send,
     required TResult Function(SyncOutputDto_Store value) store,
-    required TResult Function(SyncOutputDto_Complete value) complete,
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult? mapOrNull<TResult extends Object?>({
     TResult? Function(SyncOutputDto_Send value)? send,
     TResult? Function(SyncOutputDto_Store value)? store,
-    TResult? Function(SyncOutputDto_Complete value)? complete,
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult maybeMap<TResult extends Object?>({
     TResult Function(SyncOutputDto_Send value)? send,
     TResult Function(SyncOutputDto_Store value)? store,
-    TResult Function(SyncOutputDto_Complete value)? complete,
     required TResult orElse(),
   }) =>
       throw _privateConstructorUsedError;
@@ -4230,7 +4741,6 @@ class _$SyncOutputDto_SendImpl extends SyncOutputDto_Send {
     required TResult Function(Uint8List bytes) send,
     required TResult Function(String convId, List<SyncMessageDto> messages)
         store,
-    required TResult Function() complete,
   }) {
     return send(bytes);
   }
@@ -4240,7 +4750,6 @@ class _$SyncOutputDto_SendImpl extends SyncOutputDto_Send {
   TResult? whenOrNull<TResult extends Object?>({
     TResult? Function(Uint8List bytes)? send,
     TResult? Function(String convId, List<SyncMessageDto> messages)? store,
-    TResult? Function()? complete,
   }) {
     return send?.call(bytes);
   }
@@ -4250,7 +4759,6 @@ class _$SyncOutputDto_SendImpl extends SyncOutputDto_Send {
   TResult maybeWhen<TResult extends Object?>({
     TResult Function(Uint8List bytes)? send,
     TResult Function(String convId, List<SyncMessageDto> messages)? store,
-    TResult Function()? complete,
     required TResult orElse(),
   }) {
     if (send != null) {
@@ -4264,7 +4772,6 @@ class _$SyncOutputDto_SendImpl extends SyncOutputDto_Send {
   TResult map<TResult extends Object?>({
     required TResult Function(SyncOutputDto_Send value) send,
     required TResult Function(SyncOutputDto_Store value) store,
-    required TResult Function(SyncOutputDto_Complete value) complete,
   }) {
     return send(this);
   }
@@ -4274,7 +4781,6 @@ class _$SyncOutputDto_SendImpl extends SyncOutputDto_Send {
   TResult? mapOrNull<TResult extends Object?>({
     TResult? Function(SyncOutputDto_Send value)? send,
     TResult? Function(SyncOutputDto_Store value)? store,
-    TResult? Function(SyncOutputDto_Complete value)? complete,
   }) {
     return send?.call(this);
   }
@@ -4284,7 +4790,6 @@ class _$SyncOutputDto_SendImpl extends SyncOutputDto_Send {
   TResult maybeMap<TResult extends Object?>({
     TResult Function(SyncOutputDto_Send value)? send,
     TResult Function(SyncOutputDto_Store value)? store,
-    TResult Function(SyncOutputDto_Complete value)? complete,
     required TResult orElse(),
   }) {
     if (send != null) {
@@ -4397,7 +4902,6 @@ class _$SyncOutputDto_StoreImpl extends SyncOutputDto_Store {
     required TResult Function(Uint8List bytes) send,
     required TResult Function(String convId, List<SyncMessageDto> messages)
         store,
-    required TResult Function() complete,
   }) {
     return store(convId, messages);
   }
@@ -4407,7 +4911,6 @@ class _$SyncOutputDto_StoreImpl extends SyncOutputDto_Store {
   TResult? whenOrNull<TResult extends Object?>({
     TResult? Function(Uint8List bytes)? send,
     TResult? Function(String convId, List<SyncMessageDto> messages)? store,
-    TResult? Function()? complete,
   }) {
     return store?.call(convId, messages);
   }
@@ -4417,7 +4920,6 @@ class _$SyncOutputDto_StoreImpl extends SyncOutputDto_Store {
   TResult maybeWhen<TResult extends Object?>({
     TResult Function(Uint8List bytes)? send,
     TResult Function(String convId, List<SyncMessageDto> messages)? store,
-    TResult Function()? complete,
     required TResult orElse(),
   }) {
     if (store != null) {
@@ -4431,7 +4933,6 @@ class _$SyncOutputDto_StoreImpl extends SyncOutputDto_Store {
   TResult map<TResult extends Object?>({
     required TResult Function(SyncOutputDto_Send value) send,
     required TResult Function(SyncOutputDto_Store value) store,
-    required TResult Function(SyncOutputDto_Complete value) complete,
   }) {
     return store(this);
   }
@@ -4441,7 +4942,6 @@ class _$SyncOutputDto_StoreImpl extends SyncOutputDto_Store {
   TResult? mapOrNull<TResult extends Object?>({
     TResult? Function(SyncOutputDto_Send value)? send,
     TResult? Function(SyncOutputDto_Store value)? store,
-    TResult? Function(SyncOutputDto_Complete value)? complete,
   }) {
     return store?.call(this);
   }
@@ -4451,7 +4951,6 @@ class _$SyncOutputDto_StoreImpl extends SyncOutputDto_Store {
   TResult maybeMap<TResult extends Object?>({
     TResult Function(SyncOutputDto_Send value)? send,
     TResult Function(SyncOutputDto_Store value)? store,
-    TResult Function(SyncOutputDto_Complete value)? complete,
     required TResult orElse(),
   }) {
     if (store != null) {
@@ -4476,122 +4975,6 @@ abstract class SyncOutputDto_Store extends SyncOutputDto {
   @JsonKey(includeFromJson: false, includeToJson: false)
   _$$SyncOutputDto_StoreImplCopyWith<_$SyncOutputDto_StoreImpl> get copyWith =>
       throw _privateConstructorUsedError;
-}
-
-/// @nodoc
-abstract class _$$SyncOutputDto_CompleteImplCopyWith<$Res> {
-  factory _$$SyncOutputDto_CompleteImplCopyWith(
-          _$SyncOutputDto_CompleteImpl value,
-          $Res Function(_$SyncOutputDto_CompleteImpl) then) =
-      __$$SyncOutputDto_CompleteImplCopyWithImpl<$Res>;
-}
-
-/// @nodoc
-class __$$SyncOutputDto_CompleteImplCopyWithImpl<$Res>
-    extends _$SyncOutputDtoCopyWithImpl<$Res, _$SyncOutputDto_CompleteImpl>
-    implements _$$SyncOutputDto_CompleteImplCopyWith<$Res> {
-  __$$SyncOutputDto_CompleteImplCopyWithImpl(
-      _$SyncOutputDto_CompleteImpl _value,
-      $Res Function(_$SyncOutputDto_CompleteImpl) _then)
-      : super(_value, _then);
-
-  /// Create a copy of SyncOutputDto
-  /// with the given fields replaced by the non-null parameter values.
-}
-
-/// @nodoc
-
-class _$SyncOutputDto_CompleteImpl extends SyncOutputDto_Complete {
-  const _$SyncOutputDto_CompleteImpl() : super._();
-
-  @override
-  String toString() {
-    return 'SyncOutputDto.complete()';
-  }
-
-  @override
-  bool operator ==(Object other) {
-    return identical(this, other) ||
-        (other.runtimeType == runtimeType &&
-            other is _$SyncOutputDto_CompleteImpl);
-  }
-
-  @override
-  int get hashCode => runtimeType.hashCode;
-
-  @override
-  @optionalTypeArgs
-  TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List bytes) send,
-    required TResult Function(String convId, List<SyncMessageDto> messages)
-        store,
-    required TResult Function() complete,
-  }) {
-    return complete();
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List bytes)? send,
-    TResult? Function(String convId, List<SyncMessageDto> messages)? store,
-    TResult? Function()? complete,
-  }) {
-    return complete?.call();
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List bytes)? send,
-    TResult Function(String convId, List<SyncMessageDto> messages)? store,
-    TResult Function()? complete,
-    required TResult orElse(),
-  }) {
-    if (complete != null) {
-      return complete();
-    }
-    return orElse();
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult map<TResult extends Object?>({
-    required TResult Function(SyncOutputDto_Send value) send,
-    required TResult Function(SyncOutputDto_Store value) store,
-    required TResult Function(SyncOutputDto_Complete value) complete,
-  }) {
-    return complete(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(SyncOutputDto_Send value)? send,
-    TResult? Function(SyncOutputDto_Store value)? store,
-    TResult? Function(SyncOutputDto_Complete value)? complete,
-  }) {
-    return complete?.call(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeMap<TResult extends Object?>({
-    TResult Function(SyncOutputDto_Send value)? send,
-    TResult Function(SyncOutputDto_Store value)? store,
-    TResult Function(SyncOutputDto_Complete value)? complete,
-    required TResult orElse(),
-  }) {
-    if (complete != null) {
-      return complete(this);
-    }
-    return orElse();
-  }
-}
-
-abstract class SyncOutputDto_Complete extends SyncOutputDto {
-  const factory SyncOutputDto_Complete() = _$SyncOutputDto_CompleteImpl;
-  const SyncOutputDto_Complete._() : super._();
 }
 
 /// @nodoc

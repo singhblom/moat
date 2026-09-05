@@ -10,7 +10,7 @@ part 'simple.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `credential_from_dto`, `from_core`, `into_core`, `payload_from_core`, `payload_to_core`, `push_media_label`, `push_plaintext_preview`, `sibling_info_to_core`, `to_core_sibling_stealth`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `MoatError`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 /// Generate a stealth keypair. Returns (private_key, public_key) each 32 bytes.
 StealthKeypair generateStealthKeypair() =>
@@ -164,9 +164,16 @@ Future<Uint8List> ringMsgDecodeSyncRequest({required List<int> payload}) =>
 PlatformInt64 syncRequestTtlMs() =>
     RustLib.instance.api.crateApiSimpleSyncRequestTtlMs();
 
-/// Above this many messages in one conversation a host omits the rkey
-/// inventory from its `ConvStateDto` — see `ConvStateDto::rkeys`.
-int syncInventoryCap() => RustLib.instance.api.crateApiSimpleSyncInventoryCap();
+/// Byte budget for all inventories in one `Hello` — see
+/// `fit_hello_inventories`.
+int helloInventoryBudgetBytes() =>
+    RustLib.instance.api.crateApiSimpleHelloInventoryBudgetBytes();
+
+/// Fit a Hello's inventories inside that budget by downgrading the largest
+/// enumerations to spans, so the frame stays under the relay's hard limit.
+Future<List<ConvStateDto>> fitHelloInventories(
+        {required List<ConvStateDto> convs}) =>
+    RustLib.instance.api.crateApiSimpleFitHelloInventories(convs: convs);
 
 /// Seal a frame with AES-128-GCM under the pairing channel's directional
 /// key (`key` must be 16 bytes — one of `channel_key_new_to_old`/
@@ -628,31 +635,45 @@ class BlobEncryptResult {
           contentHash == other.contentHash;
 }
 
+@freezed
+sealed class ConvInventoryDto with _$ConvInventoryDto {
+  const ConvInventoryDto._();
+
+  /// Every rkey held, enumerated. The peer sends exactly the complement.
+  const factory ConvInventoryDto.complete({
+    required List<String> rkeys,
+  }) = ConvInventoryDto_Complete;
+
+  /// Too large for the Hello's byte budget, so only the span is given.
+  const factory ConvInventoryDto.range({
+    required String oldest,
+    required String newest,
+    required BigInt count,
+  }) = ConvInventoryDto_Range;
+
+  /// Nothing held at all.
+  const factory ConvInventoryDto.empty() = ConvInventoryDto_Empty;
+}
+
 class ConvStateDto {
   final Uint8List groupId;
-  final String? oldestRkey;
-  final String? newestRkey;
   final Uint8List tipDigest;
   final List<SyncAnchorDto> anchors;
-  final List<String>? rkeys;
+  final ConvInventoryDto inventory;
 
   const ConvStateDto({
     required this.groupId,
-    this.oldestRkey,
-    this.newestRkey,
     required this.tipDigest,
     required this.anchors,
-    this.rkeys,
+    required this.inventory,
   });
 
   @override
   int get hashCode =>
       groupId.hashCode ^
-      oldestRkey.hashCode ^
-      newestRkey.hashCode ^
       tipDigest.hashCode ^
       anchors.hashCode ^
-      rkeys.hashCode;
+      inventory.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -660,11 +681,9 @@ class ConvStateDto {
       other is ConvStateDto &&
           runtimeType == other.runtimeType &&
           groupId == other.groupId &&
-          oldestRkey == other.oldestRkey &&
-          newestRkey == other.newestRkey &&
           tipDigest == other.tipDigest &&
           anchors == other.anchors &&
-          rkeys == other.rkeys;
+          inventory == other.inventory;
 }
 
 /// Credential fields for a group member or key package.
@@ -1389,9 +1408,6 @@ sealed class SyncOutputDto with _$SyncOutputDto {
     required String convId,
     required List<SyncMessageDto> messages,
   }) = SyncOutputDto_Store;
-
-  /// Sync is complete; close the pair WS and tear down.
-  const factory SyncOutputDto.complete() = SyncOutputDto_Complete;
 }
 
 @freezed

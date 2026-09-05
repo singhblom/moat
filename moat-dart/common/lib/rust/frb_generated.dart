@@ -70,7 +70,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -1779187887;
+  int get rustContentHash => 1793515213;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -387,6 +387,9 @@ abstract class RustLibApi extends BaseApi {
   ReactionPayloadDto? crateApiSimpleEventDtoReactionPayload(
       {required EventDto that});
 
+  Future<List<ConvStateDto>> crateApiSimpleFitHelloInventories(
+      {required List<ConvStateDto> convs});
+
   List<Uint8List> crateApiSimpleGenerateCandidateTags(
       {required MoatSessionHandle handle,
       required List<int> groupId,
@@ -396,6 +399,8 @@ abstract class RustLibApi extends BaseApi {
       required BigInt count});
 
   StealthKeypair crateApiSimpleGenerateStealthKeypair();
+
+  int crateApiSimpleHelloInventoryBudgetBytes();
 
   Future<void> crateApiSimpleInitApp();
 
@@ -438,8 +443,6 @@ abstract class RustLibApi extends BaseApi {
 
   Future<DrawbridgeChallengeSignature> crateApiSimpleSignDrawbridgeChallenge(
       {required List<int> keyBundle, required List<int> message});
-
-  int crateApiSimpleSyncInventoryCap();
 
   PlatformInt64 crateApiSimpleSyncRequestTtlMs();
 
@@ -2799,6 +2802,32 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<List<ConvStateDto>> crateApiSimpleFitHelloInventories(
+      {required List<ConvStateDto> convs}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_list_conv_state_dto(convs, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 78, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_conv_state_dto,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateApiSimpleFitHelloInventoriesConstMeta,
+      argValues: [convs],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSimpleFitHelloInventoriesConstMeta =>
+      const TaskConstMeta(
+        debugName: "fit_hello_inventories",
+        argNames: ["convs"],
+      );
+
+  @override
   List<Uint8List> crateApiSimpleGenerateCandidateTags(
       {required MoatSessionHandle handle,
       required List<int> groupId,
@@ -2816,7 +2845,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_prim_u_8_loose(senderDeviceId, serializer);
         sse_encode_u_64(fromCounter, serializer);
         sse_encode_u_64(count, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 78)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 79)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_list_prim_u_8_strict,
@@ -2853,7 +2882,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 79)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 80)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_stealth_keypair,
@@ -2872,12 +2901,35 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  int crateApiSimpleHelloInventoryBudgetBytes() {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 81)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_u_32,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateApiSimpleHelloInventoryBudgetBytesConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSimpleHelloInventoryBudgetBytesConstMeta =>
+      const TaskConstMeta(
+        debugName: "hello_inventory_budget_bytes",
+        argNames: [],
+      );
+
+  @override
   Future<void> crateApiSimpleInitApp() {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 80, port: port_);
+            funcId: 82, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -2899,7 +2951,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 81)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 83)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_u_64,
@@ -2922,7 +2974,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_list_prim_u_8_loose(plaintext, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 82)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 84)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -2945,7 +2997,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_list_prim_u_8_loose(plaintext, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 83)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 85)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_bool,
@@ -2975,7 +3027,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_u_64(counter, serializer);
         sse_encode_list_prim_u_8_loose(ciphertext, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 84, port: port_);
+            funcId: 86, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -3001,7 +3053,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(text, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 85, port: port_);
+            funcId: 87, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_pairing_payload_dto,
@@ -3027,7 +3079,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(uri, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 86, port: port_);
+            funcId: 88, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_pairing_payload_dto,
@@ -3054,7 +3106,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_prim_u_8_loose(token, serializer);
         sse_encode_list_prim_u_8_loose(secret, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 87, port: port_);
+            funcId: 89, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -3081,7 +3133,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_prim_u_8_loose(token, serializer);
         sse_encode_list_prim_u_8_loose(secret, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 88, port: port_);
+            funcId: 90, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -3111,7 +3163,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_u_64(counter, serializer);
         sse_encode_list_prim_u_8_loose(plaintext, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 89, port: port_);
+            funcId: 91, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -3137,7 +3189,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_list_prim_u_8_loose(imageBytes, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 90, port: port_);
+            funcId: 92, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_image_process_result,
@@ -3163,7 +3215,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_list_prim_u_8_loose(payload, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 91, port: port_);
+            funcId: 93, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -3189,7 +3241,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_list_prim_u_8_loose(token, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 92, port: port_);
+            funcId: 94, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -3216,7 +3268,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_prim_u_8_loose(keyBundle, serializer);
         sse_encode_list_prim_u_8_loose(message, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 93, port: port_);
+            funcId: 95, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_drawbridge_challenge_signature,
@@ -3235,34 +3287,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  int crateApiSimpleSyncInventoryCap() {
-    return handler.executeSync(SyncTask(
-      callFfi: () {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 94)!;
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_u_32,
-        decodeErrorData: null,
-      ),
-      constMeta: kCrateApiSimpleSyncInventoryCapConstMeta,
-      argValues: [],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateApiSimpleSyncInventoryCapConstMeta =>
-      const TaskConstMeta(
-        debugName: "sync_inventory_cap",
-        argNames: [],
-      );
-
-  @override
   PlatformInt64 crateApiSimpleSyncRequestTtlMs() {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 95)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 96)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_i_64,
@@ -3288,7 +3317,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_list_prim_u_8_loose(scanPrivkey, serializer);
         sse_encode_list_prim_u_8_loose(payload, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 96)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 97)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_opt_list_prim_u_8_strict,
@@ -3312,7 +3341,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_list_prim_u_8_loose(padded, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 97)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 98)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_prim_u_8_strict,
@@ -3591,18 +3620,37 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ConvInventoryDto dco_decode_conv_inventory_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    switch (raw[0]) {
+      case 0:
+        return ConvInventoryDto_Complete(
+          rkeys: dco_decode_list_String(raw[1]),
+        );
+      case 1:
+        return ConvInventoryDto_Range(
+          oldest: dco_decode_String(raw[1]),
+          newest: dco_decode_String(raw[2]),
+          count: dco_decode_u_64(raw[3]),
+        );
+      case 2:
+        return ConvInventoryDto_Empty();
+      default:
+        throw Exception("unreachable");
+    }
+  }
+
+  @protected
   ConvStateDto dco_decode_conv_state_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 6)
-      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
     return ConvStateDto(
       groupId: dco_decode_list_prim_u_8_strict(arr[0]),
-      oldestRkey: dco_decode_opt_String(arr[1]),
-      newestRkey: dco_decode_opt_String(arr[2]),
-      tipDigest: dco_decode_list_prim_u_8_strict(arr[3]),
-      anchors: dco_decode_list_sync_anchor_dto(arr[4]),
-      rkeys: dco_decode_opt_list_String(arr[5]),
+      tipDigest: dco_decode_list_prim_u_8_strict(arr[1]),
+      anchors: dco_decode_list_sync_anchor_dto(arr[2]),
+      inventory: dco_decode_conv_inventory_dto(arr[3]),
     );
   }
 
@@ -3930,12 +3978,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  List<String>? dco_decode_opt_list_String(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return raw == null ? null : dco_decode_list_String(raw);
-  }
-
-  @protected
   Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_list_prim_u_8_strict(raw);
@@ -4205,8 +4247,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           convId: dco_decode_String(raw[1]),
           messages: dco_decode_list_sync_message_dto(raw[2]),
         );
-      case 2:
-        return SyncOutputDto_Complete();
       default:
         throw Exception("unreachable");
     }
@@ -4556,21 +4596,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ConvInventoryDto sse_decode_conv_inventory_dto(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var tag_ = sse_decode_i_32(deserializer);
+    switch (tag_) {
+      case 0:
+        var var_rkeys = sse_decode_list_String(deserializer);
+        return ConvInventoryDto_Complete(rkeys: var_rkeys);
+      case 1:
+        var var_oldest = sse_decode_String(deserializer);
+        var var_newest = sse_decode_String(deserializer);
+        var var_count = sse_decode_u_64(deserializer);
+        return ConvInventoryDto_Range(
+            oldest: var_oldest, newest: var_newest, count: var_count);
+      case 2:
+        return ConvInventoryDto_Empty();
+      default:
+        throw UnimplementedError('');
+    }
+  }
+
+  @protected
   ConvStateDto sse_decode_conv_state_dto(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_groupId = sse_decode_list_prim_u_8_strict(deserializer);
-    var var_oldestRkey = sse_decode_opt_String(deserializer);
-    var var_newestRkey = sse_decode_opt_String(deserializer);
     var var_tipDigest = sse_decode_list_prim_u_8_strict(deserializer);
     var var_anchors = sse_decode_list_sync_anchor_dto(deserializer);
-    var var_rkeys = sse_decode_opt_list_String(deserializer);
+    var var_inventory = sse_decode_conv_inventory_dto(deserializer);
     return ConvStateDto(
         groupId: var_groupId,
-        oldestRkey: var_oldestRkey,
-        newestRkey: var_newestRkey,
         tipDigest: var_tipDigest,
         anchors: var_anchors,
-        rkeys: var_rkeys);
+        inventory: var_inventory);
   }
 
   @protected
@@ -5034,17 +5092,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  List<String>? sse_decode_opt_list_String(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-
-    if (sse_decode_bool(deserializer)) {
-      return (sse_decode_list_String(deserializer));
-    } else {
-      return null;
-    }
-  }
-
-  @protected
   Uint8List? sse_decode_opt_list_prim_u_8_strict(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -5307,8 +5354,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         var var_convId = sse_decode_String(deserializer);
         var var_messages = sse_decode_list_sync_message_dto(deserializer);
         return SyncOutputDto_Store(convId: var_convId, messages: var_messages);
-      case 2:
-        return SyncOutputDto_Complete();
       default:
         throw UnimplementedError('');
     }
@@ -5672,14 +5717,34 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_conv_inventory_dto(
+      ConvInventoryDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    switch (self) {
+      case ConvInventoryDto_Complete(rkeys: final rkeys):
+        sse_encode_i_32(0, serializer);
+        sse_encode_list_String(rkeys, serializer);
+      case ConvInventoryDto_Range(
+          oldest: final oldest,
+          newest: final newest,
+          count: final count
+        ):
+        sse_encode_i_32(1, serializer);
+        sse_encode_String(oldest, serializer);
+        sse_encode_String(newest, serializer);
+        sse_encode_u_64(count, serializer);
+      case ConvInventoryDto_Empty():
+        sse_encode_i_32(2, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_conv_state_dto(ConvStateDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_prim_u_8_strict(self.groupId, serializer);
-    sse_encode_opt_String(self.oldestRkey, serializer);
-    sse_encode_opt_String(self.newestRkey, serializer);
     sse_encode_list_prim_u_8_strict(self.tipDigest, serializer);
     sse_encode_list_sync_anchor_dto(self.anchors, serializer);
-    sse_encode_opt_list_String(self.rkeys, serializer);
+    sse_encode_conv_inventory_dto(self.inventory, serializer);
   }
 
   @protected
@@ -6059,17 +6124,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_opt_list_String(
-      List<String>? self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-
-    sse_encode_bool(self != null, serializer);
-    if (self != null) {
-      sse_encode_list_String(self, serializer);
-    }
-  }
-
-  @protected
   void sse_encode_opt_list_prim_u_8_strict(
       Uint8List? self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -6302,8 +6356,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_i_32(1, serializer);
         sse_encode_String(convId, serializer);
         sse_encode_list_sync_message_dto(messages, serializer);
-      case SyncOutputDto_Complete():
-        sse_encode_i_32(2, serializer);
     }
   }
 

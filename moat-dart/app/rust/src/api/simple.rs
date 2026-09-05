@@ -1365,6 +1365,7 @@ impl SyncSessionHandle {
             .lock()
             .unwrap()
             .on_message(&session_lock, msg, &our_did)
+            .map_err(|e| e.to_string())?
             .into_iter()
             .map(SyncOutputDto::from)
             .collect())
@@ -1450,24 +1451,74 @@ impl From<SyncAnchorDto> for CoreAnchorDto {
     }
 }
 
+/// What one side holds for a conversation — mirrors
+/// `moat_core::ConvInventory`. The variants keep "I hold nothing" and "I
+/// am not listing what I hold" distinguishable, since they want opposite
+/// responses from the peer.
+pub enum ConvInventoryDto {
+    /// Every rkey held, enumerated. The peer sends exactly the complement.
+    Complete { rkeys: Vec<String> },
+    /// Too large for the Hello's byte budget, so only the span is given.
+    Range { oldest: String, newest: String, count: u64 },
+    /// Nothing held at all.
+    Empty,
+}
+
+impl From<ConvInventoryDto> for moat_core::ConvInventory {
+    fn from(i: ConvInventoryDto) -> Self {
+        use moat_core::ConvInventory as C;
+        match i {
+            ConvInventoryDto::Complete { rkeys } => C::Complete { rkeys },
+            ConvInventoryDto::Range { oldest, newest, count } => {
+                C::Range { oldest, newest, count }
+            }
+            ConvInventoryDto::Empty => C::Empty,
+        }
+    }
+}
+
+impl From<moat_core::ConvInventory> for ConvInventoryDto {
+    fn from(i: moat_core::ConvInventory) -> Self {
+        use moat_core::ConvInventory as C;
+        match i {
+            C::Complete { rkeys } => ConvInventoryDto::Complete { rkeys },
+            C::Range { oldest, newest, count } => {
+                ConvInventoryDto::Range { oldest, newest, count }
+            }
+            C::Empty => ConvInventoryDto::Empty,
+        }
+    }
+}
+
 pub struct ConvStateDto {
     pub group_id: Vec<u8>,
-    pub oldest_rkey: Option<String>,
-    pub newest_rkey: Option<String>,
     pub tip_digest: Vec<u8>,
     pub anchors: Vec<SyncAnchorDto>,
-    pub rkeys: Option<Vec<String>>,
+    pub inventory: ConvInventoryDto,
 }
 
 impl From<ConvStateDto> for ConvState {
     fn from(c: ConvStateDto) -> Self {
         ConvState {
             group_id: c.group_id,
-            oldest_rkey: c.oldest_rkey,
-            newest_rkey: c.newest_rkey,
             tip_digest: c.tip_digest,
             anchors: c.anchors.into_iter().map(CoreAnchorDto::from).collect(),
-            rkeys: c.rkeys,
+            inventory: c.inventory.into(),
+        }
+    }
+}
+
+impl From<ConvState> for ConvStateDto {
+    fn from(c: ConvState) -> Self {
+        ConvStateDto {
+            group_id: c.group_id,
+            tip_digest: c.tip_digest,
+            anchors: c
+                .anchors
+                .into_iter()
+                .map(|a| SyncAnchorDto { rkey: a.rkey, digest: a.digest })
+                .collect(),
+            inventory: c.inventory.into(),
         }
     }
 }
@@ -1477,8 +1528,6 @@ pub enum SyncOutputDto {
     Send { bytes: Vec<u8> },
     /// Persist these messages for the conversation `conv_id` (hex group ID).
     Store { conv_id: String, messages: Vec<SyncMessageDto> },
-    /// Sync is complete; close the pair WS and tear down.
-    Complete,
 }
 
 impl From<SyncOutput> for SyncOutputDto {
@@ -1489,7 +1538,6 @@ impl From<SyncOutput> for SyncOutputDto {
                 conv_id,
                 messages: messages.into_iter().map(SyncMessageDto::from).collect(),
             },
-            SyncOutput::Complete => SyncOutputDto::Complete,
         }
     }
 }
@@ -1703,11 +1751,19 @@ pub fn sync_request_ttl_ms() -> i64 {
     moat_core::SYNC_REQUEST_TTL_MS
 }
 
-/// Above this many messages in one conversation a host omits the rkey
-/// inventory from its `ConvStateDto` — see `ConvStateDto::rkeys`.
+/// Byte budget for all inventories in one `Hello` — see
+/// `fit_hello_inventories`.
 #[frb(sync)]
-pub fn sync_inventory_cap() -> u32 {
-    moat_core::sync::INVENTORY_CAP as u32
+pub fn hello_inventory_budget_bytes() -> u32 {
+    moat_core::HELLO_INVENTORY_BUDGET_BYTES as u32
+}
+
+/// Fit a Hello's inventories inside that budget by downgrading the largest
+/// enumerations to spans, so the frame stays under the relay's hard limit.
+pub fn fit_hello_inventories(convs: Vec<ConvStateDto>) -> Vec<ConvStateDto> {
+    let mut core: Vec<ConvState> = convs.into_iter().map(Into::into).collect();
+    moat_core::fit_hello_inventories(&mut core);
+    core.into_iter().map(ConvStateDto::from).collect()
 }
 
 /// Presentation projection of a `SyncRequestSessionHandle` — mirrors

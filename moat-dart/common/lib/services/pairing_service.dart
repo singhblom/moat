@@ -624,22 +624,17 @@ class PairingService {
               await storeSyncOutputMessages(_messageStorage, convId, messages, did);
           moatLog('PairingService: pairing-sync stored $count message(s) for $convId');
         },
-        complete: () async {
-          if (_generation != gen) return;
-          moatLog('PairingService: pairing-sync session complete — closing pair WS');
-          _pairingSyncSession = null;
-          _pairingSyncKeyNewToOld = null;
-          _pairingSyncKeyOldToNew = null;
-          // This pairing is fully done, including its sync handoff. Clear
-          // the role flag now — otherwise a later, unrelated pair session
-          // (an established-devices reconnect sync) would still route
-          // through this service's own handlers instead of falling
-          // through to `SyncService`/`DeviceRingService`.
-          _isNewDevice = null;
-          await _drawbridge.clearPair();
-          _releasePairCallbacks();
-        },
       );
+    }
+
+    // As in `SyncService`: tear down only once every output in the batch
+    // has been applied, never as one of them.
+    if (gen == _generation && (await _pairingSyncSession?.isDone() ?? false)) {
+      moatLog('PairingService: pairing-sync complete — closing pair WS');
+      _pairingSyncSession = null;
+      _pairingSyncKeyNewToOld = null;
+      _pairingSyncKeyOldToNew = null;
+      await _releaseTransport();
     }
   }
 

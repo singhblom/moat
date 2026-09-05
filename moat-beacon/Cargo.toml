@@ -23,6 +23,7 @@ tempfile = { workspace = true }
 proptest = "1"
 libc = "0.2"
 signal-hook = "0.3"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [features]
 dart = []

@@ -78,8 +78,8 @@ pub use crate::tag::{
 };
 pub use crate::digest::{diff_anchors, DigestAnchor, DiffRange};
 pub use crate::sync::{
-    decode_sync_msg, encode_sync_msg, AnchorDto, ConvState, SyncDirection, SyncMessage, SyncMsg,
-    SyncOutput, SyncSession,
+    decode_sync_msg, encode_sync_msg, fit_hello_inventories, AnchorDto, ConvInventory, ConvState,
+    SyncDirection, SyncMessage, SyncMsg, SyncOutput, SyncSession, HELLO_INVENTORY_BUDGET_BYTES,
 };
 pub use crate::sync_request::{
     decode_ring_msg, encode_ring_msg, RingMsg, SyncFailure, SyncRequestSession,

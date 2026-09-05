@@ -2074,7 +2074,20 @@ impl App {
         };
 
         let current_epoch = self.mls.get_group_epoch(&group_id).ok().flatten().unwrap_or(1);
-        let event = Event::message(group_id.clone(), current_epoch, &payload);
+        // Same reasoning as the image path below: the optimistic row is
+        // already stored under this id, and the rkey fix-up on publish
+        // matches on it. Looked up before encrypting because
+        // `encrypt_event` copies whatever id the event carries.
+        let pending_message_id = self
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.is_own && m.content.contains("[long text — uploading…]"))
+            .and_then(|m| m.message_id.clone());
+        let mut event = Event::message(group_id.clone(), current_epoch, &payload);
+        if let Some(id) = &pending_message_id {
+            event.message_id = Some(id.clone());
+        }
 
         let encrypted = match self.mls.encrypt_event(&group_id, &key_bundle, &event) {
             Ok(e) => e,
@@ -2634,7 +2647,15 @@ impl App {
         };
 
         let current_epoch = self.mls.get_group_epoch(&group_id).ok().flatten().unwrap_or(1);
-        let event = Event::message(group_id.clone(), current_epoch, &payload);
+        let mut event = Event::message(group_id.clone(), current_epoch, &payload);
+        // Publish under the id the optimistic row already carries, rather
+        // than the fresh one `Event::message` mints. That id is the
+        // message's identity from the moment the user hit send, and it is
+        // what `fixup_pending_rkey_by_message_id` matches on when the
+        // publish returns. Mint a new one and the match fails, the row
+        // keeps its "pending" rkey forever, and every sync skips it —
+        // meaning a device never sends anyone the images it took.
+        event.message_id = Some(pending_message_id.clone());
 
         let encrypted = match self.mls.encrypt_event(&group_id, &key_bundle, &event) {
             Ok(e) => e,
@@ -5329,16 +5350,17 @@ impl App {
         }
 
         // Build our ConvState list for the Hello.
-        let our_convs: Vec<ConvState> = conv_ids.iter().filter_map(|conv_id| {
+        let mut our_convs: Vec<ConvState> = conv_ids.iter().filter_map(|conv_id| {
             let group_id = hex::decode(conv_id).ok()?;
             let tip = self.mls.digest_tip(&group_id).unwrap_or([0u8; 32]);
             let anchors = self.mls.digest_anchors(&group_id);
-            let range = self.mls.range(&group_id);
 
             // The rkeys we hold, so the peer sends exactly the complement
-            // rather than its whole history. Omitted past the cap, where
-            // the peer falls back to serving everything (see
-            // `moat_core::sync::INVENTORY_CAP`).
+            // rather than its whole history. Read from the keystore rather
+            // than `mls.range`, which only tracks events that arrived
+            // through `decrypt_event` — messages received by an earlier
+            // sync are in the keystore only, and omitting them would ask
+            // for them all over again.
             let held: Vec<String> = self
                 .keys
                 .load_messages(conv_id)
@@ -5348,38 +5370,18 @@ impl App {
                 .filter(|m| m.rkey != "pending")
                 .map(|m| m.rkey)
                 .collect();
-            let rkeys = (held.len() <= moat_core::sync::INVENTORY_CAP).then_some(held);
-            let (oldest, newest) = match range {
-                Some((o, n)) => (Some(o), Some(n)),
-                None => {
-                    // mls.range only tracks events processed via decrypt_event.
-                    // Messages received via sync are stored in keystore only.
-                    // Fall back to keystore so the peer knows we have history.
-                    let msgs = self.keys.load_messages(conv_id)
-                        .map(|cm| cm.messages)
-                        .unwrap_or_default();
-                    let valid: Vec<_> = msgs.iter()
-                        .filter(|m| m.rkey != "pending")
-                        .map(|m| m.rkey.clone())
-                        .collect();
-                    if valid.is_empty() {
-                        (None, None)
-                    } else {
-                        let oldest = valid.iter().min().cloned();
-                        let newest = valid.iter().max().cloned();
-                        (oldest, newest)
-                    }
-                }
-            };
+
             Some(ConvState {
                 group_id,
-                oldest_rkey: oldest,
-                newest_rkey: newest,
                 tip_digest: tip.to_vec(),
                 anchors: anchors.iter().map(AnchorDto::from).collect(),
-                rkeys,
+                inventory: moat_core::ConvInventory::of(held),
             })
         }).collect();
+        // One Hello carries every conversation, against a hard 1 MiB frame
+        // limit that closes the connection rather than truncating — so the
+        // budget has to be spent across the whole message.
+        moat_core::fit_hello_inventories(&mut our_convs);
 
         let outputs = session.on_paired(our_convs, ring_epoch);
         (session, outputs)
@@ -5450,15 +5452,19 @@ impl App {
                         let _ = self.load_messages();
                     }
                 }
-                SyncOutput::Complete => {
-                    self.debug_log.log("sync: session complete — closing pair WS");
-                    self.sync_session = None;
-                    self.pending_pair_token = None;
-                    self.drawbridge.clear_pair();
-                    if let Some(session) = self.sync_request.as_mut() {
-                        session.on_complete();
-                    }
-                }
+            }
+        }
+
+        // Teardown happens after every output has been applied, never as
+        // one of them: closing the channel mid-list would strand whatever
+        // followed.
+        if self.sync_session.as_ref().is_some_and(|s| s.is_done()) {
+            self.debug_log.log("sync: session complete — closing pair WS");
+            self.sync_session = None;
+            self.pending_pair_token = None;
+            self.drawbridge.clear_pair();
+            if let Some(session) = self.sync_request.as_mut() {
+                session.on_complete();
             }
         }
     }
@@ -5517,6 +5523,23 @@ impl App {
         self.sync_session = Some(session);
 
         let ring_id_clone = ring_id.clone();
+        let outputs = match outputs {
+            Ok(o) => o,
+            Err(e) => {
+                // A message the session can't account for means the peer
+                // believes it delivered something we did not take. Abort
+                // loudly rather than continue a sync that is now wrong.
+                self.debug_log.log(&format!("sync: protocol error: {e}"));
+                self.sync_session = None;
+                self.drawbridge.clear_pair();
+                if let Some(req) = self.sync_request.as_mut() {
+                    req.fail(moat_core::SyncFailure::ChannelClosed {
+                        detail: e.to_string(),
+                    });
+                }
+                return;
+            }
+        };
         self.process_sync_outputs(outputs, &ring_id_clone, &key_bundle);
     }
 
@@ -5574,23 +5597,24 @@ impl App {
                         let _ = self.load_messages();
                     }
                 }
-                SyncOutput::Complete => {
-                    self.debug_log
-                        .log("pairing-sync: session complete — closing pair WS");
-                    self.sync_session = None;
-                    self.pairing_sync_keys = None;
-                    // This pairing is fully done, including its sync
-                    // handoff. Clear the role flag now — otherwise a later,
-                    // unrelated `PairConnected` (an established-devices
-                    // reconnect-sync session, qr-pairing.md §3.6) would
-                    // still route through the pairing-role match arms
-                    // instead of `start_sync_session`, since the flag
-                    // outlives this pairing and `pairing_session` itself is
-                    // deliberately never cleared (see its field doc).
-                    self.pairing_is_new_device = None;
-                    self.drawbridge.clear_pair();
-                }
             }
+        }
+
+        // As in `process_sync_outputs`: tear down only once every output in
+        // the batch has been applied, never as one of them.
+        if self.sync_session.as_ref().is_some_and(|s| s.is_done()) {
+            self.debug_log
+                .log("pairing-sync: session complete — closing pair WS");
+            self.sync_session = None;
+            self.pairing_sync_keys = None;
+            // Clear the role flag now — otherwise a later, unrelated
+            // `PairConnected` (an established-devices reconnect-sync
+            // session) would still route through the pairing-role match
+            // arms instead of `start_sync_session`, since the flag outlives
+            // this pairing and `pairing_session` itself is deliberately
+            // never cleared (see its field doc).
+            self.pairing_is_new_device = None;
+            self.drawbridge.clear_pair();
         }
     }
 
@@ -5658,7 +5682,16 @@ impl App {
         let outputs = session.on_message(&self.mls, msg, &my_did);
         self.sync_session = Some(session);
 
-        self.process_pairing_sync_outputs(outputs);
+        match outputs {
+            Ok(o) => self.process_pairing_sync_outputs(o),
+            Err(e) => {
+                self.debug_log
+                    .log(&format!("pairing-sync: protocol error: {e}"));
+                self.sync_session = None;
+                self.pairing_sync_keys = None;
+                self.drawbridge.clear_pair();
+            }
+        }
     }
 
     /// Return the current sync status for the HTTP API.

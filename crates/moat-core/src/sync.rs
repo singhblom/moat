@@ -17,9 +17,87 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 use serde_with::{base64::Base64, serde_as};
 
-use crate::{DigestAnchor, MoatSession};
+use crate::{DigestAnchor, Error, MoatSession, Result};
 
 // ── Wire types ────────────────────────────────────────────────────────────────
+
+/// What one side holds for a conversation, as declared in [`SyncMsg::Hello`].
+///
+/// A span cannot describe a hole in the middle of a history, which is
+/// exactly the shape a device ends up with after being offline past the
+/// point where it can still decrypt what it missed — so the normal case
+/// enumerates. At roughly 13 bytes per rkey that is far cheaper than the
+/// messages it saves, which is why no digest comparison or bisection is
+/// needed to plan a transfer.
+///
+/// The variants exist so "I hold nothing" and "I am not listing what I
+/// hold" can never be confused for one another: they want opposite
+/// responses from the peer.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ConvInventory {
+    /// Every rkey held, enumerated. The peer sends exactly the complement.
+    Complete { rkeys: Vec<String> },
+    /// Too large to enumerate inside the Hello's byte budget, so only the
+    /// span is given. The peer can narrow to what falls outside it, but
+    /// cannot see holes within it.
+    Range {
+        oldest: String,
+        newest: String,
+        count: u64,
+    },
+    /// Nothing held at all.
+    Empty,
+}
+
+impl ConvInventory {
+    /// Build the most precise inventory for a set of held rkeys.
+    pub fn of(rkeys: Vec<String>) -> Self {
+        if rkeys.is_empty() {
+            ConvInventory::Empty
+        } else {
+            ConvInventory::Complete { rkeys }
+        }
+    }
+
+    /// `true` when the declaring side holds no messages at all.
+    pub fn is_empty(&self) -> bool {
+        match self {
+            ConvInventory::Empty => true,
+            ConvInventory::Complete { rkeys } => rkeys.is_empty(),
+            ConvInventory::Range { count, .. } => *count == 0,
+        }
+    }
+
+    /// Roughly what this costs inside a JSON Hello, for budgeting.
+    fn encoded_size(&self) -> usize {
+        match self {
+            // Each entry is the rkey plus quotes and a separator.
+            ConvInventory::Complete { rkeys } => {
+                rkeys.iter().map(|r| r.len() + 3).sum::<usize>() + 32
+            }
+            ConvInventory::Range { oldest, newest, .. } => oldest.len() + newest.len() + 64,
+            ConvInventory::Empty => 16,
+        }
+    }
+
+    /// Drop from an enumeration to a span, keeping the conversation
+    /// describable when the full list will not fit.
+    fn downgrade(&self) -> Option<Self> {
+        match self {
+            ConvInventory::Complete { rkeys } if !rkeys.is_empty() => {
+                let mut sorted: Vec<&String> = rkeys.iter().collect();
+                sorted.sort();
+                Some(ConvInventory::Range {
+                    oldest: sorted.first().map(|s| (*s).clone())?,
+                    newest: sorted.last().map(|s| (*s).clone())?,
+                    count: rkeys.len() as u64,
+                })
+            }
+            _ => None,
+        }
+    }
+}
 
 /// Per-conversation state included in the [`SyncMsg::Hello`] handshake.
 #[serde_as]
@@ -28,30 +106,49 @@ pub struct ConvState {
     /// Conversation MLS group ID.
     #[serde_as(as = "Base64")]
     pub group_id: Vec<u8>,
-    /// Oldest stored rkey, or `None` if no messages.
-    pub oldest_rkey: Option<String>,
-    /// Newest stored rkey, or `None` if no messages.
-    pub newest_rkey: Option<String>,
-    /// Digest tip (32 bytes) — for divergence detection in Phase 6.
+    /// Digest tip (32 bytes).
     #[serde_as(as = "Base64")]
     pub tip_digest: Vec<u8>,
     /// Digest anchors at epoch boundaries.
     pub anchors: Vec<AnchorDto>,
-    /// Every rkey this side holds for the conversation, so the peer can
-    /// send exactly the complement.
-    ///
-    /// `oldest_rkey`/`newest_rkey` describe a span, and a span cannot
-    /// express a hole in the middle of it — which is precisely the shape
-    /// of the history a device ends up with after being offline past the
-    /// point where it can still decrypt what it missed. An inventory is
-    /// about 13 bytes per message against the messages themselves, so
-    /// exactness is cheaper here than any scheme that has to guess.
-    ///
-    /// `None` means "not declared" — over [`INVENTORY_CAP`], or a peer
-    /// that predates this field. The peer then falls back to serving its
-    /// whole history and letting rkey dedupe absorb the overlap.
-    #[serde(default)]
-    pub rkeys: Option<Vec<String>>,
+    /// What this side holds for the conversation.
+    pub inventory: ConvInventory,
+}
+
+/// Byte budget for all inventories in one `Hello`.
+///
+/// The pair WS closes the connection on any frame over 1 MiB, and a Hello
+/// carries *every* conversation — so a per-conversation cap guards the
+/// wrong dimension: fifty conversations of two thousand messages each
+/// exceeds the limit with no single conversation anywhere near a
+/// per-conversation bound. Budgeting the whole frame is what keeps the
+/// session alive; the headroom below the hard limit covers MLS framing,
+/// bucket padding, and the rest of the message.
+pub const HELLO_INVENTORY_BUDGET_BYTES: usize = 512 * 1024;
+
+/// Fit a Hello's inventories inside [`HELLO_INVENTORY_BUDGET_BYTES`] by
+/// downgrading the largest enumerations to spans until the total fits.
+///
+/// Largest-first so the fewest conversations lose precision, and
+/// deterministic so both sides of a session make the same choice from the
+/// same data.
+pub fn fit_hello_inventories(convs: &mut [ConvState]) {
+    let mut total: usize = convs.iter().map(|c| c.inventory.encoded_size()).sum();
+    if total <= HELLO_INVENTORY_BUDGET_BYTES {
+        return;
+    }
+    let mut order: Vec<usize> = (0..convs.len()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(convs[i].inventory.encoded_size()));
+    for i in order {
+        if total <= HELLO_INVENTORY_BUDGET_BYTES {
+            break;
+        }
+        if let Some(downgraded) = convs[i].inventory.downgrade() {
+            total -= convs[i].inventory.encoded_size();
+            total += downgraded.encoded_size();
+            convs[i].inventory = downgraded;
+        }
+    }
 }
 
 /// Digest anchor in the on-wire form (DTO mirrors [`DigestAnchor`] but uses
@@ -166,7 +263,7 @@ pub fn encode_sync_msg(msg: &SyncMsg) -> Vec<u8> {
 }
 
 /// Decode a [`SyncMsg`] from raw JSON bytes.
-pub fn decode_sync_msg(bytes: &[u8]) -> Result<SyncMsg, String> {
+pub fn decode_sync_msg(bytes: &[u8]) -> std::result::Result<SyncMsg, String> {
     serde_json::from_slice(bytes).map_err(|e| format!("SyncMsg decode: {e}"))
 }
 
@@ -186,9 +283,6 @@ pub enum SyncOutput {
         conv_id: String,
         messages: Vec<SyncMessage>,
     },
-    /// Sync is complete; the caller should close the pair WS and tear down
-    /// the session.
-    Complete,
 }
 
 /// Session phase. Internal — exposed only via [`SyncSession::is_done`].
@@ -238,23 +332,6 @@ impl Default for SyncSession {
 
 const BATCH_SIZE: usize = 50;
 
-/// Above this many messages in one conversation a host omits the rkey
-/// inventory from its [`ConvState`] and the peer falls back to serving
-/// everything. At ~13 bytes per rkey this is a little over 100 KB, which
-/// is still far below the cost of re-sending the messages themselves —
-/// the cap exists to bound the Hello frame, not because the diff stops
-/// paying for itself.
-pub const INVENTORY_CAP: usize = 10_000;
-
-/// Whether a peer's declared state holds no history at all. An explicit
-/// empty inventory is authoritative; without one, fall back to the range.
-fn peer_holds_nothing(state: &ConvState) -> bool {
-    match &state.rkeys {
-        Some(rkeys) => rkeys.is_empty(),
-        None => state.oldest_rkey.is_none(),
-    }
-}
-
 impl SyncSession {
     /// Create a new session in the `SendingHello` phase. Add per-conversation
     /// state via [`add_conv_plan`] before calling [`on_paired`].
@@ -300,26 +377,44 @@ impl SyncSession {
     ///
     /// `our_did` is reserved for future per-DID logic (Phase 6); it is
     /// currently unused but kept in the signature for API stability.
+    /// Feed a received and decrypted [`SyncMsg`] into the state machine.
+    ///
+    /// An empty output list means exactly one thing: the message was
+    /// handled and there is nothing to send or store yet. Anything the
+    /// session cannot account for — a batch for a conversation it has no
+    /// plan for, a variant it does not implement — is an error rather than
+    /// a silent drop, since both of those lose messages the peer believed
+    /// it had delivered.
+    ///
+    /// Completion is deliberately *not* an output: the caller applies the
+    /// outputs and then asks [`is_done`](Self::is_done). Reporting it in
+    /// the list would let a caller that acts in order tear the channel down
+    /// before flushing whatever follows.
     pub fn on_message(
         &mut self,
         mls: &MoatSession,
         msg: SyncMsg,
         our_did: &str,
-    ) -> Vec<SyncOutput> {
+    ) -> Result<Vec<SyncOutput>> {
         let _ = our_did;
         match msg {
-            SyncMsg::Hello { convs: peer_convs, .. } => self.handle_hello(peer_convs),
+            SyncMsg::Hello { convs: peer_convs, .. } => Ok(self.handle_hello(peer_convs)),
             SyncMsg::BatchReq { group_id, from_rkey, to_rkey, cursor } => {
-                self.handle_batch_req(group_id, from_rkey, to_rkey, cursor)
+                Ok(self.handle_batch_req(group_id, from_rkey, to_rkey, cursor))
             }
             SyncMsg::Batch { group_id, messages, next_cursor } => {
                 self.handle_batch(mls, group_id, messages, next_cursor)
             }
             SyncMsg::Done { group_id, direction: SyncDirection::Backward } => {
-                self.handle_done_backward(group_id)
+                Ok(self.handle_done_backward(group_id))
             }
-            // ManifestReq/Manifest/Done-Forward: deferred to Phase 6.
-            _ => vec![],
+            SyncMsg::Done { direction: SyncDirection::Forward, .. }
+            | SyncMsg::ManifestReq { .. }
+            | SyncMsg::Manifest { .. } => Err(Error::SyncProtocol(
+                "forward sync is not implemented; the peer should not have \
+                 sent this"
+                    .to_string(),
+            )),
         }
     }
 
@@ -336,24 +431,51 @@ impl SyncSession {
 
         for plan in &mut self.plans {
             let peer_state = peer_convs.iter().find(|c| c.group_id == plan.group_id);
-            let peer_has_nothing = peer_state.map(peer_holds_nothing).unwrap_or(true);
-
-            let want_batch = match peer_state.and_then(|s| s.rkeys.as_ref()) {
-                Some(peer_rkeys) => {
-                    // Both directions of the diff, from the one inventory:
-                    // drop what the peer already holds from what we will
-                    // serve, and ask only for what we are actually missing.
-                    let peer_set: HashSet<&str> =
-                        peer_rkeys.iter().map(String::as_str).collect();
+            let want_batch = match peer_state.map(|s| &s.inventory) {
+                // Both directions of the diff from one enumeration: drop
+                // what the peer already holds from what we will serve, and
+                // ask only for what we are actually missing.
+                Some(ConvInventory::Complete { rkeys }) => {
+                    let peer_set: HashSet<&str> = rkeys.iter().map(String::as_str).collect();
                     let ours: HashSet<&str> =
                         plan.our_messages.iter().map(|m| m.rkey.as_str()).collect();
                     let missing_here = peer_set.iter().any(|r| !ours.contains(r));
                     plan.our_messages.retain(|m| !peer_set.contains(m.rkey.as_str()));
                     missing_here
                 }
-                // No inventory to diff against: fall back to "ask whenever
-                // the peer holds anything", and serve our whole history.
-                None => !peer_has_nothing,
+                // The peer's list did not fit, so all we know is its span.
+                // Serve what falls outside it and ask for the same, which
+                // cannot see holes inside the span but is far better than
+                // exchanging whole histories.
+                Some(ConvInventory::Range { oldest, newest, .. }) => {
+                    // Taken before the retain below narrows the list.
+                    let our_span = plan
+                        .our_messages
+                        .iter()
+                        .map(|m| m.rkey.clone())
+                        .fold(None::<(String, String)>, |acc, rkey| match acc {
+                            None => Some((rkey.clone(), rkey)),
+                            Some((lo, hi)) => Some((
+                                if rkey < lo { rkey.clone() } else { lo },
+                                if rkey > hi { rkey } else { hi },
+                            )),
+                        });
+                    plan.our_messages.retain(|m| {
+                        m.rkey.as_str() < oldest.as_str() || m.rkey.as_str() > newest.as_str()
+                    });
+                    // We cannot enumerate what they hold, so ask whenever
+                    // their span reaches beyond ours.
+                    match our_span {
+                        Some((lo, hi)) => {
+                            oldest.as_str() < lo.as_str() || newest.as_str() > hi.as_str()
+                        }
+                        // We hold nothing here, so anything they have is new.
+                        None => true,
+                    }
+                }
+                // Peer holds nothing, or did not mention this conversation
+                // at all: nothing to ask for, everything to offer.
+                Some(ConvInventory::Empty) | None => false,
             };
 
             plan.expecting_batch = want_batch;
@@ -367,10 +489,10 @@ impl SyncSession {
             }
         }
 
-        // Add plans for any peer convs we don't yet know about (new device that
-        // hasn't joined those user conversations yet).
+        // Conversations only the peer knows about — a device fanned into a
+        // group after its own sync plan was built.
         for peer_state in &peer_convs {
-            if peer_holds_nothing(peer_state) {
+            if peer_state.inventory.is_empty() {
                 continue;
             }
             if self.plans.iter().any(|p| p.group_id == peer_state.group_id) {
@@ -394,10 +516,15 @@ impl SyncSession {
         }
 
         // Two devices that already agree have nothing to say to each other,
-        // and the Hello exchange is where that becomes knowable. Without
-        // this the session would sit in `Active` waiting on batches neither
-        // side intends to send.
-        outputs.extend(self.check_complete());
+        // and the Hello exchange is where that becomes knowable.
+        //
+        // Guarded on having *some* plan: `check_complete` folds over the
+        // plan list, so an empty one is vacuously "all done". A session
+        // that knows about no conversations has nothing to offer, which is
+        // not the same as the exchange being finished.
+        if !self.plans.is_empty() {
+            self.check_complete();
+        }
         outputs
     }
 
@@ -455,10 +582,17 @@ impl SyncSession {
         group_id: Vec<u8>,
         messages: Vec<SyncMessage>,
         next_cursor: Option<String>,
-    ) -> Vec<SyncOutput> {
+    ) -> Result<Vec<SyncOutput>> {
         let plan = match self.plans.iter_mut().find(|p| p.group_id == group_id) {
             Some(p) => p,
-            None => return vec![],
+            // Dropping these silently would lose messages the peer believes
+            // it delivered, with nothing anywhere to say so.
+            None => {
+                return Err(Error::SyncProtocol(format!(
+                    "batch for conversation {} which this session has no plan for",
+                    hex::encode(&group_id)
+                )))
+            }
         };
 
         // Durable resume point for an interrupted transfer. Backward sync
@@ -492,26 +626,28 @@ impl SyncSession {
             }));
         }
 
-        outputs
+        Ok(outputs)
     }
 
     fn handle_done_backward(&mut self, group_id: Vec<u8>) -> Vec<SyncOutput> {
         if let Some(plan) = self.plans.iter_mut().find(|p| p.group_id == group_id) {
             plan.received_done = true;
         }
-        self.check_complete()
+        self.check_complete();
+        Vec::new()
     }
 
-    fn check_complete(&mut self) -> Vec<SyncOutput> {
+    /// Move to `Done` when every plan has been satisfied in both
+    /// directions. Emits nothing: callers observe completion through
+    /// [`is_done`](Self::is_done) *after* applying the outputs, so a
+    /// channel can never be closed with sends still pending.
+    fn check_complete(&mut self) {
         let all_done = self.plans.iter().all(|p| {
             (p.our_messages.is_empty() || p.sent_done)
                 && (!p.expecting_batch || p.received_done)
         });
         if all_done && self.phase == Phase::Active {
             self.phase = Phase::Done;
-            vec![SyncOutput::Complete]
-        } else {
-            vec![]
         }
     }
 }
@@ -545,24 +681,24 @@ mod tests {
     fn empty_state(group_id: &[u8]) -> ConvState {
         ConvState {
             group_id: group_id.to_vec(),
-            oldest_rkey: None,
-            newest_rkey: None,
             tip_digest: vec![0u8; 32],
             anchors: vec![],
-            // These pre-inventory helpers exercise the fallback path
-            // deliberately: a peer that declares no inventory.
-            rkeys: None,
+            inventory: ConvInventory::Empty,
         }
     }
 
+    /// A peer whose list did not fit, so it declared only its span — the
+    /// reduced path, which cannot see holes inside the range.
     fn full_state(group_id: &[u8]) -> ConvState {
         ConvState {
             group_id: group_id.to_vec(),
-            oldest_rkey: Some("a".to_string()),
-            newest_rkey: Some("z".to_string()),
             tip_digest: vec![1u8; 32],
             anchors: vec![],
-            rkeys: None,
+            inventory: ConvInventory::Range {
+                oldest: "a".to_string(),
+                newest: "z".to_string(),
+                count: 2,
+            },
         }
     }
 
@@ -632,7 +768,7 @@ mod tests {
             &mls,
             SyncMsg::Hello { convs: vec![full_state(&g)], ring_epoch: 0 },
             "did:plc:alice",
-        );
+        ).unwrap();
 
         assert!(
             mls.watermark(&g).is_none(),
@@ -648,7 +784,7 @@ mod tests {
                 next_cursor: Some("c".to_string()),
             },
             "did:plc:alice",
-        );
+        ).unwrap();
         assert_eq!(
             mls.watermark(&g).as_deref(),
             Some("r40"),
@@ -664,7 +800,7 @@ mod tests {
                 next_cursor: None,
             },
             "did:plc:alice",
-        );
+        ).unwrap();
         assert_eq!(
             mls.watermark(&g).as_deref(),
             Some("r20"),
@@ -680,7 +816,7 @@ mod tests {
                 next_cursor: None,
             },
             "did:plc:alice",
-        );
+        ).unwrap();
         assert_eq!(
             mls.watermark(&g).as_deref(),
             Some("r20"),
@@ -707,7 +843,7 @@ mod tests {
                 ring_epoch: 0,
             },
             "did:plc:alice",
-        );
+        ).unwrap();
         let req_count = outs
             .iter()
             .filter(|o| matches!(o, SyncOutput::Send(SyncMsg::BatchReq { .. })))
@@ -722,13 +858,13 @@ mod tests {
                 next_cursor: None,
             },
             "did:plc:alice",
-        );
+        ).unwrap();
         assert!(outs.iter().any(|o| matches!(o, SyncOutput::Store { .. })));
 
         let outs = s.on_message(&mls, 
             SyncMsg::Done { group_id: g1.clone(), direction: SyncDirection::Backward },
             "did:plc:alice",
-        );
+        ).unwrap();
         // Not done yet — g2 still pending.
         assert!(outs.is_empty());
         assert!(!s.is_done());
@@ -741,12 +877,15 @@ mod tests {
                 next_cursor: None,
             },
             "did:plc:alice",
-        );
+        ).unwrap();
         let outs = s.on_message(&mls, 
             SyncMsg::Done { group_id: g2.clone(), direction: SyncDirection::Backward },
             "did:plc:alice",
-        );
-        assert!(outs.iter().any(|o| matches!(o, SyncOutput::Complete)));
+        ).unwrap();
+        // Completion is a state, not an output: the caller applies whatever
+        // came back and *then* asks, so it can never close the channel with
+        // sends still pending.
+        assert!(outs.is_empty());
         assert!(s.is_done());
     }
 
@@ -770,7 +909,7 @@ mod tests {
         let outs = s.on_message(&mls, 
             SyncMsg::Hello { convs: vec![empty_state(&g)], ring_epoch: 0 },
             "did:plc:alice",
-        );
+        ).unwrap();
         // We do NOT send BatchReq (peer has nothing).
         assert!(!outs.iter().any(|o| matches!(o, SyncOutput::Send(SyncMsg::BatchReq { .. }))));
 
@@ -783,7 +922,7 @@ mod tests {
                 cursor: None,
             },
             "did:plc:alice",
-        );
+        ).unwrap();
         // We send a Batch and Done.
         let batch_count = outs
             .iter()
@@ -808,8 +947,11 @@ mod tests {
         let outs = s.on_message(&mls, 
             SyncMsg::Done { group_id: g.clone(), direction: SyncDirection::Backward },
             "did:plc:alice",
-        );
-        assert!(outs.iter().any(|o| matches!(o, SyncOutput::Complete)));
+        ).unwrap();
+        // Completion is a state, not an output: the caller applies whatever
+        // came back and *then* asks, so it can never close the channel with
+        // sends still pending.
+        assert!(outs.is_empty());
         assert!(s.is_done());
     }
 
@@ -828,7 +970,7 @@ mod tests {
         let _ = s.on_message(&mls, 
             SyncMsg::Hello { convs: vec![empty_state(&g)], ring_epoch: 0 },
             "did:plc:alice",
-        );
+        ).unwrap();
 
         // First BatchReq: cursor=None → returns 50, next_cursor=Some("50").
         let outs = s.on_message(&mls, 
@@ -839,7 +981,7 @@ mod tests {
                 cursor: None,
             },
             "did:plc:alice",
-        );
+        ).unwrap();
         let next = outs.iter().find_map(|o| match o {
             SyncOutput::Send(SyncMsg::Batch { messages, next_cursor, .. }) => {
                 Some((messages.len(), next_cursor.clone()))
@@ -860,7 +1002,7 @@ mod tests {
                 cursor: Some("50".to_string()),
             },
             "did:plc:alice",
-        );
+        ).unwrap();
         let last = outs.iter().find_map(|o| match o {
             SyncOutput::Send(SyncMsg::Batch { messages, next_cursor, .. }) => {
                 Some((messages.len(), next_cursor.clone()))
@@ -884,7 +1026,7 @@ mod tests {
         let outs = s.on_message(&mls, 
             SyncMsg::Hello { convs: vec![full_state(&g)], ring_epoch: 0 },
             "did:plc:alice",
-        );
+        ).unwrap();
         let batch_req = outs.iter().any(|o| matches!(
             o,
             SyncOutput::Send(SyncMsg::BatchReq { group_id, .. }) if *group_id == g
@@ -908,7 +1050,7 @@ mod tests {
                 cursor: None,
             },
             "did:plc:alice",
-        );
+        ).unwrap();
         assert_eq!(outs.len(), 1);
         assert!(matches!(
             &outs[0],
@@ -919,17 +1061,19 @@ mod tests {
         ));
     }
 
-    /// Forward-direction Done is currently a no-op (Phase 6 territory).
+    /// Forward sync is unimplemented, so a peer sending it is a protocol
+    /// error rather than something to swallow — silently ignoring it would
+    /// leave the peer believing it had delivered something.
     #[test]
-    fn forward_done_is_noop() {
+    fn forward_done_is_a_protocol_error() {
         let mls = MoatSession::new();
         let mut s = SyncSession::new();
         let _ = s.on_paired(vec![], 0);
-        let outs = s.on_message(&mls, 
+        let result = s.on_message(&mls, 
             SyncMsg::Done { group_id: vec![1u8; 32], direction: SyncDirection::Forward },
             "did:plc:alice",
         );
-        assert!(outs.is_empty());
+        assert!(result.is_err());
         assert!(!s.is_done());
     }
 
