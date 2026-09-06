@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -2112739905;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1465972185;
 
 // Section: executor
 
@@ -3358,41 +3358,27 @@ fn wire__crate__api__simple__SyncSessionHandle_on_message_impl(
             let api_that = <RustOpaqueMoi<
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SyncSessionHandle>,
             >>::sse_decode(&mut deserializer);
-            let api_session = <RustOpaqueMoi<
-                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MoatSessionHandle>,
-            >>::sse_decode(&mut deserializer);
             let api_msg_bytes = <Vec<u8>>::sse_decode(&mut deserializer);
-            let api_our_did = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, String>((move || {
                     let mut api_that_guard = None;
-                    let mut api_session_guard = None;
                     let decode_indices_ =
                         flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
                             flutter_rust_bridge::for_generated::LockableOrderInfo::new(
                                 &api_that, 0, false,
                             ),
-                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
-                                &api_session,
-                                1,
-                                false,
-                            ),
                         ]);
                     for i in decode_indices_ {
                         match i {
                             0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
-                            1 => api_session_guard = Some(api_session.lockable_decode_sync_ref()),
                             _ => unreachable!(),
                         }
                     }
                     let api_that_guard = api_that_guard.unwrap();
-                    let api_session_guard = api_session_guard.unwrap();
                     let output_ok = crate::api::simple::SyncSessionHandle::on_message(
                         &*api_that_guard,
-                        &*api_session_guard,
                         api_msg_bytes,
-                        api_our_did,
                     )?;
                     Ok(output_ok)
                 })())
@@ -3761,6 +3747,37 @@ fn wire__crate__api__simple__fit_hello_inventories_impl(
         },
     )
 }
+fn wire__crate__api__simple__frame_unpadded_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "frame_unpadded",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_plaintext = <Vec<u8>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok =
+                    Result::<_, ()>::Ok(crate::api::simple::frame_unpadded(api_plaintext))?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__simple__generate_candidate_tags_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -3967,9 +3984,8 @@ fn wire__crate__api__simple__pad_to_bucket_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_plaintext = <Vec<u8>>::sse_decode(&mut deserializer);
             deserializer.end();
-            transform_result_sse::<_, ()>((move || {
-                let output_ok =
-                    Result::<_, ()>::Ok(crate::api::simple::pad_to_bucket(api_plaintext))?;
+            transform_result_sse::<_, String>((move || {
+                let output_ok = crate::api::simple::pad_to_bucket(api_plaintext)?;
                 Ok(output_ok)
             })())
         },
@@ -5757,46 +5773,46 @@ fn pde_ffi_dispatcher_primary_impl(
         75 => {
             wire__crate__api__simple__fit_hello_inventories_impl(port, ptr, rust_vec_len, data_len)
         }
-        79 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
-        83 => wire__crate__api__simple__pairing_open_frame_impl(port, ptr, rust_vec_len, data_len),
-        84 => wire__crate__api__simple__pairing_payload_from_text_impl(
+        80 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
+        84 => wire__crate__api__simple__pairing_open_frame_impl(port, ptr, rust_vec_len, data_len),
+        85 => wire__crate__api__simple__pairing_payload_from_text_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        85 => wire__crate__api__simple__pairing_payload_from_uri_impl(
+        86 => wire__crate__api__simple__pairing_payload_from_uri_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        86 => wire__crate__api__simple__pairing_payload_to_text_impl(
+        87 => wire__crate__api__simple__pairing_payload_to_text_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        87 => {
+        88 => {
             wire__crate__api__simple__pairing_payload_to_uri_impl(port, ptr, rust_vec_len, data_len)
         }
-        88 => wire__crate__api__simple__pairing_seal_frame_impl(port, ptr, rust_vec_len, data_len),
-        89 => {
+        89 => wire__crate__api__simple__pairing_seal_frame_impl(port, ptr, rust_vec_len, data_len),
+        90 => {
             wire__crate__api__simple__process_image_for_send_impl(port, ptr, rust_vec_len, data_len)
         }
-        90 => wire__crate__api__simple__ring_msg_decode_sync_request_impl(
+        91 => wire__crate__api__simple__ring_msg_decode_sync_request_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        91 => wire__crate__api__simple__ring_msg_encode_sync_request_impl(
+        92 => wire__crate__api__simple__ring_msg_encode_sync_request_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        92 => wire__crate__api__simple__sign_drawbridge_challenge_impl(
+        93 => wire__crate__api__simple__sign_drawbridge_challenge_impl(
             port,
             ptr,
             rust_vec_len,
@@ -5998,17 +6014,18 @@ fn pde_ffi_dispatcher_sync_impl(
         74 => {
             wire__crate__api__simple__event_dto_reaction_payload_impl(ptr, rust_vec_len, data_len)
         }
-        76 => wire__crate__api__simple__generate_candidate_tags_impl(ptr, rust_vec_len, data_len),
-        77 => wire__crate__api__simple__generate_stealth_keypair_impl(ptr, rust_vec_len, data_len),
-        78 => {
+        76 => wire__crate__api__simple__frame_unpadded_impl(ptr, rust_vec_len, data_len),
+        77 => wire__crate__api__simple__generate_candidate_tags_impl(ptr, rust_vec_len, data_len),
+        78 => wire__crate__api__simple__generate_stealth_keypair_impl(ptr, rust_vec_len, data_len),
+        79 => {
             wire__crate__api__simple__hello_inventory_budget_bytes_impl(ptr, rust_vec_len, data_len)
         }
-        80 => wire__crate__api__simple__kp_pool_target_impl(ptr, rust_vec_len, data_len),
-        81 => wire__crate__api__simple__pad_to_bucket_impl(ptr, rust_vec_len, data_len),
-        82 => wire__crate__api__simple__pairing_frame_is_done_impl(ptr, rust_vec_len, data_len),
-        93 => wire__crate__api__simple__sync_request_ttl_ms_impl(ptr, rust_vec_len, data_len),
-        94 => wire__crate__api__simple__try_decrypt_stealth_impl(ptr, rust_vec_len, data_len),
-        95 => wire__crate__api__simple__unpad_impl(ptr, rust_vec_len, data_len),
+        81 => wire__crate__api__simple__kp_pool_target_impl(ptr, rust_vec_len, data_len),
+        82 => wire__crate__api__simple__pad_to_bucket_impl(ptr, rust_vec_len, data_len),
+        83 => wire__crate__api__simple__pairing_frame_is_done_impl(ptr, rust_vec_len, data_len),
+        94 => wire__crate__api__simple__sync_request_ttl_ms_impl(ptr, rust_vec_len, data_len),
+        95 => wire__crate__api__simple__try_decrypt_stealth_impl(ptr, rust_vec_len, data_len),
+        96 => wire__crate__api__simple__unpad_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }

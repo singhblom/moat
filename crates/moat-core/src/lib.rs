@@ -66,7 +66,9 @@ pub use crate::message::{
     ParsedMessagePayload, TextMessage, MEDIUM_TEXT_MAX_BYTES, SHORT_TEXT_MAX_BYTES,
 };
 pub use crate::blob::{blob_decrypt, blob_encrypt};
-pub use crate::padding::{pad_to_bucket, unpad, Bucket};
+pub use crate::padding::{
+    frame_unpadded, pad_to_bucket, unpad, Bucket, MAX_BUCKETED_PLAINTEXT,
+};
 pub use crate::stealth::{
     encrypt_for_stealth, generate_stealth_keypair, stealth_pubkey_from_privkey, try_decrypt_stealth,
 };
@@ -304,8 +306,6 @@ pub struct MoatSession {
     /// Used by `populate_candidate_tags` to generate candidate tags with decaying
     /// gap limits for prior epochs, catching messages stranded across epoch boundaries.
     prior_export_secrets: RwLock<HashMap<Vec<u8>, VecDeque<Vec<u8>>>>,
-    /// Oldest synced rkey per conversation.  Persisted as the sync watermark.
-    watermarks: RwLock<HashMap<Vec<u8>, String>>,
 }
 
 impl Default for MoatSession {
@@ -346,7 +346,6 @@ impl MoatSession {
             tag_metadata: RwLock::new(HashMap::new()),
             pending_ops: RwLock::new(HashMap::new()),
             prior_export_secrets: RwLock::new(HashMap::new()),
-            watermarks: RwLock::new(HashMap::new()),
         }
     }
 
@@ -415,12 +414,10 @@ impl MoatSession {
             (HashMap::new(), rest)
         };
 
-        // v5: Parse the watermark table (absent in v3/v4).
-        let (watermarks, _rest) = if version >= 5 && !rest.is_empty() {
-            Self::deserialize_watermarks(rest)?
-        } else {
-            (HashMap::new(), rest)
-        };
+        // A v5 file written before the sync watermark was removed still
+        // carries its table here. Nothing parses past this point, so those
+        // trailing bytes are simply ignored.
+        let _ = rest;
 
         Ok(Self {
             provider,
@@ -431,7 +428,6 @@ impl MoatSession {
             tag_metadata: RwLock::new(HashMap::new()),
             pending_ops: RwLock::new(HashMap::new()),
             prior_export_secrets: RwLock::new(prior_export_secrets),
-            watermarks: RwLock::new(watermarks),
         })
     }
 
@@ -451,7 +447,6 @@ impl MoatSession {
         let tag_counter_bytes = self.serialize_tag_counters();
         let seen_counter_bytes = self.serialize_seen_counters();
         let prior_secrets_bytes = self.serialize_prior_export_secrets();
-        let watermark_bytes = self.serialize_watermarks();
 
         let mut buf = Vec::with_capacity(
             STATE_HEADER_SIZE
@@ -460,8 +455,7 @@ impl MoatSession {
                 + hash_chain_bytes.len()
                 + tag_counter_bytes.len()
                 + seen_counter_bytes.len()
-                + prior_secrets_bytes.len()
-                + watermark_bytes.len(),
+                + prior_secrets_bytes.len(),
         );
         buf.extend_from_slice(STATE_MAGIC);
         buf.extend_from_slice(&STATE_VERSION.to_le_bytes());
@@ -477,8 +471,6 @@ impl MoatSession {
         buf.extend_from_slice(&seen_counter_bytes);
         // v4: Prior export secrets for multi-epoch tag retention
         buf.extend_from_slice(&prior_secrets_bytes);
-        // v5: Sync watermarks
-        buf.extend_from_slice(&watermark_bytes);
         Ok(buf)
     }
 
@@ -930,7 +922,16 @@ impl MoatSession {
             chains.insert(chain_key, event_hash);
         }
 
-        let padded = pad_to_bucket(&event_bytes);
+        // Sync traffic rides the pair WebSocket and never becomes a PDS
+        // record, so there is no record length for bucketing to hide —
+        // and a bucket would cap at 4 KiB a frame the channel carries up
+        // to 1 MiB of. Everything else is destined for the PDS and pays
+        // for the rounding.
+        let padded = if event.kind == EventKind::SyncApp {
+            frame_unpadded(&event_bytes)
+        } else {
+            pad_to_bucket(&event_bytes)?
+        };
 
         // Encrypt the message
         let ciphertext = group
@@ -1551,66 +1552,6 @@ impl MoatSession {
             map.insert(group_id, deque);
         }
         Ok((map, &data[offset..]))
-    }
-
-    // ── v5 digest / watermark / inbox_range serialization ──────────────────
-
-    fn serialize_watermarks(&self) -> Vec<u8> {
-        let watermarks = self.watermarks.read().unwrap();
-        let mut buf = Vec::new();
-        buf.extend_from_slice(&(watermarks.len() as u64).to_le_bytes());
-        for (group_id, rkey) in watermarks.iter() {
-            buf.extend_from_slice(&(group_id.len() as u32).to_le_bytes());
-            buf.extend_from_slice(group_id);
-            let rkey_bytes = rkey.as_bytes();
-            buf.extend_from_slice(&(rkey_bytes.len() as u16).to_le_bytes());
-            buf.extend_from_slice(rkey_bytes);
-        }
-        buf
-    }
-
-    fn deserialize_watermarks(data: &[u8]) -> ParseRest<'_, HashMap<Vec<u8>, String>> {
-        if data.len() < 8 {
-            return Ok((HashMap::new(), data));
-        }
-        let count = u64::from_le_bytes(data[..8].try_into().unwrap()) as usize;
-        let mut offset = 8;
-        let mut map = HashMap::with_capacity(count);
-        for _ in 0..count {
-            if offset + 4 > data.len() {
-                return Err(Error::Deserialization("watermark table truncated".into()));
-            }
-            let gid_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
-            offset += 4;
-            if offset + gid_len + 2 > data.len() {
-                return Err(Error::Deserialization("watermark table truncated".into()));
-            }
-            let group_id = data[offset..offset + gid_len].to_vec();
-            offset += gid_len;
-            let rkey_len = u16::from_le_bytes(data[offset..offset + 2].try_into().unwrap()) as usize;
-            offset += 2;
-            if offset + rkey_len > data.len() {
-                return Err(Error::Deserialization("watermark rkey truncated".into()));
-            }
-            let rkey = String::from_utf8(data[offset..offset + rkey_len].to_vec())
-                .map_err(|_| Error::Deserialization("invalid UTF-8 in watermark rkey".into()))?;
-            offset += rkey_len;
-            map.insert(group_id, rkey);
-        }
-        Ok((map, &data[offset..]))
-    }
-
-    // ── v5 public API ────────────────────────────────────────────────────────
-
-    /// Return the oldest synced rkey (watermark) for a conversation.
-    pub fn watermark(&self, group_id: &[u8]) -> Option<String> {
-        self.watermarks.read().unwrap().get(group_id).cloned()
-    }
-
-    /// Set the sync watermark (oldest synced rkey) for a conversation.
-    pub fn set_watermark(&self, group_id: &[u8], rkey: &str) -> Result<()> {
-        self.watermarks.write().unwrap().insert(group_id.to_vec(), rkey.to_string());
-        Ok(())
     }
 
     /// Save the current epoch's export secret to the prior secrets ring buffer.

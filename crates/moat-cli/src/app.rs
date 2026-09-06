@@ -5451,10 +5451,12 @@ impl App {
             Ok(k) => k,
             Err(_) => return,
         };
-        let my_did = match self.client.as_ref() {
-            Some(c) => c.did().to_string(),
-            None => return,
-        };
+        // A precondition, not a value: the `Store` arm needs our DID to
+        // decide which synced messages are our own, so a frame arriving
+        // while logged out has nowhere to go.
+        if self.client.is_none() {
+            return;
+        }
 
         let outcome = match self.mls.decrypt_event(&ring_id, &data) {
             Ok(o) => o,
@@ -5479,18 +5481,13 @@ impl App {
             }
         };
 
-        // Take the session out for the duration of the call: `on_message`
-        // needs `&self.mls` alongside `&mut` the session, which can't both
-        // be borrowed from `self` at once.
-        let mut session = match self.sync_session.take() {
-            Some(s) => s,
+        let outputs = match self.sync_session.as_mut() {
+            Some(session) => session.on_message(msg),
             None => {
                 self.debug_log.log("sync: frame received but no active session");
                 return;
             }
         };
-        let outputs = session.on_message(&self.mls, msg, &my_did);
-        self.sync_session = Some(session);
 
         let ring_id_clone = ring_id.clone();
         let outputs = match outputs {
@@ -5542,13 +5539,6 @@ impl App {
                         .send(BgEvent::DrawbridgeSendPairBinary { data: ciphertext });
                 }
                 SyncOutput::Store { conv_id, messages } => {
-                    // Known gap, inherited from `process_sync_outputs`
-                    // (same pattern, not introduced here): stored messages
-                    // aren't fed into `append_to_digest`, so backfilled
-                    // history doesn't enter the digest chain and may be
-                    // re-transferred by a later sync. Worth fixing before
-                    // Phase 6 (reconnect-sync delta merge) leans on digests
-                    // to know what's already been exchanged.
                     let my_did = self.client.as_ref().map(|c| c.did().to_string());
                     for sync_msg in messages {
                         let mut stored = crate::sync::stored_from_sync_message(&sync_msg);
@@ -5597,10 +5587,12 @@ impl App {
             Some(false) => &keys.k_new_to_old,
             None => return,
         };
-        let my_did = match self.client.as_ref() {
-            Some(c) => c.did().to_string(),
-            None => return,
-        };
+        // A precondition, not a value: the `Store` arm needs our DID to
+        // decide which synced messages are our own, so a frame arriving
+        // while logged out has nowhere to go.
+        if self.client.is_none() {
+            return;
+        }
 
         let plaintext = match moat_core::open_frame(recv_key, self.pairing_sync_recv_counter, &data)
         {
@@ -5639,18 +5631,14 @@ impl App {
             }
         };
 
-        // Taken out for the call — see the matching note in
-        // `process_sync_frame`.
-        let mut session = match self.sync_session.take() {
-            Some(s) => s,
+        let outputs = match self.sync_session.as_mut() {
+            Some(session) => session.on_message(msg),
             None => {
                 self.debug_log
                     .log("pairing-sync: frame received but no active session");
                 return;
             }
         };
-        let outputs = session.on_message(&self.mls, msg, &my_did);
-        self.sync_session = Some(session);
 
         match outputs {
             Ok(o) => self.process_pairing_sync_outputs(o),

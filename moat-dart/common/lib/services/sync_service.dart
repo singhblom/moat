@@ -187,11 +187,7 @@ class SyncService {
     }
 
     try {
-      final outputs = await syncSession.onMessage(
-        session: session,
-        msgBytes: payload,
-        ourDid: did,
-      );
+      final outputs = await syncSession.onMessage(msgBytes: payload);
       moatLog('SyncService: onMessage returned ${outputs.length} outputs');
       await _processOutputs(outputs, ringId, keyBundle, did);
     } catch (e) {

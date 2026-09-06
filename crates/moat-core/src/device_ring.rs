@@ -1007,7 +1007,12 @@ fn encrypt_sibling_msg(
         .scan_pubkey;
     let event = Event::sibling_msg(mls.device_id().to_vec(), encode_coord_msg(msg));
     let event_bytes = event.to_bytes().ok()?;
-    let padded = crate::padding::pad_to_bucket(&event_bytes);
+    // A `CoordMsg` that outgrew the largest bucket cannot be published:
+    // there is no bucket to round it up to. Dropping the command is the
+    // existing failure mode for this helper (every step above uses `?` on
+    // an Option), and the only oversized payload it can build is a
+    // `KpBatch`, whose size the caller controls.
+    let padded = crate::padding::pad_to_bucket(&event_bytes).ok()?;
     let ciphertext = encrypt_for_stealth(&[scan_pubkey], &padded).ok()?;
     Some(RingCommand::PublishStealthEvent {
         tag: rand::random(),

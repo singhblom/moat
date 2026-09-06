@@ -925,7 +925,8 @@ fn responder_failure_text(reason: &SyncFailure) -> String {
 fn requester_failure_text(reason: &SyncFailure) -> String {
     match reason {
         SyncFailure::NoAnswer => {
-            "No device answered. Open Moat on the device that has your history              and try again."
+            "No device answered. Open Moat on the device that has your \
+             history and try again."
                 .to_string()
         }
         SyncFailure::ChannelClosed { detail } => {

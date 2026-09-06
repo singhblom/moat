@@ -67,9 +67,18 @@ Future<DrawbridgeChallengeSignature> signDrawbridgeChallenge(
     RustLib.instance.api.crateApiSimpleSignDrawbridgeChallenge(
         keyBundle: keyBundle, message: message);
 
-/// Pad plaintext to bucket size (256, 1024, or 4096 bytes).
+/// Pad plaintext to bucket size (512, 1024, or 4096 bytes).
+///
+/// Fails above the largest bucket: there is nothing to round up to, and
+/// oversized content belongs in an external blob with only the reference
+/// in the event.
 Uint8List padToBucket({required List<int> plaintext}) =>
     RustLib.instance.api.crateApiSimplePadToBucket(plaintext: plaintext);
+
+/// Frame plaintext with a length prefix but no bucket padding, for frames
+/// that never become PDS records. See `moat_core::frame_unpadded`.
+Uint8List frameUnpadded({required List<int> plaintext}) =>
+    RustLib.instance.api.crateApiSimpleFrameUnpadded(plaintext: plaintext);
 
 /// Remove padding and extract original plaintext.
 Uint8List unpad({required List<int> padded}) =>
@@ -578,10 +587,7 @@ abstract class SyncSessionHandle implements RustOpaqueInterface {
       RustLib.instance.api.crateApiSimpleSyncSessionHandleNewSession();
 
   /// Feed a received and decrypted `SyncMsg` (JSON bytes) into the state machine.
-  Future<List<SyncOutputDto>> onMessage(
-      {required MoatSessionHandle session,
-      required List<int> msgBytes,
-      required String ourDid});
+  Future<List<SyncOutputDto>> onMessage({required List<int> msgBytes});
 
   /// Called when the pair WS reaches the `paired` state.
   Future<List<SyncOutputDto>> onPaired(

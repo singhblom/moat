@@ -622,10 +622,21 @@ pub struct DrawbridgeChallengeSignature {
     pub public_key: Vec<u8>,
 }
 
-/// Pad plaintext to bucket size (256, 1024, or 4096 bytes).
+/// Pad plaintext to bucket size (512, 1024, or 4096 bytes).
+///
+/// Fails above the largest bucket: there is nothing to round up to, and
+/// oversized content belongs in an external blob with only the reference
+/// in the event.
 #[frb(sync)]
-pub fn pad_to_bucket(plaintext: Vec<u8>) -> Vec<u8> {
-    moat_core::pad_to_bucket(&plaintext)
+pub fn pad_to_bucket(plaintext: Vec<u8>) -> Result<Vec<u8>, String> {
+    moat_core::pad_to_bucket(&plaintext).map_err(|e| e.to_string())
+}
+
+/// Frame plaintext with a length prefix but no bucket padding, for frames
+/// that never become PDS records. See `moat_core::frame_unpadded`.
+#[frb(sync)]
+pub fn frame_unpadded(plaintext: Vec<u8>) -> Vec<u8> {
+    moat_core::frame_unpadded(&plaintext)
 }
 
 /// Remove padding and extract original plaintext.
@@ -1327,19 +1338,13 @@ impl SyncSessionHandle {
     }
 
     /// Feed a received and decrypted `SyncMsg` (JSON bytes) into the state machine.
-    pub fn on_message(
-        &self,
-        session: &MoatSessionHandle,
-        msg_bytes: Vec<u8>,
-        our_did: String,
-    ) -> Result<Vec<SyncOutputDto>, String> {
+    pub fn on_message(&self, msg_bytes: Vec<u8>) -> Result<Vec<SyncOutputDto>, String> {
         let msg = decode_sync_msg(&msg_bytes)?;
-        let session_lock = session.inner.lock().unwrap();
         Ok(self
             .inner
             .lock()
             .unwrap()
-            .on_message(&session_lock, msg, &our_did)
+            .on_message(msg)
             .map_err(|e| e.to_string())?
             .into_iter()
             .map(SyncOutputDto::from)
@@ -2474,7 +2479,7 @@ mod tests {
     #[test]
     fn test_pad_unpad_roundtrip() {
         let plaintext = b"Hello, world!".to_vec();
-        let padded = pad_to_bucket(plaintext.clone());
+        let padded = pad_to_bucket(plaintext.clone()).unwrap();
 
         assert_eq!(padded.len(), 512);
         let unpadded = unpad(padded);
@@ -2483,22 +2488,39 @@ mod tests {
 
     #[test]
     fn test_pad_bucket_sizes() {
-        let small = pad_to_bucket(vec![0x42; 100]);
+        let small = pad_to_bucket(vec![0x42; 100]).unwrap();
         assert_eq!(small.len(), 512);
 
-        let standard = pad_to_bucket(vec![0x42; 600]);
+        let standard = pad_to_bucket(vec![0x42; 600]).unwrap();
         assert_eq!(standard.len(), 1024);
 
-        let large = pad_to_bucket(vec![0x42; 2000]);
+        let large = pad_to_bucket(vec![0x42; 2000]).unwrap();
         assert_eq!(large.len(), 4096);
     }
 
     #[test]
     fn test_pad_empty() {
-        let padded = pad_to_bucket(vec![]);
+        let padded = pad_to_bucket(vec![]).unwrap();
         assert_eq!(padded.len(), 512);
         let unpadded = unpad(padded);
         assert!(unpadded.is_empty());
+    }
+
+    /// The bucket ladder has a ceiling; above it `pad_to_bucket` reports
+    /// rather than producing a frame of some other size.
+    #[test]
+    fn test_pad_rejects_oversized() {
+        assert!(pad_to_bucket(vec![0x42; 5000]).is_err());
+    }
+
+    /// Pair-WS frames use the unbucketed framing, which has no ceiling and
+    /// stays readable by the same `unpad`.
+    #[test]
+    fn test_frame_unpadded_roundtrip() {
+        let plaintext = vec![0x42; 20_000];
+        let framed = frame_unpadded(plaintext.clone());
+        assert_eq!(framed.len(), plaintext.len() + 4);
+        assert_eq!(unpad(framed), plaintext);
     }
 
     #[test]

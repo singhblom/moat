@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 use serde_with::{base64::Base64, serde_as};
 
-use crate::{Error, MoatSession, Result};
+use crate::{Error, Result};
 
 // ── Wire types ────────────────────────────────────────────────────────────────
 
@@ -325,14 +325,6 @@ impl SyncSession {
 
     /// Feed a received and decrypted [`SyncMsg`] into the state machine.
     ///
-    /// `mls` records the sync watermark as batches land, so an interrupted
-    /// transfer resumes rather than restarting — see
-    /// [`handle_batch`](Self::handle_batch).
-    ///
-    /// `our_did` is reserved for future per-DID logic (Phase 6); it is
-    /// currently unused but kept in the signature for API stability.
-    /// Feed a received and decrypted [`SyncMsg`] into the state machine.
-    ///
     /// An empty output list means exactly one thing: the message was
     /// handled and there is nothing to send or store yet. Anything the
     /// session cannot account for — a batch for a conversation it has no
@@ -344,20 +336,14 @@ impl SyncSession {
     /// outputs and then asks [`is_done`](Self::is_done). Reporting it in
     /// the list would let a caller that acts in order tear the channel down
     /// before flushing whatever follows.
-    pub fn on_message(
-        &mut self,
-        mls: &MoatSession,
-        msg: SyncMsg,
-        our_did: &str,
-    ) -> Result<Vec<SyncOutput>> {
-        let _ = our_did;
+    pub fn on_message(&mut self, msg: SyncMsg) -> Result<Vec<SyncOutput>> {
         match msg {
             SyncMsg::Hello { convs: peer_convs, .. } => Ok(self.handle_hello(peer_convs)),
             SyncMsg::BatchReq { group_id, from_rkey, to_rkey, cursor } => {
                 Ok(self.handle_batch_req(group_id, from_rkey, to_rkey, cursor))
             }
             SyncMsg::Batch { group_id, messages, next_cursor } => {
-                self.handle_batch(mls, group_id, messages, next_cursor)
+                self.handle_batch(group_id, messages, next_cursor)
             }
             SyncMsg::Done { group_id } => Ok(self.handle_done(group_id)),
         }
@@ -519,7 +505,6 @@ impl SyncSession {
 
     fn handle_batch(
         &mut self,
-        mls: &MoatSession,
         group_id: Vec<u8>,
         messages: Vec<SyncMessage>,
         next_cursor: Option<String>,
@@ -535,23 +520,6 @@ impl SyncSession {
                 )))
             }
         };
-
-        // Durable resume point for an interrupted transfer. Backward sync
-        // streams newest-first, so the watermark ("oldest rkey received")
-        // only ever moves backwards.
-        //
-        // Deliberately not also `append_to_digest`: that chain is ordered
-        // rkey-ascending, these arrive descending, so appending on arrival
-        // would corrupt it — worse than leaving backfill out. Repairing it
-        // belongs with Phase 6, which consumes digests.
-        if let Some(batch_oldest) = messages.iter().map(|m| m.rkey.as_str()).min() {
-            let new_watermark = match mls.watermark(&group_id) {
-                Some(current) if current.as_str() <= batch_oldest => current,
-                _ => batch_oldest.to_string(),
-            };
-            // Non-fatal: a lost resume point only costs a restart.
-            let _ = mls.set_watermark(&group_id, &new_watermark);
-        }
 
         let mut outputs = vec![SyncOutput::Store {
             conv_id: plan.conv_id.clone(),
@@ -683,85 +651,9 @@ mod tests {
         ));
     }
 
-    /// Two-conversation scenario, joiner side: peer (donor) has history, we
-    /// have nothing. Expect: BatchReq for each, then receive Batch+Done, then
-    /// An interrupted transfer must leave a durable resume point: each
-    /// batch records how far back it reached, so a device that dies
-    /// mid-history (the motivating case — an old phone streaming a large
-    /// backlog) resumes instead of restarting. Backward sync streams
-    /// newest-first, so the watermark only ever moves *backwards*.
-    #[test]
-    fn backward_batches_move_the_watermark_backwards_only() {
-        let mls = MoatSession::new();
-        let g = vec![7u8; 32];
-
-        let mut s = SyncSession::new();
-        s.add_conv_plan(g.clone(), hex::encode(&g), vec![], true);
-        let _ = s.on_paired(vec![], 0);
-        let _ = s.on_message(
-            &mls,
-            SyncMsg::Hello { convs: vec![full_state(&g)], ring_epoch: 0 },
-            "did:plc:alice",
-        ).unwrap();
-
-        assert!(
-            mls.watermark(&g).is_none(),
-            "no transfer progress before the first batch lands"
-        );
-
-        // Newest slice first.
-        let _ = s.on_message(
-            &mls,
-            SyncMsg::Batch {
-                group_id: g.clone(),
-                messages: vec![empty_msg("r50", "newer"), empty_msg("r40", "newest-1")],
-                next_cursor: Some("c".to_string()),
-            },
-            "did:plc:alice",
-        ).unwrap();
-        assert_eq!(
-            mls.watermark(&g).as_deref(),
-            Some("r40"),
-            "watermark tracks the oldest rkey received so far"
-        );
-
-        // An older slice moves it further back.
-        let _ = s.on_message(
-            &mls,
-            SyncMsg::Batch {
-                group_id: g.clone(),
-                messages: vec![empty_msg("r30", "older"), empty_msg("r20", "oldest")],
-                next_cursor: None,
-            },
-            "did:plc:alice",
-        ).unwrap();
-        assert_eq!(
-            mls.watermark(&g).as_deref(),
-            Some("r20"),
-            "watermark advances backwards as older history arrives"
-        );
-
-        // A late/duplicate newer slice must not lose the progress already made.
-        let _ = s.on_message(
-            &mls,
-            SyncMsg::Batch {
-                group_id: g.clone(),
-                messages: vec![empty_msg("r45", "newer again")],
-                next_cursor: None,
-            },
-            "did:plc:alice",
-        ).unwrap();
-        assert_eq!(
-            mls.watermark(&g).as_deref(),
-            Some("r20"),
-            "a newer batch must never drag the resume point forwards"
-        );
-    }
-
     /// Complete.
     #[test]
     fn joiner_drives_full_session() {
-        let mls = MoatSession::new();
         let g1 = vec![1u8; 32];
         let g2 = vec![2u8; 32];
 
@@ -771,13 +663,10 @@ mod tests {
         let _ = s.on_paired(vec![], 0);
 
         // Receive peer's Hello — they have history for both.
-        let outs = s.on_message(&mls, 
-            SyncMsg::Hello {
+        let outs = s.on_message(SyncMsg::Hello {
                 convs: vec![full_state(&g1), full_state(&g2)],
                 ring_epoch: 0,
-            },
-            "did:plc:alice",
-        ).unwrap();
+            }).unwrap();
         let req_count = outs
             .iter()
             .filter(|o| matches!(o, SyncOutput::Send(SyncMsg::BatchReq { .. })))
@@ -785,37 +674,25 @@ mod tests {
         assert_eq!(req_count, 2, "one BatchReq per conv");
 
         // Receive batch + Done for g1.
-        let outs = s.on_message(&mls, 
-            SyncMsg::Batch {
+        let outs = s.on_message(SyncMsg::Batch {
                 group_id: g1.clone(),
                 messages: vec![empty_msg("r1", "hi")],
                 next_cursor: None,
-            },
-            "did:plc:alice",
-        ).unwrap();
+            }).unwrap();
         assert!(outs.iter().any(|o| matches!(o, SyncOutput::Store { .. })));
 
-        let outs = s.on_message(&mls, 
-            SyncMsg::Done { group_id: g1.clone() },
-            "did:plc:alice",
-        ).unwrap();
+        let outs = s.on_message(SyncMsg::Done { group_id: g1.clone() }).unwrap();
         // Not done yet — g2 still pending.
         assert!(outs.is_empty());
         assert!(!s.is_done());
 
         // Receive batch + Done for g2.
-        let _ = s.on_message(&mls, 
-            SyncMsg::Batch {
+        let _ = s.on_message(SyncMsg::Batch {
                 group_id: g2.clone(),
                 messages: vec![empty_msg("r2", "hey")],
                 next_cursor: None,
-            },
-            "did:plc:alice",
-        ).unwrap();
-        let outs = s.on_message(&mls, 
-            SyncMsg::Done { group_id: g2.clone() },
-            "did:plc:alice",
-        ).unwrap();
+            }).unwrap();
+        let outs = s.on_message(SyncMsg::Done { group_id: g2.clone() }).unwrap();
         // Completion is a state, not an output: the caller applies whatever
         // came back and *then* asks, so it can never close the channel with
         // sends still pending.
@@ -828,7 +705,6 @@ mod tests {
     /// Done after the last batch, complete only on peer's Done.
     #[test]
     fn donor_serves_batch_and_completes() {
-        let mls = MoatSession::new();
         let g = vec![3u8; 32];
         let mut s = SyncSession::new();
         s.add_conv_plan(
@@ -840,23 +716,17 @@ mod tests {
         let _ = s.on_paired(vec![full_state(&g)], 0);
 
         // Peer's Hello (they have nothing).
-        let outs = s.on_message(&mls, 
-            SyncMsg::Hello { convs: vec![empty_state(&g)], ring_epoch: 0 },
-            "did:plc:alice",
-        ).unwrap();
+        let outs = s.on_message(SyncMsg::Hello { convs: vec![empty_state(&g)], ring_epoch: 0 }).unwrap();
         // We do NOT send BatchReq (peer has nothing).
         assert!(!outs.iter().any(|o| matches!(o, SyncOutput::Send(SyncMsg::BatchReq { .. }))));
 
         // Peer requests our batch.
-        let outs = s.on_message(&mls, 
-            SyncMsg::BatchReq {
+        let outs = s.on_message(SyncMsg::BatchReq {
                 group_id: g.clone(),
                 from_rkey: None,
                 to_rkey: None,
                 cursor: None,
-            },
-            "did:plc:alice",
-        ).unwrap();
+            }).unwrap();
         // We send a Batch and Done.
         let batch_count = outs
             .iter()
@@ -878,10 +748,7 @@ mod tests {
 
         // Peer's Done — even though `expecting_batch=false`, the protocol still
         // tears down via the peer's terminating Done.
-        let outs = s.on_message(&mls, 
-            SyncMsg::Done { group_id: g.clone() },
-            "did:plc:alice",
-        ).unwrap();
+        let outs = s.on_message(SyncMsg::Done { group_id: g.clone() }).unwrap();
         // Completion is a state, not an output: the caller applies whatever
         // came back and *then* asks, so it can never close the channel with
         // sends still pending.
@@ -892,7 +759,6 @@ mod tests {
     /// Donor that paginates across multiple BatchReq cursors.
     #[test]
     fn donor_paginates_with_cursor() {
-        let mls = MoatSession::new();
         let g = vec![4u8; 32];
         let mut s = SyncSession::new();
         // 75 messages forces two batches (BATCH_SIZE = 50).
@@ -901,21 +767,15 @@ mod tests {
             .collect();
         s.add_conv_plan(g.clone(), hex::encode(&g), our_msgs, false);
         let _ = s.on_paired(vec![full_state(&g)], 0);
-        let _ = s.on_message(&mls, 
-            SyncMsg::Hello { convs: vec![empty_state(&g)], ring_epoch: 0 },
-            "did:plc:alice",
-        ).unwrap();
+        let _ = s.on_message(SyncMsg::Hello { convs: vec![empty_state(&g)], ring_epoch: 0 }).unwrap();
 
         // First BatchReq: cursor=None → returns 50, next_cursor=Some("50").
-        let outs = s.on_message(&mls, 
-            SyncMsg::BatchReq {
+        let outs = s.on_message(SyncMsg::BatchReq {
                 group_id: g.clone(),
                 from_rkey: None,
                 to_rkey: None,
                 cursor: None,
-            },
-            "did:plc:alice",
-        ).unwrap();
+            }).unwrap();
         let next = outs.iter().find_map(|o| match o {
             SyncOutput::Send(SyncMsg::Batch { messages, next_cursor, .. }) => {
                 Some((messages.len(), next_cursor.clone()))
@@ -928,15 +788,12 @@ mod tests {
             .any(|o| matches!(o, SyncOutput::Send(SyncMsg::Done { .. }))));
 
         // Second BatchReq: cursor=Some("50") → returns 25, Done.
-        let outs = s.on_message(&mls, 
-            SyncMsg::BatchReq {
+        let outs = s.on_message(SyncMsg::BatchReq {
                 group_id: g.clone(),
                 from_rkey: None,
                 to_rkey: None,
                 cursor: Some("50".to_string()),
-            },
-            "did:plc:alice",
-        ).unwrap();
+            }).unwrap();
         let last = outs.iter().find_map(|o| match o {
             SyncOutput::Send(SyncMsg::Batch { messages, next_cursor, .. }) => {
                 Some((messages.len(), next_cursor.clone()))
@@ -953,14 +810,10 @@ mod tests {
     /// and request its batch.
     #[test]
     fn unknown_peer_conv_auto_added() {
-        let mls = MoatSession::new();
         let g = vec![5u8; 32];
         let mut s = SyncSession::new();
         let _ = s.on_paired(vec![], 0);
-        let outs = s.on_message(&mls, 
-            SyncMsg::Hello { convs: vec![full_state(&g)], ring_epoch: 0 },
-            "did:plc:alice",
-        ).unwrap();
+        let outs = s.on_message(SyncMsg::Hello { convs: vec![full_state(&g)], ring_epoch: 0 }).unwrap();
         let batch_req = outs.iter().any(|o| matches!(
             o,
             SyncOutput::Send(SyncMsg::BatchReq { group_id, .. }) if *group_id == g
@@ -972,19 +825,15 @@ mod tests {
     /// can mark that conversation complete.
     #[test]
     fn batch_req_unknown_group_replies_done() {
-        let mls = MoatSession::new();
         let g = vec![6u8; 32];
         let mut s = SyncSession::new();
         let _ = s.on_paired(vec![], 0);
-        let outs = s.on_message(&mls, 
-            SyncMsg::BatchReq {
+        let outs = s.on_message(SyncMsg::BatchReq {
                 group_id: g.clone(),
                 from_rkey: None,
                 to_rkey: None,
                 cursor: None,
-            },
-            "did:plc:alice",
-        ).unwrap();
+            }).unwrap();
         assert_eq!(outs.len(), 1);
         assert!(matches!(
             &outs[0],

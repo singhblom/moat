@@ -1,4 +1,4 @@
-use moat_core::{derive_event_tag, pad_to_bucket, unpad, Bucket};
+use moat_core::{derive_event_tag, frame_unpadded, pad_to_bucket, unpad, Bucket};
 use proptest::prelude::*;
 
 proptest! {
@@ -6,14 +6,14 @@ proptest! {
 
     #[test]
     fn pad_unpad_roundtrip(data in proptest::collection::vec(any::<u8>(), 0..4092)) {
-        let padded = pad_to_bucket(&data);
+        let padded = pad_to_bucket(&data).unwrap();
         let recovered = unpad(&padded);
         prop_assert_eq!(&recovered, &data);
     }
 
     #[test]
     fn padded_size_is_valid_bucket(data in proptest::collection::vec(any::<u8>(), 0..4092)) {
-        let padded = pad_to_bucket(&data);
+        let padded = pad_to_bucket(&data).unwrap();
         let len = padded.len();
         prop_assert!(
             len == 512 || len == 1024 || len == 4096,
@@ -24,20 +24,42 @@ proptest! {
     #[test]
     fn bucket_selection_matches_padded_size(data in proptest::collection::vec(any::<u8>(), 0..4092)) {
         let bucket = Bucket::for_size(data.len());
-        let padded = pad_to_bucket(&data);
+        let padded = pad_to_bucket(&data).unwrap();
         prop_assert_eq!(padded.len(), bucket.size());
     }
 
     #[test]
     fn padding_at_bucket_boundaries(len in 0usize..4092) {
         let data = vec![0x42; len];
-        let padded = pad_to_bucket(&data);
+        let padded = pad_to_bucket(&data).unwrap();
         let expected_bucket = Bucket::for_size(len);
         prop_assert_eq!(padded.len(), expected_bucket.size());
 
         // Verify content survives
         let recovered = unpad(&padded);
         prop_assert_eq!(recovered, data);
+    }
+
+    /// The other side of the bound every strategy above stops at: above
+    /// the largest bucket there is nothing to round up to, and the answer
+    /// is an error rather than a panic or a frame of some other size.
+    #[test]
+    fn oversized_payloads_are_rejected_not_padded(
+        len in 4093usize..40_000
+    ) {
+        let data = vec![0x42; len];
+        prop_assert!(pad_to_bucket(&data).is_err());
+    }
+
+    /// Unbucketed framing has no such ceiling — that is the whole reason
+    /// pair-WS frames use it — and stays readable by the same `unpad`.
+    #[test]
+    fn unpadded_framing_has_no_ceiling(
+        data in proptest::collection::vec(any::<u8>(), 0..40_000)
+    ) {
+        let framed = frame_unpadded(&data);
+        prop_assert_eq!(framed.len(), data.len() + 4);
+        prop_assert_eq!(unpad(&framed), data);
     }
 
     // --- Tag derivation properties ---

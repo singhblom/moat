@@ -99,7 +99,7 @@ fn test_tag_changes_with_group() {
 #[test]
 fn test_padding_small_message() {
     let plaintext = b"Hello, world!";
-    let padded = pad_to_bucket(plaintext);
+    let padded = pad_to_bucket(plaintext).unwrap();
 
     assert_eq!(padded.len(), 512);
     assert_eq!(unpad(&padded), plaintext);
@@ -108,7 +108,7 @@ fn test_padding_small_message() {
 #[test]
 fn test_padding_medium_message() {
     let plaintext = vec![0x42; 600];
-    let padded = pad_to_bucket(&plaintext);
+    let padded = pad_to_bucket(&plaintext).unwrap();
 
     assert_eq!(padded.len(), 1024);
     assert_eq!(unpad(&padded), plaintext);
@@ -117,7 +117,7 @@ fn test_padding_medium_message() {
 #[test]
 fn test_padding_large_message() {
     let plaintext = vec![0x42; 2000];
-    let padded = pad_to_bucket(&plaintext);
+    let padded = pad_to_bucket(&plaintext).unwrap();
 
     assert_eq!(padded.len(), 4096);
     assert_eq!(unpad(&padded), plaintext);
@@ -133,7 +133,7 @@ fn test_padding_preserves_content() {
     ];
 
     for msg in messages {
-        let padded = pad_to_bucket(&msg);
+        let padded = pad_to_bucket(&msg).unwrap();
         let recovered = unpad(&padded);
         assert_eq!(recovered, msg, "Padding round-trip should preserve content");
     }
@@ -240,7 +240,7 @@ fn test_event_serialization_with_padding() {
     let event_bytes = event.to_bytes().unwrap();
 
     // Pad (message_id adds ~24 bytes of JSON, so this may land in small or standard bucket)
-    let padded = pad_to_bucket(&event_bytes);
+    let padded = pad_to_bucket(&event_bytes).unwrap();
     assert!(
         padded.len() == 512 || padded.len() == 1024,
         "Should fit in small or standard bucket"
@@ -440,19 +440,30 @@ fn test_state_version_header() {
     assert!(state.len() >= 22);
 }
 
+/// A v5 state written before the sync watermark was removed still ends
+/// with that table. Nothing parses past the prior-export-secrets table
+/// any more, so those trailing bytes must be ignored rather than
+/// mistaken for a truncated one.
 #[test]
-fn test_v5_state_roundtrip_watermark() {
+fn test_v5_state_with_trailing_watermark_table_still_loads() {
     let session = MoatSession::new();
     let credential = MoatCredential::new("did:plc:alice", "Laptop", [1u8; 16]);
     let (_, key_bundle) = session.generate_key_package(&credential).unwrap();
     let group_id = session.create_group(&credential, &key_bundle).unwrap();
 
-    session.set_watermark(&group_id, "rkey001").unwrap();
+    let mut state = session.export_state().unwrap();
 
-    let state = session.export_state().unwrap();
+    // One watermark entry, in the layout the old writer used:
+    // count(u64) | gid_len(u32) | gid | rkey_len(u16) | rkey
+    let rkey = b"rkey001";
+    state.extend_from_slice(&1u64.to_le_bytes());
+    state.extend_from_slice(&(group_id.len() as u32).to_le_bytes());
+    state.extend_from_slice(&group_id);
+    state.extend_from_slice(&(rkey.len() as u16).to_le_bytes());
+    state.extend_from_slice(rkey);
+
     let restored = MoatSession::from_state(&state).unwrap();
-
-    assert_eq!(restored.watermark(&group_id), Some("rkey001".to_string()));
+    assert_eq!(restored.device_id(), session.device_id());
 }
 
 #[test]
@@ -985,7 +996,7 @@ fn test_reaction_fits_in_small_or_standard_padding_bucket() {
     let reaction = Event::reaction(b"group-id".to_vec(), 0, &target_id, "👍");
 
     let event_bytes = reaction.to_bytes().unwrap();
-    let padded = pad_to_bucket(&event_bytes);
+    let padded = pad_to_bucket(&event_bytes).unwrap();
     assert!(
         padded.len() <= 1024,
         "Reactions should fit in small or standard bucket, got {}",
