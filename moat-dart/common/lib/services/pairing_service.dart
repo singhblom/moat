@@ -693,11 +693,7 @@ class PairingService {
 
     List<ffi.SyncOutputDto> outputs;
     try {
-      outputs = await syncSession.onMessage(
-        session: moatSession,
-        msgBytes: plaintext,
-        ourDid: did,
-      );
+      outputs = await syncSession.onMessage(msgBytes: plaintext);
     } catch (e) {
       moatLog('PairingService: pairing-sync onMessage failed: $e — aborting');
       await _releaseTransport();
