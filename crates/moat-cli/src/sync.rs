@@ -7,7 +7,7 @@
 //! `crate::keystore` and therefore can't live in moat-core.
 
 pub use moat_core::sync::{
-    decode_sync_msg, encode_sync_msg, AnchorDto, ConvState, SyncMessage, SyncOutput, SyncSession,
+    decode_sync_msg, encode_sync_msg, ConvState, SyncMessage, SyncOutput, SyncSession,
 };
 
 use crate::keystore::StoredMessage;

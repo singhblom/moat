@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 use serde_with::{base64::Base64, serde_as};
 
-use crate::{DigestAnchor, Error, MoatSession, Result};
+use crate::{Error, MoatSession, Result};
 
 // ── Wire types ────────────────────────────────────────────────────────────────
 
@@ -106,11 +106,6 @@ pub struct ConvState {
     /// Conversation MLS group ID.
     #[serde_as(as = "Base64")]
     pub group_id: Vec<u8>,
-    /// Digest tip (32 bytes).
-    #[serde_as(as = "Base64")]
-    pub tip_digest: Vec<u8>,
-    /// Digest anchors at epoch boundaries.
-    pub anchors: Vec<AnchorDto>,
     /// What this side holds for the conversation.
     pub inventory: ConvInventory,
 }
@@ -149,33 +144,6 @@ pub fn fit_hello_inventories(convs: &mut [ConvState]) {
             convs[i].inventory = downgraded;
         }
     }
-}
-
-/// Digest anchor in the on-wire form (DTO mirrors [`DigestAnchor`] but uses
-/// `Vec<u8>` for the digest so it serialises cleanly with `serde_with`).
-#[serde_as]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AnchorDto {
-    pub rkey: String,
-    #[serde_as(as = "Base64")]
-    pub digest: Vec<u8>,
-}
-
-impl From<&DigestAnchor> for AnchorDto {
-    fn from(a: &DigestAnchor) -> Self {
-        Self { rkey: a.rkey.clone(), digest: a.digest.to_vec() }
-    }
-}
-
-/// Direction of a sync flow.
-///
-/// `Backward` = transferring older messages from a donor to a new joiner.
-/// `Forward` = transferring newer messages a peer is missing (Phase 6).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SyncDirection {
-    Forward,
-    Backward,
 }
 
 /// Plaintext message exchanged during a sync session.
@@ -218,20 +186,7 @@ pub enum SyncMsg {
         convs: Vec<ConvState>,
         ring_epoch: u64,
     },
-    /// Forward-sync manifest request (Phase 6).
-    ManifestReq {
-        #[serde_as(as = "Base64")]
-        group_id: Vec<u8>,
-        from_rkey: Option<String>,
-        to_rkey: Option<String>,
-    },
-    /// Forward-sync manifest response (Phase 6).
-    Manifest {
-        #[serde_as(as = "Base64")]
-        group_id: Vec<u8>,
-        rkeys: Vec<String>,
-    },
-    /// Backward-sync batch request.
+    /// Batch request.
     BatchReq {
         #[serde_as(as = "Base64")]
         group_id: Vec<u8>,
@@ -239,18 +194,17 @@ pub enum SyncMsg {
         to_rkey: Option<String>,
         cursor: Option<String>,
     },
-    /// Backward-sync batch with messages.
+    /// Batch of messages.
     Batch {
         #[serde_as(as = "Base64")]
         group_id: Vec<u8>,
         messages: Vec<SyncMessage>,
         next_cursor: Option<String>,
     },
-    /// All messages for `group_id` in `direction` have been sent.
+    /// Every message this side holds for `group_id` has been sent.
     Done {
         #[serde_as(as = "Base64")]
         group_id: Vec<u8>,
-        direction: SyncDirection,
     },
 }
 
@@ -307,9 +261,9 @@ struct ConvPlan {
     our_messages: Vec<SyncMessage>,
     /// Whether we expect to receive a batch from the peer.
     expecting_batch: bool,
-    /// Whether we've sent `Done{Backward}` for this conversation.
+    /// Whether we've sent `Done` for this conversation.
     sent_done: bool,
-    /// Whether we've received `Done{Backward}` for this conversation.
+    /// Whether we've received `Done` for this conversation.
     received_done: bool,
 }
 
@@ -405,16 +359,7 @@ impl SyncSession {
             SyncMsg::Batch { group_id, messages, next_cursor } => {
                 self.handle_batch(mls, group_id, messages, next_cursor)
             }
-            SyncMsg::Done { group_id, direction: SyncDirection::Backward } => {
-                Ok(self.handle_done_backward(group_id))
-            }
-            SyncMsg::Done { direction: SyncDirection::Forward, .. }
-            | SyncMsg::ManifestReq { .. }
-            | SyncMsg::Manifest { .. } => Err(Error::SyncProtocol(
-                "forward sync is not implemented; the peer should not have \
-                 sent this"
-                    .to_string(),
-            )),
+            SyncMsg::Done { group_id } => Ok(self.handle_done(group_id)),
         }
     }
 
@@ -540,10 +485,7 @@ impl SyncSession {
         let plan = match self.plans.iter_mut().find(|p| p.group_id == group_id) {
             Some(p) => p,
             None => {
-                return vec![SyncOutput::Send(SyncMsg::Done {
-                    group_id,
-                    direction: SyncDirection::Backward,
-                })];
+                return vec![SyncOutput::Send(SyncMsg::Done { group_id })];
             }
         };
 
@@ -569,7 +511,6 @@ impl SyncSession {
             plan.sent_done = true;
             outputs.push(SyncOutput::Send(SyncMsg::Done {
                 group_id: plan.group_id.clone(),
-                direction: SyncDirection::Backward,
             }));
         }
 
@@ -629,7 +570,7 @@ impl SyncSession {
         Ok(outputs)
     }
 
-    fn handle_done_backward(&mut self, group_id: Vec<u8>) -> Vec<SyncOutput> {
+    fn handle_done(&mut self, group_id: Vec<u8>) -> Vec<SyncOutput> {
         if let Some(plan) = self.plans.iter_mut().find(|p| p.group_id == group_id) {
             plan.received_done = true;
         }
@@ -681,8 +622,6 @@ mod tests {
     fn empty_state(group_id: &[u8]) -> ConvState {
         ConvState {
             group_id: group_id.to_vec(),
-            tip_digest: vec![0u8; 32],
-            anchors: vec![],
             inventory: ConvInventory::Empty,
         }
     }
@@ -692,8 +631,6 @@ mod tests {
     fn full_state(group_id: &[u8]) -> ConvState {
         ConvState {
             group_id: group_id.to_vec(),
-            tip_digest: vec![1u8; 32],
-            anchors: vec![],
             inventory: ConvInventory::Range {
                 oldest: "a".to_string(),
                 newest: "z".to_string(),
@@ -729,13 +666,10 @@ mod tests {
     }
 
     #[test]
-    fn encode_decode_roundtrip_done_backward() {
-        let msg = SyncMsg::Done {
-            group_id: vec![9u8; 32],
-            direction: SyncDirection::Backward,
-        };
+    fn encode_decode_roundtrip_done() {
+        let msg = SyncMsg::Done { group_id: vec![9u8; 32] };
         let decoded = decode_sync_msg(&encode_sync_msg(&msg)).unwrap();
-        assert!(matches!(decoded, SyncMsg::Done { direction: SyncDirection::Backward, .. }));
+        assert!(matches!(decoded, SyncMsg::Done { .. }));
     }
 
     #[test]
@@ -862,7 +796,7 @@ mod tests {
         assert!(outs.iter().any(|o| matches!(o, SyncOutput::Store { .. })));
 
         let outs = s.on_message(&mls, 
-            SyncMsg::Done { group_id: g1.clone(), direction: SyncDirection::Backward },
+            SyncMsg::Done { group_id: g1.clone() },
             "did:plc:alice",
         ).unwrap();
         // Not done yet — g2 still pending.
@@ -879,7 +813,7 @@ mod tests {
             "did:plc:alice",
         ).unwrap();
         let outs = s.on_message(&mls, 
-            SyncMsg::Done { group_id: g2.clone(), direction: SyncDirection::Backward },
+            SyncMsg::Done { group_id: g2.clone() },
             "did:plc:alice",
         ).unwrap();
         // Completion is a state, not an output: the caller applies whatever
@@ -933,7 +867,7 @@ mod tests {
             .filter(|o| {
                 matches!(
                     o,
-                    SyncOutput::Send(SyncMsg::Done { direction: SyncDirection::Backward, .. })
+                    SyncOutput::Send(SyncMsg::Done { .. })
                 )
             })
             .count();
@@ -945,7 +879,7 @@ mod tests {
         // Peer's Done — even though `expecting_batch=false`, the protocol still
         // tears down via the peer's terminating Done.
         let outs = s.on_message(&mls, 
-            SyncMsg::Done { group_id: g.clone(), direction: SyncDirection::Backward },
+            SyncMsg::Done { group_id: g.clone() },
             "did:plc:alice",
         ).unwrap();
         // Completion is a state, not an output: the caller applies whatever
@@ -1054,30 +988,10 @@ mod tests {
         assert_eq!(outs.len(), 1);
         assert!(matches!(
             &outs[0],
-            SyncOutput::Send(SyncMsg::Done {
-                direction: SyncDirection::Backward,
-                ..
-            })
+            SyncOutput::Send(SyncMsg::Done { .. })
         ));
     }
 
-    /// Forward sync is unimplemented, so a peer sending it is a protocol
-    /// error rather than something to swallow — silently ignoring it would
-    /// leave the peer believing it had delivered something.
-    #[test]
-    fn forward_done_is_a_protocol_error() {
-        let mls = MoatSession::new();
-        let mut s = SyncSession::new();
-        let _ = s.on_paired(vec![], 0);
-        let result = s.on_message(&mls, 
-            SyncMsg::Done { group_id: vec![1u8; 32], direction: SyncDirection::Forward },
-            "did:plc:alice",
-        );
-        assert!(result.is_err());
-        assert!(!s.is_done());
-    }
-
-    /// `default()` is equivalent to `new()`.
     #[test]
     fn default_equals_new() {
         let s: SyncSession = Default::default();

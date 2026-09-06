@@ -41,8 +41,6 @@ fn msg(rkey: &str) -> SyncMessage {
 fn state_with(group_id: &[u8], rkeys: &[&str]) -> ConvState {
     ConvState {
         group_id: group_id.to_vec(),
-        tip_digest: vec![0u8; 32],
-        anchors: vec![],
         inventory: ConvInventory::of(rkeys.iter().map(|r| r.to_string()).collect()),
     }
 }
@@ -52,8 +50,6 @@ fn state_with(group_id: &[u8], rkeys: &[&str]) -> ConvState {
 fn state_with_range(group_id: &[u8], oldest: &str, newest: &str, count: u64) -> ConvState {
     ConvState {
         group_id: group_id.to_vec(),
-        tip_digest: vec![0u8; 32],
-        anchors: vec![],
         inventory: ConvInventory::Range {
             oldest: oldest.to_string(),
             newest: newest.to_string(),
@@ -373,8 +369,6 @@ fn an_oversized_hello_is_brought_under_budget() {
             let rkeys: Vec<String> = (0..2000).map(|n| format!("3l6yq2{i:02}{n:06}")).collect();
             ConvState {
                 group_id: vec![i; 32],
-                tip_digest: vec![0u8; 32],
-                anchors: vec![],
                 inventory: ConvInventory::of(rkeys),
             }
         })
@@ -415,8 +409,6 @@ fn fitting_downgrades_the_largest_first() {
         state_with(&[1u8; 32], &["r1", "r2"]),
         ConvState {
             group_id: vec![2u8; 32],
-            tip_digest: vec![0u8; 32],
-            anchors: vec![],
             inventory: ConvInventory::of(big),
         },
     ];

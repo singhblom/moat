@@ -6,7 +6,6 @@ import '../models/message.dart';
 import '../rust/api/simple.dart' as ffi;
 import '../utils/platform_int64.dart';
 import 'conversation_storage.dart';
-import 'debug_log.dart';
 import 'message_storage.dart';
 
 /// Result of [buildPairedSyncSession]: a freshly-built `SyncSession`
@@ -45,8 +44,7 @@ Future<PairedSyncSetup> buildPairedSyncSession({
       ourMessages: ourMessages,
       expectingBatch: ourMessages.isEmpty,
     );
-    final state = await _convStateFor(session, conv, ourMessages);
-    if (state != null) convStates.add(state);
+    convStates.add(_convStateFor(conv, ourMessages));
   }
 
   // One Hello carries every conversation, against a hard 1 MiB frame limit
@@ -178,29 +176,20 @@ Future<List<ffi.SyncMessageDto>> _loadSyncMessagesFor(
   return out;
 }
 
-Future<ffi.ConvStateDto?> _convStateFor(
-  ffi.MoatSessionHandle session,
+ffi.ConvStateDto _convStateFor(
   Conversation conv,
   List<ffi.SyncMessageDto> ourMessages,
-) async {
-  try {
-    final tip = await session.digestTip(groupId: conv.groupId);
-    final anchors = await session.digestAnchors(groupId: conv.groupId);
-    // The rkeys we hold, so the peer sends exactly the complement rather
-    // than its whole history. Enumerating is the normal case; the budget
-    // pass above downgrades to a span only where the frame demands it.
-    return ffi.ConvStateDto(
-      groupId: conv.groupId,
-      tipDigest: tip ?? Uint8List(32),
-      anchors: anchors,
-      inventory: ourMessages.isEmpty
-          ? const ffi.ConvInventoryDto.empty()
-          : ffi.ConvInventoryDto.complete(
-              rkeys: ourMessages.map((m) => m.rkey).toList(growable: false),
-            ),
-    );
-  } catch (e) {
-    moatLog('buildPairedSyncSession: convState failed for ${conv.groupIdHex}: $e');
-    return null;
-  }
+) {
+  // The rkeys we hold, so the peer sends exactly the complement rather than
+  // its whole history. Enumerating is the normal case; the budget pass in
+  // `buildPairedSyncSession` downgrades to a span only where the frame
+  // demands it.
+  return ffi.ConvStateDto(
+    groupId: conv.groupId,
+    inventory: ourMessages.isEmpty
+        ? const ffi.ConvInventoryDto.empty()
+        : ffi.ConvInventoryDto.complete(
+            rkeys: ourMessages.map((m) => m.rkey).toList(growable: false),
+          ),
+  );
 }

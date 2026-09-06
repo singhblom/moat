@@ -1731,16 +1731,6 @@ impl App {
                             "send_message: failed to fixup pending rkey: {e}"
                         ));
                     }
-                    // Update conversation digest for the sent message.
-                    if let Some(mid) = &message_id {
-                        if mid.len() == 16 {
-                            if let Ok(group_id) = hex::decode(&conv_id) {
-                                let mut arr = [0u8; 16];
-                                arr.copy_from_slice(mid);
-                                let _ = self.mls.append_to_digest(&group_id, &rkey, &arr);
-                            }
-                        }
-                    }
                     // Also fix up in-memory display messages
                     if let Some(dm) = self.messages.iter_mut().rev().find(|m| {
                         m.rkey == "pending" && (message_id.is_none() || m.message_id.as_ref() == message_id.as_ref())
@@ -3339,18 +3329,6 @@ impl App {
                             }
                             Ok(true) => {
                                 msg_stored = true;
-                                // Update conversation digest for sync comparison.
-                                if let Some(mid) = &decrypted.event.message_id {
-                                    if mid.len() == 16 {
-                                        let mut arr = [0u8; 16];
-                                        arr.copy_from_slice(mid);
-                                        let _ = self.mls.append_to_digest(
-                                            &group_id,
-                                            &event_record.rkey,
-                                            &arr,
-                                        );
-                                    }
-                                }
                             }
                         }
 
@@ -3503,9 +3481,6 @@ impl App {
 
                         // Update watched tags on own Drawbridge for the new epoch
                         self.schedule_watch_tags_update();
-
-                        // Signal that the next message in this conversation should anchor.
-                        self.mls.mark_digest_epoch_boundary(&group_id);
 
                     }
                     EventKind::Modifier(ModifierKind::Reaction) => {
@@ -5327,7 +5302,7 @@ impl App {
         &self,
         ring_epoch: u64,
     ) -> (crate::sync::SyncSession, Vec<crate::sync::SyncOutput>) {
-        use crate::sync::{AnchorDto, ConvState};
+        use crate::sync::ConvState;
 
         // Collect all user conversations with their digest state.
         let conv_ids: Vec<String> = self.conversations.iter().map(|c| c.id.clone()).collect();
@@ -5352,9 +5327,6 @@ impl App {
         // Build our ConvState list for the Hello.
         let mut our_convs: Vec<ConvState> = conv_ids.iter().filter_map(|conv_id| {
             let group_id = hex::decode(conv_id).ok()?;
-            let tip = self.mls.digest_tip(&group_id).unwrap_or([0u8; 32]);
-            let anchors = self.mls.digest_anchors(&group_id);
-
             // The rkeys we hold, so the peer sends exactly the complement
             // rather than its whole history. Read from the keystore rather
             // than `mls.range`, which only tracks events that arrived
@@ -5373,8 +5345,6 @@ impl App {
 
             Some(ConvState {
                 group_id,
-                tip_digest: tip.to_vec(),
-                anchors: anchors.iter().map(AnchorDto::from).collect(),
                 inventory: moat_core::ConvInventory::of(held),
             })
         }).collect();

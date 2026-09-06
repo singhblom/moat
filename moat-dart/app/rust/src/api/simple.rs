@@ -2,7 +2,7 @@ use flutter_rust_bridge::frb;
 use moat_core::{
     self,
     sync::{
-        decode_sync_msg, encode_sync_msg, AnchorDto as CoreAnchorDto, ConvState, SyncMessage,
+        decode_sync_msg, encode_sync_msg, ConvState, SyncMessage,
         SyncOutput, SyncSession,
     },
     ControlKind, EncryptResult, Event, EventKind, GroupKind, KeyPackageInput, MoatCredential,
@@ -143,31 +143,6 @@ impl MoatSessionHandle {
             .unwrap()
             .get_group_epoch(&group_id)
             .map_err(|e| e.to_string())
-    }
-
-    /// Tip digest for a group. None if the group doesn't exist or has no transcript yet.
-    pub fn digest_tip(&self, group_id: Vec<u8>) -> Option<Vec<u8>> {
-        self.inner
-            .lock()
-            .unwrap()
-            .digest_tip(&group_id)
-            .map(|t| t.to_vec())
-    }
-
-    /// Sparse digest anchors for a group, oldest-first.
-    pub fn digest_anchors(&self, group_id: Vec<u8>) -> Vec<SyncAnchorDto> {
-        self.inner
-            .lock()
-            .unwrap()
-            .digest_anchors(&group_id)
-            .into_iter()
-            .map(|a| SyncAnchorDto { rkey: a.rkey, digest: a.digest.to_vec() })
-            .collect()
-    }
-
-    /// Oldest and newest known rkeys for a group, or None if the transcript is empty.
-    pub fn digest_range(&self, group_id: Vec<u8>) -> Option<(String, String)> {
-        self.inner.lock().unwrap().range(&group_id)
     }
 
     /// Get the DIDs of all members in a group (deduplicated).
@@ -1440,17 +1415,6 @@ impl From<SyncMessageDto> for SyncMessage {
     }
 }
 
-pub struct SyncAnchorDto {
-    pub rkey: String,
-    pub digest: Vec<u8>,
-}
-
-impl From<SyncAnchorDto> for CoreAnchorDto {
-    fn from(a: SyncAnchorDto) -> Self {
-        CoreAnchorDto { rkey: a.rkey, digest: a.digest }
-    }
-}
-
 /// What one side holds for a conversation — mirrors
 /// `moat_core::ConvInventory`. The variants keep "I hold nothing" and "I
 /// am not listing what I hold" distinguishable, since they want opposite
@@ -1492,8 +1456,6 @@ impl From<moat_core::ConvInventory> for ConvInventoryDto {
 
 pub struct ConvStateDto {
     pub group_id: Vec<u8>,
-    pub tip_digest: Vec<u8>,
-    pub anchors: Vec<SyncAnchorDto>,
     pub inventory: ConvInventoryDto,
 }
 
@@ -1501,8 +1463,6 @@ impl From<ConvStateDto> for ConvState {
     fn from(c: ConvStateDto) -> Self {
         ConvState {
             group_id: c.group_id,
-            tip_digest: c.tip_digest,
-            anchors: c.anchors.into_iter().map(CoreAnchorDto::from).collect(),
             inventory: c.inventory.into(),
         }
     }
@@ -1512,12 +1472,6 @@ impl From<ConvState> for ConvStateDto {
     fn from(c: ConvState) -> Self {
         ConvStateDto {
             group_id: c.group_id,
-            tip_digest: c.tip_digest,
-            anchors: c
-                .anchors
-                .into_iter()
-                .map(|a| SyncAnchorDto { rkey: a.rkey, digest: a.digest })
-                .collect(),
             inventory: c.inventory.into(),
         }
     }

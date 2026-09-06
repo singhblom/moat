@@ -10,7 +10,7 @@ part 'simple.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `credential_from_dto`, `from_core`, `into_core`, `payload_from_core`, `payload_to_core`, `push_media_label`, `push_plaintext_preview`, `sibling_info_to_core`, `to_core_sibling_stealth`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `MoatError`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 /// Generate a stealth keypair. Returns (private_key, public_key) each 32 bytes.
 StealthKeypair generateStealthKeypair() =>
@@ -237,15 +237,6 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
 
   /// Get the 16-byte device ID.
   Uint8List deviceId();
-
-  /// Sparse digest anchors for a group, oldest-first.
-  Future<List<SyncAnchorDto>> digestAnchors({required List<int> groupId});
-
-  /// Oldest and newest known rkeys for a group, or None if the transcript is empty.
-  Future<(String, String)?> digestRange({required List<int> groupId});
-
-  /// Tip digest for a group. None if the group doesn't exist or has no transcript yet.
-  Future<Uint8List?> digestTip({required List<int> groupId});
 
   /// Encrypt an event for a group. Returns encrypt result.
   Future<EncryptResultDto> encryptEvent(
@@ -657,23 +648,15 @@ sealed class ConvInventoryDto with _$ConvInventoryDto {
 
 class ConvStateDto {
   final Uint8List groupId;
-  final Uint8List tipDigest;
-  final List<SyncAnchorDto> anchors;
   final ConvInventoryDto inventory;
 
   const ConvStateDto({
     required this.groupId,
-    required this.tipDigest,
-    required this.anchors,
     required this.inventory,
   });
 
   @override
-  int get hashCode =>
-      groupId.hashCode ^
-      tipDigest.hashCode ^
-      anchors.hashCode ^
-      inventory.hashCode;
+  int get hashCode => groupId.hashCode ^ inventory.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -681,8 +664,6 @@ class ConvStateDto {
       other is ConvStateDto &&
           runtimeType == other.runtimeType &&
           groupId == other.groupId &&
-          tipDigest == other.tipDigest &&
-          anchors == other.anchors &&
           inventory == other.inventory;
 }
 
@@ -1272,27 +1253,6 @@ class StealthKeypair {
           runtimeType == other.runtimeType &&
           privateKey == other.privateKey &&
           publicKey == other.publicKey;
-}
-
-class SyncAnchorDto {
-  final String rkey;
-  final Uint8List digest;
-
-  const SyncAnchorDto({
-    required this.rkey,
-    required this.digest,
-  });
-
-  @override
-  int get hashCode => rkey.hashCode ^ digest.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is SyncAnchorDto &&
-          runtimeType == other.runtimeType &&
-          rkey == other.rkey &&
-          digest == other.digest;
 }
 
 @freezed
