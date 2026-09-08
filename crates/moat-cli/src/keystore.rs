@@ -43,6 +43,26 @@ pub struct GroupMetadata {
     /// older persisted records that predate this field.
     #[serde(default)]
     pub kind: GroupKind,
+    /// DIDs that have left this group but whose PDS this device has not
+    /// swept since they left.
+    ///
+    /// A poll asks the DIDs in `participant_dids`, and processing a commit
+    /// overwrites that list from MLS membership. A device that is offline
+    /// while someone joins, speaks and leaves therefore processes the Add
+    /// and the Remove in one catch-up pass, and never runs a poll while
+    /// that person is a member — so their messages, which live on *their*
+    /// PDS, are never fetched at all.
+    ///
+    /// Holding departed DIDs here until they have been swept once closes
+    /// that gap. One sweep is enough: after the Remove merges they can
+    /// publish nothing further to this group, so a single fetch sees
+    /// everything they will ever have written to it.
+    ///
+    /// Persisted rather than kept in memory because the whole point is to
+    /// survive the offline window, which usually includes a restart. See
+    /// `MULTI_DEVICE.md`, "Catch-Up Across Membership Changes".
+    #[serde(default)]
+    pub pending_ex_members: Vec<String>,
 }
 
 /// Deserialize a field that may be a single string (old format) or a Vec<String> (new format).

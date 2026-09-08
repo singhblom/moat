@@ -28,10 +28,12 @@ class SyncService {
   ffi.SyncSessionHandle? _session;
   bool _active = false;
 
-  /// The device on the other end, as MLS named it on the frames it sent.
-  /// Read from the leaf credential rather than the payload, so a finished
-  /// sync can say which sibling the history came from — and, when nothing
-  /// moved, which one had no more than you.
+  /// Serialises everything that touches the pair channel — see [_enqueue].
+  Future<void> _frameQueue = Future.value();
+
+  /// The peer, as MLS named it on the frames it sent — from the leaf
+  /// credential, not the payload, so a finished sync can say which sibling
+  /// the history came from.
   String? _peerDeviceName;
 
   /// Lifecycle hooks for whoever *opened* this channel — today
@@ -39,15 +41,10 @@ class SyncService {
   /// honest. The transfer itself stays entirely this service's business.
   void Function()? onSessionStarted;
 
-  /// Called once the transfer finishes, with what it moved and the peer
-  /// it moved from — the two facts that make a completed sync legible
-  /// rather than merely over.
+  /// Called once the transfer finishes, with what it moved and the peer it
+  /// moved from.
   void Function(ffi.SyncTallyDto tally, String? deviceName)? onSessionComplete;
   void Function(String reason)? onSessionAborted;
-  // Frames that arrive during the async setup window (before onPaired is called)
-  // are buffered here and replayed after onPaired completes.
-  List<Uint8List>? _pendingFrames;
-
   /// True iff a sync session is currently in progress.
   bool get isActive => _active;
 
@@ -88,13 +85,28 @@ class SyncService {
 
   void _handlePairConnected() {
     moatLog('SyncService: _handlePairConnected called');
-    // Run the async start in the background; errors are logged inside.
-    unawaited(_startSession());
+    _enqueue(_startSession);
   }
 
   void _handlePairFrame(Uint8List ciphertext) {
     moatLog('SyncService: pair frame received ${ciphertext.length}B');
-    unawaited(_processFrame(ciphertext));
+    _enqueue(() => _processFrame(ciphertext));
+  }
+
+  /// Run pair-channel work one item at a time, in arrival order.
+  ///
+  /// Running them concurrently lets one frame's teardown land between
+  /// another's sends, closing the socket with a batch still pending.
+  /// Session setup is the first item, so frames arriving during it wait
+  /// rather than needing their own buffer.
+  ///
+  /// `catchError` stops one failed item breaking the chain. The queue is
+  /// never reset: reassigning it from inside a queued item would let the
+  /// next one start alongside an unfinished one.
+  void _enqueue(Future<void> Function() work) {
+    _frameQueue = _frameQueue.then((_) => work()).catchError((Object e) {
+      moatLog('SyncService: pair channel work failed: $e');
+    });
   }
 
   void _handlePairClosed(String reason) {
@@ -112,7 +124,6 @@ class SyncService {
       return;
     }
     _active = true;
-    _pendingFrames = [];
     onSessionStarted?.call();
 
     final session = _auth.moatSession;
@@ -147,29 +158,9 @@ class SyncService {
 
     moatLog('SyncService: onPaired returned ${setup.outputs.length} outputs');
     await _processOutputs(setup.outputs, ringId, keyBundle, did);
-
-    // Replay any frames that arrived during the async setup window (before
-    // onPaired was called).  Now that the state machine has processed onPaired,
-    // it is in WaitingHello phase and can correctly handle them.
-    final pending = _pendingFrames;
-    _pendingFrames = null;
-    if (pending != null && pending.isNotEmpty) {
-      moatLog('SyncService: replaying ${pending.length} buffered frame(s)');
-      for (final frame in pending) {
-        await _processFrame(frame);
-      }
-    }
   }
 
   Future<void> _processFrame(Uint8List ciphertext) async {
-    // If the session object doesn't exist yet, _active guards whether we should
-    // buffer. If _active is true but _session is still null, we're in the
-    // async setup window; buffer the frame and replay after onPaired.
-    if (_active && _pendingFrames != null) {
-      moatLog('SyncService: buffering frame (${ciphertext.length}B) until onPaired');
-      _pendingFrames!.add(ciphertext);
-      return;
-    }
     final syncSession = _session;
     if (syncSession == null) {
       moatLog('SyncService: pair frame received but no active session');
@@ -253,8 +244,7 @@ class SyncService {
       onSessionComplete?.call(tally, _peerDeviceName);
       await _reset();
       await _drawbridge.clearPair();
-      // What this device holds has just changed, which is one of the two
-      // moments an advertisement is worth spending a record on.
+      // Holdings just changed — one of the two moments worth advertising.
       await _ring.publishHistorySummary();
     }
   }
@@ -272,7 +262,6 @@ class SyncService {
     _active = false;
     _session = null;
     _peerDeviceName = null;
-    _pendingFrames = null;
     _ring.clearPendingPair();
   }
 }

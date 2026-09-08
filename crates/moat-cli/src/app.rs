@@ -667,6 +667,11 @@ pub struct App {
     /// Active history sync session (Some while a pair WS session is in progress).
     sync_session: Option<crate::sync::SyncSession>,
 
+    /// Ex-members this poll cycle actually asked for events, as
+    /// `(conv_id, did)`. Cleared from `pending_ex_members` once the
+    /// results have been processed — see the note where it is populated.
+    swept_ex_members: Vec<(String, String)>,
+
     /// The sibling an open offer prompt is about, hex device id. `Some`
     /// exactly while `Focus::SyncOfferPrompt` is showing, so the screen
     /// and the decision cannot disagree about who is being offered to.
@@ -858,6 +863,7 @@ impl App {
             ring_driver,
             last_ring_tick: None,
             sync_session: None,
+            swept_ex_members: Vec::new(),
             pending_offer_device: None,
             sync_peer_name: None,
             pending_pair_token: None,
@@ -1617,6 +1623,30 @@ impl App {
                     .push(idx);
             }
         }
+
+        // Members are not the whole story: someone who left still has
+        // messages on their own PDS that this device may never have asked
+        // for. `pending_ex_members` holds them for exactly one sweep after
+        // their removal — see MULTI_DEVICE.md, "Catch-Up Across Membership
+        // Changes".
+        //
+        // Which ones this cycle actually asks is captured *now*, before any
+        // event is processed. A departure discovered later in this same
+        // cycle must not be cleared by it: the fetch already happened, so
+        // it would be cleared without ever having been swept.
+        let mut swept_ex_members: Vec<(String, String)> = Vec::new();
+        for (idx, conv) in self.conversations.iter().enumerate() {
+            let pending = self
+                .keys
+                .load_group_metadata(&conv.id)
+                .map(|m| m.pending_ex_members)
+                .unwrap_or_default();
+            for did in pending {
+                dids_to_poll.entry(did.clone()).or_default().push(idx);
+                swept_ex_members.push((conv.id.clone(), did));
+            }
+        }
+        self.swept_ex_members = swept_ex_members;
         // Always poll own DID — needed to receive coord-group messages from sibling
         // devices even when there are no user conversations yet.
         {
@@ -1930,6 +1960,7 @@ impl App {
                             participant_dids: conv.participant_dids.clone(),
                             participant_handles: conv.participant_handles.clone(),
                             kind: GroupKind::User,
+                            pending_ex_members: Vec::new(),
                         },
                     );
                 }
@@ -3453,6 +3484,25 @@ impl App {
             }
         }
 
+        // The ex-members this cycle asked for events have now been swept:
+        // their PDS was fetched after they left, so everything they could
+        // ever have published to the group has been seen. Stop asking.
+        //
+        // Only the DIDs captured at fetch time are cleared. Someone whose
+        // departure was discovered while processing *these* events is not
+        // among them, and stays pending for the next cycle — which is the
+        // cycle that will actually fetch from them.
+        for (conv_id, did) in std::mem::take(&mut self.swept_ex_members) {
+            if let Ok(mut meta) = self.keys.load_group_metadata(&conv_id) {
+                if let Some(pos) = meta.pending_ex_members.iter().position(|d| *d == did) {
+                    meta.pending_ex_members.remove(pos);
+                    let _ = self.keys.store_group_metadata(&conv_id, &meta);
+                    self.debug_log
+                        .log(&format!("poll: swept {did} for {conv_id}; no longer polling them"));
+                }
+            }
+        }
+
         PollStats {
             new_messages,
             new_conversations: self.conversations.len().saturating_sub(conv_count_before),
@@ -3704,6 +3754,35 @@ impl App {
                                     conv.participant_dids = member_dids.clone();
                                     conv.participant_handles = new_handles.clone();
                                 }
+                                // Anyone who just left still has messages
+                                // on their own PDS that this device may
+                                // never have fetched — it only ever asks
+                                // the DIDs in `participant_dids`, and this
+                                // assignment has just removed them from
+                                // it. Hold them for one sweep.
+                                //
+                                // Without this, a device offline while
+                                // someone joins, speaks and leaves handles
+                                // the Add and the Remove in a single
+                                // catch-up pass and never polls them at
+                                // all. See MULTI_DEVICE.md, "Catch-Up
+                                // Across Membership Changes".
+                                let mut pending_ex_members = self
+                                    .keys
+                                    .load_group_metadata(&conv_id)
+                                    .map(|m| m.pending_ex_members)
+                                    .unwrap_or_default();
+                                for departed in &old_dids {
+                                    if !member_dids.contains(departed)
+                                        && !pending_ex_members.contains(departed)
+                                    {
+                                        self.debug_log.log(&format!(
+                                            "poll: {departed} left {conv_id}; holding for one sweep"
+                                        ));
+                                        pending_ex_members.push(departed.clone());
+                                    }
+                                }
+
                                 // Update stored metadata
                                 let _ = self.keys.store_group_metadata(
                                     &conv_id,
@@ -3711,6 +3790,7 @@ impl App {
                                         participant_dids: member_dids,
                                         participant_handles: new_handles,
                                         kind: GroupKind::User,
+                                        pending_ex_members,
                                     },
                                 );
                                 // Fetch relay configs for any new members
@@ -3924,6 +4004,7 @@ impl App {
                 participant_dids: participant_dids.clone(),
                 participant_handles: participant_handles.clone(),
                 kind: GroupKind::User,
+                pending_ex_members: Vec::new(),
             },
         );
 
@@ -4649,6 +4730,7 @@ impl App {
                 participant_dids: vec![recipient_did.clone()],
                 participant_handles: vec![recipient_handle.to_string()],
                 kind: GroupKind::User,
+                pending_ex_members: Vec::new(),
             },
         )?;
 
@@ -4779,6 +4861,7 @@ impl App {
                     participant_dids: conv.participant_dids.clone(),
                     participant_handles: conv.participant_handles.clone(),
                     kind: GroupKind::User,
+                    pending_ex_members: Vec::new(),
                 },
             );
         }
@@ -4837,6 +4920,7 @@ impl App {
                     participant_dids: conv.participant_dids.clone(),
                     participant_handles: conv.participant_handles.clone(),
                     kind: GroupKind::User,
+                    pending_ex_members: Vec::new(),
                 },
             );
         }
@@ -5653,6 +5737,7 @@ impl App {
                             participant_dids: vec![my_did.clone()],
                             participant_handles: vec![],
                             kind,
+                            pending_ex_members: Vec::new(),
                         },
                     );
                     self.populate_candidate_tags(&group_id_hex, &group_id);
@@ -5903,6 +5988,7 @@ impl App {
             participant_dids: participant_dids.clone(),
             participant_handles: Vec::new(),
             kind: GroupKind::User,
+            pending_ex_members: Vec::new(),
         };
         if let Err(e) = self.keys.store_group_metadata(conv_id, &metadata) {
             self.debug_log
@@ -6918,6 +7004,7 @@ impl App {
                             participant_dids: vec![credential.did().to_string()],
                             participant_handles: vec![],
                             kind: GroupKind::Ring,
+                            pending_ex_members: Vec::new(),
                         },
                     );
                     self.populate_candidate_tags(&ring_id_hex, ring_id);
@@ -7024,6 +7111,7 @@ impl App {
                             participant_dids: my_did.into_iter().collect(),
                             participant_handles: vec![],
                             kind: GroupKind::Ring,
+                            pending_ex_members: Vec::new(),
                         },
                     );
                     self.populate_candidate_tags(&ring_id_hex, &ring_id);

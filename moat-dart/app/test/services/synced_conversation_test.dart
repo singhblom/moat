@@ -145,7 +145,6 @@ void main() {
   /// `crates/moat-cli/src/sync.rs`.
   group('sync message fidelity', () {
     test('reactions survive the mapping', () async {
-      final groupId = Uint8List.fromList(List.filled(16, 3));
       final dto = ffi.SyncMessageDto(
         rkey: 'r1',
         senderDid: 'did:plc:bob',
