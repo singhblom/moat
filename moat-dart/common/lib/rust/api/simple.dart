@@ -10,7 +10,7 @@ part 'simple.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `credential_from_dto`, `from_core`, `into_core`, `payload_from_core`, `payload_to_core`, `push_media_label`, `push_plaintext_preview`, `sibling_info_to_core`, `to_core_sibling_stealth`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `MoatError`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 /// Generate a stealth keypair. Returns (private_key, public_key) each 32 bytes.
 StealthKeypair generateStealthKeypair() =>
@@ -159,14 +159,51 @@ Future<PairingPayloadDto> pairingPayloadFromUri({required String uri}) =>
 
 /// Encode a `RingMsg::SyncRequest` for publication on the device ring as
 /// an `EventKindDto::RingMsg` event payload.
-Future<Uint8List> ringMsgEncodeSyncRequest({required List<int> token}) =>
-    RustLib.instance.api.crateApiSimpleRingMsgEncodeSyncRequest(token: token);
+Future<Uint8List> ringMsgEncodeSyncRequest(
+        {required List<int> token, Uint8List? targetDeviceId}) =>
+    RustLib.instance.api.crateApiSimpleRingMsgEncodeSyncRequest(
+        token: token, targetDeviceId: targetDeviceId);
+
+/// Build a `ring.msg` payload offering history to one sibling. Always
+/// targeted — the relay admits two attaches, so an untargeted offer would
+/// pick its recipient arbitrarily.
+Future<Uint8List> ringMsgEncodeSyncOffer(
+        {required List<int> token, required List<int> targetDeviceId}) =>
+    RustLib.instance.api.crateApiSimpleRingMsgEncodeSyncOffer(
+        token: token, targetDeviceId: targetDeviceId);
 
 /// Decode a `ring.msg` payload and return the sync request's rendezvous
 /// token. Errors on anything that is not a well-formed `RingMsg`.
 Future<Uint8List> ringMsgDecodeSyncRequest({required List<int> payload}) =>
     RustLib.instance.api
         .crateApiSimpleRingMsgDecodeSyncRequest(payload: payload);
+
+/// Decode any `ring.msg` payload.
+Future<RingMsgDto> ringMsgDecode({required List<int> payload}) =>
+    RustLib.instance.api.crateApiSimpleRingMsgDecode(payload: payload);
+
+/// Build a `ring.msg` payload advertising what this device holds. The
+/// conversation list itself lives in the blob the reference points at.
+Future<Uint8List> ringMsgEncodeHistorySummary(
+        {required String uri,
+        required List<int> key,
+        required List<int> ciphertextHash,
+        required BigInt ciphertextSize,
+        required List<int> contentHash}) =>
+    RustLib.instance.api.crateApiSimpleRingMsgEncodeHistorySummary(
+        uri: uri,
+        key: key,
+        ciphertextHash: ciphertextHash,
+        ciphertextSize: ciphertextSize,
+        contentHash: contentHash);
+
+/// Encode the summary blob's plaintext.
+Future<Uint8List> historySummaryEncode({required List<ConvSummaryDto> convs}) =>
+    RustLib.instance.api.crateApiSimpleHistorySummaryEncode(convs: convs);
+
+/// Decode the summary blob's plaintext.
+Future<List<ConvSummaryDto>> historySummaryDecode({required List<int> bytes}) =>
+    RustLib.instance.api.crateApiSimpleHistorySummaryDecode(bytes: bytes);
 
 /// How long a published sync request stays valid, matching the relay's
 /// token TTL.
@@ -239,9 +276,10 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
       {required List<int> groupId, required List<int> ciphertext});
 
   /// Decrypt an incoming `/pair` WS binary frame as a `SyncApp` event in the
-  /// ring group. Returns the inner payload bytes (`SyncMsg` JSON) on success,
-  /// or an error if decrypt failed or the event was not a `SyncApp`.
-  Future<Uint8List> decryptSyncFrame(
+  /// ring group. Returns the inner payload bytes (`SyncMsg` JSON) alongside
+  /// the sending device as MLS named it, or an error if decrypt failed or
+  /// the event was not a `SyncApp`.
+  Future<SyncFrameDto> decryptSyncFrame(
       {required List<int> ringGroupId, required List<int> ciphertext});
 
   /// Get the 16-byte device ID.
@@ -435,6 +473,10 @@ abstract class RingDriverHandle implements RustOpaqueInterface {
   /// beacon failure produces comparable lines from both sides.
   String debugSummary();
 
+  /// Mark a sibling's current advertisement as already asked about, so
+  /// it stops prompting until that sibling says something new.
+  void dismissSiblingSummary({required List<int> deviceId});
+
   /// Emit a `KpRequest` to `owner` asking it to top up our pool.  The host
   /// publishes the returned commands.  Empty if not in a ring or if the
   /// sibling's stealth record is not yet known (self-healing: the next poll
@@ -481,8 +523,20 @@ abstract class RingDriverHandle implements RustOpaqueInterface {
   static RingDriverHandle newEmpty() =>
       RustLib.instance.api.crateApiSimpleRingDriverHandleNewEmpty();
 
+  /// Siblings worth prompting the user to send history to: ones that
+  /// have advertised holding less than `our_messages`, and that the
+  /// user has not already answered. Returns hex device ids.
+  ///
+  /// The rule itself lives in moat-core so both runtimes decide
+  /// identically — see `DeviceRingState::offerable_siblings`.
+  List<String> offerableSiblings({required BigInt ourMessages});
+
   /// Cursor (rkey) for incremental own-PDS stealth scan.
   String? ownEventsCursor();
+
+  /// The record URI of our last published summary, which the next
+  /// publish supersedes and should delete.
+  String? publishedSummaryRecord();
 
   /// Record that we are now an MLS member of `ring_id`, looking up our
   /// own leaf index from the group's member list. Called once, host-side,
@@ -496,12 +550,27 @@ abstract class RingDriverHandle implements RustOpaqueInterface {
       required List<int> ringId,
       required PlatformInt64 nowMs});
 
+  /// Record a sibling's advertisement, replacing whatever it said
+  /// before. A dismissal is carried over only when the contents are
+  /// unchanged — a sibling that now holds something different is
+  /// asking a different question.
+  void recordSiblingSummary(
+      {required List<int> deviceId,
+      required List<ConvSummaryDto> convs,
+      required PlatformInt64 receivedAtMs});
+
   /// Raw ring group ID, if a ring exists.
   Uint8List? ringGroupId();
 
   /// Device ids of siblings confirmed to be in the ring.  Drives the
   /// same-user fan-out loop in the host.
   List<Uint8List> ringJoinedSiblings({required MoatSessionHandle session});
+
+  /// Record the URI of the summary we just published.
+  void setPublishedSummaryRecord({String? uri});
+
+  /// Every advertisement this device holds.
+  List<SiblingSummaryDto> siblingSummaries();
 
   /// Drive one ring coordination tick. Returns commands for the host to interpret.
   Future<List<RingCommandDto>> tick(
@@ -516,6 +585,14 @@ abstract class SyncRequestSessionHandle implements RustOpaqueInterface {
   /// The user approved a sibling's request. Returns the token to
   /// `pair_join` with; errors if no decision is outstanding.
   Uint8List accept();
+
+  /// A sibling offered us history and we are joining its rendezvous.
+  /// No prompt: the offer already carries the one human decision, made
+  /// on the side that could judge.
+  static SyncRequestSessionHandle acceptOffer(
+          {required List<int> token, required PlatformInt64 nowMs}) =>
+      RustLib.instance.api.crateApiSimpleSyncRequestSessionHandleAcceptOffer(
+          token: token, nowMs: nowMs);
 
   /// The user declined. Local only — nothing goes on the wire, so one
   /// refusal among several prompted siblings doesn't cancel the request.
@@ -540,11 +617,21 @@ abstract class SyncRequestSessionHandle implements RustOpaqueInterface {
   /// `true` once the session can no longer change state.
   bool isTerminal();
 
+  /// Offer history to a sibling that does not have it. The offerer's
+  /// user has already approved — that is what produced this call — so
+  /// neither side prompts again.
+  static SyncRequestSessionHandle offer(
+          {required List<int> token, required PlatformInt64 nowMs}) =>
+      RustLib.instance.api.crateApiSimpleSyncRequestSessionHandleOffer(
+          token: token, nowMs: nowMs);
+
   /// The pair channel reached `paired`.
   void onChannelUp();
 
-  /// The sync session running on this channel reported `Complete`.
-  void onComplete();
+  /// The sync session running on this channel finished. `tally` comes
+  /// from that session; `device_name` is the peer as MLS named it on the
+  /// frames it sent.
+  void onComplete({required SyncTallyDto tally, String? deviceName});
 
   /// A sibling's request arrived on the ring. `device_name` must come
   /// from the sender's MLS leaf credential, not from the payload.
@@ -592,6 +679,10 @@ abstract class SyncSessionHandle implements RustOpaqueInterface {
   /// Called when the pair WS reaches the `paired` state.
   Future<List<SyncOutputDto>> onPaired(
       {required List<ConvStateDto> ourConvs, required BigInt ringEpoch});
+
+  /// What this side has received. Read at completion, where it becomes
+  /// the report the user sees.
+  SyncTallyDto tally();
 }
 
 class BlobEncryptResult {
@@ -668,6 +759,28 @@ class ConvStateDto {
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is ConvStateDto &&
+          runtimeType == other.runtimeType &&
+          groupId == other.groupId &&
+          inventory == other.inventory;
+}
+
+/// What one device holds for one conversation, as advertised.
+class ConvSummaryDto {
+  final Uint8List groupId;
+  final ConvInventoryDto inventory;
+
+  const ConvSummaryDto({
+    required this.groupId,
+    required this.inventory,
+  });
+
+  @override
+  int get hashCode => groupId.hashCode ^ inventory.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ConvSummaryDto &&
           runtimeType == other.runtimeType &&
           groupId == other.groupId &&
           inventory == other.inventory;
@@ -1160,6 +1273,34 @@ sealed class RingCommandDto with _$RingCommandDto {
       RingCommandDto_PollForNewDevices;
 }
 
+@freezed
+sealed class RingMsgDto with _$RingMsgDto {
+  const RingMsgDto._();
+
+  /// "I am missing history — open a sync channel with me at this token."
+  /// `target_device_id` names one sibling; `None` is a broadcast.
+  const factory RingMsgDto.syncRequest({
+    required Uint8List token,
+    Uint8List? targetDeviceId,
+  }) = RingMsgDto_SyncRequest;
+
+  /// "I have history you don't — join me." Always targeted.
+  const factory RingMsgDto.syncOffer({
+    required Uint8List token,
+    required Uint8List targetDeviceId,
+  }) = RingMsgDto_SyncOffer;
+
+  /// "Here is what I hold", as a reference to an external blob. See
+  /// `moat_core::RingMsg::HistorySummary` for why the list is not inline.
+  const factory RingMsgDto.historySummary({
+    required String uri,
+    required Uint8List key,
+    required Uint8List ciphertextHash,
+    required BigInt ciphertextSize,
+    required Uint8List contentHash,
+  }) = RingMsgDto_HistorySummary;
+}
+
 /// Information about the sender of a message, extracted from MLS credentials.
 class SenderInfoDto {
   /// The sender's DID (e.g., "did:plc:abc123")
@@ -1240,6 +1381,45 @@ class SiblingStealthDto {
           deviceId == other.deviceId;
 }
 
+/// What a sibling last advertised, as this device recorded it.
+class SiblingSummaryDto {
+  /// Hex-encoded 16-byte device id.
+  final String deviceId;
+  final BigInt conversations;
+  final BigInt messages;
+  final PlatformInt64 receivedAtMs;
+
+  /// Whether the user has already been asked about *this* advertisement.
+  final bool dismissed;
+
+  const SiblingSummaryDto({
+    required this.deviceId,
+    required this.conversations,
+    required this.messages,
+    required this.receivedAtMs,
+    required this.dismissed,
+  });
+
+  @override
+  int get hashCode =>
+      deviceId.hashCode ^
+      conversations.hashCode ^
+      messages.hashCode ^
+      receivedAtMs.hashCode ^
+      dismissed.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SiblingSummaryDto &&
+          runtimeType == other.runtimeType &&
+          deviceId == other.deviceId &&
+          conversations == other.conversations &&
+          messages == other.messages &&
+          receivedAtMs == other.receivedAtMs &&
+          dismissed == other.dismissed;
+}
+
 class StealthKeypair {
   final Uint8List privateKey;
   final Uint8List publicKey;
@@ -1285,6 +1465,34 @@ sealed class SyncFailureDto with _$SyncFailureDto {
   }) = SyncFailureDto_PublishFailed;
 }
 
+/// A decrypted pair-WS sync frame: the `SyncMsg` bytes plus the device
+/// that sent them.
+///
+/// The name comes from the MLS leaf credential, which is authenticated,
+/// where a field in the payload would not be. It is what lets a finished
+/// sync say *which* sibling the history came from — or, when nothing
+/// moved, which one had no more than you.
+class SyncFrameDto {
+  final Uint8List payload;
+  final String? senderDeviceName;
+
+  const SyncFrameDto({
+    required this.payload,
+    this.senderDeviceName,
+  });
+
+  @override
+  int get hashCode => payload.hashCode ^ senderDeviceName.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SyncFrameDto &&
+          runtimeType == other.runtimeType &&
+          payload == other.payload &&
+          senderDeviceName == other.senderDeviceName;
+}
+
 class SyncMessageDto {
   final String rkey;
   final Uint8List? messageId;
@@ -1302,6 +1510,14 @@ class SyncMessageDto {
   final int? blobWidth;
   final int? blobHeight;
 
+  /// The image's blurry placeholder, shown while the blob downloads.
+  final Uint8List? blobThumbhash;
+
+  /// Emoji reactions on this message. Carried because the receiving
+  /// device cannot rebuild them: reaction events predating its
+  /// membership are not decryptable to it.
+  final List<SyncReactionDto> reactions;
+
   const SyncMessageDto({
     required this.rkey,
     this.messageId,
@@ -1318,6 +1534,8 @@ class SyncMessageDto {
     this.blobMime,
     this.blobWidth,
     this.blobHeight,
+    this.blobThumbhash,
+    required this.reactions,
   });
 
   @override
@@ -1336,7 +1554,9 @@ class SyncMessageDto {
       blobContentHash.hashCode ^
       blobMime.hashCode ^
       blobWidth.hashCode ^
-      blobHeight.hashCode;
+      blobHeight.hashCode ^
+      blobThumbhash.hashCode ^
+      reactions.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1357,7 +1577,9 @@ class SyncMessageDto {
           blobContentHash == other.blobContentHash &&
           blobMime == other.blobMime &&
           blobWidth == other.blobWidth &&
-          blobHeight == other.blobHeight;
+          blobHeight == other.blobHeight &&
+          blobThumbhash == other.blobThumbhash &&
+          reactions == other.reactions;
 }
 
 @freezed
@@ -1374,6 +1596,28 @@ sealed class SyncOutputDto with _$SyncOutputDto {
     required String convId,
     required List<SyncMessageDto> messages,
   }) = SyncOutputDto_Store;
+}
+
+/// One emoji reaction, as carried by a synced message.
+class SyncReactionDto {
+  final String emoji;
+  final String senderDid;
+
+  const SyncReactionDto({
+    required this.emoji,
+    required this.senderDid,
+  });
+
+  @override
+  int get hashCode => emoji.hashCode ^ senderDid.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SyncReactionDto &&
+          runtimeType == other.runtimeType &&
+          emoji == other.emoji &&
+          senderDid == other.senderDid;
 }
 
 @freezed
@@ -1396,14 +1640,41 @@ sealed class SyncRequestUiStateDto with _$SyncRequestUiStateDto {
   /// Channel up, transfer running.
   const factory SyncRequestUiStateDto.active() = SyncRequestUiStateDto_Active;
 
-  /// Transfer finished.
-  const factory SyncRequestUiStateDto.complete() =
-      SyncRequestUiStateDto_Complete;
+  /// Transfer finished, with what it moved and where from.
+  const factory SyncRequestUiStateDto.complete({
+    required SyncTallyDto tally,
+    String? deviceName,
+  }) = SyncRequestUiStateDto_Complete;
 
   /// Terminal failure, with the structured reason retained.
   const factory SyncRequestUiStateDto.failed({
     required SyncFailureDto reason,
   }) = SyncRequestUiStateDto_Failed;
+}
+
+/// What a finished sync took from its peer. See `moat_core::SyncTally`.
+class SyncTallyDto {
+  final BigInt messages;
+  final BigInt conversations;
+
+  const SyncTallyDto({
+    required this.messages,
+    required this.conversations,
+  });
+
+  static Future<SyncTallyDto> default_() =>
+      RustLib.instance.api.crateApiSimpleSyncTallyDtoDefault();
+
+  @override
+  int get hashCode => messages.hashCode ^ conversations.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SyncTallyDto &&
+          runtimeType == other.runtimeType &&
+          messages == other.messages &&
+          conversations == other.conversations;
 }
 
 class ThumbHashResult {

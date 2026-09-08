@@ -131,6 +131,25 @@ pub struct StoredMessage {
     pub blob_width: Option<u32>,
     #[serde(default)]
     pub blob_height: Option<u32>,
+    /// The image's blurry placeholder, shown while the blob downloads.
+    #[serde(default)]
+    pub blob_thumbhash: Option<Vec<u8>>,
+    /// Emoji reactions on this message.
+    ///
+    /// Persisted rather than kept only in the in-memory display list,
+    /// because a device that receives this message through history sync
+    /// cannot rebuild them: reactions arrive as their own PDS events, and
+    /// events predating that device's membership are not decryptable to
+    /// it. Unpersisted, they would be lost the moment history moved.
+    #[serde(default)]
+    pub reactions: Vec<StoredReaction>,
+}
+
+/// One emoji reaction as persisted beside its message.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StoredReaction {
+    pub emoji: String,
+    pub sender_did: String,
 }
 
 /// All stored messages for a conversation
@@ -357,6 +376,49 @@ impl KeyStore {
     /// Returns `Ok(false)` if a message with the same rkey already exists (dedup).
     /// Exception: if the existing message is missing blob metadata and the new one has it,
     /// the blob metadata fields are updated before returning `Ok(false)`.
+    /// Toggle one emoji reaction on a stored message, by its message id.
+    ///
+    /// Reactions arrive as their own PDS events, so a device that was
+    /// present can rebuild them by replaying. A device that receives this
+    /// message through history sync cannot — those events predate its
+    /// membership and are not decryptable to it — so the reaction has to
+    /// be persisted here rather than living only in the display list.
+    ///
+    /// Toggling rather than adding: a reaction event means "this person
+    /// pressed this emoji", and pressing it again takes it back. Returns
+    /// whether the target message was found.
+    pub fn toggle_reaction(
+        &self,
+        conv_id: &str,
+        target_message_id: &[u8],
+        emoji: &str,
+        sender_did: &str,
+    ) -> Result<bool> {
+        let mut messages = self.load_messages(conv_id)?;
+        let Some(msg) = messages
+            .messages
+            .iter_mut()
+            .find(|m| m.message_id.as_deref() == Some(target_message_id))
+        else {
+            return Ok(false);
+        };
+        match msg
+            .reactions
+            .iter()
+            .position(|r| r.emoji == emoji && r.sender_did == sender_did)
+        {
+            Some(pos) => {
+                msg.reactions.remove(pos);
+            }
+            None => msg.reactions.push(StoredReaction {
+                emoji: emoji.to_string(),
+                sender_did: sender_did.to_string(),
+            }),
+        }
+        self.store_messages(conv_id, &messages)?;
+        Ok(true)
+    }
+
     pub fn append_message(&self, conv_id: &str, message: StoredMessage) -> Result<bool> {
         let mut messages = self.load_messages(conv_id)?;
         // An optimistic row is identified by its `message_id`, not its
@@ -706,6 +768,8 @@ mod tests {
             blob_mime: None,
             blob_width: None,
             blob_height: None,
+            blob_thumbhash: None,
+            reactions: Vec::new(),
         }
     }
 
@@ -901,5 +965,47 @@ mod tests {
             loaded.participant_handles,
             vec!["old.bsky.social".to_string()]
         );
+    }
+
+    /// Reactions have to survive in *storage*, not only in the display
+    /// list: storage is what history sync serves from, and a device
+    /// receiving a message that way cannot rebuild reactions — the events
+    /// carrying them predate its membership and are not decryptable to it.
+    #[test]
+    fn toggling_a_reaction_persists_it() {
+        let dir = tempdir().unwrap();
+        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+        let id = vec![7u8; 16];
+        let mut msg = pending_msg(&id, "hello");
+        msg.rkey = "rkey001".to_string();
+        store.append_message("conv", msg).unwrap();
+
+        assert!(store
+            .toggle_reaction("conv", &id, "👍", "did:plc:bob")
+            .unwrap());
+        let held = store.load_messages("conv").unwrap();
+        assert_eq!(held.messages[0].reactions.len(), 1);
+        assert_eq!(held.messages[0].reactions[0].emoji, "👍");
+
+        // Pressing it again takes it back — a reaction event means "this
+        // person pressed this emoji", not "add one more".
+        store
+            .toggle_reaction("conv", &id, "👍", "did:plc:bob")
+            .unwrap();
+        assert!(store.load_messages("conv").unwrap().messages[0]
+            .reactions
+            .is_empty());
+    }
+
+    /// A reaction for a message this device does not hold is reported
+    /// rather than silently dropped, so a caller can tell "toggled" from
+    /// "nothing to toggle".
+    #[test]
+    fn a_reaction_for_an_unknown_message_reports_not_found() {
+        let dir = tempdir().unwrap();
+        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+        assert!(!store
+            .toggle_reaction("conv", &[9u8; 16], "👍", "did:plc:bob")
+            .unwrap());
     }
 }

@@ -3802,6 +3802,669 @@ abstract class RingCommandDto_PollForNewDevices extends RingCommandDto {
 }
 
 /// @nodoc
+mixin _$RingMsgDto {
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(Uint8List token, Uint8List? targetDeviceId)
+        syncRequest,
+    required TResult Function(Uint8List token, Uint8List targetDeviceId)
+        syncOffer,
+    required TResult Function(
+            String uri,
+            Uint8List key,
+            Uint8List ciphertextHash,
+            BigInt ciphertextSize,
+            Uint8List contentHash)
+        historySummary,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(Uint8List token, Uint8List? targetDeviceId)? syncRequest,
+    TResult? Function(Uint8List token, Uint8List targetDeviceId)? syncOffer,
+    TResult? Function(String uri, Uint8List key, Uint8List ciphertextHash,
+            BigInt ciphertextSize, Uint8List contentHash)?
+        historySummary,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(Uint8List token, Uint8List? targetDeviceId)? syncRequest,
+    TResult Function(Uint8List token, Uint8List targetDeviceId)? syncOffer,
+    TResult Function(String uri, Uint8List key, Uint8List ciphertextHash,
+            BigInt ciphertextSize, Uint8List contentHash)?
+        historySummary,
+    required TResult orElse(),
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(RingMsgDto_SyncRequest value) syncRequest,
+    required TResult Function(RingMsgDto_SyncOffer value) syncOffer,
+    required TResult Function(RingMsgDto_HistorySummary value) historySummary,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(RingMsgDto_SyncRequest value)? syncRequest,
+    TResult? Function(RingMsgDto_SyncOffer value)? syncOffer,
+    TResult? Function(RingMsgDto_HistorySummary value)? historySummary,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(RingMsgDto_SyncRequest value)? syncRequest,
+    TResult Function(RingMsgDto_SyncOffer value)? syncOffer,
+    TResult Function(RingMsgDto_HistorySummary value)? historySummary,
+    required TResult orElse(),
+  }) =>
+      throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class $RingMsgDtoCopyWith<$Res> {
+  factory $RingMsgDtoCopyWith(
+          RingMsgDto value, $Res Function(RingMsgDto) then) =
+      _$RingMsgDtoCopyWithImpl<$Res, RingMsgDto>;
+}
+
+/// @nodoc
+class _$RingMsgDtoCopyWithImpl<$Res, $Val extends RingMsgDto>
+    implements $RingMsgDtoCopyWith<$Res> {
+  _$RingMsgDtoCopyWithImpl(this._value, this._then);
+
+  // ignore: unused_field
+  final $Val _value;
+  // ignore: unused_field
+  final $Res Function($Val) _then;
+
+  /// Create a copy of RingMsgDto
+  /// with the given fields replaced by the non-null parameter values.
+}
+
+/// @nodoc
+abstract class _$$RingMsgDto_SyncRequestImplCopyWith<$Res> {
+  factory _$$RingMsgDto_SyncRequestImplCopyWith(
+          _$RingMsgDto_SyncRequestImpl value,
+          $Res Function(_$RingMsgDto_SyncRequestImpl) then) =
+      __$$RingMsgDto_SyncRequestImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({Uint8List token, Uint8List? targetDeviceId});
+}
+
+/// @nodoc
+class __$$RingMsgDto_SyncRequestImplCopyWithImpl<$Res>
+    extends _$RingMsgDtoCopyWithImpl<$Res, _$RingMsgDto_SyncRequestImpl>
+    implements _$$RingMsgDto_SyncRequestImplCopyWith<$Res> {
+  __$$RingMsgDto_SyncRequestImplCopyWithImpl(
+      _$RingMsgDto_SyncRequestImpl _value,
+      $Res Function(_$RingMsgDto_SyncRequestImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of RingMsgDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? token = null,
+    Object? targetDeviceId = freezed,
+  }) {
+    return _then(_$RingMsgDto_SyncRequestImpl(
+      token: null == token
+          ? _value.token
+          : token // ignore: cast_nullable_to_non_nullable
+              as Uint8List,
+      targetDeviceId: freezed == targetDeviceId
+          ? _value.targetDeviceId
+          : targetDeviceId // ignore: cast_nullable_to_non_nullable
+              as Uint8List?,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$RingMsgDto_SyncRequestImpl extends RingMsgDto_SyncRequest {
+  const _$RingMsgDto_SyncRequestImpl({required this.token, this.targetDeviceId})
+      : super._();
+
+  @override
+  final Uint8List token;
+  @override
+  final Uint8List? targetDeviceId;
+
+  @override
+  String toString() {
+    return 'RingMsgDto.syncRequest(token: $token, targetDeviceId: $targetDeviceId)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$RingMsgDto_SyncRequestImpl &&
+            const DeepCollectionEquality().equals(other.token, token) &&
+            const DeepCollectionEquality()
+                .equals(other.targetDeviceId, targetDeviceId));
+  }
+
+  @override
+  int get hashCode => Object.hash(
+      runtimeType,
+      const DeepCollectionEquality().hash(token),
+      const DeepCollectionEquality().hash(targetDeviceId));
+
+  /// Create a copy of RingMsgDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$RingMsgDto_SyncRequestImplCopyWith<_$RingMsgDto_SyncRequestImpl>
+      get copyWith => __$$RingMsgDto_SyncRequestImplCopyWithImpl<
+          _$RingMsgDto_SyncRequestImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(Uint8List token, Uint8List? targetDeviceId)
+        syncRequest,
+    required TResult Function(Uint8List token, Uint8List targetDeviceId)
+        syncOffer,
+    required TResult Function(
+            String uri,
+            Uint8List key,
+            Uint8List ciphertextHash,
+            BigInt ciphertextSize,
+            Uint8List contentHash)
+        historySummary,
+  }) {
+    return syncRequest(token, targetDeviceId);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(Uint8List token, Uint8List? targetDeviceId)? syncRequest,
+    TResult? Function(Uint8List token, Uint8List targetDeviceId)? syncOffer,
+    TResult? Function(String uri, Uint8List key, Uint8List ciphertextHash,
+            BigInt ciphertextSize, Uint8List contentHash)?
+        historySummary,
+  }) {
+    return syncRequest?.call(token, targetDeviceId);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(Uint8List token, Uint8List? targetDeviceId)? syncRequest,
+    TResult Function(Uint8List token, Uint8List targetDeviceId)? syncOffer,
+    TResult Function(String uri, Uint8List key, Uint8List ciphertextHash,
+            BigInt ciphertextSize, Uint8List contentHash)?
+        historySummary,
+    required TResult orElse(),
+  }) {
+    if (syncRequest != null) {
+      return syncRequest(token, targetDeviceId);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(RingMsgDto_SyncRequest value) syncRequest,
+    required TResult Function(RingMsgDto_SyncOffer value) syncOffer,
+    required TResult Function(RingMsgDto_HistorySummary value) historySummary,
+  }) {
+    return syncRequest(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(RingMsgDto_SyncRequest value)? syncRequest,
+    TResult? Function(RingMsgDto_SyncOffer value)? syncOffer,
+    TResult? Function(RingMsgDto_HistorySummary value)? historySummary,
+  }) {
+    return syncRequest?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(RingMsgDto_SyncRequest value)? syncRequest,
+    TResult Function(RingMsgDto_SyncOffer value)? syncOffer,
+    TResult Function(RingMsgDto_HistorySummary value)? historySummary,
+    required TResult orElse(),
+  }) {
+    if (syncRequest != null) {
+      return syncRequest(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class RingMsgDto_SyncRequest extends RingMsgDto {
+  const factory RingMsgDto_SyncRequest(
+      {required final Uint8List token,
+      final Uint8List? targetDeviceId}) = _$RingMsgDto_SyncRequestImpl;
+  const RingMsgDto_SyncRequest._() : super._();
+
+  Uint8List get token;
+  Uint8List? get targetDeviceId;
+
+  /// Create a copy of RingMsgDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$RingMsgDto_SyncRequestImplCopyWith<_$RingMsgDto_SyncRequestImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class _$$RingMsgDto_SyncOfferImplCopyWith<$Res> {
+  factory _$$RingMsgDto_SyncOfferImplCopyWith(_$RingMsgDto_SyncOfferImpl value,
+          $Res Function(_$RingMsgDto_SyncOfferImpl) then) =
+      __$$RingMsgDto_SyncOfferImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({Uint8List token, Uint8List targetDeviceId});
+}
+
+/// @nodoc
+class __$$RingMsgDto_SyncOfferImplCopyWithImpl<$Res>
+    extends _$RingMsgDtoCopyWithImpl<$Res, _$RingMsgDto_SyncOfferImpl>
+    implements _$$RingMsgDto_SyncOfferImplCopyWith<$Res> {
+  __$$RingMsgDto_SyncOfferImplCopyWithImpl(_$RingMsgDto_SyncOfferImpl _value,
+      $Res Function(_$RingMsgDto_SyncOfferImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of RingMsgDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? token = null,
+    Object? targetDeviceId = null,
+  }) {
+    return _then(_$RingMsgDto_SyncOfferImpl(
+      token: null == token
+          ? _value.token
+          : token // ignore: cast_nullable_to_non_nullable
+              as Uint8List,
+      targetDeviceId: null == targetDeviceId
+          ? _value.targetDeviceId
+          : targetDeviceId // ignore: cast_nullable_to_non_nullable
+              as Uint8List,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$RingMsgDto_SyncOfferImpl extends RingMsgDto_SyncOffer {
+  const _$RingMsgDto_SyncOfferImpl(
+      {required this.token, required this.targetDeviceId})
+      : super._();
+
+  @override
+  final Uint8List token;
+  @override
+  final Uint8List targetDeviceId;
+
+  @override
+  String toString() {
+    return 'RingMsgDto.syncOffer(token: $token, targetDeviceId: $targetDeviceId)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$RingMsgDto_SyncOfferImpl &&
+            const DeepCollectionEquality().equals(other.token, token) &&
+            const DeepCollectionEquality()
+                .equals(other.targetDeviceId, targetDeviceId));
+  }
+
+  @override
+  int get hashCode => Object.hash(
+      runtimeType,
+      const DeepCollectionEquality().hash(token),
+      const DeepCollectionEquality().hash(targetDeviceId));
+
+  /// Create a copy of RingMsgDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$RingMsgDto_SyncOfferImplCopyWith<_$RingMsgDto_SyncOfferImpl>
+      get copyWith =>
+          __$$RingMsgDto_SyncOfferImplCopyWithImpl<_$RingMsgDto_SyncOfferImpl>(
+              this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(Uint8List token, Uint8List? targetDeviceId)
+        syncRequest,
+    required TResult Function(Uint8List token, Uint8List targetDeviceId)
+        syncOffer,
+    required TResult Function(
+            String uri,
+            Uint8List key,
+            Uint8List ciphertextHash,
+            BigInt ciphertextSize,
+            Uint8List contentHash)
+        historySummary,
+  }) {
+    return syncOffer(token, targetDeviceId);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(Uint8List token, Uint8List? targetDeviceId)? syncRequest,
+    TResult? Function(Uint8List token, Uint8List targetDeviceId)? syncOffer,
+    TResult? Function(String uri, Uint8List key, Uint8List ciphertextHash,
+            BigInt ciphertextSize, Uint8List contentHash)?
+        historySummary,
+  }) {
+    return syncOffer?.call(token, targetDeviceId);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(Uint8List token, Uint8List? targetDeviceId)? syncRequest,
+    TResult Function(Uint8List token, Uint8List targetDeviceId)? syncOffer,
+    TResult Function(String uri, Uint8List key, Uint8List ciphertextHash,
+            BigInt ciphertextSize, Uint8List contentHash)?
+        historySummary,
+    required TResult orElse(),
+  }) {
+    if (syncOffer != null) {
+      return syncOffer(token, targetDeviceId);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(RingMsgDto_SyncRequest value) syncRequest,
+    required TResult Function(RingMsgDto_SyncOffer value) syncOffer,
+    required TResult Function(RingMsgDto_HistorySummary value) historySummary,
+  }) {
+    return syncOffer(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(RingMsgDto_SyncRequest value)? syncRequest,
+    TResult? Function(RingMsgDto_SyncOffer value)? syncOffer,
+    TResult? Function(RingMsgDto_HistorySummary value)? historySummary,
+  }) {
+    return syncOffer?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(RingMsgDto_SyncRequest value)? syncRequest,
+    TResult Function(RingMsgDto_SyncOffer value)? syncOffer,
+    TResult Function(RingMsgDto_HistorySummary value)? historySummary,
+    required TResult orElse(),
+  }) {
+    if (syncOffer != null) {
+      return syncOffer(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class RingMsgDto_SyncOffer extends RingMsgDto {
+  const factory RingMsgDto_SyncOffer(
+      {required final Uint8List token,
+      required final Uint8List targetDeviceId}) = _$RingMsgDto_SyncOfferImpl;
+  const RingMsgDto_SyncOffer._() : super._();
+
+  Uint8List get token;
+  Uint8List get targetDeviceId;
+
+  /// Create a copy of RingMsgDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$RingMsgDto_SyncOfferImplCopyWith<_$RingMsgDto_SyncOfferImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class _$$RingMsgDto_HistorySummaryImplCopyWith<$Res> {
+  factory _$$RingMsgDto_HistorySummaryImplCopyWith(
+          _$RingMsgDto_HistorySummaryImpl value,
+          $Res Function(_$RingMsgDto_HistorySummaryImpl) then) =
+      __$$RingMsgDto_HistorySummaryImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call(
+      {String uri,
+      Uint8List key,
+      Uint8List ciphertextHash,
+      BigInt ciphertextSize,
+      Uint8List contentHash});
+}
+
+/// @nodoc
+class __$$RingMsgDto_HistorySummaryImplCopyWithImpl<$Res>
+    extends _$RingMsgDtoCopyWithImpl<$Res, _$RingMsgDto_HistorySummaryImpl>
+    implements _$$RingMsgDto_HistorySummaryImplCopyWith<$Res> {
+  __$$RingMsgDto_HistorySummaryImplCopyWithImpl(
+      _$RingMsgDto_HistorySummaryImpl _value,
+      $Res Function(_$RingMsgDto_HistorySummaryImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of RingMsgDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? uri = null,
+    Object? key = null,
+    Object? ciphertextHash = null,
+    Object? ciphertextSize = null,
+    Object? contentHash = null,
+  }) {
+    return _then(_$RingMsgDto_HistorySummaryImpl(
+      uri: null == uri
+          ? _value.uri
+          : uri // ignore: cast_nullable_to_non_nullable
+              as String,
+      key: null == key
+          ? _value.key
+          : key // ignore: cast_nullable_to_non_nullable
+              as Uint8List,
+      ciphertextHash: null == ciphertextHash
+          ? _value.ciphertextHash
+          : ciphertextHash // ignore: cast_nullable_to_non_nullable
+              as Uint8List,
+      ciphertextSize: null == ciphertextSize
+          ? _value.ciphertextSize
+          : ciphertextSize // ignore: cast_nullable_to_non_nullable
+              as BigInt,
+      contentHash: null == contentHash
+          ? _value.contentHash
+          : contentHash // ignore: cast_nullable_to_non_nullable
+              as Uint8List,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$RingMsgDto_HistorySummaryImpl extends RingMsgDto_HistorySummary {
+  const _$RingMsgDto_HistorySummaryImpl(
+      {required this.uri,
+      required this.key,
+      required this.ciphertextHash,
+      required this.ciphertextSize,
+      required this.contentHash})
+      : super._();
+
+  @override
+  final String uri;
+  @override
+  final Uint8List key;
+  @override
+  final Uint8List ciphertextHash;
+  @override
+  final BigInt ciphertextSize;
+  @override
+  final Uint8List contentHash;
+
+  @override
+  String toString() {
+    return 'RingMsgDto.historySummary(uri: $uri, key: $key, ciphertextHash: $ciphertextHash, ciphertextSize: $ciphertextSize, contentHash: $contentHash)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$RingMsgDto_HistorySummaryImpl &&
+            (identical(other.uri, uri) || other.uri == uri) &&
+            const DeepCollectionEquality().equals(other.key, key) &&
+            const DeepCollectionEquality()
+                .equals(other.ciphertextHash, ciphertextHash) &&
+            (identical(other.ciphertextSize, ciphertextSize) ||
+                other.ciphertextSize == ciphertextSize) &&
+            const DeepCollectionEquality()
+                .equals(other.contentHash, contentHash));
+  }
+
+  @override
+  int get hashCode => Object.hash(
+      runtimeType,
+      uri,
+      const DeepCollectionEquality().hash(key),
+      const DeepCollectionEquality().hash(ciphertextHash),
+      ciphertextSize,
+      const DeepCollectionEquality().hash(contentHash));
+
+  /// Create a copy of RingMsgDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$RingMsgDto_HistorySummaryImplCopyWith<_$RingMsgDto_HistorySummaryImpl>
+      get copyWith => __$$RingMsgDto_HistorySummaryImplCopyWithImpl<
+          _$RingMsgDto_HistorySummaryImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(Uint8List token, Uint8List? targetDeviceId)
+        syncRequest,
+    required TResult Function(Uint8List token, Uint8List targetDeviceId)
+        syncOffer,
+    required TResult Function(
+            String uri,
+            Uint8List key,
+            Uint8List ciphertextHash,
+            BigInt ciphertextSize,
+            Uint8List contentHash)
+        historySummary,
+  }) {
+    return historySummary(
+        uri, key, ciphertextHash, ciphertextSize, contentHash);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(Uint8List token, Uint8List? targetDeviceId)? syncRequest,
+    TResult? Function(Uint8List token, Uint8List targetDeviceId)? syncOffer,
+    TResult? Function(String uri, Uint8List key, Uint8List ciphertextHash,
+            BigInt ciphertextSize, Uint8List contentHash)?
+        historySummary,
+  }) {
+    return historySummary?.call(
+        uri, key, ciphertextHash, ciphertextSize, contentHash);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(Uint8List token, Uint8List? targetDeviceId)? syncRequest,
+    TResult Function(Uint8List token, Uint8List targetDeviceId)? syncOffer,
+    TResult Function(String uri, Uint8List key, Uint8List ciphertextHash,
+            BigInt ciphertextSize, Uint8List contentHash)?
+        historySummary,
+    required TResult orElse(),
+  }) {
+    if (historySummary != null) {
+      return historySummary(
+          uri, key, ciphertextHash, ciphertextSize, contentHash);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(RingMsgDto_SyncRequest value) syncRequest,
+    required TResult Function(RingMsgDto_SyncOffer value) syncOffer,
+    required TResult Function(RingMsgDto_HistorySummary value) historySummary,
+  }) {
+    return historySummary(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(RingMsgDto_SyncRequest value)? syncRequest,
+    TResult? Function(RingMsgDto_SyncOffer value)? syncOffer,
+    TResult? Function(RingMsgDto_HistorySummary value)? historySummary,
+  }) {
+    return historySummary?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(RingMsgDto_SyncRequest value)? syncRequest,
+    TResult Function(RingMsgDto_SyncOffer value)? syncOffer,
+    TResult Function(RingMsgDto_HistorySummary value)? historySummary,
+    required TResult orElse(),
+  }) {
+    if (historySummary != null) {
+      return historySummary(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class RingMsgDto_HistorySummary extends RingMsgDto {
+  const factory RingMsgDto_HistorySummary(
+      {required final String uri,
+      required final Uint8List key,
+      required final Uint8List ciphertextHash,
+      required final BigInt ciphertextSize,
+      required final Uint8List contentHash}) = _$RingMsgDto_HistorySummaryImpl;
+  const RingMsgDto_HistorySummary._() : super._();
+
+  String get uri;
+  Uint8List get key;
+  Uint8List get ciphertextHash;
+  BigInt get ciphertextSize;
+  Uint8List get contentHash;
+
+  /// Create a copy of RingMsgDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$RingMsgDto_HistorySummaryImplCopyWith<_$RingMsgDto_HistorySummaryImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
 mixin _$SyncFailureDto {
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
@@ -4985,7 +5648,7 @@ mixin _$SyncRequestUiStateDto {
     required TResult Function() awaitingPeer,
     required TResult Function(String deviceName) awaitingApproval,
     required TResult Function() active,
-    required TResult Function() complete,
+    required TResult Function(SyncTallyDto tally, String? deviceName) complete,
     required TResult Function(SyncFailureDto reason) failed,
   }) =>
       throw _privateConstructorUsedError;
@@ -4995,7 +5658,7 @@ mixin _$SyncRequestUiStateDto {
     TResult? Function()? awaitingPeer,
     TResult? Function(String deviceName)? awaitingApproval,
     TResult? Function()? active,
-    TResult? Function()? complete,
+    TResult? Function(SyncTallyDto tally, String? deviceName)? complete,
     TResult? Function(SyncFailureDto reason)? failed,
   }) =>
       throw _privateConstructorUsedError;
@@ -5005,7 +5668,7 @@ mixin _$SyncRequestUiStateDto {
     TResult Function()? awaitingPeer,
     TResult Function(String deviceName)? awaitingApproval,
     TResult Function()? active,
-    TResult Function()? complete,
+    TResult Function(SyncTallyDto tally, String? deviceName)? complete,
     TResult Function(SyncFailureDto reason)? failed,
     required TResult orElse(),
   }) =>
@@ -5118,7 +5781,7 @@ class _$SyncRequestUiStateDto_IdleImpl extends SyncRequestUiStateDto_Idle {
     required TResult Function() awaitingPeer,
     required TResult Function(String deviceName) awaitingApproval,
     required TResult Function() active,
-    required TResult Function() complete,
+    required TResult Function(SyncTallyDto tally, String? deviceName) complete,
     required TResult Function(SyncFailureDto reason) failed,
   }) {
     return idle();
@@ -5131,7 +5794,7 @@ class _$SyncRequestUiStateDto_IdleImpl extends SyncRequestUiStateDto_Idle {
     TResult? Function()? awaitingPeer,
     TResult? Function(String deviceName)? awaitingApproval,
     TResult? Function()? active,
-    TResult? Function()? complete,
+    TResult? Function(SyncTallyDto tally, String? deviceName)? complete,
     TResult? Function(SyncFailureDto reason)? failed,
   }) {
     return idle?.call();
@@ -5144,7 +5807,7 @@ class _$SyncRequestUiStateDto_IdleImpl extends SyncRequestUiStateDto_Idle {
     TResult Function()? awaitingPeer,
     TResult Function(String deviceName)? awaitingApproval,
     TResult Function()? active,
-    TResult Function()? complete,
+    TResult Function(SyncTallyDto tally, String? deviceName)? complete,
     TResult Function(SyncFailureDto reason)? failed,
     required TResult orElse(),
   }) {
@@ -5257,7 +5920,7 @@ class _$SyncRequestUiStateDto_AwaitingPeerImpl
     required TResult Function() awaitingPeer,
     required TResult Function(String deviceName) awaitingApproval,
     required TResult Function() active,
-    required TResult Function() complete,
+    required TResult Function(SyncTallyDto tally, String? deviceName) complete,
     required TResult Function(SyncFailureDto reason) failed,
   }) {
     return awaitingPeer();
@@ -5270,7 +5933,7 @@ class _$SyncRequestUiStateDto_AwaitingPeerImpl
     TResult? Function()? awaitingPeer,
     TResult? Function(String deviceName)? awaitingApproval,
     TResult? Function()? active,
-    TResult? Function()? complete,
+    TResult? Function(SyncTallyDto tally, String? deviceName)? complete,
     TResult? Function(SyncFailureDto reason)? failed,
   }) {
     return awaitingPeer?.call();
@@ -5283,7 +5946,7 @@ class _$SyncRequestUiStateDto_AwaitingPeerImpl
     TResult Function()? awaitingPeer,
     TResult Function(String deviceName)? awaitingApproval,
     TResult Function()? active,
-    TResult Function()? complete,
+    TResult Function(SyncTallyDto tally, String? deviceName)? complete,
     TResult Function(SyncFailureDto reason)? failed,
     required TResult orElse(),
   }) {
@@ -5429,7 +6092,7 @@ class _$SyncRequestUiStateDto_AwaitingApprovalImpl
     required TResult Function() awaitingPeer,
     required TResult Function(String deviceName) awaitingApproval,
     required TResult Function() active,
-    required TResult Function() complete,
+    required TResult Function(SyncTallyDto tally, String? deviceName) complete,
     required TResult Function(SyncFailureDto reason) failed,
   }) {
     return awaitingApproval(deviceName);
@@ -5442,7 +6105,7 @@ class _$SyncRequestUiStateDto_AwaitingApprovalImpl
     TResult? Function()? awaitingPeer,
     TResult? Function(String deviceName)? awaitingApproval,
     TResult? Function()? active,
-    TResult? Function()? complete,
+    TResult? Function(SyncTallyDto tally, String? deviceName)? complete,
     TResult? Function(SyncFailureDto reason)? failed,
   }) {
     return awaitingApproval?.call(deviceName);
@@ -5455,7 +6118,7 @@ class _$SyncRequestUiStateDto_AwaitingApprovalImpl
     TResult Function()? awaitingPeer,
     TResult Function(String deviceName)? awaitingApproval,
     TResult Function()? active,
-    TResult Function()? complete,
+    TResult Function(SyncTallyDto tally, String? deviceName)? complete,
     TResult Function(SyncFailureDto reason)? failed,
     required TResult orElse(),
   }) {
@@ -5579,7 +6242,7 @@ class _$SyncRequestUiStateDto_ActiveImpl extends SyncRequestUiStateDto_Active {
     required TResult Function() awaitingPeer,
     required TResult Function(String deviceName) awaitingApproval,
     required TResult Function() active,
-    required TResult Function() complete,
+    required TResult Function(SyncTallyDto tally, String? deviceName) complete,
     required TResult Function(SyncFailureDto reason) failed,
   }) {
     return active();
@@ -5592,7 +6255,7 @@ class _$SyncRequestUiStateDto_ActiveImpl extends SyncRequestUiStateDto_Active {
     TResult? Function()? awaitingPeer,
     TResult? Function(String deviceName)? awaitingApproval,
     TResult? Function()? active,
-    TResult? Function()? complete,
+    TResult? Function(SyncTallyDto tally, String? deviceName)? complete,
     TResult? Function(SyncFailureDto reason)? failed,
   }) {
     return active?.call();
@@ -5605,7 +6268,7 @@ class _$SyncRequestUiStateDto_ActiveImpl extends SyncRequestUiStateDto_Active {
     TResult Function()? awaitingPeer,
     TResult Function(String deviceName)? awaitingApproval,
     TResult Function()? active,
-    TResult Function()? complete,
+    TResult Function(SyncTallyDto tally, String? deviceName)? complete,
     TResult Function(SyncFailureDto reason)? failed,
     required TResult orElse(),
   }) {
@@ -5675,6 +6338,8 @@ abstract class _$$SyncRequestUiStateDto_CompleteImplCopyWith<$Res> {
           _$SyncRequestUiStateDto_CompleteImpl value,
           $Res Function(_$SyncRequestUiStateDto_CompleteImpl) then) =
       __$$SyncRequestUiStateDto_CompleteImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({SyncTallyDto tally, String? deviceName});
 }
 
 /// @nodoc
@@ -5689,28 +6354,65 @@ class __$$SyncRequestUiStateDto_CompleteImplCopyWithImpl<$Res>
 
   /// Create a copy of SyncRequestUiStateDto
   /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? tally = null,
+    Object? deviceName = freezed,
+  }) {
+    return _then(_$SyncRequestUiStateDto_CompleteImpl(
+      tally: null == tally
+          ? _value.tally
+          : tally // ignore: cast_nullable_to_non_nullable
+              as SyncTallyDto,
+      deviceName: freezed == deviceName
+          ? _value.deviceName
+          : deviceName // ignore: cast_nullable_to_non_nullable
+              as String?,
+    ));
+  }
 }
 
 /// @nodoc
 
 class _$SyncRequestUiStateDto_CompleteImpl
     extends SyncRequestUiStateDto_Complete {
-  const _$SyncRequestUiStateDto_CompleteImpl() : super._();
+  const _$SyncRequestUiStateDto_CompleteImpl(
+      {required this.tally, this.deviceName})
+      : super._();
+
+  @override
+  final SyncTallyDto tally;
+  @override
+  final String? deviceName;
 
   @override
   String toString() {
-    return 'SyncRequestUiStateDto.complete()';
+    return 'SyncRequestUiStateDto.complete(tally: $tally, deviceName: $deviceName)';
   }
 
   @override
   bool operator ==(Object other) {
     return identical(this, other) ||
         (other.runtimeType == runtimeType &&
-            other is _$SyncRequestUiStateDto_CompleteImpl);
+            other is _$SyncRequestUiStateDto_CompleteImpl &&
+            (identical(other.tally, tally) || other.tally == tally) &&
+            (identical(other.deviceName, deviceName) ||
+                other.deviceName == deviceName));
   }
 
   @override
-  int get hashCode => runtimeType.hashCode;
+  int get hashCode => Object.hash(runtimeType, tally, deviceName);
+
+  /// Create a copy of SyncRequestUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$SyncRequestUiStateDto_CompleteImplCopyWith<
+          _$SyncRequestUiStateDto_CompleteImpl>
+      get copyWith => __$$SyncRequestUiStateDto_CompleteImplCopyWithImpl<
+          _$SyncRequestUiStateDto_CompleteImpl>(this, _$identity);
 
   @override
   @optionalTypeArgs
@@ -5719,10 +6421,10 @@ class _$SyncRequestUiStateDto_CompleteImpl
     required TResult Function() awaitingPeer,
     required TResult Function(String deviceName) awaitingApproval,
     required TResult Function() active,
-    required TResult Function() complete,
+    required TResult Function(SyncTallyDto tally, String? deviceName) complete,
     required TResult Function(SyncFailureDto reason) failed,
   }) {
-    return complete();
+    return complete(tally, deviceName);
   }
 
   @override
@@ -5732,10 +6434,10 @@ class _$SyncRequestUiStateDto_CompleteImpl
     TResult? Function()? awaitingPeer,
     TResult? Function(String deviceName)? awaitingApproval,
     TResult? Function()? active,
-    TResult? Function()? complete,
+    TResult? Function(SyncTallyDto tally, String? deviceName)? complete,
     TResult? Function(SyncFailureDto reason)? failed,
   }) {
-    return complete?.call();
+    return complete?.call(tally, deviceName);
   }
 
   @override
@@ -5745,12 +6447,12 @@ class _$SyncRequestUiStateDto_CompleteImpl
     TResult Function()? awaitingPeer,
     TResult Function(String deviceName)? awaitingApproval,
     TResult Function()? active,
-    TResult Function()? complete,
+    TResult Function(SyncTallyDto tally, String? deviceName)? complete,
     TResult Function(SyncFailureDto reason)? failed,
     required TResult orElse(),
   }) {
     if (complete != null) {
-      return complete();
+      return complete(tally, deviceName);
     }
     return orElse();
   }
@@ -5804,9 +6506,20 @@ class _$SyncRequestUiStateDto_CompleteImpl
 }
 
 abstract class SyncRequestUiStateDto_Complete extends SyncRequestUiStateDto {
-  const factory SyncRequestUiStateDto_Complete() =
-      _$SyncRequestUiStateDto_CompleteImpl;
+  const factory SyncRequestUiStateDto_Complete(
+      {required final SyncTallyDto tally,
+      final String? deviceName}) = _$SyncRequestUiStateDto_CompleteImpl;
   const SyncRequestUiStateDto_Complete._() : super._();
+
+  SyncTallyDto get tally;
+  String? get deviceName;
+
+  /// Create a copy of SyncRequestUiStateDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$SyncRequestUiStateDto_CompleteImplCopyWith<
+          _$SyncRequestUiStateDto_CompleteImpl>
+      get copyWith => throw _privateConstructorUsedError;
 }
 
 /// @nodoc
@@ -5898,7 +6611,7 @@ class _$SyncRequestUiStateDto_FailedImpl extends SyncRequestUiStateDto_Failed {
     required TResult Function() awaitingPeer,
     required TResult Function(String deviceName) awaitingApproval,
     required TResult Function() active,
-    required TResult Function() complete,
+    required TResult Function(SyncTallyDto tally, String? deviceName) complete,
     required TResult Function(SyncFailureDto reason) failed,
   }) {
     return failed(reason);
@@ -5911,7 +6624,7 @@ class _$SyncRequestUiStateDto_FailedImpl extends SyncRequestUiStateDto_Failed {
     TResult? Function()? awaitingPeer,
     TResult? Function(String deviceName)? awaitingApproval,
     TResult? Function()? active,
-    TResult? Function()? complete,
+    TResult? Function(SyncTallyDto tally, String? deviceName)? complete,
     TResult? Function(SyncFailureDto reason)? failed,
   }) {
     return failed?.call(reason);
@@ -5924,7 +6637,7 @@ class _$SyncRequestUiStateDto_FailedImpl extends SyncRequestUiStateDto_Failed {
     TResult Function()? awaitingPeer,
     TResult Function(String deviceName)? awaitingApproval,
     TResult Function()? active,
-    TResult Function()? complete,
+    TResult Function(SyncTallyDto tally, String? deviceName)? complete,
     TResult Function(SyncFailureDto reason)? failed,
     required TResult orElse(),
   }) {

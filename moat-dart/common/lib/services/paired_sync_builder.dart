@@ -55,6 +55,47 @@ Future<PairedSyncSetup> buildPairedSyncSession({
   return PairedSyncSetup(session: syncSession, outputs: outputs);
 }
 
+/// Surface a conversation whose history arrived by sync before we were a
+/// member of it.
+///
+/// `handle_hello` plans for every conversation the peer has and we do
+/// not, so a donor can serve history for a group whose fan-out `Add` has
+/// not reached us yet. Without this the messages land in storage and are
+/// visible nowhere, because the conversation list is what the UI reads.
+///
+/// Registered read-only: participants are inferred from who actually sent
+/// the messages, since there is no MLS group to ask, and `isMember` stays
+/// false until the `Add` arrives. Normally transient — the peer that had
+/// the history is in the conversation and will add us — but not
+/// guaranteed to be brief, since an `Add` can only come from a member.
+///
+/// Dart mirror of `App::register_synced_conversation` in
+/// `crates/moat-cli/src/app.rs`.
+Future<void> registerSyncedConversation(
+  ConversationStorage convStorage,
+  String convId,
+  List<ffi.SyncMessageDto> messages,
+  String myDid,
+) async {
+  final existing = await convStorage.loadAll();
+  if (existing.any((c) => c.groupIdHex == convId)) return;
+
+  final participants = <String>[];
+  for (final m in messages) {
+    if (m.senderDid == myDid) continue;
+    if (!participants.contains(m.senderDid)) participants.add(m.senderDid);
+  }
+
+  await convStorage.save(Conversation(
+    groupId: _decodeHex(convId),
+    participants: participants,
+    keyBundleRef: convId,
+    createdAt: DateTime.now(),
+    unreadCount: messages.length,
+    isMember: false,
+  ));
+}
+
 /// Convert and persist a `SyncOutput.store` batch. Shared by [SyncService]
 /// and [PairingService] — the `store` arm's logic doesn't depend on which
 /// wire encryption produced the batch. Returns the number of messages
@@ -89,6 +130,13 @@ Message _messageFromSyncDto(ffi.SyncMessageDto m, Uint8List groupId, String myDi
     epoch: 0,
     messageId: m.messageId,
     attachment: _attachmentFromSyncDto(m),
+    // Reactions arrive as their own PDS events, which a device receiving
+    // this message through sync cannot decrypt — they predate its
+    // membership. Sync is their only route, so they are carried here
+    // rather than left to be rebuilt.
+    reactions: m.reactions
+        .map((r) => Reaction(emoji: r.emoji, senderDid: r.senderDid))
+        .toList(growable: false),
   );
 }
 
@@ -98,9 +146,10 @@ Message _messageFromSyncDto(ffi.SyncMessageDto m, Uint8List groupId, String myDi
 /// be fetched or integrity-checked, so it is dropped rather than turned
 /// into an attachment that fails on open.
 ///
-/// `thumbhash` is absent by design: it lives in the message payload rather
-/// than in stored metadata, so neither runtime carries it through sync.
-/// The image still loads; only the blurry placeholder is missing.
+/// `thumbhash` travels with the rest: it is stored beside the blob
+/// metadata, and a device receiving this message cannot recover it from
+/// the PDS, since the event carrying it predates that device's
+/// membership.
 Attachment? _attachmentFromSyncDto(ffi.SyncMessageDto m) {
   final uri = m.blobUri;
   final key = m.blobKey;
@@ -120,6 +169,7 @@ Attachment? _attachmentFromSyncDto(ffi.SyncMessageDto m) {
     ciphertextHash: ciphertextHash,
     ciphertextSize: ciphertextSize.toInt(),
     contentHash: contentHash,
+    thumbhash: m.blobThumbhash,
     mime: m.blobMime,
     width: m.blobWidth,
     height: m.blobHeight,
@@ -171,6 +221,13 @@ Future<List<ffi.SyncMessageDto>> _loadSyncMessagesFor(
       blobMime: image?.mime,
       blobWidth: image?.width,
       blobHeight: image?.height,
+      blobThumbhash: image?.thumbhash,
+      reactions: m.reactions
+          .map((r) => ffi.SyncReactionDto(
+                emoji: r.emoji,
+                senderDid: r.senderDid,
+              ))
+          .toList(growable: false),
     ));
   }
   return out;

@@ -41,7 +41,14 @@ Map<String, dynamic> _syncRequestUiStateJson(SyncRequestUiStateDto state) {
     awaitingApproval: (deviceName) =>
         {'phase': 'awaiting_approval', 'device_name': deviceName},
     active: () => {'phase': 'active'},
-    complete: () => {'phase': 'complete'},
+    complete: (tally, deviceName) => {
+      'phase': 'complete',
+      'tally': {
+        'messages': tally.messages.toInt(),
+        'conversations': tally.conversations.toInt(),
+      },
+      'device_name': deviceName,
+    },
     failed: (reason) => {'phase': 'failed', 'reason': _syncFailureJson(reason)},
   );
 }
@@ -137,6 +144,7 @@ Handler buildRouter({
           'id': c.groupIdHex,
           'name': c.resolveDisplayName((did) => did),
           'participant_dids': c.participants,
+          'is_member': c.isMember,
           'epoch': c.epoch,
           'unread': c.unreadCount,
         }).toList();
@@ -224,6 +232,9 @@ Handler buildRouter({
             'sender_did': m.senderDid,
             'message_id': m.messageIdHex,
             'attachment': m.attachment?.toJson(),
+            'reactions': m.reactions
+                .map((r) => {'emoji': r.emoji, 'sender_did': r.senderDid})
+                .toList(),
           }).toList();
     } else if (messageStorage != null) {
       // Conversation not yet registered locally (e.g. synced history before
@@ -240,6 +251,9 @@ Handler buildRouter({
             'sender_did': m.senderDid,
             'message_id': m.messageIdHex,
             'attachment': m.attachment?.toJson(),
+            'reactions': m.reactions
+                .map((r) => {'emoji': r.emoji, 'sender_did': r.senderDid})
+                .toList(),
           }).toList();
       // Return [] when empty (mirrors Rust's api_set_active_conversation fallback).
     } else {
@@ -268,6 +282,12 @@ Handler buildRouter({
       if (conv == null) {
         return Response.notFound(
             jsonEncode({'error': 'conversation not found'}),
+            headers: _jsonHeaders);
+      }
+      if (!conv.isMember) {
+        return Response(409,
+            body: jsonEncode(
+                {'error': 'waiting to be connected to this conversation'}),
             headers: _jsonHeaders);
       }
 
@@ -627,6 +647,38 @@ Handler buildRouter({
     }
   });
 
+  // POST /sync/offer — send history to a sibling that lacks it. This call
+  // is the human approval; the target joins without prompting.
+  router.post('/sync/offer', (Request request) async {
+    try {
+      final body =
+          jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+      final deviceId = _hexToBytes(body['device_id'] as String);
+      await syncRequestService.offerSync(deviceId);
+      return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
+    } catch (e) {
+      moatLog('Server: sync/offer error: $e');
+      return Response(500,
+          body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
+    }
+  });
+
+  // POST /sync/dismiss — stop a sibling's current advertisement from
+  // prompting again until it says something new.
+  router.post('/sync/dismiss', (Request request) async {
+    try {
+      final body =
+          jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+      await ringService.dismissSiblingSummary(
+          _hexToBytes(body['device_id'] as String));
+      return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
+    } catch (e) {
+      moatLog('Server: sync/dismiss error: $e');
+      return Response(500,
+          body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
+    }
+  });
+
   // POST /sync/accept — send this device's history to the sibling that
   // asked for it.
   router.post('/sync/accept', (Request request) async {
@@ -651,6 +703,67 @@ Handler buildRouter({
       return Response(500,
           body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
     }
+  });
+
+  // GET /sync/offerable — siblings worth prompting the user to send
+  // history to. The headless server has no user to prompt, so it reports
+  // the condition instead; the app raises a screen on the same signal.
+  router.get('/sync/offerable', (Request request) async {
+    final offerable = (await ringService.offerableSiblings()).toSet();
+    // Joined back to the ring's MLS leaf credentials for a name, so this
+    // returns the same records as moat-cli's `/sync/offerable`.
+    final siblings = <Map<String, dynamic>>[];
+    final ringId = await ringService.ringGroupId();
+    final session = authService.moatSession;
+    if (ringId != null && session != null) {
+      try {
+        final creds = await session.getGroupMemberCredentials(groupId: ringId);
+        final myDeviceIdHex = _hexBytes(session.deviceId());
+        final summaries = {
+          for (final s in ringService.siblingSummaries()) s.deviceId: s
+        };
+        for (final c in creds) {
+          final hex = _hexBytes(c.deviceId);
+          if (!offerable.contains(hex)) continue;
+          final advertised = summaries[hex];
+          siblings.add({
+            'device_id': hex,
+            'device_name': c.deviceName,
+            'is_self': hex == myDeviceIdHex,
+            'advertised': advertised == null
+                ? null
+                : {
+                    'conversations': advertised.conversations.toInt(),
+                    'messages': advertised.messages.toInt(),
+                    'received_at_ms': advertised.receivedAtMs.toInt(),
+                  },
+          });
+        }
+      } catch (e) {
+        moatLog('Server: sync/offerable credentials failed: $e');
+      }
+    }
+    return Response.ok(
+      jsonEncode({'siblings': siblings}),
+      headers: _jsonHeaders,
+    );
+  });
+
+  // GET /sync/summaries — what each sibling last advertised holding.
+  // Same shape as moat-cli's, so a beacon assertion reads one thing from
+  // either runtime.
+  router.get('/sync/summaries', (Request request) {
+    final siblings = ringService.siblingSummaries().map((s) => {
+          'device_id': s.deviceId,
+          'conversations': s.conversations.toInt(),
+          'messages': s.messages.toInt(),
+          'received_at_ms': s.receivedAtMs.toInt(),
+          'dismissed': s.dismissed,
+        }).toList();
+    return Response.ok(
+      jsonEncode({'siblings': siblings}),
+      headers: _jsonHeaders,
+    );
   });
 
   // GET /sync/status — whether a transfer is running, plus the

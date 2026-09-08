@@ -373,7 +373,52 @@ class _ConversationScreenState extends State<ConversationScreen> {
     );
   }
 
+  /// Stands in for the composer while this device holds a conversation's
+  /// history but is not yet in its MLS group.
+  Widget _buildAwaitingMembershipNotice(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(8),
+      child: SafeArea(
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.hourglass_empty, size: 18, color: scheme.outline),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Waiting to be connected to this conversation.',
+                  style: TextStyle(color: scheme.outline),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildMessageInput(BuildContext context, ConversationRepository provider) {
+    // A conversation whose history arrived by sync before the Add that
+    // puts us in the group has nothing to send into — there is no local
+    // MLS group to encrypt to. Replace the composer with a plain
+    // statement of that rather than accepting text that cannot go
+    // anywhere.
+    //
+    // Deliberately not worded as though it resolves any moment now: an
+    // Add can only come from a member, so if the device that served the
+    // history was the only one and it goes offline, nothing adds us until
+    // it comes back.
+    if (!widget.conversation.isMember) {
+      return _buildAwaitingMembershipNotice(context);
+    }
+
     final hasText = _textController.text.trim().isNotEmpty;
 
     return Container(

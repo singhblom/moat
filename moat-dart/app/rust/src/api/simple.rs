@@ -296,13 +296,14 @@ impl MoatSessionHandle {
     }
 
     /// Decrypt an incoming `/pair` WS binary frame as a `SyncApp` event in the
-    /// ring group. Returns the inner payload bytes (`SyncMsg` JSON) on success,
-    /// or an error if decrypt failed or the event was not a `SyncApp`.
+    /// ring group. Returns the inner payload bytes (`SyncMsg` JSON) alongside
+    /// the sending device as MLS named it, or an error if decrypt failed or
+    /// the event was not a `SyncApp`.
     pub fn decrypt_sync_frame(
         &self,
         ring_group_id: Vec<u8>,
         ciphertext: Vec<u8>,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<SyncFrameDto, String> {
         let outcome = self
             .inner
             .lock()
@@ -316,7 +317,10 @@ impl MoatSessionHandle {
                 result.event.kind
             ));
         }
-        Ok(result.event.payload)
+        Ok(SyncFrameDto {
+            payload: result.event.payload,
+            sender_device_name: result.sender.map(|s| s.device_name),
+        })
     }
 
     /// Decrypt a ciphertext for a group. Returns decrypt result with any warnings.
@@ -973,6 +977,92 @@ impl RingDriverHandle {
         serde_json::to_string(&*self.inner.lock().unwrap()).map_err(|e| e.to_string())
     }
 
+    /// Record a sibling's advertisement, replacing whatever it said
+    /// before. A dismissal is carried over only when the contents are
+    /// unchanged — a sibling that now holds something different is
+    /// asking a different question.
+    #[frb(sync)]
+    pub fn record_sibling_summary(
+        &self,
+        device_id: Vec<u8>,
+        convs: Vec<ConvSummaryDto>,
+        received_at_ms: i64,
+    ) -> Result<(), String> {
+        let device_id: [u8; 16] = device_id
+            .try_into()
+            .map_err(|_| "device_id must be 16 bytes".to_string())?;
+        let convs: Vec<moat_core::ConvSummary> =
+            convs.into_iter().map(Into::into).collect();
+        self.inner
+            .lock()
+            .unwrap()
+            .record_sibling_summary(&device_id, convs, received_at_ms);
+        Ok(())
+    }
+
+    /// Every advertisement this device holds.
+    #[frb(sync)]
+    pub fn sibling_summaries(&self) -> Vec<SiblingSummaryDto> {
+        self.inner
+            .lock()
+            .unwrap()
+            .sibling_summaries()
+            .iter()
+            .map(|(device_id, s)| SiblingSummaryDto {
+                device_id: device_id.clone(),
+                conversations: s.convs.len() as u64,
+                messages: s.total_messages(),
+                received_at_ms: s.received_at_ms,
+                dismissed: s.dismissed,
+            })
+            .collect()
+    }
+
+    /// Siblings worth prompting the user to send history to: ones that
+    /// have advertised holding less than `our_messages`, and that the
+    /// user has not already answered. Returns hex device ids.
+    ///
+    /// The rule itself lives in moat-core so both runtimes decide
+    /// identically — see `DeviceRingState::offerable_siblings`.
+    #[frb(sync)]
+    pub fn offerable_siblings(&self, our_messages: u64) -> Vec<String> {
+        self.inner
+            .lock()
+            .unwrap()
+            .offerable_siblings(our_messages)
+            .iter()
+            .map(|id| id.iter().map(|b| format!("{b:02x}")).collect::<String>())
+            .collect()
+    }
+
+    /// Mark a sibling's current advertisement as already asked about, so
+    /// it stops prompting until that sibling says something new.
+    #[frb(sync)]
+    pub fn dismiss_sibling_summary(&self, device_id: Vec<u8>) -> Result<(), String> {
+        let device_id: [u8; 16] = device_id
+            .try_into()
+            .map_err(|_| "device_id must be 16 bytes".to_string())?;
+        self.inner.lock().unwrap().dismiss_sibling_summary(&device_id);
+        Ok(())
+    }
+
+    /// The record URI of our last published summary, which the next
+    /// publish supersedes and should delete.
+    #[frb(sync)]
+    pub fn published_summary_record(&self) -> Option<String> {
+        self.inner
+            .lock()
+            .unwrap()
+            .published_summary_record()
+            .map(str::to_string)
+    }
+
+    /// Record the URI of the summary we just published.
+    #[frb(sync)]
+    pub fn set_published_summary_record(&self, uri: Option<String>) {
+        self.inner.lock().unwrap().set_published_summary_record(uri);
+    }
+
     /// Raw ring group ID, if a ring exists.
     #[frb(sync)]
     pub fn ring_group_id(&self) -> Option<Vec<u8>> {
@@ -1356,6 +1446,13 @@ impl SyncSessionHandle {
     pub fn is_done(&self) -> bool {
         self.inner.lock().unwrap().is_done()
     }
+
+    /// What this side has received. Read at completion, where it becomes
+    /// the report the user sees.
+    #[frb(sync)]
+    pub fn tally(&self) -> SyncTallyDto {
+        self.inner.lock().unwrap().tally().into()
+    }
 }
 
 pub struct SyncMessageDto {
@@ -1374,6 +1471,30 @@ pub struct SyncMessageDto {
     pub blob_mime: Option<String>,
     pub blob_width: Option<u32>,
     pub blob_height: Option<u32>,
+    /// The image's blurry placeholder, shown while the blob downloads.
+    pub blob_thumbhash: Option<Vec<u8>>,
+    /// Emoji reactions on this message. Carried because the receiving
+    /// device cannot rebuild them: reaction events predating its
+    /// membership are not decryptable to it.
+    pub reactions: Vec<SyncReactionDto>,
+}
+
+/// One emoji reaction, as carried by a synced message.
+pub struct SyncReactionDto {
+    pub emoji: String,
+    pub sender_did: String,
+}
+
+impl From<moat_core::SyncReaction> for SyncReactionDto {
+    fn from(r: moat_core::SyncReaction) -> Self {
+        SyncReactionDto { emoji: r.emoji, sender_did: r.sender_did }
+    }
+}
+
+impl From<SyncReactionDto> for moat_core::SyncReaction {
+    fn from(r: SyncReactionDto) -> Self {
+        moat_core::SyncReaction { emoji: r.emoji, sender_did: r.sender_did }
+    }
 }
 
 impl From<SyncMessage> for SyncMessageDto {
@@ -1394,6 +1515,8 @@ impl From<SyncMessage> for SyncMessageDto {
             blob_mime: m.blob_mime,
             blob_width: m.blob_width,
             blob_height: m.blob_height,
+            blob_thumbhash: m.blob_thumbhash,
+            reactions: m.reactions.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -1416,6 +1539,8 @@ impl From<SyncMessageDto> for SyncMessage {
             blob_mime: m.blob_mime,
             blob_width: m.blob_width,
             blob_height: m.blob_height,
+            blob_thumbhash: m.blob_thumbhash,
+            reactions: m.reactions.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -1688,19 +1813,172 @@ fn credential_from_dto(dto: CredentialDto) -> Result<MoatCredential, String> {
 
 /// Encode a `RingMsg::SyncRequest` for publication on the device ring as
 /// an `EventKindDto::RingMsg` event payload.
-pub fn ring_msg_encode_sync_request(token: Vec<u8>) -> Result<Vec<u8>, String> {
+pub fn ring_msg_encode_sync_request(
+    token: Vec<u8>,
+    target_device_id: Option<Vec<u8>>,
+) -> Result<Vec<u8>, String> {
     let token: [u8; moat_core::SYNC_REQUEST_TOKEN_LEN] = token
         .try_into()
         .map_err(|_| "token must be 16 bytes".to_string())?;
-    Ok(moat_core::encode_ring_msg(&moat_core::RingMsg::SyncRequest { token }))
+    let target_device_id = match target_device_id {
+        Some(id) => Some(
+            <[u8; moat_core::DEVICE_ID_LEN]>::try_from(id.as_slice())
+                .map_err(|_| "device_id must be 16 bytes".to_string())?,
+        ),
+        None => None,
+    };
+    Ok(moat_core::encode_ring_msg(&moat_core::RingMsg::SyncRequest {
+        token,
+        target_device_id,
+    }))
+}
+
+/// Build a `ring.msg` payload offering history to one sibling. Always
+/// targeted — the relay admits two attaches, so an untargeted offer would
+/// pick its recipient arbitrarily.
+pub fn ring_msg_encode_sync_offer(
+    token: Vec<u8>,
+    target_device_id: Vec<u8>,
+) -> Result<Vec<u8>, String> {
+    let token: [u8; moat_core::SYNC_REQUEST_TOKEN_LEN] = token
+        .try_into()
+        .map_err(|_| "token must be 16 bytes".to_string())?;
+    let target_device_id = <[u8; moat_core::DEVICE_ID_LEN]>::try_from(
+        target_device_id.as_slice(),
+    )
+    .map_err(|_| "device_id must be 16 bytes".to_string())?;
+    Ok(moat_core::encode_ring_msg(&moat_core::RingMsg::SyncOffer {
+        token,
+        target_device_id,
+    }))
 }
 
 /// Decode a `ring.msg` payload and return the sync request's rendezvous
 /// token. Errors on anything that is not a well-formed `RingMsg`.
 pub fn ring_msg_decode_sync_request(payload: Vec<u8>) -> Result<Vec<u8>, String> {
     match moat_core::decode_ring_msg(&payload).map_err(|e| e.to_string())? {
-        moat_core::RingMsg::SyncRequest { token } => Ok(token.to_vec()),
+        moat_core::RingMsg::SyncRequest { token, .. } => Ok(token.to_vec()),
+        other => Err(format!("not a sync request: {other:?}")),
     }
+}
+
+/// What one device holds for one conversation, as advertised.
+pub struct ConvSummaryDto {
+    pub group_id: Vec<u8>,
+    pub inventory: ConvInventoryDto,
+}
+
+impl From<ConvSummaryDto> for moat_core::ConvSummary {
+    fn from(c: ConvSummaryDto) -> Self {
+        moat_core::ConvSummary {
+            group_id: c.group_id,
+            inventory: c.inventory.into(),
+        }
+    }
+}
+
+impl From<moat_core::ConvSummary> for ConvSummaryDto {
+    fn from(c: moat_core::ConvSummary) -> Self {
+        ConvSummaryDto {
+            group_id: c.group_id,
+            inventory: c.inventory.into(),
+        }
+    }
+}
+
+/// What a sibling last advertised, as this device recorded it.
+pub struct SiblingSummaryDto {
+    /// Hex-encoded 16-byte device id.
+    pub device_id: String,
+    pub conversations: u64,
+    pub messages: u64,
+    pub received_at_ms: i64,
+    /// Whether the user has already been asked about *this* advertisement.
+    pub dismissed: bool,
+}
+
+/// A decoded `ring.msg` payload.
+pub enum RingMsgDto {
+    /// "I am missing history — open a sync channel with me at this token."
+    /// `target_device_id` names one sibling; `None` is a broadcast.
+    SyncRequest {
+        token: Vec<u8>,
+        target_device_id: Option<Vec<u8>>,
+    },
+    /// "I have history you don't — join me." Always targeted.
+    SyncOffer {
+        token: Vec<u8>,
+        target_device_id: Vec<u8>,
+    },
+    /// "Here is what I hold", as a reference to an external blob. See
+    /// `moat_core::RingMsg::HistorySummary` for why the list is not inline.
+    HistorySummary {
+        uri: String,
+        key: Vec<u8>,
+        ciphertext_hash: Vec<u8>,
+        ciphertext_size: u64,
+        content_hash: Vec<u8>,
+    },
+}
+
+/// Decode any `ring.msg` payload.
+pub fn ring_msg_decode(payload: Vec<u8>) -> Result<RingMsgDto, String> {
+    match moat_core::decode_ring_msg(&payload).map_err(|e| e.to_string())? {
+        moat_core::RingMsg::SyncRequest { token, target_device_id } => {
+            Ok(RingMsgDto::SyncRequest {
+                token: token.to_vec(),
+                target_device_id: target_device_id.map(|t| t.to_vec()),
+            })
+        }
+        moat_core::RingMsg::SyncOffer { token, target_device_id } => Ok(RingMsgDto::SyncOffer {
+            token: token.to_vec(),
+            target_device_id: target_device_id.to_vec(),
+        }),
+        moat_core::RingMsg::HistorySummary { external } => Ok(RingMsgDto::HistorySummary {
+            uri: external.uri,
+            key: external.key,
+            ciphertext_hash: external.ciphertext_hash,
+            ciphertext_size: external.ciphertext_size,
+            content_hash: external.content_hash,
+        }),
+    }
+}
+
+/// Build a `ring.msg` payload advertising what this device holds. The
+/// conversation list itself lives in the blob the reference points at.
+pub fn ring_msg_encode_history_summary(
+    uri: String,
+    key: Vec<u8>,
+    ciphertext_hash: Vec<u8>,
+    ciphertext_size: u64,
+    content_hash: Vec<u8>,
+) -> Result<Vec<u8>, String> {
+    let external = moat_core::ExternalBlob::new(
+        uri,
+        key,
+        ciphertext_hash,
+        ciphertext_size,
+        content_hash,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(moat_core::encode_ring_msg(&moat_core::RingMsg::HistorySummary { external }))
+}
+
+/// Encode the summary blob's plaintext.
+pub fn history_summary_encode(convs: Vec<ConvSummaryDto>) -> Vec<u8> {
+    moat_core::encode_history_summary(&moat_core::HistorySummaryPayload {
+        convs: convs.into_iter().map(Into::into).collect(),
+    })
+}
+
+/// Decode the summary blob's plaintext.
+pub fn history_summary_decode(bytes: Vec<u8>) -> Result<Vec<ConvSummaryDto>, String> {
+    Ok(moat_core::decode_history_summary(&bytes)
+        .map_err(|e| e.to_string())?
+        .convs
+        .into_iter()
+        .map(Into::into)
+        .collect())
 }
 
 /// How long a published sync request stays valid, matching the relay's
@@ -1772,6 +2050,37 @@ impl From<moat_core::SyncFailure> for SyncFailureDto {
     }
 }
 
+/// A decrypted pair-WS sync frame: the `SyncMsg` bytes plus the device
+/// that sent them.
+///
+/// The name comes from the MLS leaf credential, which is authenticated,
+/// where a field in the payload would not be. It is what lets a finished
+/// sync say *which* sibling the history came from — or, when nothing
+/// moved, which one had no more than you.
+pub struct SyncFrameDto {
+    pub payload: Vec<u8>,
+    pub sender_device_name: Option<String>,
+}
+
+/// What a finished sync took from its peer. See `moat_core::SyncTally`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SyncTallyDto {
+    pub messages: u64,
+    pub conversations: u64,
+}
+
+impl From<moat_core::SyncTally> for SyncTallyDto {
+    fn from(t: moat_core::SyncTally) -> Self {
+        Self { messages: t.messages, conversations: t.conversations }
+    }
+}
+
+impl From<SyncTallyDto> for moat_core::SyncTally {
+    fn from(t: SyncTallyDto) -> Self {
+        Self { messages: t.messages, conversations: t.conversations }
+    }
+}
+
 pub enum SyncRequestUiStateDto {
     /// No sync request in flight. The handle itself never returns this;
     /// a host wrapping an optional session reports it when there is none.
@@ -1782,8 +2091,11 @@ pub enum SyncRequestUiStateDto {
     AwaitingApproval { device_name: String },
     /// Channel up, transfer running.
     Active,
-    /// Transfer finished.
-    Complete,
+    /// Transfer finished, with what it moved and where from.
+    Complete {
+        tally: SyncTallyDto,
+        device_name: Option<String>,
+    },
     /// Terminal failure, with the structured reason retained.
     Failed { reason: SyncFailureDto },
 }
@@ -1798,7 +2110,10 @@ impl From<moat_core::SyncRequestUiState> for SyncRequestUiStateDto {
                 SyncRequestUiStateDto::AwaitingApproval { device_name }
             }
             S::Active => SyncRequestUiStateDto::Active,
-            S::Complete => SyncRequestUiStateDto::Complete,
+            S::Complete { tally, device_name } => SyncRequestUiStateDto::Complete {
+                tally: tally.into(),
+                device_name,
+            },
             S::Failed { reason } => {
                 SyncRequestUiStateDto::Failed { reason: reason.into() }
             }
@@ -1824,6 +2139,35 @@ impl SyncRequestSessionHandle {
             .map_err(|_| "token must be 16 bytes".to_string())?;
         Ok(SyncRequestSessionHandle {
             inner: Mutex::new(moat_core::SyncRequestSession::request(token, now_ms)),
+        })
+    }
+
+    /// Offer history to a sibling that does not have it. The offerer's
+    /// user has already approved — that is what produced this call — so
+    /// neither side prompts again.
+    #[frb(sync)]
+    pub fn offer(token: Vec<u8>, now_ms: i64) -> Result<SyncRequestSessionHandle, String> {
+        let token: [u8; moat_core::SYNC_REQUEST_TOKEN_LEN] = token
+            .try_into()
+            .map_err(|_| "token must be 16 bytes".to_string())?;
+        Ok(SyncRequestSessionHandle {
+            inner: Mutex::new(moat_core::SyncRequestSession::offer(token, now_ms)),
+        })
+    }
+
+    /// A sibling offered us history and we are joining its rendezvous.
+    /// No prompt: the offer already carries the one human decision, made
+    /// on the side that could judge.
+    #[frb(sync)]
+    pub fn accept_offer(
+        token: Vec<u8>,
+        now_ms: i64,
+    ) -> Result<SyncRequestSessionHandle, String> {
+        let token: [u8; moat_core::SYNC_REQUEST_TOKEN_LEN] = token
+            .try_into()
+            .map_err(|_| "token must be 16 bytes".to_string())?;
+        Ok(SyncRequestSessionHandle {
+            inner: Mutex::new(moat_core::SyncRequestSession::accept_offer(token, now_ms)),
         })
     }
 
@@ -1884,10 +2228,12 @@ impl SyncRequestSessionHandle {
         self.inner.lock().unwrap().on_channel_up().map_err(|e| e.to_string())
     }
 
-    /// The sync session running on this channel reported `Complete`.
+    /// The sync session running on this channel finished. `tally` comes
+    /// from that session; `device_name` is the peer as MLS named it on the
+    /// frames it sent.
     #[frb(sync)]
-    pub fn on_complete(&self) {
-        self.inner.lock().unwrap().on_complete();
+    pub fn on_complete(&self, tally: SyncTallyDto, device_name: Option<String>) {
+        self.inner.lock().unwrap().on_complete(tally.into(), device_name);
     }
 
     /// Terminal failure. The first reason wins — a late teardown notice
@@ -2745,6 +3091,15 @@ mod ring_sync_ffi_tests {
             blob_mime: Some("image/png".into()),
             blob_width: Some(100),
             blob_height: Some(200),
+            // Non-default so the round trip actually covers them: both
+            // were dropped by the Dart mapping until they were carried
+            // here, and a receiving device cannot recover either from the
+            // PDS.
+            blob_thumbhash: Some(vec![5u8; 24]),
+            reactions: vec![moat_core::SyncReaction {
+                emoji: "👍".into(),
+                sender_did: "did:plc:bob".into(),
+            }],
         };
         let dto: SyncMessageDto = core.clone().into();
         let back: SyncMessage = dto.into();

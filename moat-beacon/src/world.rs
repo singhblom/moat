@@ -18,6 +18,7 @@
 //! Everything is cleaned up when `TestWorld` is dropped.
 
 
+use crate::ports::reserve_port;
 use crate::client::MoatCliClient;
 use crate::config::WorldConfig;
 use crate::drawbridge::DrawbridgeProcess;
@@ -27,7 +28,6 @@ use anyhow::{Context, Result};
 use moat_postern::{AccountConfig, PosternConfig, PosternHandle};
 use std::{
     collections::HashMap,
-    net::TcpListener,
     path::PathBuf,
     process::{Child, Command, Stdio},
     fs::File,
@@ -390,8 +390,8 @@ impl TestWorld {
             let full_handle = format!("{handle}{handle_suffix}");
             let drawbridge_ws = drawbridge_ws_endpoints[i].as_deref();
 
-            let http_port = free_port()?;
-            let http_addr = format!("127.0.0.1:{http_port}");
+            let mut http_port = reserve_port()?;
+            let http_addr = format!("127.0.0.1:{}", http_port.port());
             let storage = make_storage_dir(handle)?;
 
             let mut args = vec![
@@ -429,6 +429,10 @@ impl TestWorld {
                 .stderr(Stdio::from(log_file));
             #[cfg(unix)]
             cmd.process_group(pgid as i32);
+            // Last possible moment: everything between here and the
+            // child's own bind is the window another process could take
+            // the port in.
+            http_port.release();
             let child = cmd
                 .spawn()
                 .with_context(|| format!("spawn participant ({kind:?}) for {full_handle}"))?;
@@ -625,8 +629,8 @@ impl TestWorld {
         label: &str,
         kind: ParticipantKind,
     ) -> Result<MoatCliClient> {
-        let http_port = free_port()?;
-        let http_addr = format!("127.0.0.1:{http_port}");
+        let mut http_port = reserve_port()?;
+        let http_addr = format!("127.0.0.1:{}", http_port.port());
         let storage = make_storage_dir(label)?;
 
         let mut args = vec![
@@ -673,6 +677,8 @@ impl TestWorld {
             .stderr(Stdio::from(log_file));
         #[cfg(unix)]
         cmd.process_group(pgid as i32);
+        // See the note at the matching release above.
+        http_port.release();
         let child = cmd
             .spawn()
             .with_context(|| format!("spawn second device ({kind:?}) for {label}"))?;
@@ -792,11 +798,6 @@ fn prune_storage_roots(base: &std::path::Path) {
 }
 
 /// Find a free TCP port by binding to `127.0.0.1:0`.
-fn free_port() -> Result<u16> {
-    let listener = TcpListener::bind("127.0.0.1:0").context("bind ephemeral port")?;
-    Ok(listener.local_addr()?.port())
-}
-
 /// Path to the `moat-cli` binary in the Cargo target directory.
 ///
 /// Always runs `cargo build -p moat-cli` first. This is incremental (a no-op

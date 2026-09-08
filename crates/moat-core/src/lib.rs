@@ -55,7 +55,7 @@ pub use crate::error::{Error, ErrorCode, Result};
 pub use crate::device_ring::{
     decode_coord_msg, encode_coord_msg, summarize_ring_commands, CoordMsg, DeviceId,
     DeviceRingState, GroupKind, KeyPackageInput, OfferedKp, OwnEventInput, RingCommand, RingEvent,
-    RingMembership, SiblingStealth, StepEnv, TickInputs, KP_POOL_TARGET,
+    RingMembership, SiblingStealth, SiblingSummary, StepEnv, TickInputs, KP_POOL_TARGET,
 };
 pub use crate::event::{
     ControlKind, DecryptOutcome, Event, EventKind, MessageKind, ModifierKind, ReactionPayload,
@@ -79,11 +79,13 @@ pub use crate::tag::{
 };
 pub use crate::sync::{
     decode_sync_msg, encode_sync_msg, fit_hello_inventories, ConvInventory, ConvState,
-    SyncMessage, SyncMsg, SyncOutput, SyncSession, HELLO_INVENTORY_BUDGET_BYTES,
+    SyncMessage, SyncMsg, SyncOutput, SyncReaction, SyncSession, SyncTally,
+    HELLO_INVENTORY_BUDGET_BYTES,
 };
 pub use crate::sync_request::{
-    decode_ring_msg, encode_ring_msg, RingMsg, SyncFailure, SyncRequestSession,
-    SyncRequestUiState, SYNC_REQUEST_TOKEN_LEN, SYNC_REQUEST_TTL_MS,
+    decode_history_summary, decode_ring_msg, encode_history_summary, encode_ring_msg,
+    ConvSummary, HistorySummaryPayload, RingMsg, SyncFailure, SyncRequestSession,
+    SyncRequestUiState, DEVICE_ID_LEN, SYNC_REQUEST_TOKEN_LEN, SYNC_REQUEST_TTL_MS,
 };
 pub use crate::pairing::{
     crockford_decode, crockford_encode, decode_pairing_msg, derive_pairing_keys,

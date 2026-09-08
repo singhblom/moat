@@ -33,6 +33,9 @@ pub mod push_latency;
 pub mod push_latency_restart;
 pub mod same_drawbridge_local;
 pub mod staggered_device_pairing;
+pub mod sync_history_before_membership;
+pub mod sync_offer_history;
+pub mod sync_offer_history_dr;
 pub mod sync_request_history;
 pub mod sync_request_history_dd;
 pub mod sync_request_history_dr;
@@ -869,6 +872,27 @@ pub static SCENARIOS: &[Scenario] = &[
         name: "staggered-device-pairing",
         description: "D2 is offline while D1 pairs D3; D2 must catch up on its own",
         run_fn: staggered_device_pairing::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "sync-offer-history",
+        description: "D1 sees D2 has no history and offers it; D2 joins without being prompted",
+        run_fn: sync_offer_history::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "sync-offer-history-dr",
+        description: "Same as sync-offer-history, but the offering device is Dart",
+        run_fn: sync_offer_history_dr::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "sync-history-before-membership",
+        description: "D2 is served history for a conversation it has not been added to yet",
+        run_fn: sync_history_before_membership::run_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },

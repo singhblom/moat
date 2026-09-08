@@ -1,7 +1,7 @@
 //! Terminal UI rendering with Ratatui
 
 use crate::app::{App, DeviceAlert, DisplayMessage, Focus, LoginField, QUICK_EMOJIS};
-use moat_core::{PairingUiState, SyncFailure, SyncRequestUiState};
+use moat_core::{PairingUiState, SyncFailure, SyncRequestUiState, SyncTally};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -72,6 +72,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_sync_approve_popup(frame, app);
     } else if app.focus == Focus::Devices {
         draw_devices_popup(frame, app);
+    } else if app.focus == Focus::SyncOfferPrompt {
+        draw_sync_offer_prompt(frame, app);
     }
 
     // Draw message info popup if toggled
@@ -585,6 +587,32 @@ fn build_msg_lines(
 }
 
 fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
+    // A conversation whose history arrived by sync before the Add that
+    // puts us in the group has nothing to send into: there is no local
+    // MLS group to encrypt to. Say so where the composer would be, rather
+    // than accepting keystrokes that cannot go anywhere.
+    //
+    // Deliberately not promising this resolves imminently. An Add comes
+    // from a member, so if the device that served the history was the
+    // only one and it goes offline, nothing adds us until it returns.
+    let awaiting_membership = app
+        .active_conversation
+        .and_then(|i| app.conversations.get(i))
+        .is_some_and(|c| !c.is_member);
+
+    if awaiting_membership {
+        let block = Block::default()
+            .title(" Message ")
+            .borders(Borders::ALL)
+            .style(Style::default().fg(Color::DarkGray));
+        let notice = Paragraph::new("Waiting to be connected to this conversation.")
+            .block(block)
+            .style(Style::default().fg(Color::DarkGray))
+            .wrap(Wrap { trim: true });
+        frame.render_widget(notice, area);
+        return;
+    }
+
     let is_focused = app.focus == Focus::Input;
     let color = if is_focused {
         color_pulse(38.0, 227.0, 195.0, 38.0, 195.0, 227.0, 5000)
@@ -857,6 +885,15 @@ fn draw_devices_popup(frame: &mut Frame, app: &App) {
                     Style::default().fg(Color::DarkGray),
                 ),
             ]));
+            // What that device last said it holds. This is what turns
+            // "ask a device and hope" into a choice the user can make:
+            // approve on the one that actually has the history.
+            if !is_self {
+                lines.push(Line::from(Span::styled(
+                    format!("    {}", advertisement_text(&device["advertised"])),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
         }
     }
 
@@ -880,8 +917,8 @@ fn draw_devices_popup(frame: &mut Frame, app: &App) {
             "Transferring history…".to_string(),
             Style::default().fg(Color::Green),
         ),
-        SyncRequestUiState::Complete => (
-            "History sync complete.".to_string(),
+        SyncRequestUiState::Complete { tally, device_name } => (
+            sync_complete_text(&tally, device_name.as_deref()),
             Style::default().fg(Color::Green),
         ),
         SyncRequestUiState::Failed { reason } => (
@@ -892,12 +929,58 @@ fn draw_devices_popup(frame: &mut Frame, app: &App) {
     lines.push(Line::from(Span::styled(label, style)));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "s: ask for history   Esc: close",
+        "s: ask for history   o: send history   Esc: close",
         Style::default().fg(Color::DarkGray),
     )));
 
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true });
     frame.render_widget(paragraph, inner);
+}
+
+/// What a sibling last advertised holding, for its line on the Devices
+/// screen.
+///
+/// A hint, never a verdict: two devices can hold a hundred *different*
+/// messages each and advertise the same count, so this narrows where to
+/// ask rather than saying anyone is in sync. The wording states what was
+/// said and when, and claims nothing further.
+fn advertisement_text(advertised: &serde_json::Value) -> String {
+    let Some(messages) = advertised["messages"].as_u64() else {
+        return "hasn't said what it has yet".to_string();
+    };
+    if messages == 0 {
+        return "says it has no history".to_string();
+    }
+    let convs = advertised["conversations"].as_u64().unwrap_or(0);
+    format!(
+        "says it has {} across {}",
+        plural(messages, "message", "messages"),
+        plural(convs, "conversation", "conversations"),
+    )
+}
+
+/// How a finished sync reads, on either side of it.
+///
+/// An empty tally is not a lesser success, it is a different answer: with
+/// one donor per gesture it is what tells the user to go and approve on a
+/// *different* device. Naming that device is the other half — "no more
+/// than you" is only actionable once you know which sibling said it.
+///
+/// Core carries the counts, not the words; this is the TUI's wording, and
+/// `syncCompleteText` in moat-dart is the Flutter app's.
+fn sync_complete_text(tally: &SyncTally, device_name: Option<&str>) -> String {
+    let device = device_name.unwrap_or("that device");
+    if tally.is_empty() {
+        return format!("Nothing new — {device} didn't have more than you.");
+    }
+    let messages = plural(tally.messages, "message", "messages");
+    let convs = plural(tally.conversations, "conversation", "conversations");
+    format!("Received {messages} across {convs} from {device}.")
+}
+
+/// `"1 message"` / `"412 messages"`.
+fn plural(n: u64, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
 }
 
 /// How a [`SyncFailure`] reads on the device that was *asked* for history.
@@ -939,6 +1022,50 @@ fn requester_failure_text(reason: &SyncFailure) -> String {
         SyncFailure::RequestExpired => "This request expired.".to_string(),
         SyncFailure::Declined => "Declined on this device.".to_string(),
     }
+}
+
+/// A sibling has said it holds no history, and this device does.
+///
+/// Raised on app open and the moment such an advertisement arrives,
+/// because a newly added device with nothing on it is exactly when the
+/// user cares — telling them a week later is worth much less.
+///
+/// Answering either way settles it: sending offers, declining sets the
+/// dismissal flag so this same advertisement will not ask again. Only a
+/// sibling that later says something *different* can prompt again.
+fn draw_sync_offer_prompt(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+
+    let popup_width = 60.min(area.width.saturating_sub(4));
+    let popup_height = 9;
+    let popup_x = (area.width - popup_width) / 2;
+    let popup_y = (area.height - popup_height) / 2;
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+    frame.render_widget(Clear, popup_area);
+    let block = Block::default()
+        .title(" New Device ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Magenta));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let name = app
+        .pending_offer_device_name()
+        .unwrap_or_else(|| "A new device".to_string());
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("Device: ", Style::default().fg(Color::Yellow)),
+            Span::raw(name),
+        ]),
+        Line::from(""),
+        Line::from("says it has none of your message history."),
+        Line::from(""),
+        Line::from("Send it your history? (y/Enter to send, n/Esc to dismiss)"),
+    ];
+
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true });
+    frame.render_widget(paragraph, inner);
 }
 
 /// A sibling asked for history. Names the requesting device from its MLS
@@ -987,7 +1114,7 @@ fn draw_sync_approve_popup(frame: &mut Frame, app: &App) {
         SyncRequestUiState::Idle
         | SyncRequestUiState::AwaitingPeer
         | SyncRequestUiState::Active
-        | SyncRequestUiState::Complete => vec![Line::from("")],
+        | SyncRequestUiState::Complete { .. } => vec![Line::from("")],
     };
 
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true });
@@ -1096,4 +1223,69 @@ fn draw_device_alert(frame: &mut Frame, alert: &DeviceAlert) {
         .style(Style::default().fg(Color::Magenta));
 
     frame.render_widget(paragraph, alert_area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tally(messages: u64, conversations: u64) -> SyncTally {
+        SyncTally { messages, conversations }
+    }
+
+    /// The outcome that sends the user to a different device has to read
+    /// differently from every other kind of "complete".
+    #[test]
+    fn an_empty_tally_says_the_device_had_nothing_new() {
+        let text = sync_complete_text(&SyncTally::default(), Some("Pixel 8"));
+        assert_eq!(text, "Nothing new — Pixel 8 didn't have more than you.");
+    }
+
+    #[test]
+    fn a_transfer_reports_what_it_moved_and_where_from() {
+        let text = sync_complete_text(&tally(412, 6), Some("Pixel 8"));
+        assert_eq!(text, "Received 412 messages across 6 conversations from Pixel 8.");
+    }
+
+    #[test]
+    fn singular_counts_read_as_singular() {
+        let text = sync_complete_text(&tally(1, 1), Some("Laptop"));
+        assert_eq!(text, "Received 1 message across 1 conversation from Laptop.");
+    }
+
+    /// Every completed transfer carries a credential, so this is the
+    /// pairing-time caller rather than a peer that stayed anonymous.
+    /// The Devices screen's per-sibling line. Deliberately factual: a
+    /// count is a hint about where to ask, not a claim that anyone is in
+    /// sync.
+    #[test]
+    fn an_advertisement_reads_as_what_the_device_said() {
+        let advertised = serde_json::json!({ "messages": 412, "conversations": 6 });
+        assert_eq!(
+            advertisement_text(&advertised),
+            "says it has 412 messages across 6 conversations"
+        );
+    }
+
+    #[test]
+    fn a_device_with_no_history_says_so_rather_than_showing_zero() {
+        let advertised = serde_json::json!({ "messages": 0, "conversations": 0 });
+        assert_eq!(advertisement_text(&advertised), "says it has no history");
+    }
+
+    /// A sibling that has not advertised yet is not the same as one that
+    /// advertised nothing — the first is silence, the second an answer.
+    #[test]
+    fn a_silent_device_is_distinguished_from_an_empty_one() {
+        assert_eq!(
+            advertisement_text(&serde_json::Value::Null),
+            "hasn't said what it has yet"
+        );
+    }
+
+    #[test]
+    fn an_unnamed_peer_still_reads_as_a_sentence() {
+        let text = sync_complete_text(&SyncTally::default(), None);
+        assert_eq!(text, "Nothing new — that device didn't have more than you.");
+    }
 }

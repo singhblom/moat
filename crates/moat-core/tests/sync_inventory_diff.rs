@@ -34,6 +34,8 @@ fn msg(rkey: &str) -> SyncMessage {
         blob_mime: None,
         blob_width: None,
         blob_height: None,
+        blob_thumbhash: None,
+        reactions: Vec::new(),
     }
 }
 
@@ -396,6 +398,71 @@ fn encoded_len(c: &ConvState) -> usize {
         ConvInventory::Range { oldest, newest, .. } => oldest.len() + newest.len() + 64,
         ConvInventory::Empty => 16,
     }
+}
+
+// ── What the session reports at the end ──────────────────────────────────────
+
+/// The session counts what it took, so a host does not have to. Both
+/// runtimes then report the same number from the same events, which is
+/// the whole reason this lives in core rather than twice in the hosts.
+#[test]
+fn a_session_counts_the_messages_and_conversations_it_received() {
+    let a = vec![1u8; 32];
+    let b = vec![2u8; 32];
+
+    let mut s = SyncSession::new();
+    s.add_conv_plan(a.clone(), hex::encode(&a), vec![], true);
+    s.add_conv_plan(b.clone(), hex::encode(&b), vec![], true);
+    let _ = s.on_paired(vec![], 0);
+    let _ = s
+        .on_message(SyncMsg::Hello {
+            convs: vec![state_with(&a, &["r1", "r2"]), state_with(&b, &["r9"])],
+            ring_epoch: 0,
+        })
+        .unwrap();
+
+    assert_eq!(s.tally().messages, 0, "nothing has arrived yet");
+
+    let _ = s
+        .on_message(SyncMsg::Batch {
+            group_id: a.clone(),
+            messages: vec![msg("r1"), msg("r2")],
+            next_cursor: None,
+        })
+        .unwrap();
+    let _ = s
+        .on_message(SyncMsg::Batch {
+            group_id: b.clone(),
+            messages: vec![msg("r9")],
+            next_cursor: None,
+        })
+        .unwrap();
+
+    let tally = s.tally();
+    assert_eq!(tally.messages, 3);
+    assert_eq!(tally.conversations, 2);
+    assert!(!tally.is_empty());
+}
+
+/// Two devices that already agree exchange nothing, and the report has to
+/// say that rather than looking like any other completed sync — it is the
+/// result that means "ask a different device".
+#[test]
+fn a_session_that_moves_nothing_reports_an_empty_tally() {
+    let g = vec![7u8; 32];
+    let mut s = SyncSession::new();
+    s.add_conv_plan(g.clone(), hex::encode(&g), vec![msg("r1")], false);
+    let _ = s.on_paired(vec![], 0);
+    let _ = s
+        .on_message(SyncMsg::Hello {
+            convs: vec![state_with(&g, &["r1"])],
+            ring_epoch: 0,
+        })
+        .unwrap();
+
+    assert!(s.is_done(), "identical inventories finish on the Hello");
+    assert!(s.tally().is_empty());
+    assert_eq!(s.tally().conversations, 0);
 }
 
 // ── The Hello frame against the wire that carries it ─────────────────────────

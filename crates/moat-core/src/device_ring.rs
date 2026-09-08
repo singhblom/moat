@@ -227,6 +227,50 @@ pub struct DeviceRingState {
     /// Per-owner pool we draw KPs from when adding the owner to a user
     /// conversation.  Key is the owner's hex-encoded `device_id`.
     kp_pools: HashMap<String, KpPool>,
+
+    /// The latest [`crate::RingMsg::HistorySummary`] we have seen from
+    /// each sibling, keyed by its hex-encoded `device_id`.
+    ///
+    /// One entry per device, replaced wholesale: an advertisement is a
+    /// hint, not a log, so only the newest matters and there is nothing
+    /// to reconcile.
+    #[serde(default)]
+    sibling_summaries: HashMap<String, SiblingSummary>,
+
+    /// The record URI of our own last published summary, so the next
+    /// publish can delete it.
+    ///
+    /// The *record* is what gets deleted, not the blob: the PDS
+    /// garbage-collects a blob once nothing references it, so dropping
+    /// the record is what releases the bytes. Exactly one summary per
+    /// device stays live; without this they accumulate forever.
+    #[serde(default)]
+    published_summary_record: Option<String>,
+}
+
+/// What a sibling last said it holds, and whether we have acted on it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SiblingSummary {
+    /// Conversations and counts, as advertised.
+    pub convs: Vec<crate::ConvSummary>,
+    /// When this arrived, by our clock.
+    pub received_at_ms: i64,
+    /// Whether the user has already been shown, and dismissed, a prompt
+    /// for *this* advertisement.
+    ///
+    /// A device holding a summary it has not acted on must not re-prompt
+    /// on every launch until the user does something. Cleared whenever
+    /// the sibling advertises something new, since that is a different
+    /// question being asked.
+    #[serde(default)]
+    pub dismissed: bool,
+}
+
+impl SiblingSummary {
+    /// Total messages this sibling advertised.
+    pub fn total_messages(&self) -> u64 {
+        crate::HistorySummaryPayload { convs: self.convs.clone() }.total_messages()
+    }
 }
 
 // ─── Event / command surface ────────────────────────────────────────────────
@@ -465,6 +509,100 @@ impl DeviceRingState {
     }
 
     /// Number of unclaimed KPs we hold for this owner.
+    /// Record a sibling's advertisement, replacing whatever it said
+    /// before.
+    ///
+    /// The dismissal flag is deliberately not carried over: a sibling
+    /// that now advertises something different is asking a different
+    /// question, and a previous "no thanks" was an answer to the old one.
+    pub fn record_sibling_summary(
+        &mut self,
+        device_id: &DeviceId,
+        convs: Vec<crate::ConvSummary>,
+        received_at_ms: i64,
+    ) {
+        let key = hex::encode(device_id);
+        let unchanged = self
+            .sibling_summaries
+            .get(&key)
+            .is_some_and(|existing| existing.convs == convs);
+        let dismissed = unchanged
+            && self.sibling_summaries.get(&key).is_some_and(|e| e.dismissed);
+        self.sibling_summaries.insert(
+            key,
+            SiblingSummary { convs, received_at_ms, dismissed },
+        );
+    }
+
+    /// What a sibling last advertised, if anything.
+    pub fn sibling_summary(&self, device_id: &DeviceId) -> Option<&SiblingSummary> {
+        self.sibling_summaries.get(&hex::encode(device_id))
+    }
+
+    /// Every advertisement we hold, keyed by hex device id.
+    pub fn sibling_summaries(&self) -> &HashMap<String, SiblingSummary> {
+        &self.sibling_summaries
+    }
+
+    /// Siblings worth prompting the user to send history to.
+    ///
+    /// This is the trigger for the offer direction: a device that has just
+    /// joined advertises holding nothing, and the device the user is
+    /// actually holding is the one that can fix that. Prompting promptly
+    /// is the point — a new phone with no history is the moment the user
+    /// cares, and telling them a week later is worth much less.
+    ///
+    /// Three conditions, each ruling out a way of being annoying:
+    ///
+    /// - the sibling has *advertised*. Silence is not an invitation: a
+    ///   device that has said nothing might hold everything.
+    /// - it advertised less than `our_messages`. Offering what the other
+    ///   side already has is a prompt with nothing behind it.
+    /// - the user has not already answered this advertisement. Re-asking
+    ///   a question they declined is how people learn to dismiss
+    ///   reflexively.
+    ///
+    /// A heuristic, deliberately: counts can coincide across devices
+    /// holding entirely different messages, so a false negative here
+    /// costs a prompt that was never shown, never a wrong transfer. What
+    /// actually moves is settled by the session's own `Hello`.
+    pub fn offerable_siblings(&self, our_messages: u64) -> Vec<DeviceId> {
+        let mut out: Vec<DeviceId> = self
+            .sibling_summaries
+            .iter()
+            .filter(|(_, s)| !s.dismissed && s.total_messages() < our_messages)
+            .filter_map(|(device_id, _)| {
+                hex::decode(device_id)
+                    .ok()
+                    .and_then(|b| DeviceId::try_from(b.as_slice()).ok())
+            })
+            .collect();
+        // Stable order, so a host prompting about "the first one" doesn't
+        // pick a different device on each launch.
+        out.sort_unstable();
+        out
+    }
+
+    /// Mark a sibling's current advertisement as one the user has already
+    /// been asked about, so it stops producing prompts until the sibling
+    /// says something new.
+    pub fn dismiss_sibling_summary(&mut self, device_id: &DeviceId) {
+        if let Some(entry) = self.sibling_summaries.get_mut(&hex::encode(device_id)) {
+            entry.dismissed = true;
+        }
+    }
+
+    /// The record URI of our last published summary, which the next
+    /// publish supersedes and should delete.
+    pub fn published_summary_record(&self) -> Option<&str> {
+        self.published_summary_record.as_deref()
+    }
+
+    /// Record the URI of the summary we just published.
+    pub fn set_published_summary_record(&mut self, uri: Option<String>) {
+        self.published_summary_record = uri;
+    }
+
     pub fn kp_pool_size(&self, owner: &DeviceId) -> usize {
         let key = hex::encode(owner);
         self.kp_pools.get(&key).map(|p| p.local_pool.len()).unwrap_or(0)

@@ -64,6 +64,8 @@ Future<void> main(List<String> args) async {
   );
   await ringService.init();
   ringService.convsService = convsService;
+  // So the history advertisement can say how much this device holds.
+  ringService.messageStorage = msgStorage;
   final syncService = SyncService(
     auth: authService,
     drawbridge: DrawbridgeService.instance,
@@ -102,7 +104,7 @@ Future<void> main(List<String> args) async {
     secureStorage: secureStorage,
     ringService: ringService,
   );
-  pollingService.onRingSyncRequest = syncRequestService.onRingSyncRequest;
+  pollingService.onRingMessage = syncRequestService.onRingMessage;
   pollingService.onPollTick = syncRequestService.expireIfDue;
 
   // Wire ConversationManager.

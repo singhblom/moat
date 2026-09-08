@@ -32,6 +32,17 @@ class Conversation {
   /// Creation timestamp
   final DateTime createdAt;
 
+  /// Whether this device is an MLS member of the group.
+  ///
+  /// `false` for a conversation whose history arrived by sync before the
+  /// fan-out `Add` that puts us in the group: the messages are readable,
+  /// but there is no local MLS group to encrypt a reply to, so the
+  /// composer stays closed until the `Add` lands.
+  ///
+  /// Defaults to `true` — every other way a conversation comes into
+  /// existence goes through joining or creating its group.
+  bool isMember;
+
   Conversation({
     required this.groupId,
     this.displayName,
@@ -42,6 +53,7 @@ class Conversation {
     this.epoch = 0,
     required this.keyBundleRef,
     required this.createdAt,
+    this.isMember = true,
   });
 
   /// Resolve a display name for this conversation.
@@ -69,6 +81,7 @@ class Conversation {
         'epoch': epoch,
         'keyBundleRef': keyBundleRef,
         'createdAt': createdAt.toIso8601String(),
+        'isMember': isMember,
       };
 
   factory Conversation.fromJson(Map<String, dynamic> json) => Conversation(
@@ -85,5 +98,8 @@ class Conversation {
         epoch: json['epoch'] as int? ?? 0,
         keyBundleRef: json['keyBundleRef'] as String,
         createdAt: DateTime.parse(json['createdAt'] as String),
+        // Absent in records written before read-only conversations
+        // existed, and every one of those was a group we had joined.
+        isMember: json['isMember'] as bool? ?? true,
       );
 }

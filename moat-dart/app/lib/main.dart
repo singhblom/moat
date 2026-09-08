@@ -18,6 +18,7 @@ import 'providers/profile_provider.dart';
 import 'providers/theme_provider.dart';
 import 'providers/watch_list_provider.dart';
 import 'screens/login_screen.dart';
+import 'screens/offer_history_screen.dart';
 import 'screens/conversations_screen.dart';
 import 'screens/approve_pairing_screen.dart';
 import 'screens/approve_sync_request_screen.dart';
@@ -410,6 +411,8 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       // Best-effort load of persisted ring state before polling starts.
       // ignore: discarded_futures
       ringService.init();
+      // So the history advertisement can say how much this device holds.
+      ringService.messageStorage = widget.msgStorage;
       final syncService = SyncService(
         auth: auth.service,
         drawbridge: DrawbridgeService.instance,
@@ -472,10 +475,30 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
           );
         }
       });
+      // The offer direction. Raised the moment a sibling advertises that
+      // it holds nothing — a newly added device is exactly when the user
+      // cares — and again below on app open, for an advertisement that
+      // arrived in an earlier session.
+      ringService.onOfferableSibling = (deviceIdHex) async {
+        rootNavigatorKey.currentState?.push(
+          MaterialPageRoute(
+            builder: (_) => OfferHistoryScreen(
+              deviceIdHex: deviceIdHex,
+              authService: auth.service,
+            ),
+          ),
+        );
+      };
+      // App open: advertisements are persisted, so a device paired in an
+      // earlier session still gets asked about now rather than whenever
+      // the user next opens the Devices screen.
+      // ignore: discarded_futures
+      ringService.promptOfferOnOpen();
+
       // A sibling's `ring.msg` reaches the service through the poller,
       // which is what decrypts ring traffic.
-      _pollingService!.onRingSyncRequest =
-          SyncRequestManager.instance.service!.onRingSyncRequest;
+      _pollingService!.onRingMessage =
+          SyncRequestManager.instance.service!.onRingMessage;
       // The sync-request session has no clock of its own.
       _pollingService!.onPollTick =
           SyncRequestManager.instance.service!.expireIfDue;

@@ -146,11 +146,30 @@ pub fn fit_hello_inventories(convs: &mut [ConvState]) {
     }
 }
 
+/// One emoji reaction, as carried by a synced message.
+///
+/// Reactions arrive as their own events on the PDS, so a device that was
+/// present can rebuild them by replaying. A device receiving history from
+/// before it joined cannot: those events are not decryptable to it. If
+/// sync does not carry them they are lost for good, which is why they
+/// travel with the message rather than being left to the transport.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SyncReaction {
+    pub emoji: String,
+    pub sender_did: String,
+}
+
 /// Plaintext message exchanged during a sync session.
 ///
 /// Mirrors the host's `StoredMessage` but with explicit, JSON-friendly fields.
 /// Optional values use `Option<…>` directly so they round-trip through JSON
 /// without sentinel values.
+///
+/// The rule this type exists to keep: **everything a host persists about a
+/// message travels**. A field held on one side and not carried here is
+/// silently lost on the other, and for history predating the receiver's
+/// membership it cannot be recovered from the PDS afterwards — the
+/// original events are not decryptable to it.
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SyncMessage {
@@ -173,6 +192,16 @@ pub struct SyncMessage {
     pub blob_mime: Option<String>,
     pub blob_width: Option<u32>,
     pub blob_height: Option<u32>,
+    /// The image's blurry placeholder, shown while the blob downloads.
+    /// Stored beside the other blob metadata, so it travels with it.
+    #[serde(default)]
+    #[serde_as(as = "Option<Base64>")]
+    pub blob_thumbhash: Option<Vec<u8>>,
+    /// Emoji reactions on this message. `default` so a peer that predates
+    /// the field still decodes; an empty list and an absent one mean the
+    /// same thing.
+    #[serde(default)]
+    pub reactions: Vec<SyncReaction>,
 }
 
 /// The sync protocol message, serialised to JSON and transmitted as a
@@ -239,6 +268,31 @@ pub enum SyncOutput {
     },
 }
 
+/// What a finished session took from its peer.
+///
+/// With one donor per gesture, "nothing new — that device didn't have
+/// more than you" is the outcome that tells the user to try a *different*
+/// device. Without it a sync that transferred everything and one that
+/// transferred nothing look identical, so the counts are not decoration:
+/// they are the difference between a legible result and a mysterious one.
+///
+/// Counts what the peer *delivered*, not what storage accepted as new.
+/// The inventory diff means the donor already sent only the complement,
+/// so the two agree except where a `range` inventory forced it to serve
+/// across a span it could not see holes in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct SyncTally {
+    pub messages: u64,
+    pub conversations: u64,
+}
+
+impl SyncTally {
+    /// `true` when the peer had nothing this side was missing.
+    pub fn is_empty(&self) -> bool {
+        self.messages == 0
+    }
+}
+
 /// Session phase. Internal — exposed only via [`SyncSession::is_done`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Phase {
@@ -276,6 +330,11 @@ struct ConvPlan {
 pub struct SyncSession {
     phase: Phase,
     plans: Vec<ConvPlan>,
+    /// Messages received from the peer, and the conversations they
+    /// arrived for. Counted here rather than in each host so both
+    /// runtimes report the same number from the same events.
+    received_messages: u64,
+    received_convs: HashSet<String>,
 }
 
 impl Default for SyncSession {
@@ -290,7 +349,12 @@ impl SyncSession {
     /// Create a new session in the `SendingHello` phase. Add per-conversation
     /// state via [`add_conv_plan`] before calling [`on_paired`].
     pub fn new() -> Self {
-        Self { phase: Phase::SendingHello, plans: Vec::new() }
+        Self {
+            phase: Phase::SendingHello,
+            plans: Vec::new(),
+            received_messages: 0,
+            received_convs: HashSet::new(),
+        }
     }
 
     /// Populate the plan for one conversation.
@@ -352,6 +416,15 @@ impl SyncSession {
     /// `true` once the session has reached the `Done` phase.
     pub fn is_done(&self) -> bool {
         self.phase == Phase::Done
+    }
+
+    /// What this side has received so far. Meaningful at any point, but
+    /// read at completion, where it becomes the report the user sees.
+    pub fn tally(&self) -> SyncTally {
+        SyncTally {
+            messages: self.received_messages,
+            conversations: self.received_convs.len() as u64,
+        }
     }
 
     // ── Internal handlers ─────────────────────────────────────────────────────
@@ -521,6 +594,11 @@ impl SyncSession {
             }
         };
 
+        if !messages.is_empty() {
+            self.received_messages += messages.len() as u64;
+            self.received_convs.insert(plan.conv_id.clone());
+        }
+
         let mut outputs = vec![SyncOutput::Store {
             conv_id: plan.conv_id.clone(),
             messages,
@@ -584,6 +662,8 @@ mod tests {
             blob_mime: None,
             blob_width: None,
             blob_height: None,
+            blob_thumbhash: None,
+            reactions: Vec::new(),
         }
     }
 

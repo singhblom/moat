@@ -543,6 +543,30 @@ class AtprotoClient {
     return response['uri'] as String;
   }
 
+  /// Delete one of our own event records, given its `at://` URI.
+  ///
+  /// Used to retire a superseded record — a history summary replaced by a
+  /// newer one. Deleting the *record* is also what releases its blob: the
+  /// PDS garbage-collects a blob once nothing references it, so there is
+  /// no separate blob-delete call to make.
+  ///
+  /// Mirrors `MoatAtprotoClient::delete_event` in `crates/moat-atproto`.
+  Future<void> deleteEvent(String uri) async {
+    _requireSession();
+    final rkey = uri.split('/').last;
+    if (rkey.isEmpty) {
+      throw AtprotoException('no rkey in record URI: $uri');
+    }
+    await _authedPost(
+      '${_session!.pdsUrl}/xrpc/com.atproto.repo.deleteRecord',
+      body: {
+        'repo': _session!.did,
+        'collection': eventNsid,
+        'rkey': rkey,
+      },
+    );
+  }
+
   Future<List<EventRecord>> fetchEvents(String did, {String? afterRkey}) async {
     final pdsUrl = await resolvePdsEndpoint(did);
 

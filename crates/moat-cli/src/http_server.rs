@@ -75,6 +75,9 @@ struct ConversationDto {
     id: String,
     name: String,
     participant_dids: Vec<String>,
+    /// `false` while this device holds the conversation's history but is
+    /// not yet in its MLS group — see `App::register_synced_conversation`.
+    is_member: bool,
     epoch: u64,
     unread: usize,
 }
@@ -106,6 +109,16 @@ struct MessageDto {
     message_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     attachment: Option<ImageAttachmentDto>,
+    /// Emoji reactions on this message. Exposed so a test can see that
+    /// they survive history sync — a receiving device cannot rebuild them
+    /// from the PDS, so a drop here would be silent and permanent.
+    reactions: Vec<ReactionDto>,
+}
+
+#[derive(Serialize)]
+struct ReactionDto {
+    emoji: String,
+    sender_did: String,
 }
 
 // ── Error helper ─────────────────────────────────────────────────────────────
@@ -160,6 +173,7 @@ async fn get_conversations(State(state): State<Arc<ServerState>>) -> Json<Vec<Co
             id: c.id.clone(),
             name: c.display_name(),
             participant_dids: c.participant_dids.clone(),
+            is_member: c.is_member,
             epoch: c.current_epoch,
             unread: c.unread,
         })
@@ -265,6 +279,14 @@ async fn get_messages(
                 sender_did: m.sender_did.clone(),
                 message_id: message_id_hex,
                 attachment,
+                reactions: m
+                    .reactions
+                    .iter()
+                    .map(|r| ReactionDto {
+                        emoji: r.emoji.clone(),
+                        sender_did: r.sender_did.clone(),
+                    })
+                    .collect(),
             }
         })
         .collect();
@@ -458,6 +480,54 @@ async fn get_pair_status(State(state): State<Arc<ServerState>>) -> Json<moat_cor
 /// Ask the user's other devices for history this one is missing. The
 /// sibling's user must accept — no host auto-accepts, matching pairing's
 /// explicit-approval rule.
+/// A device id, hex-encoded, as the body of a targeted sync call.
+#[derive(Deserialize)]
+struct DeviceIdRequest {
+    device_id: String,
+}
+
+fn parse_device_id(hex_id: &str) -> HandlerResult<[u8; moat_core::DEVICE_ID_LEN]> {
+    let bytes = hex::decode(hex_id)
+        .map_err(|e| app_err(AppError::Other(format!("invalid device_id: {e}"))))?;
+    <[u8; moat_core::DEVICE_ID_LEN]>::try_from(bytes.as_slice())
+        .map_err(|_| app_err(AppError::Other("device_id must be 16 bytes".to_string())))
+}
+
+/// `POST /sync/offer` — send history to a sibling that lacks it.
+async fn post_sync_offer(
+    State(state): State<Arc<ServerState>>,
+    Json(body): Json<DeviceIdRequest>,
+) -> HandlerResult<Json<Value>> {
+    let device_id = parse_device_id(&body.device_id)?;
+    let mut app = state.app.lock().await;
+    app.api_sync_offer(device_id).map_err(app_err)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// `POST /sync/dismiss` — stop a sibling's current advertisement from
+/// prompting again until it says something new.
+async fn post_sync_dismiss(
+    State(state): State<Arc<ServerState>>,
+    Json(body): Json<DeviceIdRequest>,
+) -> HandlerResult<Json<Value>> {
+    let device_id = parse_device_id(&body.device_id)?;
+    let mut app = state.app.lock().await;
+    app.api_dismiss_summary(device_id).map_err(app_err)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// `GET /sync/offerable` — siblings worth offering history to.
+async fn get_sync_offerable(State(state): State<Arc<ServerState>>) -> Json<Value> {
+    let app = state.app.lock().await;
+    Json(json!({ "siblings": app.offerable_siblings() }))
+}
+
+/// `GET /sync/summaries` — what each sibling last advertised holding.
+async fn get_sync_summaries(State(state): State<Arc<ServerState>>) -> Json<Value> {
+    let app = state.app.lock().await;
+    Json(app.sibling_summaries_json())
+}
+
 async fn post_sync_request(State(state): State<Arc<ServerState>>) -> HandlerResult<Json<Value>> {
     let mut app = state.app.lock().await;
     app.api_sync_request().map_err(app_err)?;
@@ -591,6 +661,10 @@ pub async fn run_http(
         .route("/pair/status", get(get_pair_status))
         .route("/sync/start", post(post_sync_start))
         .route("/sync/request", post(post_sync_request))
+        .route("/sync/summaries", get(get_sync_summaries))
+        .route("/sync/offer", post(post_sync_offer))
+        .route("/sync/dismiss", post(post_sync_dismiss))
+        .route("/sync/offerable", get(get_sync_offerable))
         .route("/sync/accept", post(post_sync_accept))
         .route("/sync/decline", post(post_sync_decline))
         .route("/sync/status", get(get_sync_status))

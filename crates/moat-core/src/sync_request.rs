@@ -29,11 +29,16 @@
 use serde::{Deserialize, Serialize};
 use serde_with::{base64::Base64, serde_as};
 
+use crate::message::ExternalBlob;
+use crate::sync::{ConvInventory, SyncTally};
 use crate::{Error, Result};
 
 /// Length of the Drawbridge rendezvous token carried in a sync request.
 /// Matches `PAIRING_TOKEN_LEN` — it is the same relay mechanism.
 pub const SYNC_REQUEST_TOKEN_LEN: usize = 16;
+
+/// Length of an MLS device id, as carried in a leaf credential.
+pub const DEVICE_ID_LEN: usize = 16;
 
 /// How long a published request stays valid, matching the relay's own
 /// token TTL. A prompt that outlived the token would offer the user a
@@ -53,12 +58,106 @@ pub const SYNC_REQUEST_TTL_MS: i64 = 5 * 60 * 1000;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RingMsg {
-    /// "I am missing history — one of you please open a sync channel with
-    /// me at this rendezvous token."
+    /// "I am missing history — open a sync channel with me at this
+    /// rendezvous token."
+    ///
+    /// `target_device_id` names one sibling when the user picked a
+    /// specific device to ask; `None` is a broadcast, and every sibling
+    /// prompts. A sibling that is named but is not the target ignores the
+    /// message entirely rather than prompting about someone else's
+    /// business.
     SyncRequest {
         #[serde_as(as = "Base64")]
         token: [u8; SYNC_REQUEST_TOKEN_LEN],
+        #[serde(default)]
+        #[serde_as(as = "Option<Base64>")]
+        target_device_id: Option<[u8; DEVICE_ID_LEN]>,
     },
+
+    /// "I have history you don't — I am opening a channel; join me."
+    ///
+    /// The mirror of `SyncRequest`, for when the device holding the
+    /// history is the one in the user's hands. Always targeted: an
+    /// untargeted offer would have every sibling race for a rendezvous
+    /// that admits exactly two, making the winner arbitrary.
+    ///
+    /// Only one human approves a session, on the side that can judge. For
+    /// a request that is the donor; for an offer it is the offerer, who
+    /// has already decided. The recipient joins without prompting — the
+    /// offer comes from an authenticated ring member that can already
+    /// read everything it is about to send.
+    SyncOffer {
+        #[serde_as(as = "Base64")]
+        token: [u8; SYNC_REQUEST_TOKEN_LEN],
+        #[serde_as(as = "Base64")]
+        target_device_id: [u8; DEVICE_ID_LEN],
+    },
+
+    /// "Here is what I hold." An advertisement, so a sibling can tell
+    /// whether it is worth asking this device — or worth offering to it.
+    ///
+    /// The conversation list lives in an external blob rather than in the
+    /// record, and the record carries only the reference. That is not an
+    /// optimisation: a summary of more than ~22 conversations does not fit
+    /// the largest padding bucket at all, and there is no bucket above it.
+    /// A reference is a fixed ~200 bytes, so the record sits in the 512 B
+    /// bucket whatever the device holds — which also means an observer
+    /// learns nothing about how many conversations that is, where an
+    /// inline list would have leaked the count at bucket resolution.
+    ///
+    /// Same shape `message.long_text` and `message.image` already use.
+    HistorySummary { external: ExternalBlob },
+}
+
+/// What one device holds for one conversation, as advertised.
+///
+/// Reuses [`ConvInventory`] rather than inventing a second shape for the
+/// same idea, so the advertisement and the sync wire agree on what "what
+/// I hold" means. In practice this is always the `range` variant —
+/// enumerating every rkey would defeat the point of a summary.
+#[serde_as]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConvSummary {
+    #[serde_as(as = "Base64")]
+    pub group_id: Vec<u8>,
+    pub inventory: ConvInventory,
+}
+
+/// The blob a [`RingMsg::HistorySummary`] points at.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct HistorySummaryPayload {
+    pub convs: Vec<ConvSummary>,
+}
+
+impl HistorySummaryPayload {
+    /// Total messages advertised, across every conversation.
+    pub fn total_messages(&self) -> u64 {
+        self.convs
+            .iter()
+            .map(|c| match &c.inventory {
+                ConvInventory::Range { count, .. } => *count,
+                ConvInventory::Complete { rkeys } => rkeys.len() as u64,
+                ConvInventory::Empty => 0,
+            })
+            .sum()
+    }
+
+    /// `true` when this device advertises nothing at all — a fresh
+    /// device, and the case a sibling should offer to fill.
+    pub fn is_empty(&self) -> bool {
+        self.convs.is_empty() || self.total_messages() == 0
+    }
+}
+
+/// Encode a summary payload for the blob. Plain JSON: the blob is
+/// encrypted by [`crate::blob_encrypt`] before it leaves the device.
+pub fn encode_history_summary(payload: &HistorySummaryPayload) -> Vec<u8> {
+    serde_json::to_vec(payload).expect("HistorySummaryPayload serialization should never fail")
+}
+
+/// Decode a summary payload from decrypted blob bytes.
+pub fn decode_history_summary(bytes: &[u8]) -> Result<HistorySummaryPayload> {
+    serde_json::from_slice(bytes).map_err(|e| Error::Deserialization(e.to_string()))
 }
 
 /// Encode a [`RingMsg`] to bytes suitable for use as `Event.payload`.
@@ -107,8 +206,18 @@ pub enum SyncRequestUiState {
     AwaitingApproval { device_name: String },
     /// The channel is up and [`crate::SyncSession`] is running on it.
     Active,
-    /// Transfer finished.
-    Complete,
+    /// Transfer finished, with what it moved.
+    ///
+    /// The counts are the point: with one donor per gesture, a sync that
+    /// transferred nothing and one that transferred everything are
+    /// otherwise indistinguishable, and only the first means "try a
+    /// different device". `device_name` is the peer read from its MLS
+    /// leaf credential on the frames it sent, so it names the device the
+    /// history actually came from rather than one the user assumed.
+    Complete {
+        tally: SyncTally,
+        device_name: Option<String>,
+    },
     /// Terminal failure, carrying a structured reason. Retained rather
     /// than discarded so a failed sync is distinguishable from a slow one.
     Failed { reason: SyncFailure },
@@ -123,7 +232,10 @@ enum Phase {
     AwaitingApproval { device_name: String },
     /// Pair channel established.
     Active,
-    Complete,
+    Complete {
+        tally: SyncTally,
+        device_name: Option<String>,
+    },
     Failed { reason: SyncFailure },
 }
 
@@ -151,6 +263,38 @@ impl SyncRequestSession {
         Self {
             phase: Phase::AwaitingPeer,
             role: Role::Requester,
+            token,
+            started_at_ms: now_ms,
+        }
+    }
+
+    /// Offer history to a sibling that does not have it.
+    ///
+    /// The offerer's user has already approved — that is what produced
+    /// this call — so there is no approval phase on this side, and none
+    /// on the other. Waiting semantics match [`request`](Self::request):
+    /// this device published a rendezvous and is waiting for the target
+    /// to join it, so an unanswered offer reads as "nobody answered".
+    pub fn offer(token: [u8; SYNC_REQUEST_TOKEN_LEN], now_ms: i64) -> Self {
+        Self {
+            phase: Phase::AwaitingPeer,
+            role: Role::Requester,
+            token,
+            started_at_ms: now_ms,
+        }
+    }
+
+    /// A sibling offered us history and we are joining its rendezvous.
+    ///
+    /// No prompt: the offer already carries one human decision, made on
+    /// the side that could judge, and the offerer is an authenticated
+    /// ring member that can read everything it is about to send. A second
+    /// prompt here would ask the user to approve receiving their own
+    /// messages.
+    pub fn accept_offer(token: [u8; SYNC_REQUEST_TOKEN_LEN], now_ms: i64) -> Self {
+        Self {
+            phase: Phase::AwaitingPeer,
+            role: Role::Responder,
             token,
             started_at_ms: now_ms,
         }
@@ -190,7 +334,10 @@ impl SyncRequestSession {
                 SyncRequestUiState::AwaitingApproval { device_name: device_name.clone() }
             }
             Phase::Active => SyncRequestUiState::Active,
-            Phase::Complete => SyncRequestUiState::Complete,
+            Phase::Complete { tally, device_name } => SyncRequestUiState::Complete {
+                tally: *tally,
+                device_name: device_name.clone(),
+            },
             Phase::Failed { reason } => {
                 SyncRequestUiState::Failed { reason: reason.clone() }
             }
@@ -233,11 +380,15 @@ impl SyncRequestSession {
         Ok(())
     }
 
-    /// The [`crate::SyncSession`] running on this channel reported
-    /// `Complete`.
-    pub fn on_complete(&mut self) {
+    /// The [`crate::SyncSession`] running on this channel finished.
+    ///
+    /// `tally` comes from that session; `device_name` is the peer as MLS
+    /// named it on the frames it sent, and is `None` only when no frame
+    /// carried a credential — a completed transfer always has at least
+    /// one, so in practice this is the pairing-time caller.
+    pub fn on_complete(&mut self, tally: SyncTally, device_name: Option<String>) {
         if !self.is_terminal() {
-            self.phase = Phase::Complete;
+            self.phase = Phase::Complete { tally, device_name };
         }
     }
 
@@ -252,7 +403,7 @@ impl SyncRequestSession {
 
     /// `true` once the session can no longer change state.
     pub fn is_terminal(&self) -> bool {
-        matches!(self.phase, Phase::Complete | Phase::Failed { .. })
+        matches!(self.phase, Phase::Complete { .. } | Phase::Failed { .. })
     }
 
     /// Move an unanswered session to `Failed`, if its rendezvous has

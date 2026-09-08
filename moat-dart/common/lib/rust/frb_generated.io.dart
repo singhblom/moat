@@ -147,6 +147,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   SyncFailureDto dco_decode_box_autoadd_sync_failure_dto(dynamic raw);
 
   @protected
+  SyncTallyDto dco_decode_box_autoadd_sync_tally_dto(dynamic raw);
+
+  @protected
   TickInputsDto dco_decode_box_autoadd_tick_inputs_dto(dynamic raw);
 
   @protected
@@ -160,6 +163,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ConvStateDto dco_decode_conv_state_dto(dynamic raw);
+
+  @protected
+  ConvSummaryDto dco_decode_conv_summary_dto(dynamic raw);
 
   @protected
   CredentialDto dco_decode_credential_dto(dynamic raw);
@@ -208,6 +214,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<ConvStateDto> dco_decode_list_conv_state_dto(dynamic raw);
 
   @protected
+  List<ConvSummaryDto> dco_decode_list_conv_summary_dto(dynamic raw);
+
+  @protected
   List<CredentialDto> dco_decode_list_credential_dto(dynamic raw);
 
   @protected
@@ -241,10 +250,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<SiblingStealthDto> dco_decode_list_sibling_stealth_dto(dynamic raw);
 
   @protected
+  List<SiblingSummaryDto> dco_decode_list_sibling_summary_dto(dynamic raw);
+
+  @protected
   List<SyncMessageDto> dco_decode_list_sync_message_dto(dynamic raw);
 
   @protected
   List<SyncOutputDto> dco_decode_list_sync_output_dto(dynamic raw);
+
+  @protected
+  List<SyncReactionDto> dco_decode_list_sync_reaction_dto(dynamic raw);
 
   @protected
   OfferedKpDto dco_decode_offered_kp_dto(dynamic raw);
@@ -299,6 +314,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   RingCommandDto dco_decode_ring_command_dto(dynamic raw);
 
   @protected
+  RingMsgDto dco_decode_ring_msg_dto(dynamic raw);
+
+  @protected
   SenderInfoDto dco_decode_sender_info_dto(dynamic raw);
 
   @protected
@@ -308,10 +326,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   SiblingStealthDto dco_decode_sibling_stealth_dto(dynamic raw);
 
   @protected
+  SiblingSummaryDto dco_decode_sibling_summary_dto(dynamic raw);
+
+  @protected
   StealthKeypair dco_decode_stealth_keypair(dynamic raw);
 
   @protected
   SyncFailureDto dco_decode_sync_failure_dto(dynamic raw);
+
+  @protected
+  SyncFrameDto dco_decode_sync_frame_dto(dynamic raw);
 
   @protected
   SyncMessageDto dco_decode_sync_message_dto(dynamic raw);
@@ -320,7 +344,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   SyncOutputDto dco_decode_sync_output_dto(dynamic raw);
 
   @protected
+  SyncReactionDto dco_decode_sync_reaction_dto(dynamic raw);
+
+  @protected
   SyncRequestUiStateDto dco_decode_sync_request_ui_state_dto(dynamic raw);
+
+  @protected
+  SyncTallyDto dco_decode_sync_tally_dto(dynamic raw);
 
   @protected
   ThumbHashResult dco_decode_thumb_hash_result(dynamic raw);
@@ -462,6 +492,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
+  SyncTallyDto sse_decode_box_autoadd_sync_tally_dto(
+      SseDeserializer deserializer);
+
+  @protected
   TickInputsDto sse_decode_box_autoadd_tick_inputs_dto(
       SseDeserializer deserializer);
 
@@ -476,6 +510,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ConvStateDto sse_decode_conv_state_dto(SseDeserializer deserializer);
+
+  @protected
+  ConvSummaryDto sse_decode_conv_summary_dto(SseDeserializer deserializer);
 
   @protected
   CredentialDto sse_decode_credential_dto(SseDeserializer deserializer);
@@ -526,6 +563,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
+  List<ConvSummaryDto> sse_decode_list_conv_summary_dto(
+      SseDeserializer deserializer);
+
+  @protected
   List<CredentialDto> sse_decode_list_credential_dto(
       SseDeserializer deserializer);
 
@@ -567,11 +608,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
+  List<SiblingSummaryDto> sse_decode_list_sibling_summary_dto(
+      SseDeserializer deserializer);
+
+  @protected
   List<SyncMessageDto> sse_decode_list_sync_message_dto(
       SseDeserializer deserializer);
 
   @protected
   List<SyncOutputDto> sse_decode_list_sync_output_dto(
+      SseDeserializer deserializer);
+
+  @protected
+  List<SyncReactionDto> sse_decode_list_sync_reaction_dto(
       SseDeserializer deserializer);
 
   @protected
@@ -636,6 +685,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   RingCommandDto sse_decode_ring_command_dto(SseDeserializer deserializer);
 
   @protected
+  RingMsgDto sse_decode_ring_msg_dto(SseDeserializer deserializer);
+
+  @protected
   SenderInfoDto sse_decode_sender_info_dto(SseDeserializer deserializer);
 
   @protected
@@ -646,10 +698,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
+  SiblingSummaryDto sse_decode_sibling_summary_dto(
+      SseDeserializer deserializer);
+
+  @protected
   StealthKeypair sse_decode_stealth_keypair(SseDeserializer deserializer);
 
   @protected
   SyncFailureDto sse_decode_sync_failure_dto(SseDeserializer deserializer);
+
+  @protected
+  SyncFrameDto sse_decode_sync_frame_dto(SseDeserializer deserializer);
 
   @protected
   SyncMessageDto sse_decode_sync_message_dto(SseDeserializer deserializer);
@@ -658,8 +717,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   SyncOutputDto sse_decode_sync_output_dto(SseDeserializer deserializer);
 
   @protected
+  SyncReactionDto sse_decode_sync_reaction_dto(SseDeserializer deserializer);
+
+  @protected
   SyncRequestUiStateDto sse_decode_sync_request_ui_state_dto(
       SseDeserializer deserializer);
+
+  @protected
+  SyncTallyDto sse_decode_sync_tally_dto(SseDeserializer deserializer);
 
   @protected
   ThumbHashResult sse_decode_thumb_hash_result(SseDeserializer deserializer);
@@ -803,6 +868,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SyncFailureDto self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_sync_tally_dto(
+      SyncTallyDto self, SseSerializer serializer);
+
+  @protected
   void sse_encode_box_autoadd_tick_inputs_dto(
       TickInputsDto self, SseSerializer serializer);
 
@@ -818,6 +887,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_conv_state_dto(ConvStateDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_conv_summary_dto(
+      ConvSummaryDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_credential_dto(CredentialDto self, SseSerializer serializer);
@@ -871,6 +944,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       List<ConvStateDto> self, SseSerializer serializer);
 
   @protected
+  void sse_encode_list_conv_summary_dto(
+      List<ConvSummaryDto> self, SseSerializer serializer);
+
+  @protected
   void sse_encode_list_credential_dto(
       List<CredentialDto> self, SseSerializer serializer);
 
@@ -914,12 +991,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       List<SiblingStealthDto> self, SseSerializer serializer);
 
   @protected
+  void sse_encode_list_sibling_summary_dto(
+      List<SiblingSummaryDto> self, SseSerializer serializer);
+
+  @protected
   void sse_encode_list_sync_message_dto(
       List<SyncMessageDto> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_sync_output_dto(
       List<SyncOutputDto> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_sync_reaction_dto(
+      List<SyncReactionDto> self, SseSerializer serializer);
 
   @protected
   void sse_encode_offered_kp_dto(OfferedKpDto self, SseSerializer serializer);
@@ -986,6 +1071,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       RingCommandDto self, SseSerializer serializer);
 
   @protected
+  void sse_encode_ring_msg_dto(RingMsgDto self, SseSerializer serializer);
+
+  @protected
   void sse_encode_sender_info_dto(SenderInfoDto self, SseSerializer serializer);
 
   @protected
@@ -997,12 +1085,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SiblingStealthDto self, SseSerializer serializer);
 
   @protected
+  void sse_encode_sibling_summary_dto(
+      SiblingSummaryDto self, SseSerializer serializer);
+
+  @protected
   void sse_encode_stealth_keypair(
       StealthKeypair self, SseSerializer serializer);
 
   @protected
   void sse_encode_sync_failure_dto(
       SyncFailureDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_sync_frame_dto(SyncFrameDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_sync_message_dto(
@@ -1012,8 +1107,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_sync_output_dto(SyncOutputDto self, SseSerializer serializer);
 
   @protected
+  void sse_encode_sync_reaction_dto(
+      SyncReactionDto self, SseSerializer serializer);
+
+  @protected
   void sse_encode_sync_request_ui_state_dto(
       SyncRequestUiStateDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_sync_tally_dto(SyncTallyDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_thumb_hash_result(

@@ -28,11 +28,21 @@ class SyncService {
   ffi.SyncSessionHandle? _session;
   bool _active = false;
 
+  /// The device on the other end, as MLS named it on the frames it sent.
+  /// Read from the leaf credential rather than the payload, so a finished
+  /// sync can say which sibling the history came from — and, when nothing
+  /// moved, which one had no more than you.
+  String? _peerDeviceName;
+
   /// Lifecycle hooks for whoever *opened* this channel — today
   /// `SyncRequestService`, which needs them to keep its own projection
   /// honest. The transfer itself stays entirely this service's business.
   void Function()? onSessionStarted;
-  void Function()? onSessionComplete;
+
+  /// Called once the transfer finishes, with what it moved and the peer
+  /// it moved from — the two facts that make a completed sync legible
+  /// rather than merely over.
+  void Function(ffi.SyncTallyDto tally, String? deviceName)? onSessionComplete;
   void Function(String reason)? onSessionAborted;
   // Frames that arrive during the async setup window (before onPaired is called)
   // are buffered here and replayed after onPaired completes.
@@ -176,10 +186,16 @@ class SyncService {
 
     final Uint8List payload;
     try {
-      payload = await session.decryptSyncFrame(
+      final frame = await session.decryptSyncFrame(
         ringGroupId: ringId,
         ciphertext: ciphertext,
       );
+      payload = frame.payload;
+      // A pair channel has exactly one peer, so the latest frame's sender
+      // is the peer; every frame carries one.
+      if (frame.senderDeviceName != null) {
+        _peerDeviceName = frame.senderDeviceName;
+      }
       moatLog('SyncService: decryptSyncFrame ok payload=${payload.length}B');
     } catch (e) {
       moatLog('SyncService: decryptSyncFrame failed: $e');
@@ -220,6 +236,7 @@ class SyncService {
           }
         },
         store: (convId, messages) async {
+          await registerSyncedConversation(_convStorage, convId, messages, did);
           final count =
               await storeSyncOutputMessages(_messageStorage, convId, messages, did);
           moatLog('SyncService: stored $count message(s) for $convId');
@@ -229,11 +246,16 @@ class SyncService {
 
     // Teardown happens after every output has been applied, never as one of
     // them: closing the channel mid-list would strand whatever followed.
-    if (await _session?.isDone() ?? false) {
-      moatLog('SyncService: session complete — closing pair WS');
-      onSessionComplete?.call();
+    if (_session?.isDone() ?? false) {
+      final tally = _session!.tally();
+      moatLog('SyncService: session complete — ${tally.messages} message(s) '
+          'across ${tally.conversations} conversation(s); closing pair WS');
+      onSessionComplete?.call(tally, _peerDeviceName);
       await _reset();
       await _drawbridge.clearPair();
+      // What this device holds has just changed, which is one of the two
+      // moments an advertisement is worth spending a record on.
+      await _ring.publishHistorySummary();
     }
   }
 
@@ -249,6 +271,7 @@ class SyncService {
   Future<void> _reset() async {
     _active = false;
     _session = null;
+    _peerDeviceName = null;
     _pendingFrames = null;
     _ring.clearPendingPair();
   }

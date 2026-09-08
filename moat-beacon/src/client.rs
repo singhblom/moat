@@ -30,8 +30,18 @@ pub struct Conversation {
     pub id: String,
     pub name: String,
     pub participant_dids: Vec<String>,
+    /// `false` while the device holds this conversation's history but is
+    /// not yet a member of its MLS group — history that arrived by sync
+    /// ahead of the fan-out `Add`. Defaulted so a runtime that predates
+    /// the field still deserializes.
+    #[serde(default = "default_true")]
+    pub is_member: bool,
     pub epoch: u64,
     pub unread: usize,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -44,6 +54,17 @@ pub struct Message {
     pub message_id: Option<String>,
     #[serde(default)]
     pub attachment: Option<ImageAttachmentInfo>,
+    /// Emoji reactions on this message. Defaulted so a runtime that
+    /// predates the field still deserializes.
+    #[serde(default)]
+    pub reactions: Vec<ReactionInfo>,
+}
+
+/// One emoji reaction on a message, as either runtime reports it.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct ReactionInfo {
+    pub emoji: String,
+    pub sender_did: String,
 }
 
 /// Image attachment metadata returned by the Dart server (camelCase keys from `ImageAttachment.toJson()`).
@@ -60,6 +81,31 @@ pub struct ImageAttachmentInfo {
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub mime: Option<String>,
+}
+
+/// A sibling this device would prompt the user to send history to. The
+/// prompt names the device, so the name has to come back with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OfferableSibling {
+    pub device_id: String,
+    pub device_name: Option<String>,
+}
+
+/// What one sibling last advertised holding, as this device recorded it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SiblingSummary {
+    pub device_id: String,
+    pub conversations: u64,
+    pub messages: u64,
+}
+
+/// What a finished sync reported: the counts and the donor that served
+/// them. Read from `/sync/status`, so it covers both runtimes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncCompletion {
+    pub messages: u64,
+    pub conversations: u64,
+    pub device_name: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -433,18 +479,167 @@ impl MoatCliClient {
             .context("parse ring-status response")
     }
 
-    /// `GET /sync/status` — return whether a sync session is active.
-    pub async fn sync_status(&self) -> Result<bool> {
+    /// `GET /sync/offerable` — siblings this device would prompt the user
+    /// to send history to. Hex device ids.
+    ///
+    /// This is the prompt *condition*: the app raises a screen on it, and
+    /// the headless server reports it, so a test can assert the prompt
+    /// would appear without needing a UI.
+    pub async fn sync_offerable(&self) -> Result<Vec<OfferableSibling>> {
         let val: serde_json::Value = self
             .http
+            .get(format!("{}/sync/offerable", self.base_url))
+            .send()
+            .await
+            .context("GET /sync/offerable")?
+            .json()
+            .await
+            .context("parse sync/offerable response")?;
+        Ok(val
+            .get("siblings")
+            .and_then(serde_json::Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|s| {
+                        Some(OfferableSibling {
+                            device_id: s
+                                .get("device_id")
+                                .and_then(serde_json::Value::as_str)?
+                                .to_string(),
+                            // Read deliberately: both runtimes must supply
+                            // it, and a shape that differs only in a field
+                            // nothing reads is a trap for whoever reads it
+                            // next.
+                            device_name: s
+                                .get("device_name")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::to_string),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// `POST /sync/dismiss` — stop a sibling's current advertisement from
+    /// prompting again until it says something new.
+    pub async fn sync_dismiss(&self, device_id: &str) -> Result<()> {
+        let resp = self
+            .http
+            .post(format!("{}/sync/dismiss", self.base_url))
+            .json(&serde_json::json!({ "device_id": device_id }))
+            .send()
+            .await
+            .context("POST /sync/dismiss")?;
+        if !resp.status().is_success() {
+            anyhow::bail!("sync/dismiss failed: {}", resp.text().await.unwrap_or_default());
+        }
+        Ok(())
+    }
+
+    /// `POST /sync/offer` — send history to the named sibling.
+    pub async fn sync_offer(&self, device_id: &str) -> Result<()> {
+        let resp = self
+            .http
+            .post(format!("{}/sync/offer", self.base_url))
+            .json(&serde_json::json!({ "device_id": device_id }))
+            .send()
+            .await
+            .context("POST /sync/offer")?;
+        if !resp.status().is_success() {
+            anyhow::bail!("sync/offer failed: {}", resp.text().await.unwrap_or_default());
+        }
+        Ok(())
+    }
+
+    /// `GET /sync/summaries` — what each sibling last advertised holding.
+    pub async fn sync_summaries(&self) -> Result<Vec<SiblingSummary>> {
+        let val: serde_json::Value = self
+            .http
+            .get(format!("{}/sync/summaries", self.base_url))
+            .send()
+            .await
+            .context("GET /sync/summaries")?
+            .json()
+            .await
+            .context("parse sync/summaries response")?;
+        let siblings = val
+            .get("siblings")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        Ok(siblings
+            .into_iter()
+            .map(|s| SiblingSummary {
+                device_id: s
+                    .get("device_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                conversations: s
+                    .get("conversations")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0),
+                messages: s
+                    .get("messages")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0),
+            })
+            .collect())
+    }
+
+    /// `GET /sync/status` — return whether a sync session is active.
+    pub async fn sync_status(&self) -> Result<bool> {
+        Ok(self
+            .sync_status_raw()
+            .await?
+            .get("active")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false))
+    }
+
+    /// `GET /sync/status` — the whole document, for assertions about the
+    /// sync-request projection rather than just the active flag. Both
+    /// runtimes emit the same shape (serde's, which the Dart server
+    /// mirrors by hand), so a test reads one thing from either.
+    pub async fn sync_status_raw(&self) -> Result<serde_json::Value> {
+        self.http
             .get(format!("{}/sync/status", self.base_url))
             .send()
             .await
             .context("GET /sync/status")?
             .json()
             .await
-            .context("parse sync/status response")?;
-        Ok(val.get("active").and_then(|v| v.as_bool()).unwrap_or(false))
+            .context("parse sync/status response")
+    }
+
+    /// The completion report a finished sync left behind: how many
+    /// messages arrived, across how many conversations, and which device
+    /// they came from. `None` until the request reaches `complete`.
+    pub async fn sync_completion(&self) -> Result<Option<SyncCompletion>> {
+        let val = self.sync_status_raw().await?;
+        let request = match val.get("request") {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+        if request.get("phase").and_then(|p| p.as_str()) != Some("complete") {
+            return Ok(None);
+        }
+        let tally = request.get("tally");
+        Ok(Some(SyncCompletion {
+            messages: tally
+                .and_then(|t| t.get("messages"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+            conversations: tally
+                .and_then(|t| t.get("conversations"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+            device_name: request
+                .get("device_name")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+        }))
     }
 
     /// `POST /sync/start` — trigger a ring-tick which initiates history sync if

@@ -265,11 +265,26 @@ _(Future: If a blob moves or is re-encrypted, the sender emits a follow-up event
 
 ### Preview & Bucket Policy
 
-- 512 B bucket: reactions and `short_text`.
-- 1 KB bucket: `medium_text`, previews for long text, and all media previews.
-- 4 KB control bucket: only for overflow control traffic (commit/welcome/checkpoint) that truly cannot fit in 1 KB.
-- Algorithmic previews stay tiny: ThumbHash ≤ 64 B raw (≈88 Base64 chars) for media posters, waveform snippets ≤ 160 B raw, and `preview_text` capped ~240–440 ASCII chars depending on other fields.
+- 512 B bucket: reactions and `short_text`.
+- 1 KB bucket: `medium_text`, previews for long text, and all media previews.
+- 4 KB control bucket: only for overflow control traffic (commit/welcome/checkpoint) that truly cannot fit in 1 KB.
+- Algorithmic previews stay tiny: ThumbHash ≤ 64 B raw (≈ 88 Base64 chars) for media posters, waveform snippets ≤ 160 B raw, and `preview_text` capped ~240–440 ASCII chars depending on other fields.
 - No cover traffic in MVP, but the envelope structure keeps ciphertexts indistinguishable until MLS decryption routes them to the proper conversation.
+
+Bucketing rounds *up* to a fixed size, so 4 KB is a ceiling and not merely
+the largest common case: a serialized event above 4092 bytes has no bucket
+to round to. Padding it to something else would leak the exact length the
+buckets exist to hide, so oversizing is an error, and the way to carry more
+is an external blob with only the reference in the event — the shape
+`message.long_text` and `message.image` already take.
+
+Padding answers a question about *PDS records*: how long is the record an
+observer can see. Frames that never become records do not inherit it.
+Sync traffic on the pair WebSocket (`EventKind::SyncApp`) is framed with
+the same 4-byte length prefix but no bucket, since the relay observes those
+frame sizes either way and a 4 KB ceiling would cap a channel that carries
+1 MiB. The length prefix is what both framings share, so the receiving side
+unpads both without needing to tell them apart.
 
 ### Blob Retention & Forward Secrecy
 
@@ -571,9 +586,14 @@ the deepest history: the person holding the devices decides.
 
 1. The device that wants history mints a 16-byte rendezvous token,
    registers it with the relay (`pair_offer`), and publishes
-   `RingMsg::SyncRequest { token }` as a `ring.msg` event on the device
-   ring. Siblings watch the ring's tags with Drawbridge, so an online one
-   sees it at once rather than on its next poll.
+   `RingMsg::SyncRequest { token, target_device_id }` as a `ring.msg`
+   event on the device ring. Siblings watch the ring's tags with
+   Drawbridge, so an online one sees it at once rather than on its next
+   poll. `target_device_id` names one sibling when the user has picked a
+   device to ask — usually from its [advertisement](#history-advertisement)
+   — and is absent for a broadcast. A sibling that is named but is not the
+   target ignores the message rather than prompting about another device's
+   business.
 2. Every sibling that decrypts it prompts its user, naming the requesting
    device **from its MLS leaf credential** — the payload carries only the
    token. **No host auto-accepts**, matching pairing's rule.
@@ -628,6 +648,74 @@ Because the lane is `ring.msg`, a device that has fallen too far behind
 the ring's epochs to send or read ring traffic cannot use this. Its
 recourse is to pair again, which is a first-class affordance.
 
+#### Offered Sync
+
+A request asks the user to walk to the device that holds the history and
+approve there. That is the wrong way round whenever the device already in
+their hands is the one with the history — the ordinary case just after
+adding a phone. `RingMsg::SyncOffer { token, target_device_id }` is the
+mirror: the holder opens the rendezvous and the recipient joins it.
+
+The rule that keeps this from becoming an election is **exactly one human
+approval per session, on the side that can judge**:
+
+| Direction | Who approves | The other side |
+|---|---|---|
+| Request | the donor, who knows whether it has the history | the requester waits |
+| Offer | the offerer, who has the history | the recipient joins without prompting |
+
+The recipient does not prompt because there is nothing left to judge: the
+offer comes from an authenticated ring member that can already read
+everything it is about to send, so a second prompt would be asking the
+user to approve receiving their own messages.
+
+An offer is always targeted. The relay admits exactly two attaches per
+token, so an untargeted offer would have every sibling race and the winner
+would be arbitrary. Concurrent offers simply fail with the same refusal any
+second attach gets, and the offerer learns through the answer deadline that
+already exists — same person, same pocket.
+
+A device drives one sync at a time, so an offer arriving while a sync or a
+pairing is in flight is ignored rather than allowed to supersede a decision
+the user is already looking at.
+
+#### When the Offer Is Raised
+
+Publishing a summary is confined to two moments, but *reading* stored
+summaries is free and local, so it happens on app open and whenever an
+advertisement arrives. Both raise the offer prompt, and the second is the
+one that matters: a device the user has just added says it holds nothing
+within seconds of joining, and they are holding the device that can fix
+that. Asking then is worth far more than asking a week later, when they
+happen to open a settings screen.
+
+App open covers the rest, since advertisements are persisted: a device
+paired in an earlier session is still asked about on the next launch.
+
+A sibling is worth prompting about when all three hold:
+
+| Condition | Why |
+|---|---|
+| it has advertised | Silence is not an invitation — a device that has said nothing might hold everything |
+| it advertised less than this device holds | Offering what the other side already has is a prompt with nothing behind it |
+| the user has not already answered this advertisement | Re-asking a declined question is how people learn to dismiss reflexively |
+
+Counts can coincide across devices holding entirely different messages, so
+this is a heuristic like the rest of the lane: a false negative costs a
+prompt that was never shown, never a wrong transfer.
+
+The prompt never interrupts a screen that is already asking something. A
+pairing or sync decision the user is mid-way through outranks it, because
+a prompt that steals one of those is worse than a late prompt.
+
+Dismissal is scoped to the *advertisement*, not the device: re-seeing the
+same summary stays dismissed, but a sibling that later advertises something
+different is asking a different question, and the old refusal does not
+answer it. Offering also dismisses, since it is itself an answer.
+Dismissing silences the prompt without discarding what the sibling said —
+the Devices screen still shows it, and the user can still offer from
+there.
+
 ### History Sync
 
 Both onboarding sync and requested sync run the same session. Each side
@@ -636,22 +724,143 @@ then sends the peer exactly the complement. Both directions run in the one
 session, so a laptop with deep old history and a phone with a recent week
 converge on the union without either being designated donor.
 
-The inventory is deliberately exact rather than clever. A
-`(oldest_rkey, newest_rkey)` span cannot describe a hole in the *middle*
-of a device's history, which is the shape a device ends up with after
-being offline past the point where it can still decrypt what it missed.
-At roughly 13 bytes per rkey an inventory is far cheaper than re-sending
-the messages it saves, so no digest comparison or bisection is needed to
-decide what to transfer. Above 10,000 messages in one conversation the
-inventory is omitted and the peer serves its whole history instead,
-letting rkey dedupe absorb the overlap.
+The inventory is deliberately exact rather than clever. A span cannot
+describe a hole in the *middle* of a device's history, which is the shape
+a device ends up with after being offline past the point where it can
+still decrypt what it missed. At roughly 13 bytes per rkey an inventory is
+far cheaper than re-sending the messages it saves, so no digest comparison
+or bisection is needed to decide what to transfer.
+
+Each conversation declares one of three things, so that "I hold nothing"
+and "I am not listing what I hold" can never be read as each other — they
+call for opposite responses:
+
+| Inventory | Meaning |
+|---|---|
+| `complete` | Every rkey held, enumerated; the peer sends exactly the complement |
+| `range` | Only the span `(oldest, newest, count)`; the peer serves what falls outside it, and cannot see holes within |
+| `empty` | Nothing held at all |
+
+A synced message carries **everything a host persists about it** — text,
+sender, timestamps, the blob reference including its ThumbHash placeholder,
+and any emoji reactions. This is not a convenience: a field held on one
+side and not carried is lost permanently on the other, because the events
+that would rebuild it predate the receiving device's membership and are not
+decryptable to it. Reactions in particular arrive as their own PDS events,
+so for history moved by sync there is no second route by which they can
+appear.
+
+A `Hello` carries *every* conversation in one frame, against the pair WS's
+hard 1 MiB limit — which closes the connection rather than truncating. The
+byte budget is therefore spent across the whole message, not per
+conversation: a per-conversation cap would let fifty ordinary
+conversations exceed the frame with none of them individually large.
+Inventories are downgraded `complete` → `range`, largest first, until the
+total fits, so the fewest conversations lose precision and both sides make
+the same deterministic choice from the same data.
 
 Two devices whose inventories already agree exchange nothing and finish on
 the `Hello`.
 
+A finished session reports what it took: how many messages arrived, across
+how many conversations, and which device served them. This is not
+decoration. With one donor per gesture, "nothing new — that device didn't
+have more than you" is the outcome that tells the user to go and approve on
+a *different* sibling, and without counts it is indistinguishable from a
+transfer that moved everything. The donor is named from its MLS leaf
+credential on the frames it sent, so the name is authenticated rather than
+claimed. The counts are of what the peer *delivered*: the inventory diff
+means it sent only the complement, so this matches what was stored except
+where a `range` inventory forced it to serve across a span whose interior
+it could not see.
+
 An implementation that declares no inventory at all is interoperable: its
 peer serves whole histories and rkey dedupe absorbs the overlap. That
 fallback is what `rkeys: null` means on the wire.
+
+#### History Ahead of Membership
+
+A session plans for every conversation the peer declares and this side
+does not, so a donor serves history for groups the requester has not been
+added to yet. This is deliberate: when the fan-out `Add` arrives, the
+history is already in place.
+
+The receiving device registers such a conversation **read-only**. Its
+messages are readable, but there is no local MLS group to encrypt into, so
+the composer is replaced by "Waiting to be connected to this
+conversation." Membership needs no separate flag — a conversation with no
+local MLS state is exactly one this device has not joined. Participants are
+inferred from the senders of the messages themselves, there being no group
+to ask; they are replaced with the group's real membership when the `Add`
+lands and the conversation stops being read-only.
+
+The state is normally brief, because the device that served the history is
+in the conversation and adds its siblings on its next ring tick. It is not
+guaranteed to be brief: an MLS `Add` can only come from a member, so if the
+donor was the group's only member and it goes offline immediately after the
+transfer, nothing adds the requester until it returns. The wording is
+chosen accordingly — it does not promise imminent resolution.
+
+### History Advertisement
+
+Requested sync tells a user to go and approve on the device that has their
+history — without saying which device that is. The advertisement is what
+narrows it: each device publishes what it holds, and siblings keep the
+latest per device.
+
+The invariant that keeps this cheap: **the advertisement is a hint, the
+session is the truth.** A stale advertisement costs a wasted prompt and a
+session that transfers nothing — never a wrong outcome, because a `Hello`'s
+inventory still decides what actually moves. So there is no freshness
+protocol, no ordering, and no reconciliation. Counts are a heuristic in
+particular: two devices can hold a hundred *different* messages each and
+advertise the same number, so "counts match" never means "in sync".
+
+`RingMsg::HistorySummary` carries an `external` blob reference and nothing
+else. The conversation list lives in the blob:
+
+```json
+{ "convs": [ { "group_id": "<base64>", "inventory": { "kind": "range", … } } ] }
+```
+
+Each entry reuses `ConvInventory` from [History Sync](#history-sync) rather
+than inventing a second shape for the same idea, and is always the `range`
+variant — enumerating every rkey would be the inventory itself, not a
+summary of it.
+
+The indirection is not an optimisation. A summary listing more than about
+twenty-two conversations does not fit the largest padding bucket, and there
+is no bucket above it. A blob reference is a fixed ~200 bytes, so the
+record sits in the 512 B bucket whatever the device holds — which also
+means an observer learns *nothing* about the conversation count, where an
+inline list would have leaked it at bucket resolution.
+
+Publication is confined to the two moments a device's holdings actually
+change:
+
+- **joining the ring** — the joining device advertises what is initially
+  nothing, which is exactly the signal that makes it worth offering history
+  to; and each existing sibling advertises in turn once the `Add` commit has
+  merged, so the new device learns who holds what. The commit must merge
+  first: a summary sealed at the previous ring epoch is unreadable by the
+  very device it is meant for.
+- **finishing a sync** — both sides re-advertise, and the picture converges.
+
+It is deliberately *not* periodic. Every extra record is timing surface,
+and between those two moments a device's holdings only change in ways its
+siblings learn about anyway. Reading stored summaries and deciding whether
+to prompt is free and local, and still happens whenever the app opens.
+
+Each device keeps exactly one live summary: publishing a new one deletes
+the record the previous one lived in, which is also what releases its blob,
+since a PDS garbage-collects a blob nothing references. The new record is
+published *before* the old one is deleted — a stale extra summary is
+harmless under the hint-not-truth invariant, where a window with no summary
+at all is not.
+
+A summary that cannot be published, fetched, or decrypted is dropped
+silently for the same reason: it leaves a sibling with a stale view, never
+a wrong one.
 
 ### Same-user Key Distribution
 
@@ -774,9 +983,6 @@ Session state uses a versioned binary format (currently version 5):
 [variable: tag counter state]        — v3+
 [variable: seen counter state]       — v3+
 [variable: prior export secrets]     — v4+
-[variable: conversation digest state] — v5+
-[variable: watermark state]          — v5+
-[variable: inbox range state]        — v5+
 ```
 
 Hash chain state:
@@ -811,21 +1017,6 @@ For each entry:
   [8 bytes: counter (LE u64)]
 ```
 
-Conversation digest state (v5):
-```
-[8 bytes: entry_count]
-For each entry:
-  [4 bytes: group_id_length]
-  [variable: group_id]
-  [32 bytes: tip_digest]
-  [8 bytes: append_count (LE u64)]
-  [4 bytes: anchor_count (LE u32)]
-  For each anchor:
-    [2 bytes: rkey_len (LE u16)]
-    [rkey_len bytes: rkey (UTF-8)]
-    [32 bytes: anchor_digest]
-```
-
 Watermark state (v5) — oldest synced rkey per conversation:
 ```
 [8 bytes: entry_count]
@@ -850,30 +1041,22 @@ For each entry:
 
 Versions 1 and 2 are rejected with a `StateVersionMismatch` error. Older v3/v4 states load with empty v5 tables.
 
-### Conversation Digest
+### Retired v5 Tables
 
-Each device maintains a running SHA-256 digest chain per user conversation, as a compact statement of what it holds.
+Two tables that v5 once carried are gone, and a state file written before
+their removal simply ends with bytes nothing parses:
 
-It is carried in each `Hello` alongside the rkey inventory, but **sync planning does not consult it** — the inventory answers the same question exactly, and cheaply enough that a hash comparison buys nothing (see [History Sync](#history-sync)). Note also that history received through sync is deliberately *not* appended to the chain: the chain is ordered rkey-ascending while backward sync delivers newest-first, so appending on arrival would corrupt it. A device that has been backfilled therefore has a digest that will not match a peer's, which is another reason planning does not lean on it.
+- A per-conversation **sync watermark** — the oldest rkey received from a
+  peer — recorded as each batch landed, so an interrupted transfer would
+  have a durable resume point. Nothing ever read it. The rkey inventory
+  (see [History Sync](#history-sync)) resumes at the same granularity by
+  declaring what the requester now holds, so a retry costs only the
+  remainder either way.
+- A running SHA-256 **digest chain** per conversation, with epoch-boundary
+  anchors for bisecting two devices' histories. The inventory answers the
+  same question exactly and more cheaply, so nothing consumed the digests.
 
-**Chain formula:**
-```
-digest_0 = 0x00...00  (32 zero bytes)
-digest_n = SHA256(digest_{n-1} || rkey_n || message_id_n)
-```
-
-Only events whose kind starts with `message.` (user-visible content) contribute to the digest. Control events (commits, welcomes) and reaction modifiers are excluded.
-
-**Anchors:** A `DigestAnchor { rkey, digest }` is saved every `DIGEST_ANCHOR_STRIDE = 64` appended messages and immediately after the first append in a new MLS epoch. Per-group anchor lists are capped at 256 entries (oldest dropped on overflow). Anchors were introduced to allow bisecting two devices' histories without a full message scan; the inventory diff supersedes that use, and they are retained as coarse epoch-boundary checkpoints.
-
-**`diff_anchors(ours, theirs) -> DiffRange`:** Compares two anchor lists pairwise from the start and returns:
-- `common_prefix_rkey` — `rkey` of the last matching anchor (`None` if no common prefix)
-- `our_tail` — anchors we hold beyond the common prefix
-- `their_tail` — anchors they hold beyond the common prefix
-
-**Watermark:** A per-conversation `watermark` is the `rkey` of the oldest message successfully received from a sync peer, recorded as each batch lands so an interrupted transfer has a durable resume point. Because it only ever moves backwards, a late or duplicated newer batch cannot drag it forwards.
-
-**Inbox range:** `(oldest_rkey, newest_rkey)` tracks the local history span per conversation. Updated on every `append_to_digest` call.
+Both were state every device maintained and none read.
 
 ## Local Storage
 

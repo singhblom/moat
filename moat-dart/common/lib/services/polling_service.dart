@@ -51,13 +51,18 @@ class PollingService {
   /// unanswered sync request.
   void Function()? onPollTick;
 
-  /// Callback when a sibling asks for history on the ring
-  /// (`EventKindDto.ringMsg`). Wired to
-  /// `SyncRequestService.onRingSyncRequest`; the second argument is the
-  /// sender's device name, taken from its MLS leaf credential. Unset means
-  /// the host doesn't support requested sync and the message is dropped.
-  Future<void> Function(Uint8List payload, String deviceName)?
-      onRingSyncRequest;
+  /// Callback for any `ring.msg` a sibling published — a request for
+  /// history, or an advertisement of what it holds.
+  ///
+  /// The device name *and id* both come from the sender's MLS leaf
+  /// credential, not from the payload: that authentication is the whole
+  /// reason this lane is the ring rather than the stealth one. Unset means
+  /// the host doesn't support these and the message is dropped.
+  Future<void> Function(
+    Uint8List payload,
+    String deviceName,
+    Uint8List deviceId,
+  )? onRingMessage;
 
   PollingService({
     required AuthService authService,
@@ -494,11 +499,17 @@ class PollingService {
           moatLog('PollingService: ignoring a ring message whose sender is not us');
           return;
         }
-        final handler = onRingSyncRequest;
+        final handler = onRingMessage;
+        final sender = result.sender;
         if (handler == null) return;
+        if (sender == null) {
+          moatLog('PollingService: ignoring a ring message MLS could not attribute');
+          return;
+        }
         await handler(
           Uint8List.fromList(result.event.payload),
-          result.sender?.deviceName ?? 'an unnamed device',
+          sender.deviceName.isEmpty ? 'an unnamed device' : sender.deviceName,
+          Uint8List.fromList(sender.deviceId),
         );
       }
     } catch (e) {

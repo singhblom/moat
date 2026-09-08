@@ -94,7 +94,7 @@ class SyncRequestService {
   /// Throws if there is no ring to publish on, or if the ring message
   /// can't be sealed — the rendezvous is only registered once the request
   /// itself is certain to go out.
-  Future<void> requestSync() async {
+  Future<void> requestSync({Uint8List? targetDeviceId}) async {
     final session = _auth.moatSession;
     if (session == null) {
       throw StateError('no active MoatSession');
@@ -110,7 +110,10 @@ class SyncRequestService {
 
     final token = _randomBytes(16);
     final epoch = (await session.getGroupEpoch(groupId: ringId)) ?? BigInt.zero;
-    final payload = await ffi.ringMsgEncodeSyncRequest(token: token);
+    final payload = await ffi.ringMsgEncodeSyncRequest(
+      token: token,
+      targetDeviceId: targetDeviceId,
+    );
     final encrypted = await session.encryptEvent(
       groupId: ringId,
       keyBundle: keyBundle,
@@ -159,17 +162,174 @@ class SyncRequestService {
     }
   }
 
-  /// A sibling's `ring.msg` arrived. `deviceName` must come from the MLS
-  /// leaf credential of the sender, not from the payload — that is the
-  /// whole reason this lane is the ring rather than the stealth one.
-  Future<void> onRingSyncRequest(Uint8List payload, String deviceName) async {
-    final Uint8List token;
+  /// Offer history to a sibling that does not have it.
+  ///
+  /// The mirror of [requestSync], for when the device holding the history
+  /// is the one in the user's hands. This call *is* the human approval,
+  /// so the target joins without prompting — exactly one approval per
+  /// session, on the side that can judge. Always targeted: the relay
+  /// admits two attaches, so an untargeted offer would pick its recipient
+  /// arbitrarily.
+  Future<void> offerSync(Uint8List targetDeviceId) async {
+    final session = _auth.moatSession;
+    if (session == null) {
+      throw StateError('no active MoatSession');
+    }
+    final ringId = await _ring.ringGroupId();
+    if (ringId == null) {
+      throw StateError('no device ring — pair a device first');
+    }
+    final keyBundle = await _auth.secureStorage.loadKeyBundle();
+    if (keyBundle == null) {
+      throw StateError('missing key bundle');
+    }
+
+    final token = _randomBytes(16);
+    final epoch = (await session.getGroupEpoch(groupId: ringId)) ?? BigInt.zero;
+    final payload = await ffi.ringMsgEncodeSyncOffer(
+      token: token,
+      targetDeviceId: targetDeviceId,
+    );
+    final encrypted = await session.encryptEvent(
+      groupId: ringId,
+      keyBundle: keyBundle,
+      event: ffi.EventDto(
+        kind: ffi.EventKindDto.ringMsg,
+        groupId: ringId,
+        epoch: epoch,
+        payload: payload,
+      ),
+    );
+    await _auth.saveMlsState();
+
+    _session = ffi.SyncRequestSessionHandle.offer(
+      token: token,
+      nowMs: toPlatformInt64(DateTime.now().millisecondsSinceEpoch),
+    );
+    _syncState();
+
+    // Offering is itself an answer to that sibling's advertisement, so it
+    // should stop prompting about it either way.
+    await _ring.dismissSiblingSummary(targetDeviceId);
+
+    _drawbridge.sendPairOffer(token);
+
     try {
-      token = await ffi.ringMsgDecodeSyncRequest(payload: payload);
+      final uri = await _auth.atprotoClient.publishEvent(
+        encrypted.tag,
+        encrypted.ciphertext,
+      );
+      _drawbridge.notifyEventPosted(
+        tag: encrypted.tag,
+        rkey: uri.split('/').last,
+        payload: encrypted.ciphertext,
+        relayUrls: const [],
+      );
+      moatLog('SyncRequestService: offered history to a sibling');
+    } catch (e) {
+      moatLog('SyncRequestService: offer publish failed: $e');
+      _session?.fail(
+          reason: ffi.SyncFailureDto.publishFailed(detail: e.toString()));
+      _syncState();
+      rethrow;
+    }
+  }
+
+  /// A sibling's `ring.msg` arrived: either a request for history, or an
+  /// advertisement of what that sibling holds.
+  ///
+  /// `deviceName` and `deviceId` must both come from the MLS leaf
+  /// credential of the sender, not from the payload — that is the whole
+  /// reason this lane is the ring rather than the stealth one.
+  Future<void> onRingMessage(
+    Uint8List payload,
+    String deviceName,
+    Uint8List deviceId,
+  ) async {
+    final ffi.RingMsgDto msg;
+    try {
+      msg = await ffi.ringMsgDecode(payload: payload);
     } catch (e) {
       moatLog('SyncRequestService: undecodable ring message: $e');
       return;
     }
+
+    switch (msg) {
+      case ffi.RingMsgDto_HistorySummary(
+          :final uri,
+          :final key,
+          :final ciphertextHash,
+          :final contentHash,
+        ):
+        // Fetching and recording belongs to the ring service, which owns
+        // the state the advertisement lands in.
+        await _ring.onHistorySummary(
+          deviceId: deviceId,
+          uri: uri,
+          key: key,
+          ciphertextHash: ciphertextHash,
+          contentHash: contentHash,
+        );
+        return;
+      case ffi.RingMsgDto_SyncRequest(:final token, :final targetDeviceId):
+        // A request naming another device is not ours to answer:
+        // prompting would ask the user about someone else's business, and
+        // two approvals would race for a rendezvous that admits two.
+        if (targetDeviceId != null && !_isUs(targetDeviceId)) {
+          moatLog('SyncRequestService: ignoring a request addressed elsewhere');
+          return;
+        }
+        await _onSyncRequest(token, deviceName);
+        return;
+      case ffi.RingMsgDto_SyncOffer(:final token, :final targetDeviceId):
+        if (!_isUs(targetDeviceId)) {
+          moatLog('SyncRequestService: ignoring an offer addressed elsewhere');
+          return;
+        }
+        await _onSyncOffer(token, deviceName);
+        return;
+    }
+  }
+
+  bool _isUs(List<int> deviceId) {
+    final mine = _auth.moatSession?.deviceId();
+    if (mine == null || mine.length != deviceId.length) return false;
+    for (var i = 0; i < mine.length; i++) {
+      if (mine[i] != deviceId[i]) return false;
+    }
+    return true;
+  }
+
+  /// A sibling is offering us history.
+  ///
+  /// Joined without a prompt, deliberately: the offer already carries one
+  /// human decision, made on the side that could judge, and it comes from
+  /// an authenticated ring member that can already read everything it is
+  /// about to send. Asking again would be asking the user to approve
+  /// receiving their own messages.
+  ///
+  /// Still refused while something else is in flight — an offer must not
+  /// supersede a decision the user is already looking at.
+  Future<void> _onSyncOffer(Uint8List token, String deviceName) async {
+    final nowMs = toPlatformInt64(DateTime.now().millisecondsSinceEpoch);
+    final existing = _session;
+    if (existing != null &&
+        !existing.isTerminal() &&
+        !existing.isExpired(nowMs: nowMs)) {
+      moatLog('SyncRequestService: ignoring an offer — one is already in flight');
+      return;
+    }
+
+    moatLog('SyncRequestService: accepting $deviceName\'s offer of history');
+    _session = ffi.SyncRequestSessionHandle.acceptOffer(
+      token: token,
+      nowMs: nowMs,
+    );
+    _syncState();
+    _drawbridge.sendPairJoin(token);
+  }
+
+  Future<void> _onSyncRequest(Uint8List token, String deviceName) async {
 
     final nowMs = toPlatformInt64(DateTime.now().millisecondsSinceEpoch);
     // One sync session at a time. A live request of our own, or a prompt
@@ -226,8 +386,8 @@ class SyncRequestService {
     _syncState();
   }
 
-  void _handleComplete() {
-    _session?.onComplete();
+  void _handleComplete(ffi.SyncTallyDto tally, String? deviceName) {
+    _session?.onComplete(tally: tally, deviceName: deviceName);
     _syncState();
   }
 

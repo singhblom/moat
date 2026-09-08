@@ -1,12 +1,32 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:moat_dart_common/moat_dart_common.dart' as common;
 import '../services/sync_request_manager.dart';
 
-/// One linked device, as read from the ring's MLS leaf credentials.
+/// One linked device, as read from the ring's MLS leaf credentials, with
+/// whatever that device last advertised holding.
 class _LinkedDevice {
   final String name;
   final bool isSelf;
-  const _LinkedDevice({required this.name, required this.isSelf});
+  final String deviceIdHex;
+  /// `null` when this sibling has not advertised — silence, not an answer.
+  final common.SiblingSummaryDto? advertised;
+  const _LinkedDevice({
+    required this.name,
+    required this.isSelf,
+    required this.deviceIdHex,
+    this.advertised,
+  });
+
+  /// Worth offering history to: it has said it holds less than nothing we
+  /// know of, and the user has not already answered that. Silence is not
+  /// an invitation — a device that has not advertised might hold
+  /// everything.
+  bool get isOfferable {
+    final a = advertised;
+    return !isSelf && a != null && !a.dismissed && a.messages == BigInt.zero;
+  }
 }
 
 /// The linked devices, and what any in-flight sync is doing.
@@ -36,7 +56,7 @@ class DevicesScreen extends StatefulWidget {
 
 class _DevicesScreenState extends State<DevicesScreen> {
   List<_LinkedDevice>? _devices;
-  bool _isRequesting = false;
+  bool _isBusy = false;
 
   @override
   void initState() {
@@ -65,11 +85,16 @@ class _DevicesScreenState extends State<DevicesScreen> {
     try {
       final creds = await session.getGroupMemberCredentials(groupId: ringId);
       final myDeviceId = _hex(session.deviceId());
+      final summaries = {
+        for (final s in widget.ringService.siblingSummaries()) s.deviceId: s
+      };
       final devices = [
         for (final c in creds)
           _LinkedDevice(
             name: c.deviceName.isEmpty ? 'Unnamed device' : c.deviceName,
             isSelf: _hex(c.deviceId) == myDeviceId,
+            deviceIdHex: _hex(c.deviceId),
+            advertised: summaries[_hex(c.deviceId)],
           )
       ];
       if (mounted) setState(() => _devices = devices);
@@ -84,7 +109,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
   Future<void> _requestSync() async {
     final service = SyncRequestManager.instance.service;
     if (service == null) return;
-    setState(() => _isRequesting = true);
+    setState(() => _isBusy = true);
     try {
       await service.requestSync();
     } catch (e) {
@@ -92,7 +117,30 @@ class _DevicesScreenState extends State<DevicesScreen> {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
       }
     }
-    if (mounted) setState(() => _isRequesting = false);
+    if (mounted) setState(() => _isBusy = false);
+  }
+
+  Future<void> _offer(_LinkedDevice device) async {
+    final service = SyncRequestManager.instance.service;
+    if (service == null) return;
+    setState(() => _isBusy = true);
+    try {
+      await service.offerSync(_bytes(device.deviceIdHex));
+      await _loadDevices();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      }
+    }
+    if (mounted) setState(() => _isBusy = false);
+  }
+
+  static Uint8List _bytes(String hex) {
+    final out = Uint8List(hex.length ~/ 2);
+    for (var i = 0; i < out.length; i++) {
+      out[i] = int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16);
+    }
+    return out;
   }
 
   @override
@@ -138,7 +186,25 @@ class _DevicesScreenState extends State<DevicesScreen> {
                         color: Theme.of(context).colorScheme.primary,
                       ),
                       title: Text(d.name),
-                      subtitle: d.isSelf ? const Text('This device') : null,
+                      // What that device last said it holds. This is what
+                      // turns "ask a device and hope" into a choice:
+                      // approve on the one that actually has the history.
+                      subtitle: Text(
+                        d.isSelf
+                            ? 'This device'
+                            : common.advertisementText(d.advertised),
+                      ),
+                      // The offer direction: this device has the history
+                      // and that one does not, so the decision can be
+                      // made here rather than by walking over there.
+                      // Pressing it *is* the approval — the other side
+                      // joins without a prompt of its own.
+                      trailing: d.isOfferable
+                          ? TextButton(
+                              onPressed: _isBusy ? null : () => _offer(d),
+                              child: const Text('Send history'),
+                            )
+                          : null,
                     ),
                   ),
                 const Divider(),
@@ -147,7 +213,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
                   padding: const EdgeInsets.all(16),
                   child: FilledButton.icon(
                     onPressed:
-                        _isRequesting || devices.length < 2 ? null : _requestSync,
+                        _isBusy || devices.length < 2 ? null : _requestSync,
                     icon: const Icon(Icons.history),
                     label: const Text('Ask for history'),
                   ),
@@ -191,7 +257,14 @@ class _SyncStatusTile extends StatelessWidget {
         scheme.tertiary,
       ),
       active: () => (Icons.sync, 'Transferring history…', scheme.primary),
-      complete: () => (Icons.check_circle, 'History sync complete.', scheme.primary),
+      // An empty tally is a different answer, not a lesser success: it is
+      // what tells the user to approve on a different device. It reads as
+      // a neutral outcome rather than a triumphant one.
+      complete: (tally, deviceName) => (
+        tally.messages == BigInt.zero ? Icons.info_outline : Icons.check_circle,
+        common.syncCompleteText(tally, deviceName),
+        tally.messages == BigInt.zero ? scheme.outline : scheme.primary,
+      ),
       failed: (reason) =>
           (Icons.error_outline, common.requesterFailureText(reason), scheme.error),
     );

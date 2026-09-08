@@ -526,6 +526,11 @@ class PairingService {
         persistRing: (ringId) async {
           await _ring.recordRingMembership(ringId);
           await _auth.populateConversationTags(ringId);
+          // Advertise straight away, before the pairing sync has run:
+          // what this device holds right now is nothing, and a sibling
+          // seeing an empty summary is exactly what makes it worth
+          // offering history to. The post-sync publish replaces it.
+          await _ring.publishHistorySummary();
           // New device, right after persisting ring membership:
           // proactively scan for the UserConvWelcomes an existing
           // sibling's fan-out may already have published, rather than
@@ -620,6 +625,7 @@ class PairingService {
         },
         store: (convId, messages) async {
           if (did == null) return;
+          await registerSyncedConversation(_convStorage, convId, messages, did);
           final count =
               await storeSyncOutputMessages(_messageStorage, convId, messages, did);
           moatLog('PairingService: pairing-sync stored $count message(s) for $convId');
@@ -635,6 +641,9 @@ class PairingService {
       _pairingSyncKeyNewToOld = null;
       _pairingSyncKeyOldToNew = null;
       await _releaseTransport();
+      // Onboarding sync has just filled this device, so the empty
+      // advertisement it published on joining the ring is now wrong.
+      await _ring.publishHistorySummary();
     }
   }
 

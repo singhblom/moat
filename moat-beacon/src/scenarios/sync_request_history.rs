@@ -206,6 +206,50 @@ pub async fn run_with(
         tokio::time::sleep(POLL_INTERVAL).await;
     }
 
+    // Bob reacts to one of D1's messages. Reactions arrive as their own
+    // PDS events, so a device present at the time rebuilds them by
+    // replaying — but D2 cannot: those events predate its membership and
+    // are not decryptable to it. Sync is their only route, and a drop
+    // would be silent and permanent.
+    let reacted_to = {
+        let deadline = std::time::Instant::now() + TIMEOUT;
+        loop {
+            let _ = bob.poll().await;
+            let msgs = bob.get_messages(&group_id).await.unwrap_or_default();
+            if let Some(id) = msgs
+                .iter()
+                .find(|m| m.content == "first")
+                .and_then(|m| m.message_id.clone())
+            {
+                break id;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "bob never received a message to react to within {TIMEOUT:?}"
+            );
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+    };
+    bob.send_reaction(&group_id, &reacted_to, "👍")
+        .await
+        .expect("bob reacts");
+
+    let deadline = std::time::Instant::now() + TIMEOUT;
+    loop {
+        let _ = d1.poll().await;
+        let msgs = d1.get_messages(&group_id).await.unwrap_or_default();
+        if msgs.iter().any(|m| !m.reactions.is_empty()) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "d1 never recorded bob's reaction within {TIMEOUT:?}; it has to \
+             be *persisted*, not merely displayed, or there is nothing for \
+             sync to serve"
+        );
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+
     // ── D2 returns: it gets membership, and nothing else ─────────────────────
     vlog!("[online] d2 back up");
     world.restart_participant("alice-d2").await.expect("restart d2");
@@ -282,6 +326,20 @@ pub async fn run_with(
                  too, since the original event predates d2's membership and \
                  cannot be decrypted; got {contents:?}"
             );
+            // The reaction must have travelled with the message. Nothing
+            // else can deliver it here: the reaction event predates d2's
+            // membership, so it cannot be decrypted from the PDS.
+            let reacted = msgs.iter().find(|m| m.content == "first");
+            assert!(
+                reacted.is_some_and(|m| m
+                    .reactions
+                    .iter()
+                    .any(|r| r.emoji == "👍")),
+                "d2 must receive the reaction along with the message it is \
+                 on; got {:?}",
+                reacted.map(|m| &m.reactions)
+            );
+
             let attachment = images[0].attachment.as_ref().expect("checked above");
             assert!(!attachment.uri.is_empty(), "blob URI must survive sync");
             assert!(!attachment.key.is_empty(), "blob key must survive sync");
@@ -311,6 +369,83 @@ pub async fn run_with(
             expected_total
         );
         tokio::time::sleep(POLL_INTERVAL).await;
+    }
+
+    // ── The report the user is shown ─────────────────────────────────────────
+    //
+    // A transfer that moved everything and one that moved nothing look
+    // identical without this, and with one donor per gesture that is the
+    // difference between "you're done" and "go and ask a different
+    // device". So the counts are asserted, not just the messages.
+    let deadline = std::time::Instant::now() + TIMEOUT;
+    let completion = loop {
+        let _ = d2.poll().await;
+        if let Some(c) = d2.sync_completion().await.expect("d2 sync completion") {
+            break c;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "d2's sync never reported completion within {TIMEOUT:?}; \
+             this must fail the test, not hang it"
+        );
+        tokio::time::sleep(POLL_INTERVAL).await;
+    };
+    vlog!("[sync] d2's completion report: {completion:?}");
+    assert_eq!(
+        completion.messages, expected_total as u64,
+        "the report must count every message that arrived, or \"nothing new\" \
+         and \"everything arrived\" read alike"
+    );
+    assert_eq!(
+        completion.conversations, 1,
+        "one conversation was transferred; got {completion:?}"
+    );
+    // The donor is named from its MLS leaf credential rather than from
+    // anything the payload claimed, which is what makes the name worth
+    // acting on. Asserted as "present and non-empty" rather than by
+    // value: both devices here derive the same hostname-based default
+    // name, so no value assertion could tell the donor from the
+    // requester. That the name is the *sender's* is covered where it is
+    // distinguishable — d1's `awaiting_approval` above carries d2's.
+    let name = completion
+        .device_name
+        .as_deref()
+        .expect("a completed transfer always carried a credential to name");
+    assert!(
+        !name.is_empty(),
+        "the report must name the device the history came from; got {completion:?}"
+    );
+
+    // ── The advertisement ────────────────────────────────────────────────────
+    //
+    // Finishing a sync is one of the two moments a device's holdings
+    // change, so both sides re-advertise. The record carries only a blob
+    // reference, so it stays a fixed size however much there is to
+    // describe — a summary listing more than about twenty conversations
+    // would not fit the largest padding bucket at all.
+    //
+    // Asserted wherever D1 (the donor, and therefore the advertiser with
+    // something to say) is the Rust CLI or the Dart server — which is
+    // every cell. Both runtimes publish the same record and record the
+    // same state, so this is also the cross-runtime check that they agree
+    // on the wire format.
+    {
+        let deadline = std::time::Instant::now() + TIMEOUT;
+        loop {
+            let _ = d1.poll().await;
+            let _ = d2.poll().await;
+            let seen = d2.sync_summaries().await.unwrap_or_default();
+            vlog!("[summary] d2 holds {} sibling advertisement(s): {seen:?}", seen.len());
+            if seen.iter().any(|s| s.messages as usize >= expected_total) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "d2 never recorded d1's advertisement within {TIMEOUT:?} \
+                 (saw {seen:?}); this must fail the test, not hang it"
+            );
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
     }
 
     vlog!("[check] sync request history ({cell})... ok");
