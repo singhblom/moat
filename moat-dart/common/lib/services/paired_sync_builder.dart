@@ -127,7 +127,6 @@ Message _messageFromSyncDto(ffi.SyncMessageDto m, Uint8List groupId, String myDi
     content: m.content,
     timestamp: DateTime.fromMillisecondsSinceEpoch(platformInt64ToInt(m.timestampMs)),
     isOwn: isOwn,
-    epoch: 0,
     messageId: m.messageId,
     attachment: _attachmentFromSyncDto(m),
     // Reactions arrive as their own PDS events, which a device receiving

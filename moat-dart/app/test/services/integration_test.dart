@@ -30,7 +30,6 @@ class FakeSendService implements SendService {
       content: text,
       timestamp: DateTime.utc(2025, 1, 15, 12, 0, callCount),
       isOwn: true,
-      epoch: 0,
       status: MessageStatus.sent,
       messageId: Uint8List.fromList(List.generate(16, (i) => callCount + i)),
     );
@@ -53,7 +52,6 @@ class FakeSendService implements SendService {
       content: '[image image/png 1x1]',
       timestamp: DateTime.utc(2025, 1, 15, 12, 0, callCount),
       isOwn: true,
-      epoch: 0,
       status: MessageStatus.sent,
     );
   }
@@ -89,7 +87,6 @@ Message makeMessage({
   String content = 'Hello!',
   DateTime? timestamp,
   bool isOwn = false,
-  int epoch = 0,
   MessageStatus status = MessageStatus.sent,
   String? localId,
   List<int>? messageId,
@@ -102,7 +99,6 @@ Message makeMessage({
     content: content,
     timestamp: timestamp ?? DateTime.utc(2025, 1, 15, 12, 0, 0),
     isOwn: isOwn,
-    epoch: epoch,
     status: status,
     localId: localId,
     messageId: messageId != null ? Uint8List.fromList(messageId) : null,

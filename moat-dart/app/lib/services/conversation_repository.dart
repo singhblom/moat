@@ -192,7 +192,6 @@ class ConversationRepository extends ChangeNotifier {
       content: text,
       timestamp: DateTime.now(),
       isOwn: true,
-      epoch: 0,
       status: MessageStatus.sending,
     );
 
@@ -215,7 +214,6 @@ class ConversationRepository extends ChangeNotifier {
       content: '[image]',
       timestamp: DateTime.now(),
       isOwn: true,
-      epoch: 0,
       status: MessageStatus.sending,
     );
 

@@ -14,7 +14,6 @@ void main() {
       String content = 'Hello, world!',
       DateTime? timestamp,
       bool isOwn = false,
-      int epoch = 0,
       MessageStatus status = MessageStatus.sent,
       String? localId,
     }) {
@@ -26,7 +25,6 @@ void main() {
         content: content,
         timestamp: timestamp ?? DateTime.utc(2025, 1, 15, 12, 30, 0),
         isOwn: isOwn,
-        epoch: epoch,
         status: status,
         localId: localId,
       );
@@ -45,7 +43,6 @@ void main() {
         expect(restored.content, original.content);
         expect(restored.timestamp, original.timestamp);
         expect(restored.isOwn, original.isOwn);
-        expect(restored.epoch, original.epoch);
         expect(restored.status, original.status);
         expect(restored.localId, original.localId);
       });
@@ -76,12 +73,6 @@ void main() {
         final original = makeMessage(isOwn: true);
         final restored = Message.fromJson(original.toJson());
         expect(restored.isOwn, true);
-      });
-
-      test('message with high epoch roundtrips', () {
-        final original = makeMessage(epoch: 999999);
-        final restored = Message.fromJson(original.toJson());
-        expect(restored.epoch, 999999);
       });
 
       test('groupId base64-encodes in JSON', () {
@@ -144,7 +135,6 @@ void main() {
         expect(copy.content, original.content);
         expect(copy.timestamp, original.timestamp);
         expect(copy.isOwn, original.isOwn);
-        expect(copy.epoch, original.epoch);
         expect(copy.status, original.status);
         expect(copy.localId, original.localId);
       });
@@ -245,7 +235,6 @@ void main() {
         content: '[image image/jpeg 1920x1080]',
         timestamp: DateTime.utc(2025, 1, 15, 12, 0, 0),
         isOwn: false,
-        epoch: 1,
         attachment: ImageAttachment(
           uri: 'at://did:plc:alice/bafkrei',
           key: Uint8List.fromList(List.generate(32, (i) => i)),
@@ -277,7 +266,6 @@ void main() {
         content: 'Hello',
         timestamp: DateTime.utc(2025, 1, 1),
         isOwn: false,
-        epoch: 0,
       );
       final json = message.toJson();
       expect(json['attachment'], isNull);
@@ -300,7 +288,6 @@ void main() {
         content: '[image]',
         timestamp: DateTime.now(),
         isOwn: false,
-        epoch: 0,
         attachment: attachment,
       );
       final updated = message.copyWith(content: 'updated');

@@ -21,7 +21,6 @@ void main() {
       content: content,
       timestamp: DateTime.utc(2025, 1, 15, 12, 0, 0),
       isOwn: true,
-      epoch: 0,
       status: status,
       localId: localId,
       messageId: Uint8List.fromList([1, 2, 3, 4]),

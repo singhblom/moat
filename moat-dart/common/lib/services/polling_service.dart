@@ -375,7 +375,6 @@ class PollingService {
             content: text,
             timestamp: event.createdAt,
             isOwn: isOwn,
-            epoch: result.event.epoch.toInt(),
             messageId: result.event.messageId != null
                 ? Uint8List.fromList(result.event.messageId!)
                 : null,
@@ -563,7 +562,6 @@ class PollingService {
     final conversation = Conversation(
       groupId: groupId,
       participants: otherDids.isNotEmpty ? otherDids : [senderDid],
-      epoch: epoch,
       keyBundleRef: 'key_bundle_$groupIdHex',
       createdAt: DateTime.now(),
     );

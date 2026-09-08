@@ -36,7 +36,6 @@ Message makeMessage({
     content: content,
     timestamp: timestamp ?? DateTime.utc(2025, 1, 15, 12, 0, 0),
     isOwn: false,
-    epoch: 0,
     messageId: messageId != null ? Uint8List.fromList(messageId) : null,
   );
 }

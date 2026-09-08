@@ -122,7 +122,6 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
           content: result.plaintextPreview!,
           timestamp: DateTime.now(),
           isOwn: false,
-          epoch: 0,
           messageId: result.messageId != null
               ? Uint8List.fromList(result.messageId!)
               : null,

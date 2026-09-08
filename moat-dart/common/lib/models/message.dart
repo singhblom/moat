@@ -157,9 +157,6 @@ class Message {
   /// Whether this message was sent by us
   final bool isOwn;
 
-  /// MLS epoch when the message was sent
-  final int epoch;
-
   /// Status of the message (for sent messages)
   final MessageStatus status;
 
@@ -183,7 +180,6 @@ class Message {
     required this.content,
     required this.timestamp,
     required this.isOwn,
-    required this.epoch,
     this.status = MessageStatus.sent,
     this.localId,
     this.messageId,
@@ -212,7 +208,6 @@ class Message {
         'content': content,
         'timestamp': timestamp.toIso8601String(),
         'isOwn': isOwn,
-        'epoch': epoch,
         'status': status.name,
         'localId': localId,
         'messageId': messageId != null ? base64Encode(messageId!) : null,
@@ -229,7 +224,6 @@ class Message {
     String? content,
     DateTime? timestamp,
     bool? isOwn,
-    int? epoch,
     MessageStatus? status,
     String? localId,
     Uint8List? messageId,
@@ -244,7 +238,6 @@ class Message {
         content: content ?? this.content,
         timestamp: timestamp ?? this.timestamp,
         isOwn: isOwn ?? this.isOwn,
-        epoch: epoch ?? this.epoch,
         status: status ?? this.status,
         localId: localId ?? this.localId,
         messageId: messageId ?? this.messageId,
@@ -260,7 +253,6 @@ class Message {
         content: json['content'] as String,
         timestamp: DateTime.parse(json['timestamp'] as String),
         isOwn: json['isOwn'] as bool,
-        epoch: json['epoch'] as int,
         status: _parseStatus(json['status'] as String?),
         localId: json['localId'] as String?,
         messageId: json['messageId'] != null

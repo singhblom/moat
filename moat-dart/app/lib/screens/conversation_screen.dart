@@ -753,7 +753,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
             if (message.senderDeviceId != null)
               _buildInfoRow(context, 'Device', message.senderDeviceId!),
             _buildInfoRow(context, 'Time', _formatDateTime(message.timestamp)),
-            _buildInfoRow(context, 'Epoch', message.epoch.toString()),
             _buildInfoRow(context, 'Status', message.status.name),
             _buildInfoRow(context, 'Message ID', message.id, isMonospace: true),
             const SizedBox(height: 16),

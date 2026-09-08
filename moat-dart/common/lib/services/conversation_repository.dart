@@ -146,7 +146,6 @@ class ConversationRepository {
       content: text,
       timestamp: DateTime.now(),
       isOwn: true,
-      epoch: 0,
       status: MessageStatus.sending,
     );
 
