@@ -92,7 +92,6 @@ class SendService {
       content: preview,
       timestamp: DateTime.now(),
       isOwn: true,
-      epoch: conversation.epoch,
       status: MessageStatus.sent,
       messageId: result.messageId != null ? Uint8List.fromList(result.messageId!) : null,
     );
@@ -197,7 +196,6 @@ class SendService {
       content: renderMessagePreview(structuredPayload),
       timestamp: DateTime.now(),
       isOwn: true,
-      epoch: conversation.epoch,
       status: MessageStatus.sent,
       messageId: result.messageId != null ? Uint8List.fromList(result.messageId!) : null,
       attachment: ImageAttachment(
