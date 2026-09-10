@@ -36,6 +36,14 @@ use std::{
 use std::os::unix::process::CommandExt as _;
 use tempfile::TempDir;
 
+/// How long to wait for a participant's HTTP server to start answering.
+///
+/// 30 s is generous for a single process (~0.1 s for either runtime),
+/// but the full suite runs many test binaries in parallel, each spawning
+/// several OS processes, so startup competes for CPU. 10 s was too tight
+/// under that contention and produced false failures.
+const STARTUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Which implementation a participant runs.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ParticipantKind {
@@ -457,9 +465,9 @@ impl TestWorld {
         // watch the socket — which is how "did not start within 10s" came
         // to be reported for failures that had nothing to do with the
         // budget. Checking liveness turns those into an immediate, named
-        // error instead of a ten-second stall and a guess.
+        // error instead of a long stall and a guess.
         {
-            let timeout = std::time::Duration::from_secs(10);
+            let timeout = STARTUP_TIMEOUT;
             let deadline = std::time::Instant::now() + timeout;
             let mut ready = vec![false; pending.len()];
 
@@ -605,7 +613,7 @@ impl TestWorld {
             &proc.client,
             child,
             &proc.log_path,
-            std::time::Duration::from_secs(10),
+            STARTUP_TIMEOUT,
         )
         .await
         .with_context(|| format!("waiting for participant ({handle}) to restart"))?;
@@ -689,7 +697,7 @@ impl TestWorld {
             &client,
             &mut child,
             &log_path,
-            std::time::Duration::from_secs(10),
+            STARTUP_TIMEOUT,
         )
         .await
         .with_context(|| format!("waiting for second device ({label}) to start"))?;
