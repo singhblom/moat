@@ -295,10 +295,7 @@ class PollingService {
 
           final tagHex = event.tag.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
-          // Skip events this device published (mark_own=true) to avoid
-          // self-processing ring-group coord messages such as SyncOffer.
-          if (_ringService.isOwnPublishedTag(event.tag)) {
-            moatLog('PollingService: skipping own-published event rkey=${event.rkey} tag=$tagHex');
+          if (did == myDid) {
             continue;
           }
 
@@ -321,8 +318,6 @@ class PollingService {
               .where((c) => c.groupIdHex == groupIdHex)
               .firstOrNull;
           if (conversation == null) {
-            // Not a user conversation and not the ring group: there is no
-            // other group kind this could legitimately be.
             moatLog('PollingService: event ${event.rkey} tag=$tagHex matched an unknown group $groupIdHex — dropped');
             continue;
           }

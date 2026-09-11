@@ -178,6 +178,19 @@ pub struct ConversationMessages {
     pub messages: Vec<StoredMessage>,
 }
 
+/// An event that was fetched but could not be processed, serialised to disk
+/// so it survives a restart. Without this, the cursor advances past the
+/// event and a restart loses it permanently.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredUnprocessedEvent {
+    pub rkey: String,
+    pub author_did: String,
+    pub tag_hex: String,
+    pub ciphertext_b64: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub source_did: String,
+}
+
 pub type Result<T> = std::result::Result<T, KeyStoreError>;
 
 /// Credentials parsed from a credentials.txt file in the moat directory
@@ -371,6 +384,65 @@ impl KeyStore {
         let mut state = self.load_pagination_state()?;
         state.last_rkeys.insert(did.to_string(), rkey.to_string());
         self.store_pagination_state(&state)
+    }
+
+    pub fn store_unprocessed_events(
+        &self,
+        events: &[(Vec<usize>, moat_atproto::EventRecord, String)],
+    ) -> Result<()> {
+        use base64::Engine;
+        let stored: Vec<StoredUnprocessedEvent> = events
+            .iter()
+            .map(|(_, ev, did)| StoredUnprocessedEvent {
+                rkey: ev.rkey.clone(),
+                author_did: ev.author_did.clone(),
+                tag_hex: hex::encode(ev.tag.as_slice()),
+                ciphertext_b64: base64::engine::general_purpose::STANDARD.encode(&ev.ciphertext),
+                created_at: ev.created_at,
+                source_did: did.clone(),
+            })
+            .collect();
+        let path = self.base_path.join("unprocessed_events.json");
+        if stored.is_empty() {
+            let _ = fs::remove_file(&path);
+            return Ok(());
+        }
+        let json = serde_json::to_vec(&stored)?;
+        fs::write(&path, json)?;
+        Ok(())
+    }
+
+    pub fn load_unprocessed_events(&self) -> Result<Vec<(moat_atproto::EventRecord, String)>> {
+        use base64::Engine;
+        let path = self.base_path.join("unprocessed_events.json");
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let data = fs::read(&path)?;
+        let stored: Vec<StoredUnprocessedEvent> = serde_json::from_slice(&data)?;
+        let mut events = Vec::new();
+        for s in stored {
+            let tag_bytes = hex::decode(&s.tag_hex).unwrap_or_default();
+            if tag_bytes.len() != 16 {
+                continue;
+            }
+            let mut tag = [0u8; 16];
+            tag.copy_from_slice(&tag_bytes);
+            let ciphertext = base64::engine::general_purpose::STANDARD
+                .decode(&s.ciphertext_b64)
+                .unwrap_or_default();
+            let ev = moat_atproto::EventRecord {
+                uri: String::new(),
+                rkey: s.rkey,
+                author_did: s.author_did,
+                v: 1,
+                tag,
+                ciphertext,
+                created_at: s.created_at,
+            };
+            events.push((ev, s.source_did));
+        }
+        Ok(events)
     }
 
     /// Load messages for a conversation

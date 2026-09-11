@@ -34,10 +34,6 @@ class DeviceRingService {
   Uint8List? _pendingPairToken;
   int _coordGroupCount = 0;
 
-  /// Tags published by this device (mark_own=true) that the polling service
-  /// must skip to avoid self-processing its own published events.
-  final Set<String> _ownPublishedTagHexes = {};
-
   /// Last tick's sibling stealth addresses, kept so KP-lane calls outside
   /// `tick()` (e.g. [emitKpRequestFor], [encryptUserConvWelcome] in
   /// `_pollForNewDevices`) can stealth-address a sibling without re-fetching.
@@ -805,13 +801,6 @@ class DeviceRingService {
     } catch (e) {
       moatLog('DeviceRingService: persist failed: $e');
     }
-  }
-
-  /// Returns true if [tag] was published by this device (mark_own=true) and
-  /// should be skipped during message polling to avoid self-processing.
-  bool isOwnPublishedTag(List<int> tag) {
-    final hex = tag.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-    return _ownPublishedTagHexes.contains(hex);
   }
 
   /// Drop any pending pair-WS state — used when sync ends or aborts.

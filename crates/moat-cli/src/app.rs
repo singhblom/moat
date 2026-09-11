@@ -608,11 +608,6 @@ pub struct App {
     // Tag -> conversation mapping (tag -> hex-encoded group_id)
     pub tag_map: HashMap<[u8; 16], String>,
 
-    // Tags published by this device — skip these during polling to avoid
-    // self-decryption errors. Using tags rather than rkeys because we know
-    // the tag before the network publish completes.
-    own_published_tags: HashSet<[u8; 16]>,
-
     // Events that were fetched but could not be processed (tag miss or decrypt
     // failure). Retried each poll cycle after new events are processed, since
     // commits in new events may advance epochs and unlock these.
@@ -817,6 +812,12 @@ impl App {
         let drawbridge = DrawbridgeManager::new(bg_tx.clone());
 
         let ring_driver = keys.load_ring_state().unwrap_or_default();
+        let restored_unprocessed: Vec<(Vec<usize>, moat_atproto::EventRecord, String)> = keys
+            .load_unprocessed_events()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(ev, did)| (Vec::new(), ev, did))
+            .collect();
 
         Ok(Self {
             keys,
@@ -843,8 +844,7 @@ impl App {
             cursor_position: 0,
             new_conv_handle: String::new(),
             tag_map: HashMap::new(),
-            own_published_tags: HashSet::new(),
-            unprocessed_events: Vec::new(),
+            unprocessed_events: restored_unprocessed,
             last_poll: None,
             last_device_poll: None,
             watched_dids: std::collections::HashSet::new(),
@@ -1164,7 +1164,6 @@ impl App {
         );
 
         let encrypted = self.mls.encrypt_event(&group_id, &key_bundle, &event)?;
-        self.own_published_tags.insert(encrypted.tag);
         self.save_mls_state()?;
         self.keys
             .store_group_state(&conv_id, &encrypted.new_group_state)?;
@@ -2237,7 +2236,6 @@ impl App {
             }
         };
 
-        self.own_published_tags.insert(encrypted.tag);
         if let Err(e) = self.save_mls_state() {
             self.debug_log.log(&format!("blob_uploaded: failed to save MLS state: {e}"));
         }
@@ -2915,7 +2913,6 @@ impl App {
             }
         };
 
-        self.own_published_tags.insert(encrypted.tag);
         if let Err(e) = self.save_mls_state() {
             self.debug_log
                 .log(&format!("image_uploaded: failed to save MLS state: {e}"));
@@ -3365,7 +3362,7 @@ impl App {
             let mut still_unprocessed = Vec::new();
 
             for (conv_indices, event_record, did) in all_events {
-                if self.own_published_tags.contains(&event_record.tag) {
+                if did == my_did {
                     continue;
                 }
                 let tag_hex: String =
@@ -3458,8 +3455,8 @@ impl App {
         }
         // Decrypt watched events that matched the tag_map (e.g. events
         // arriving in the same batch as the Welcome that created the conversation).
-        for (conv_indices, event_record, _did) in reprocess {
-            if self.own_published_tags.contains(&event_record.tag) {
+        for (conv_indices, event_record, did) in reprocess {
+            if did == my_did {
                 continue;
             }
             if let Some(true) = self.process_matched_event(&conv_indices, &event_record, &my_did) { new_messages += 1; }
@@ -3482,6 +3479,14 @@ impl App {
                     e
                 ));
             }
+        }
+
+        // Persist unprocessed events so they survive a restart. Without
+        // this the cursor advances past them and they are lost.
+        if let Err(e) = self.keys.store_unprocessed_events(&self.unprocessed_events) {
+            self.debug_log.log(&format!(
+                "poll: failed to persist unprocessed events: {e}",
+            ));
         }
 
         // The ex-members this cycle asked for events have now been swept:
@@ -5228,7 +5233,6 @@ impl App {
 
         // Encrypt synchronously (fast — pure crypto, no I/O)
         let encrypted = self.mls.encrypt_event(&group_id, &key_bundle, &event)?;
-        self.own_published_tags.insert(encrypted.tag);
         self.save_mls_state()?;
 
         self.debug_log.log(&format!(
@@ -6400,9 +6404,6 @@ impl App {
             }
         };
         let _ = self.save_mls_state();
-        // Our own publishes never trial-decrypt as ours, so without this
-        // the poller would retry this event forever as "unprocessed".
-        self.own_published_tags.insert(encrypted.tag);
 
         let _ = self.bg_tx.send(BgEvent::PublishHistorySummary {
             tag: encrypted.tag,
@@ -6521,9 +6522,6 @@ impl App {
             .encrypt_event(&ring_id, &key_bundle, &event)
             .map_err(AppError::Mls)?;
         let _ = self.save_mls_state();
-        // Our own publishes never trial-decrypt as ours, so without this
-        // the poller would retry this event forever as "unprocessed".
-        self.own_published_tags.insert(encrypted.tag);
 
         // Whatever occupied the pair channel before is superseded — a
         // device drives one pair session at a time (see `api_pair_new`).
@@ -6595,7 +6593,6 @@ impl App {
             .encrypt_event(&ring_id, &key_bundle, &event)
             .map_err(AppError::Mls)?;
         let _ = self.save_mls_state();
-        self.own_published_tags.insert(encrypted.tag);
 
         self.drawbridge.clear_pair();
         self.sync_session = None;
