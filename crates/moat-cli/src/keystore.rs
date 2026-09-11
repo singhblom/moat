@@ -63,6 +63,12 @@ pub struct GroupMetadata {
     /// `MULTI_DEVICE.md`, "Catch-Up Across Membership Changes".
     #[serde(default)]
     pub pending_ex_members: Vec<String>,
+    /// DID → device_id for all members ever seen in this group.
+    /// Populated from MLS credentials on startup and when members join.
+    /// Needed to generate candidate tags for departed members whose
+    /// MLS leaf credentials have been removed.
+    #[serde(default)]
+    pub member_device_ids: std::collections::HashMap<String, Vec<u8>>,
 }
 
 /// Deserialize a field that may be a single string (old format) or a Vec<String> (new format).

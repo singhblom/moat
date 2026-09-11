@@ -1960,6 +1960,7 @@ impl App {
                             participant_handles: conv.participant_handles.clone(),
                             kind: GroupKind::User,
                             pending_ex_members: Vec::new(),
+                            member_device_ids: Default::default(),
                         },
                     );
                 }
@@ -3274,10 +3275,31 @@ impl App {
 
         self.conversations.clear();
         for group_id in group_ids {
-            let meta = self.keys.load_group_metadata(&group_id).unwrap_or_default();
+            let mut meta = self.keys.load_group_metadata(&group_id).unwrap_or_default();
+            let group_id_bytes = hex::decode(&group_id).unwrap_or_default();
+
+            // Populate member_device_ids from current MLS membership.
+            // This fills the map on first run (migration) and keeps it
+            // current for members still in the group.
+            if let Ok(members) = self.mls.get_group_members(&group_id_bytes) {
+                let mut changed = false;
+                for (_leaf_idx, cred) in &members {
+                    if let Some(c) = cred {
+                        let did = c.did().to_string();
+                        let dev = c.device_id().to_vec();
+                        if meta.member_device_ids.get(&did) != Some(&dev) {
+                            meta.member_device_ids.insert(did, dev);
+                            changed = true;
+                        }
+                    }
+                }
+                if changed {
+                    let _ = self.keys.store_group_metadata(&group_id, &meta);
+                }
+            }
+
             // Ring and DeviceCoord groups are infrastructure — hide from the conversation list
             // but still populate their candidate tags for event routing.
-            let group_id_bytes = hex::decode(&group_id).unwrap_or_default();
             if meta.kind != GroupKind::User {
                 self.populate_candidate_tags(&group_id, &group_id_bytes);
                 continue;
@@ -3310,7 +3332,16 @@ impl App {
     /// Generates tags for each member device using the GAP_LIMIT window.
     /// Tags map back to the hex-encoded group_id for routing.
     fn populate_candidate_tags(&mut self, conv_id: &str, group_id: &[u8]) {
-        match self.mls.populate_candidate_tags(group_id) {
+        let extras = self.extra_members_for_tags(conv_id);
+        let extra_refs: Vec<(&str, &[u8; 16])> = extras
+            .iter()
+            .filter_map(|(did, dev)| {
+                <&[u8; 16]>::try_from(dev.as_slice())
+                    .ok()
+                    .map(|d| (did.as_str(), d))
+            })
+            .collect();
+        match self.mls.populate_candidate_tags(group_id, &extra_refs) {
             Ok(tags) => {
                 for tag in tags {
                     self.tag_map.insert(tag, conv_id.to_string());
@@ -3321,6 +3352,23 @@ impl App {
                     .log(&format!("populate_tags: failed for {}: {}", conv_id, e));
             }
         }
+    }
+
+    /// Collect (DID, device_id) pairs for pending ex-members whose device_ids
+    /// are known from the persisted member_device_ids map.
+    fn extra_members_for_tags(&self, conv_id: &str) -> Vec<(String, Vec<u8>)> {
+        let meta = match self.keys.load_group_metadata(conv_id) {
+            Ok(m) => m,
+            Err(_) => return Vec::new(),
+        };
+        meta.pending_ex_members
+            .iter()
+            .filter_map(|did| {
+                meta.member_device_ids
+                    .get(did)
+                    .map(|dev| (did.clone(), dev.clone()))
+            })
+            .collect()
     }
 
     /// Process poll results on the main thread (decrypt, update state).
@@ -3772,11 +3820,23 @@ impl App {
                                 // catch-up pass and never polls them at
                                 // all. See MULTI_DEVICE.md, "Catch-Up
                                 // Across Membership Changes".
-                                let mut pending_ex_members = self
+                                let existing_meta = self
                                     .keys
                                     .load_group_metadata(&conv_id)
-                                    .map(|m| m.pending_ex_members)
                                     .unwrap_or_default();
+                                let mut pending_ex_members = existing_meta.pending_ex_members;
+                                let mut member_device_ids = existing_meta.member_device_ids;
+                                // Refresh device_ids for current members (captures newcomers)
+                                if let Ok(members) = self.mls.get_group_members(&group_id) {
+                                    for (_leaf_idx, cred) in &members {
+                                        if let Some(c) = cred {
+                                            member_device_ids.insert(
+                                                c.did().to_string(),
+                                                c.device_id().to_vec(),
+                                            );
+                                        }
+                                    }
+                                }
                                 for departed in &old_dids {
                                     if !member_dids.contains(departed)
                                         && !pending_ex_members.contains(departed)
@@ -3796,6 +3856,7 @@ impl App {
                                         participant_handles: new_handles,
                                         kind: GroupKind::User,
                                         pending_ex_members,
+                                        member_device_ids,
                                     },
                                 );
                                 // Fetch relay configs for any new members
@@ -4010,6 +4071,7 @@ impl App {
                 participant_handles: participant_handles.clone(),
                 kind: GroupKind::User,
                 pending_ex_members: Vec::new(),
+                member_device_ids: Default::default(),
             },
         );
 
@@ -4736,6 +4798,7 @@ impl App {
                 participant_handles: vec![recipient_handle.to_string()],
                 kind: GroupKind::User,
                 pending_ex_members: Vec::new(),
+                member_device_ids: Default::default(),
             },
         )?;
 
@@ -4867,6 +4930,7 @@ impl App {
                     participant_handles: conv.participant_handles.clone(),
                     kind: GroupKind::User,
                     pending_ex_members: Vec::new(),
+                    member_device_ids: Default::default(),
                 },
             );
         }
@@ -4926,6 +4990,7 @@ impl App {
                     participant_handles: conv.participant_handles.clone(),
                     kind: GroupKind::User,
                     pending_ex_members: Vec::new(),
+                    member_device_ids: Default::default(),
                 },
             );
         }
@@ -5467,7 +5532,7 @@ impl App {
                         .log(&format!("poll_devices: save_mls_state: {e}"));
                 }
 
-                if let Ok(tags) = self.mls.populate_candidate_tags(group_id) {
+                if let Ok(tags) = self.mls.populate_candidate_tags(group_id, &[]) {
                     for t in tags {
                         self.tag_map.insert(t, conv_id.clone());
                     }
@@ -5742,6 +5807,7 @@ impl App {
                             participant_handles: vec![],
                             kind,
                             pending_ex_members: Vec::new(),
+                            member_device_ids: Default::default(),
                         },
                     );
                     self.populate_candidate_tags(&group_id_hex, &group_id);
@@ -5993,6 +6059,7 @@ impl App {
             participant_handles: Vec::new(),
             kind: GroupKind::User,
             pending_ex_members: Vec::new(),
+            member_device_ids: Default::default(),
         };
         if let Err(e) = self.keys.store_group_metadata(conv_id, &metadata) {
             self.debug_log
@@ -7002,6 +7069,7 @@ impl App {
                             participant_handles: vec![],
                             kind: GroupKind::Ring,
                             pending_ex_members: Vec::new(),
+                            member_device_ids: Default::default(),
                         },
                     );
                     self.populate_candidate_tags(&ring_id_hex, ring_id);
@@ -7109,6 +7177,7 @@ impl App {
                             participant_handles: vec![],
                             kind: GroupKind::Ring,
                             pending_ex_members: Vec::new(),
+                            member_device_ids: Default::default(),
                         },
                     );
                     self.populate_candidate_tags(&ring_id_hex, &ring_id);

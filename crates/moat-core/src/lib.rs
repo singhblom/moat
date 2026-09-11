@@ -1793,7 +1793,11 @@ impl MoatSession {
     /// advance the seen counter when a tag is matched.
     ///
     /// Returns a flat list of all candidate tags.
-    pub fn populate_candidate_tags(&self, group_id: &[u8]) -> Result<Vec<[u8; 16]>> {
+    pub fn populate_candidate_tags(
+        &self,
+        group_id: &[u8],
+        extra_members: &[(&str, &[u8; 16])],
+    ) -> Result<Vec<[u8; 16]>> {
         let group = self
             .load_group(group_id)?
             .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
@@ -1804,19 +1808,27 @@ impl MoatSession {
         let mut all_tags = Vec::new();
         let mut metadata = self.tag_metadata.write().unwrap();
 
-        // Current epoch: use seen_counters for the scanning window
+        // Collect (did, device_id) from MLS membership + extras
+        let mut member_pairs: Vec<(&str, &[u8; 16])> = Vec::new();
         for (_leaf_idx, cred) in &members {
-            let cred = match cred {
-                Some(c) => c,
-                None => continue,
-            };
-            let device_id = cred.device_id();
-            let key = (group_id.to_vec(), cred.did().to_string(), *device_id);
+            if let Some(c) = cred {
+                member_pairs.push((c.did(), c.device_id()));
+            }
+        }
+        for &(did, device_id) in extra_members {
+            if !member_pairs.iter().any(|(d, _)| *d == did) {
+                member_pairs.push((did, device_id));
+            }
+        }
+
+        // Current epoch: use seen_counters for the scanning window
+        for &(did, device_id) in &member_pairs {
+            let key = (group_id.to_vec(), did.to_string(), *device_id);
             let from_counter = seen.get(&key).map_or(0, |&c| c + 1);
             let tags = tag::generate_candidate_tags(
                 &export_secret,
                 group_id,
-                cred.did(),
+                did,
                 device_id,
                 from_counter,
                 tag::TAG_GAP_LIMIT,
@@ -1826,7 +1838,7 @@ impl MoatSession {
                     t,
                     TagMetadata {
                         group_id: group_id.to_vec(),
-                        sender_did: cred.did().to_string(),
+                        sender_did: did.to_string(),
                         device_id: *device_id,
                         counter,
                     },
@@ -1844,18 +1856,13 @@ impl MoatSession {
                 if gap == 0 {
                     break;
                 }
-                for (_leaf_idx, cred) in &members {
-                    let cred = match cred {
-                        Some(c) => c,
-                        None => continue,
-                    };
-                    let device_id = cred.device_id();
+                for &(did, device_id) in &member_pairs {
                     let tags = tag::generate_candidate_tags(
                         prior_secret,
                         group_id,
-                        cred.did(),
+                        did,
                         device_id,
-                        0, // always scan from counter 0 for old epochs
+                        0,
                         gap,
                     )?;
                     for (t, counter) in tags {
@@ -1863,7 +1870,7 @@ impl MoatSession {
                             t,
                             TagMetadata {
                                 group_id: group_id.to_vec(),
-                                sender_did: cred.did().to_string(),
+                                sender_did: did.to_string(),
                                 device_id: *device_id,
                                 counter,
                             },

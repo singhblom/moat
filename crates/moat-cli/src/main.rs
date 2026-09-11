@@ -361,7 +361,7 @@ async fn cmd_fetch(storage_dir: Option<PathBuf>, repository: &str) -> anyhow::Re
     let group_ids = keys.list_groups().unwrap_or_default();
     for gid in &group_ids {
         let group_id_bytes = hex::decode(gid).unwrap_or_default();
-        if let Ok(tags) = mls.populate_candidate_tags(&group_id_bytes) {
+        if let Ok(tags) = mls.populate_candidate_tags(&group_id_bytes, &[]) {
             for tag in tags {
                 tag_map.insert(tag, group_id_bytes.clone());
             }
@@ -535,7 +535,7 @@ async fn cmd_send_test(
 
     for gid in &group_ids {
         let group_id_bytes = hex::decode(gid).unwrap_or_default();
-        if let Ok(tags) = mls.populate_candidate_tags(&group_id_bytes) {
+        if let Ok(tags) = mls.populate_candidate_tags(&group_id_bytes, &[]) {
             if tags.contains(&tag) {
                 found_group = Some(group_id_bytes);
                 break;

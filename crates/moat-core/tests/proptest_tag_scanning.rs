@@ -29,7 +29,7 @@ impl TagScanner {
     fn rebuild(&mut self, sim: &ConversationSim, participant: usize) {
         let tags = sim.participants[participant]
             .session
-            .populate_candidate_tags(&sim.group_id)
+            .populate_candidate_tags(&sim.group_id, &[])
             .unwrap();
         self.candidates[participant] = tags.into_iter().collect();
     }

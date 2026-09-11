@@ -162,7 +162,7 @@ impl MoatSessionHandle {
         self.inner
             .lock()
             .unwrap()
-            .populate_candidate_tags(&group_id)
+            .populate_candidate_tags(&group_id, &[])
             .map(|tags| tags.into_iter().map(|t| t.to_vec()).collect())
             .map_err(|e| e.to_string())
     }
@@ -847,7 +847,7 @@ pub fn decrypt_push_payload(
     let mut matched_group: Option<Vec<u8>> = None;
     'outer: for group_id in &group_ids {
         let candidates = session
-            .populate_candidate_tags(group_id)
+            .populate_candidate_tags(group_id, &[])
             .map_err(|e| e.to_string())?;
         for candidate in candidates {
             if candidate == tag_arr {
