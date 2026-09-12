@@ -44,7 +44,7 @@ Future<void> main(List<String> args) async {
   final convStorage = ConversationStorage(backend: docBackend);
   final msgStorage = MessageStorage(backend: docBackend);
 
-  // Create services.
+  // Create pre-bundle services.
   final atprotoClient = AtprotoClient(pdsOverride: pdsUrl);
   final authService = AuthService(
     atprotoClient: atprotoClient,
@@ -56,68 +56,21 @@ Future<void> main(List<String> args) async {
     atprotoClient: atprotoClient,
     secureStorage: secureStorage,
   );
-  // Device ring + sync (multi-device coordination).
-  final ringService = DeviceRingService(
-    auth: authService,
-    drawbridge: DrawbridgeService.instance,
-    backend: docBackend,
-  );
-  await ringService.init();
-  ringService.convsService = convsService;
-  // So the history advertisement can say how much this device holds.
-  ringService.messageStorage = msgStorage;
-  final syncService = SyncService(
-    auth: authService,
-    drawbridge: DrawbridgeService.instance,
-    ring: ringService,
-    conversationStorage: convStorage,
-    messageStorage: msgStorage,
-  );
 
-  // Live pairing (QR / text code) device onboarding. No host, including
-  // this headless server, auto-approves an incoming `Enroll` anymore —
-  // approval is always an explicit call once `pairingService.state`
-  // reports `AwaitingApproval` (Beacon calls `POST /pair/approve`).
-  final pairingService = PairingService(
+  // Create and wire all shared post-login services.
+  final bundle = await createServiceBundle(
     auth: authService,
     drawbridge: DrawbridgeService.instance,
-    ring: ringService,
-    sync: syncService,
-    conversationStorage: convStorage,
-    messageStorage: msgStorage,
-  );
-
-  // Requested sync between established devices. Like pairing, the
-  // sibling's user must accept explicitly — Beacon calls
-  // `POST /sync/accept`.
-  final syncRequestService = SyncRequestService(
-    auth: authService,
-    drawbridge: DrawbridgeService.instance,
-    ring: ringService,
-    sync: syncService,
-  );
-
-  final pollingService = PollingService(
-    authService: authService,
+    docBackend: docBackend,
     conversationsService: convsService,
     watchListService: watchListService,
     secureStorage: secureStorage,
-    ringService: ringService,
-  );
-  pollingService.onRingMessage = syncRequestService.onRingMessage;
-  pollingService.onPollTick = syncRequestService.expireIfDue;
-
-  // Wire ConversationManager.
-  ConversationManager.instance.init(
-    authService: authService,
-    storage: msgStorage,
-    ringService: ringService,
-    syncService: syncService,
+    messageStorage: msgStorage,
   );
 
   // Wire Drawbridge push notifications to trigger polling.
   DrawbridgeService.instance.onNewEvent = (_) {
-    pollingService.pollOnce();
+    bundle.polling.pollOnce();
   };
 
   // Create BlobService for image support.
@@ -131,12 +84,12 @@ Future<void> main(List<String> args) async {
     authService: authService,
     convsService: convsService,
     watchListService: watchListService,
-    pollingService: pollingService,
+    pollingService: bundle.polling,
     blobService: blobService,
-    ringService: ringService,
-    syncService: syncService,
-    pairingService: pairingService,
-    syncRequestService: syncRequestService,
+    ringService: bundle.ring,
+    syncService: bundle.sync,
+    pairingService: bundle.pairing,
+    syncRequestService: bundle.syncRequest,
     messageStorage: msgStorage,
   );
 

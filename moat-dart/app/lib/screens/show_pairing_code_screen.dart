@@ -10,8 +10,9 @@ import '../widgets/common_value_listenable_builder.dart';
 /// raw text as a manual-entry fallback), then waits for the existing
 /// device to enter it and approve.
 ///
-/// Renders off [PairingService.state] rather than polling. Pops once
-/// `state` reaches `Done`; on `Failed`, shows the reason and waits.
+/// Renders off [PairingService.state] rather than polling. Shows a
+/// sync spinner once `state` reaches `Done`, and pops when
+/// `historyReady` fires; on `Failed`, shows the reason and waits.
 class ShowPairingCodeScreen extends StatefulWidget {
   const ShowPairingCodeScreen({super.key});
 
@@ -26,7 +27,9 @@ class _ShowPairingCodeScreenState extends State<ShowPairingCodeScreen> {
   @override
   void initState() {
     super.initState();
-    PairingManager.instance.service?.state.addListener(_onStateChange);
+    final service = PairingManager.instance.service;
+    service?.state.addListener(_onStateChange);
+    service?.historyReady.addListener(_onHistoryReady);
     _start();
   }
 
@@ -57,6 +60,16 @@ class _ShowPairingCodeScreenState extends State<ShowPairingCodeScreen> {
     if (!mounted) return;
     final uiState = PairingManager.instance.service?.state.value;
     if (uiState is common.PairingUiStateDto_Done) {
+      // The pairing protocol is done, but the history sync runs after this.
+      // Trigger a rebuild to show the syncing spinner; the actual pop
+      // happens in _onHistoryReady once sync + ring tick are complete.
+      setState(() {});
+    }
+  }
+
+  void _onHistoryReady() {
+    if (!mounted) return;
+    if (PairingManager.instance.service?.historyReady.value == true) {
       Navigator.of(context).pop(true);
     }
   }
@@ -75,7 +88,9 @@ class _ShowPairingCodeScreenState extends State<ShowPairingCodeScreen> {
 
   @override
   void dispose() {
-    PairingManager.instance.service?.state.removeListener(_onStateChange);
+    final service = PairingManager.instance.service;
+    service?.state.removeListener(_onStateChange);
+    service?.historyReady.removeListener(_onHistoryReady);
     super.dispose();
   }
 
@@ -116,9 +131,22 @@ class _ShowPairingCodeScreenState extends State<ShowPairingCodeScreen> {
         onDismiss: () => Navigator.of(context).pop(false),
       );
     }
+    if (uiState is common.PairingUiStateDto_Done) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(height: 16),
+            Text(
+              'Syncing history…',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ],
+        ),
+      );
+    }
     if (uiState is! common.PairingUiStateDto_ShowingCode) {
-      // AwaitingPeer/AwaitingApproval/Idle never apply to a new-device
-      // session; Done is about to pop via `_onStateChange`.
       return const Center(child: CircularProgressIndicator());
     }
 

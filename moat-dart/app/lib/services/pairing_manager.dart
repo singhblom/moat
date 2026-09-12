@@ -17,24 +17,10 @@ class PairingManager {
 
   PairingService? get service => _service;
 
-  /// Must be called once per login, alongside `DeviceRingService`/
-  /// `SyncService` construction in `AuthGate._startPollingIfNeeded`.
-  void init({
-    required AuthService authService,
-    required DrawbridgeService drawbridge,
-    required DeviceRingService ring,
-    required SyncService sync,
-    required ConversationStorage conversationStorage,
-    required MessageStorage messageStorage,
-  }) {
-    _service = PairingService(
-      auth: authService,
-      drawbridge: drawbridge,
-      ring: ring,
-      sync: sync,
-      conversationStorage: conversationStorage,
-      messageStorage: messageStorage,
-    );
+  /// Must be called once per login, alongside the other post-login
+  /// services in `AuthGate._startPollingIfNeeded`.
+  void init({required ServiceBundle bundle}) {
+    _service = bundle.pairing;
   }
 
   /// Called on logout, alongside the other post-login services.

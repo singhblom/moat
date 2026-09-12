@@ -17,18 +17,8 @@ class SyncRequestManager {
 
   /// Must be called once per login, alongside the other post-login
   /// services in `AuthGate._startPollingIfNeeded`.
-  void init({
-    required AuthService authService,
-    required DrawbridgeService drawbridge,
-    required DeviceRingService ring,
-    required SyncService sync,
-  }) {
-    _service = SyncRequestService(
-      auth: authService,
-      drawbridge: drawbridge,
-      ring: ring,
-      sync: sync,
-    );
+  void init({required ServiceBundle bundle}) {
+    _service = bundle.syncRequest;
   }
 
   /// Called on logout, alongside the other post-login services.

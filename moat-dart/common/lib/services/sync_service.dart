@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import '../rust/api/simple.dart' as ffi;
 import 'auth_service.dart';
-import 'conversation_storage.dart';
+import 'conversations_service.dart';
 import 'debug_log.dart';
 import 'device_ring_service.dart';
 import 'drawbridge_service.dart';
@@ -22,7 +22,7 @@ class SyncService {
   final AuthService _auth;
   final DrawbridgeService _drawbridge;
   final DeviceRingService _ring;
-  final ConversationStorage _convStorage;
+  final ConversationsService _convService;
   final MessageStorage _messageStorage;
 
   ffi.SyncSessionHandle? _session;
@@ -52,12 +52,12 @@ class SyncService {
     required AuthService auth,
     required DrawbridgeService drawbridge,
     required DeviceRingService ring,
-    required ConversationStorage conversationStorage,
+    required ConversationsService conversationsService,
     required MessageStorage messageStorage,
   })  : _auth = auth,
         _drawbridge = drawbridge,
         _ring = ring,
-        _convStorage = conversationStorage,
+        _convService = conversationsService,
         _messageStorage = messageStorage {
     reclaimPairCallbacks();
   }
@@ -150,7 +150,7 @@ class SyncService {
 
     final setup = await buildPairedSyncSession(
       session: session,
-      convStorage: _convStorage,
+      convService: _convService,
       messageStorage: _messageStorage,
       ringEpoch: ringEpoch,
     );
@@ -227,7 +227,7 @@ class SyncService {
           }
         },
         store: (convId, messages) async {
-          await registerSyncedConversation(_convStorage, convId, messages, did);
+          await registerSyncedConversation(_convService, convId, messages, did);
           final count =
               await storeSyncOutputMessages(_messageStorage, convId, messages, did);
           moatLog('SyncService: stored $count message(s) for $convId');

@@ -43,6 +43,7 @@ export 'utils/sync_failure_text.dart';
 export 'services/paired_sync_builder.dart';
 export 'services/pairing_service.dart';
 export 'services/profile_cache_service.dart';
+export 'services/service_bundle.dart';
 
 // FRB bindings
 export 'rust/api/simple.dart';

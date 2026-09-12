@@ -47,11 +47,14 @@ class ConversationsScreen extends StatelessWidget {
                 final brightness = Theme.of(context).brightness;
                 context.read<ThemeProvider>().toggleTheme(brightness);
               } else if (value == 'show_pairing_code') {
-                Navigator.of(context).push(
+                final synced = await Navigator.of(context).push<bool>(
                   MaterialPageRoute(
                     builder: (context) => const ShowPairingCodeScreen(),
                   ),
                 );
+                if (synced == true && context.mounted) {
+                  await conversations.refresh();
+                }
               } else if (value == 'enter_pairing_code') {
                 Navigator.of(context).push(
                   MaterialPageRoute(

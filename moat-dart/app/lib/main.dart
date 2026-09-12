@@ -399,58 +399,32 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
     DrawbridgeService.instance.watchTags(allTags);
   }
 
-  void _startPollingIfNeeded(AuthProvider auth) {
+  Future<void> _startPollingIfNeeded(AuthProvider auth) async {
     if (auth.isAuthenticated && !_pollingStarted) {
       _pollingStarted = true;
-      final ringService = DeviceRingService(
+      final convsService = context.read<ConversationsProvider>().service;
+
+      final bundle = await createServiceBundle(
         auth: auth.service,
         drawbridge: DrawbridgeService.instance,
-        backend: widget.docBackend,
-      );
-      // Best-effort load of persisted ring state before polling starts.
-      // ignore: discarded_futures
-      ringService.init();
-      // So the history advertisement can say how much this device holds.
-      ringService.messageStorage = widget.msgStorage;
-      final syncService = SyncService(
-        auth: auth.service,
-        drawbridge: DrawbridgeService.instance,
-        ring: ringService,
-        conversationStorage: widget.convStorage,
-        messageStorage: widget.msgStorage,
-      );
-      _pollingService = PollingService(
-        authService: auth.service,
-        conversationsService: context.read<ConversationsProvider>().service,
+        docBackend: widget.docBackend,
+        conversationsService: convsService,
         watchListService: context.read<WatchListProvider>().service,
         secureStorage: widget.secureStorage,
-        ringService: ringService,
+        messageStorage: widget.msgStorage,
       );
-      ConversationManager.instance.init(
-        authService: auth.service,
-        storage: widget.msgStorage,
-        ringService: ringService,
-        syncService: syncService,
-      );
+      if (!mounted) return;
+
+      _pollingService = bundle.polling;
+
       app_cm.ConversationManager.instance.init(
         authService: auth.service,
         storage: widget.msgStorage,
       );
-      PairingManager.instance.init(
-        authService: auth.service,
-        drawbridge: DrawbridgeService.instance,
-        ring: ringService,
-        sync: syncService,
-        conversationStorage: widget.convStorage,
-        messageStorage: widget.msgStorage,
-      );
-      DeviceRingManager.instance.init(ringService);
-      SyncRequestManager.instance.init(
-        authService: auth.service,
-        drawbridge: DrawbridgeService.instance,
-        ring: ringService,
-        sync: syncService,
-      );
+      PairingManager.instance.init(bundle: bundle);
+      DeviceRingManager.instance.init(bundle.ring);
+      SyncRequestManager.instance.init(bundle: bundle);
+
       // `init()` just built a fresh service (and `state` notifier), so
       // listeners can't accumulate across login cycles. Listening globally
       // rather than per-screen is deliberate: an `Enroll` can arrive while
@@ -478,7 +452,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       // it holds nothing — a newly added device is exactly when the user
       // cares — and again below on app open, for an advertisement that
       // arrived in an earlier session.
-      ringService.onOfferableSibling = (deviceIdHex) async {
+      bundle.ring.onOfferableSibling = (deviceIdHex) async {
         rootNavigatorKey.currentState?.push(
           MaterialPageRoute(
             builder: (_) => OfferHistoryScreen(
@@ -492,15 +466,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       // earlier session still gets asked about now rather than whenever
       // the user next opens the Devices screen.
       // ignore: discarded_futures
-      ringService.promptOfferOnOpen();
-
-      // A sibling's `ring.msg` reaches the service through the poller,
-      // which is what decrypts ring traffic.
-      _pollingService!.onRingMessage =
-          SyncRequestManager.instance.service!.onRingMessage;
-      // The sync-request session has no clock of its own.
-      _pollingService!.onPollTick =
-          SyncRequestManager.instance.service!.expireIfDue;
+      bundle.ring.promptOfferOnOpen();
 
       _pollingService!.onMessages = app_cm.ConversationManager.instance.notify;
       _pollingService!.onReaction = app_cm.ConversationManager.instance.notifyReaction;

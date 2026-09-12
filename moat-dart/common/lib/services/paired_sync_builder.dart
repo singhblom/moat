@@ -5,7 +5,7 @@ import '../models/conversation.dart';
 import '../models/message.dart';
 import '../rust/api/simple.dart' as ffi;
 import '../utils/platform_int64.dart';
-import 'conversation_storage.dart';
+import 'conversations_service.dart';
 import 'message_storage.dart';
 
 /// Result of [buildPairedSyncSession]: a freshly-built `SyncSession`
@@ -28,11 +28,11 @@ class PairedSyncSetup {
 /// `crates/moat-cli/src/app.rs`.
 Future<PairedSyncSetup> buildPairedSyncSession({
   required ffi.MoatSessionHandle session,
-  required ConversationStorage convStorage,
+  required ConversationsService convService,
   required MessageStorage messageStorage,
   required BigInt ringEpoch,
 }) async {
-  final conversations = await convStorage.loadAll();
+  final conversations = convService.conversations;
   final syncSession = ffi.SyncSessionHandle.newSession();
 
   final convStates = <ffi.ConvStateDto>[];
@@ -72,13 +72,12 @@ Future<PairedSyncSetup> buildPairedSyncSession({
 /// Dart mirror of `App::register_synced_conversation` in
 /// `crates/moat-cli/src/app.rs`.
 Future<void> registerSyncedConversation(
-  ConversationStorage convStorage,
+  ConversationsService convService,
   String convId,
   List<ffi.SyncMessageDto> messages,
   String myDid,
 ) async {
-  final existing = await convStorage.loadAll();
-  if (existing.any((c) => c.groupIdHex == convId)) return;
+  if (convService.findByGroupId(_decodeHex(convId)) != null) return;
 
   final participants = <String>[];
   for (final m in messages) {
@@ -86,7 +85,7 @@ Future<void> registerSyncedConversation(
     if (!participants.contains(m.senderDid)) participants.add(m.senderDid);
   }
 
-  await convStorage.save(Conversation(
+  await convService.saveConversation(Conversation(
     groupId: _decodeHex(convId),
     participants: participants,
     keyBundleRef: convId,

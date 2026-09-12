@@ -1,6 +1,6 @@
 //! Phase A: Size bucketing to hide message length
 //!
-//! Messages are padded to fixed bucket sizes (512B, 1KB, 4KB control) to prevent
+//! Messages are padded to fixed bucket sizes (512B, 1KB, 4KB, 16KB) to prevent
 //! traffic analysis from inferring message content based on size.
 //!
 //! Bucketing rounds *up* to a fixed size, so there is no bucket for a
@@ -29,6 +29,8 @@ pub enum Bucket {
     Standard = 1024,
     /// 4096 bytes - control bucket for overflow commits/welcomes/checkpoints
     Control = 4096,
+    /// 16384 bytes - large welcomes in groups with many members
+    Large = 16384,
 }
 
 impl Bucket {
@@ -40,8 +42,10 @@ impl Bucket {
             Bucket::Small
         } else if needed <= Bucket::Standard as usize {
             Bucket::Standard
-        } else {
+        } else if needed <= Bucket::Control as usize {
             Bucket::Control
+        } else {
+            Bucket::Large
         }
     }
 
@@ -53,13 +57,13 @@ impl Bucket {
 
 /// The largest plaintext that any bucket can hold, once the 4-byte length
 /// prefix is accounted for.
-pub const MAX_BUCKETED_PLAINTEXT: usize = Bucket::Control as usize - 4;
+pub const MAX_BUCKETED_PLAINTEXT: usize = Bucket::Large as usize - 4;
 
 /// Pad plaintext to the nearest bucket size.
 ///
 /// Format: [4-byte big-endian length][plaintext][random padding]
 ///
-/// The total output will be exactly one of: 512, 1024, or 4096 bytes.
+/// The total output will be exactly one of: 512, 1024, 4096, or 16384 bytes.
 ///
 /// Fails above [`MAX_BUCKETED_PLAINTEXT`]: there is no bucket to round up
 /// to, and every alternative is worse than saying so. Emitting an
@@ -150,7 +154,12 @@ mod tests {
         // Control bucket for overflow
         assert_eq!(Bucket::for_size(1021), Bucket::Control);
         assert_eq!(Bucket::for_size(2000), Bucket::Control);
-        assert_eq!(Bucket::for_size(4000), Bucket::Control);
+        assert_eq!(Bucket::for_size(4092), Bucket::Control); // 4092 + 4 = 4096
+
+        // Large bucket for big welcomes
+        assert_eq!(Bucket::for_size(4093), Bucket::Large);
+        assert_eq!(Bucket::for_size(8000), Bucket::Large);
+        assert_eq!(Bucket::for_size(16380), Bucket::Large); // 16380 + 4 = 16384
     }
 
     #[test]
@@ -181,6 +190,15 @@ mod tests {
     }
 
     #[test]
+    fn test_pad_unpad_xlarge() {
+        let plaintext = vec![0x42; 5000];
+        let padded = pad_to_bucket(&plaintext).unwrap();
+
+        assert_eq!(padded.len(), 16384);
+        assert_eq!(unpad(&padded), plaintext);
+    }
+
+    #[test]
     fn test_pad_unpad_empty() {
         let plaintext = b"";
         let padded = pad_to_bucket(plaintext).unwrap();
@@ -192,7 +210,7 @@ mod tests {
     #[test]
     fn largest_bucketed_plaintext_still_pads() {
         let plaintext = vec![0x42; MAX_BUCKETED_PLAINTEXT];
-        assert_eq!(pad_to_bucket(&plaintext).unwrap().len(), 4096);
+        assert_eq!(pad_to_bucket(&plaintext).unwrap().len(), 16384);
     }
 
     /// One byte past the largest bucket. This used to underflow
@@ -260,5 +278,9 @@ mod tests {
         assert_eq!(pad_to_bucket(&vec![0x42; 1020]).unwrap().len(), 1024);
         // One byte over spills to Control
         assert_eq!(pad_to_bucket(&vec![0x42; 1021]).unwrap().len(), 4096);
+        // Max payload that fits in Control (4092 + 4 = 4096)
+        assert_eq!(pad_to_bucket(&vec![0x42; 4092]).unwrap().len(), 4096);
+        // One byte over spills to Large
+        assert_eq!(pad_to_bucket(&vec![0x42; 4093]).unwrap().len(), 16384);
     }
 }

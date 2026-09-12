@@ -5,7 +5,7 @@ import 'dart:typed_data';
 import '../rust/api/simple.dart' as ffi;
 import '../utils/value_listenable.dart';
 import 'auth_service.dart';
-import 'conversation_storage.dart';
+import 'conversations_service.dart';
 import 'debug_log.dart';
 import 'device_ring_service.dart';
 import 'drawbridge_service.dart';
@@ -46,7 +46,7 @@ class PairingService {
   final DrawbridgeService _drawbridge;
   final DeviceRingService _ring;
   final SyncService _sync;
-  final ConversationStorage _convStorage;
+  final ConversationsService _convService;
   final MessageStorage _messageStorage;
 
   ffi.PairingSessionHandle? _session;
@@ -65,6 +65,14 @@ class PairingService {
   /// `failed` after completion, not just at the instant it happens (mirrors
   /// `PairingSession::ui_state`'s retention of a terminal outcome).
   ValueListenable<ffi.PairingUiStateDto> get state => _state;
+
+  final SimpleValueNotifier<bool> _historyReady = SimpleValueNotifier(false);
+
+  /// Fires `true` once the post-pairing history sync has completed and
+  /// the ring tick has processed any pending `UserConvWelcome`s. UI
+  /// screens should wait for this before navigating away, so the user
+  /// lands on a populated conversations list.
+  ValueListenable<bool> get historyReady => _historyReady;
 
   /// Refresh [state] from the live session — call after every operation
   /// that may have changed it (construction, `startEnroll`/`onFrameReceived`/
@@ -109,13 +117,13 @@ class PairingService {
     required DrawbridgeService drawbridge,
     required DeviceRingService ring,
     required SyncService sync,
-    required ConversationStorage conversationStorage,
+    required ConversationsService conversationsService,
     required MessageStorage messageStorage,
   })  : _auth = auth,
         _drawbridge = drawbridge,
         _ring = ring,
         _sync = sync,
-        _convStorage = conversationStorage,
+        _convService = conversationsService,
         _messageStorage = messageStorage;
 
   /// The ring this session ended up in, once known.
@@ -353,6 +361,7 @@ class PairingService {
     _frameQueue = Future.value();
     _session = null;
     _isNewDevice = null;
+    _historyReady.value = false;
     _syncState();
   }
 
@@ -556,6 +565,9 @@ class PairingService {
     }
     if (startSync && _generation == gen) {
       await _startPairingSyncSession(gen);
+    } else if (_generation == gen &&
+        _state.value is ffi.PairingUiStateDto_Done) {
+      _historyReady.value = true;
     }
   }
 
@@ -570,7 +582,10 @@ class PairingService {
   Future<void> _startPairingSyncSession(int gen) async {
     final session = _session;
     final moatSession = _auth.moatSession;
-    if (session == null || moatSession == null) return;
+    if (session == null || moatSession == null) {
+      _historyReady.value = true;
+      return;
+    }
 
     final keyNewToOld = session.channelKeyNewToOld();
     final keyOldToNew = session.channelKeyOldToNew();
@@ -578,13 +593,16 @@ class PairingService {
     final recvCounter = session.nextRecvCounter();
 
     final ringId = session.ringId();
-    if (ringId == null) return;
+    if (ringId == null) {
+      _historyReady.value = true;
+      return;
+    }
     final ringEpoch = (await moatSession.getGroupEpoch(groupId: ringId)) ?? BigInt.zero;
     if (_generation != gen) return;
 
     final setup = await buildPairedSyncSession(
       session: moatSession,
-      convStorage: _convStorage,
+      convService: _convService,
       messageStorage: _messageStorage,
       ringEpoch: ringEpoch,
     );
@@ -625,7 +643,7 @@ class PairingService {
         },
         store: (convId, messages) async {
           if (did == null) return;
-          await registerSyncedConversation(_convStorage, convId, messages, did);
+          await registerSyncedConversation(_convService, convId, messages, did);
           final count =
               await storeSyncOutputMessages(_messageStorage, convId, messages, did);
           moatLog('PairingService: pairing-sync stored $count message(s) for $convId');
@@ -635,15 +653,22 @@ class PairingService {
 
     // As in `SyncService`: tear down only once every output in the batch
     // has been applied, never as one of them.
-    if (gen == _generation && (await _pairingSyncSession?.isDone() ?? false)) {
+    final isDone = await _pairingSyncSession?.isDone() ?? false;
+    // ignore: avoid_print
+    print('[moat] PairingService: pairing-sync isDone=$isDone gen=$gen/_generation=$_generation');
+    if (gen == _generation && isDone) {
+      // ignore: avoid_print
+      print('[moat] PairingService: pairing-sync complete — closing pair WS, will tick');
       moatLog('PairingService: pairing-sync complete — closing pair WS');
       _pairingSyncSession = null;
       _pairingSyncKeyNewToOld = null;
       _pairingSyncKeyOldToNew = null;
       await _releaseTransport();
-      // Onboarding sync has just filled this device, so the empty
-      // advertisement it published on joining the ring is now wrong.
       await _ring.publishHistorySummary();
+      await _ring.tick();
+      // ignore: avoid_print
+      print('[moat] PairingService: post-sync tick done, historyReady=true');
+      _historyReady.value = true;
     }
   }
 
@@ -687,23 +712,22 @@ class PairingService {
     if (_generation != gen) return;
     _pairingSyncRecvCounter += BigInt.one;
 
-    // The new device's advisory `Done` courtesy (channel-teardown only,
-    // not load-bearing for either side's own completion) can still be in
-    // flight when the peer locally transitions to sync mode: both sides
-    // do so as soon as *their own* processing finishes, independent of
-    // what the other side has sent or received yet. A `Done` that arrives
-    // after that transition opens fine under the pairing AEAD (same
-    // channel, next counter) but isn't a SyncMsg — recognize and ignore
-    // it rather than treating it as a decode error.
-    if (ffi.pairingFrameIsDone(plaintext: plaintext)) {
-      moatLog('PairingService: pairing-sync received the pairing session\'s Done courtesy');
-      return;
-    }
-
     List<ffi.SyncOutputDto> outputs;
     try {
       outputs = await syncSession.onMessage(msgBytes: plaintext);
     } catch (e) {
+      // The new device's advisory `PairingMsg::Done` (a channel-teardown
+      // courtesy, not load-bearing for either side's own completion) can
+      // still be in flight when the peer locally transitions to sync mode:
+      // both sides do so as soon as *their own* processing finishes,
+      // independent of what the other side has sent or received yet. A
+      // `Done` that arrives after that transition opens fine under the
+      // pairing AEAD (same channel, next counter) but isn't a SyncMsg —
+      // recognize and ignore it rather than logging a spurious decode error.
+      if (ffi.pairingFrameIsDone(plaintext: plaintext)) {
+        moatLog('PairingService: pairing-sync received the pairing session\'s Done courtesy');
+        return;
+      }
       moatLog('PairingService: pairing-sync onMessage failed: $e — aborting');
       await _releaseTransport();
       return;

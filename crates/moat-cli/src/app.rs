@@ -3410,7 +3410,10 @@ impl App {
             let mut still_unprocessed = Vec::new();
 
             for (conv_indices, event_record, did) in all_events {
-                if did == my_did {
+                // Skip own-DID events only when this device has no siblings.
+                // With sibling devices, own-DID events may come from another
+                // device and must be processed.
+                if did == my_did && self.ring_driver.ring_id().is_none() {
                     continue;
                 }
                 let tag_hex: String =
@@ -3430,8 +3433,12 @@ impl App {
                             made_progress = true;
                         }
                         None => {
-                            // Decrypt failed — cache for retry
-                            still_unprocessed.push((conv_indices, event_record, did));
+                            // Decrypt failed — cache for retry, but not for
+                            // own-DID events (MLS cannot self-decrypt, so
+                            // these would accumulate forever).
+                            if did != my_did {
+                                still_unprocessed.push((conv_indices, event_record, did));
+                            }
                         }
                     }
                 } else {
@@ -3444,7 +3451,10 @@ impl App {
                         made_progress = true;
                     } else {
                         // Neither tag match nor welcome — cache for retry
-                        still_unprocessed.push((conv_indices, event_record, did));
+                        // (same own-DID guard as above).
+                        if did != my_did {
+                            still_unprocessed.push((conv_indices, event_record, did));
+                        }
                     }
                 }
             }

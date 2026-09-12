@@ -489,8 +489,8 @@ fn a_hello_far_past_the_old_bucket_ceiling_survives_the_wire() {
     let (_kp, key_bundle) = session.generate_key_package(&credential).unwrap();
     let group_id = session.create_group(&credential, &key_bundle).unwrap();
 
-    // Twenty times the old ceiling, and well past any single bucket.
-    let rkeys: Vec<String> = (0..3_000).map(|i| format!("3lkzq7xk2p{i:04}")).collect();
+    // Well past any single bucket.
+    let rkeys: Vec<String> = (0..10_000).map(|i| format!("3lkzq7xk2p{i:05}")).collect();
     let convs = vec![ConvState {
         group_id: group_id.clone(),
         inventory: ConvInventory::Complete { rkeys: rkeys.clone() },
@@ -522,7 +522,7 @@ fn a_pds_bound_event_still_refuses_to_exceed_its_bucket() {
     let (_kp, key_bundle) = session.generate_key_package(&credential).unwrap();
     let group_id = session.create_group(&credential, &key_bundle).unwrap();
 
-    let event = moat_core::Event::ring_msg(group_id.clone(), 7, vec![0x42; 8_000]);
+    let event = moat_core::Event::ring_msg(group_id.clone(), 7, vec![0x42; 20_000]);
     match session.encrypt_event(&group_id, &key_bundle, &event) {
         Err(moat_core::Error::PayloadTooLarge(_)) => {}
         Err(other) => panic!("expected PayloadTooLarge, got {other:?}"),

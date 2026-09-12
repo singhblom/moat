@@ -192,9 +192,29 @@ class DeviceRingService {
     return d.ownEventsCursor();
   }
 
+  /// Throws if required properties have not been injected.
+  ///
+  /// Called at the start of [tick] so a missing injection fails loudly
+  /// instead of silently skipping fan-out and group registration.
+  void assertReady() {
+    if (convsService == null) {
+      throw StateError(
+        'DeviceRingService.convsService is null — '
+        'set it before the first tick (use createServiceBundle)',
+      );
+    }
+    if (messageStorage == null) {
+      throw StateError(
+        'DeviceRingService.messageStorage is null — '
+        'set it before the first tick (use createServiceBundle)',
+      );
+    }
+  }
+
   /// Drive one ring tick.
   Future<void> tick() async {
     if (_tickInFlight) return;
+    assertReady();
     _tickInFlight = true;
     try {
       await _tickInner();
@@ -303,7 +323,7 @@ class DeviceRingService {
     );
 
     final cmds = await driver.tick(session: session, inputs: inputs);
-    moatLog(
+    moatLog( 
       'DeviceRingService: tick out cmds=[${_summarizeCmds(cmds)}] '
       '| ${driver.debugSummary()}',
     );

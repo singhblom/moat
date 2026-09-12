@@ -16,10 +16,13 @@ import 'package:moat_dart_common/utils/platform_int64.dart';
 void main() {
   late Directory tempDir;
   late ConversationStorage storage;
+  late ConversationsService convService;
 
-  setUp(() {
+  setUp(() async {
     tempDir = Directory.systemTemp.createTempSync('synced_conv_test_');
     storage = ConversationStorage(backend: IoDocumentBackend(tempDir));
+    convService = ConversationsService(storage: storage);
+    await convService.init();
   });
 
   tearDown(() {
@@ -43,13 +46,13 @@ void main() {
   group('registerSyncedConversation', () {
     test('registers an unknown conversation as read-only', () async {
       await registerSyncedConversation(
-        storage,
+        convService,
         convId,
         [message('r1', 'did:plc:bob'), message('r2', 'did:plc:bob')],
         myDid,
       );
 
-      final all = await storage.loadAll();
+      final all = convService.conversations;
       expect(all, hasLength(1));
       expect(all.single.groupIdHex, convId);
       expect(
@@ -63,7 +66,7 @@ void main() {
     test('infers participants from who sent the messages, excluding us',
         () async {
       await registerSyncedConversation(
-        storage,
+        convService,
         convId,
         [
           message('r1', 'did:plc:bob'),
@@ -74,7 +77,7 @@ void main() {
         myDid,
       );
 
-      final all = await storage.loadAll();
+      final all = convService.conversations;
       expect(
         all.single.participants,
         ['did:plc:bob', 'did:plc:carol'],
@@ -84,22 +87,22 @@ void main() {
     });
 
     test('leaves an already-known conversation alone', () async {
-      await storage.save(Conversation(
+      await convService.saveConversation(Conversation(
         groupId: Uint8List.fromList(List.filled(16, 7)),
         participants: const ['did:plc:bob'],
         keyBundleRef: 'existing',
         createdAt: DateTime.now(),
       ));
-      final existingHex = (await storage.loadAll()).single.groupIdHex;
+      final existingHex = convService.conversations.single.groupIdHex;
 
       await registerSyncedConversation(
-        storage,
+        convService,
         existingHex,
         [message('r1', 'did:plc:carol')],
         myDid,
       );
 
-      final all = await storage.loadAll();
+      final all = convService.conversations;
       expect(all, hasLength(1));
       expect(
         all.single.isMember,
@@ -158,7 +161,7 @@ void main() {
         ],
       );
 
-      await registerSyncedConversation(storage, convId, [dto], myDid);
+      await registerSyncedConversation(convService, convId, [dto], myDid);
       final messageStorage = MessageStorage(backend: IoDocumentBackend(tempDir));
       await storeSyncOutputMessages(messageStorage, convId, [dto], myDid);
 

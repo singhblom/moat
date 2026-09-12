@@ -2856,7 +2856,7 @@ mod tests {
     /// rather than producing a frame of some other size.
     #[test]
     fn test_pad_rejects_oversized() {
-        assert!(pad_to_bucket(vec![0x42; 5000]).is_err());
+        assert!(pad_to_bucket(vec![0x42; 20_000]).is_err());
     }
 
     /// Pair-WS frames use the unbucketed framing, which has no ceiling and
