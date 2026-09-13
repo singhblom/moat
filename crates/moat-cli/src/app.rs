@@ -1653,13 +1653,18 @@ impl App {
             dids_to_poll.entry(my_did).or_insert(all_conv_indices);
         }
 
-        let watched: Vec<(String, Option<String>)> = self
+        // Watching a DID for invites keeps its own cursor. Sharing the
+        // conversation cursor would let a watch fetch move past messages this
+        // device cannot read yet — from a group whose Welcome is still on
+        // another member's PDS — and joining would never fetch them again.
+        let watched: Vec<(String, String, Option<String>)> = self
             .watched_dids
             .iter()
             .filter(|did| !dids_to_poll.contains_key(*did))
             .map(|did| {
-                let last_rkey = self.keys.get_last_rkey(did).ok().flatten();
-                (did.clone(), last_rkey)
+                let cursor_key = format!("watch:{did}");
+                let last_rkey = self.keys.get_last_rkey(&cursor_key).ok().flatten();
+                (did.clone(), cursor_key, last_rkey)
             })
             .collect();
 
@@ -1704,7 +1709,7 @@ impl App {
             }
 
             let mut watched_events = Vec::new();
-            for (did, last_rkey) in &watched {
+            for (did, cursor_key, last_rkey) in &watched {
                 if let Ok(events) = client
                     .fetch_events_from_did(did, last_rkey.as_deref())
                     .await {
@@ -1721,7 +1726,7 @@ impl App {
                         watched_events.push((did.clone(), event));
                     }
                     if let Some(rkey) = max_rkey {
-                        new_rkeys.push((did.clone(), rkey));
+                        new_rkeys.push((cursor_key.clone(), rkey));
                     }
                 }
             }

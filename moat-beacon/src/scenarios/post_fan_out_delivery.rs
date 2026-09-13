@@ -208,7 +208,7 @@ async fn run_with(
     }
 }
 
-async fn epoch_of(client: &MoatCliClient, group_id: &str) -> Option<u64> {
+pub(crate) async fn epoch_of(client: &MoatCliClient, group_id: &str) -> Option<u64> {
     client
         .list_conversations()
         .await
@@ -219,7 +219,7 @@ async fn epoch_of(client: &MoatCliClient, group_id: &str) -> Option<u64> {
 }
 
 /// Poll `client` until it holds `group_id` as a member.
-async fn wait_for_membership(
+pub(crate) async fn wait_for_membership(
     client: &MoatCliClient,
     group_id: &str,
     label: &str,
@@ -274,7 +274,7 @@ async fn wait_for_fan_out(
     }
 }
 
-async fn wait_for_epoch_after(
+pub(crate) async fn wait_for_epoch_after(
     client: &MoatCliClient,
     group_id: &str,
     before: u64,
@@ -300,7 +300,7 @@ async fn wait_for_epoch_after(
 /// Poll `client` until a message with content `text` appears in `group_id`.
 /// Returns `false` on timeout so the caller can record the failure and keep
 /// checking the remaining directions.
-async fn wait_for_message(
+pub(crate) async fn wait_for_message(
     client: &MoatCliClient,
     group_id: &str,
     text: &str,

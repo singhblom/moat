@@ -56,6 +56,7 @@ pub mod two_party_fanout;
 pub mod two_party_push;
 pub mod two_party_push_restart;
 pub mod two_party_restart;
+pub mod watched_before_welcome;
 
 // ── Verbose logging ───────────────────────────────────────────────────────────
 
@@ -887,6 +888,20 @@ pub static SCENARIOS: &[Scenario] = &[
         name: "post-fan-out-delivery-rd",
         description: "Same as post-fan-out-delivery, but D1 (existing device) runs Dart, D2 runs Rust",
         run_fn: post_fan_out_delivery::run_rd_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "watched-before-welcome",
+        description: "Carol reads Alice's post-Add message from a watch before holding Bob's Welcome; she must still get it",
+        run_fn: watched_before_welcome::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "watched-before-welcome-d",
+        description: "Same as watched-before-welcome, but Carol (the joiner) runs Dart",
+        run_fn: watched_before_welcome::run_dart_joiner_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
