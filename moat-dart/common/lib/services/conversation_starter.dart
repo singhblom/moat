@@ -55,18 +55,10 @@ Future<Conversation> startConversation({
   // 6. Publish stealth-encrypted welcome.
   await client.publishEvent(result.randomTag, result.stealthCiphertext);
 
-  // 7. Populate candidate tags.
+  // 7. Populate candidate tags and watch them on own Drawbridge.
   await authService.populateConversationTags(result.groupId);
 
   final groupIdHex = _bytesToHex(result.groupId);
-
-  // 8. Register tags on own Drawbridge.
-  final session = authService.moatSession;
-  if (session != null) {
-    final tags = session.populateCandidateTags(groupId: result.groupId);
-    DrawbridgeService.instance
-        .addTags(tags.map((t) => Uint8List.fromList(t)).toList());
-  }
 
   // 9. Fetch recipient's Drawbridge config and cache it.
   final recipientRelayUrls = await client.fetchDrawbridgeConfig(recipientDid);

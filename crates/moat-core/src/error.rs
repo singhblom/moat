@@ -43,6 +43,8 @@ pub enum ErrorCode {
     StateDiverged = 202,
     UnknownSender = 203,
     ConflictUnresolved = 204,
+    OwnEvent = 205,
+    StaleEpoch = 206,
     // Pairing error codes
     PairingCodec = 300,
     PairingCrypto = 301,
@@ -125,6 +127,18 @@ pub enum Error {
     #[error("commit conflict unresolved after retries: {0}")]
     ConflictUnresolved(String),
 
+    /// An event this device published itself. MLS cannot decrypt a sender's
+    /// own ciphertext, and there is nothing to apply: the event took effect
+    /// on this device when it was created.
+    #[error("own event: {0}")]
+    OwnEvent(String),
+
+    /// An event from an epoch this group can no longer process: a commit for
+    /// an epoch already left, or an application message older than the
+    /// retained past epochs.
+    #[error("stale epoch: {0}")]
+    StaleEpoch(String),
+
     #[error("invalid blob URI (must start with at://): {0}")]
     InvalidBlobUri(String),
 
@@ -171,6 +185,14 @@ impl Error {
         ))
     }
 
+    /// Whether processing the same event again can never succeed.
+    ///
+    /// A host that keeps undecryptable events to retry after later ones
+    /// should drop these instead.
+    pub fn is_permanent(&self) -> bool {
+        matches!(self, Error::OwnEvent(_) | Error::StaleEpoch(_))
+    }
+
     /// Return the numeric error code for this error.
     pub fn code(&self) -> ErrorCode {
         match self {
@@ -197,6 +219,8 @@ impl Error {
             Error::StateDiverged(_) => ErrorCode::StateDiverged,
             Error::UnknownSender(_) => ErrorCode::UnknownSender,
             Error::ConflictUnresolved(_) => ErrorCode::ConflictUnresolved,
+            Error::OwnEvent(_) => ErrorCode::OwnEvent,
+            Error::StaleEpoch(_) => ErrorCode::StaleEpoch,
             Error::InvalidBlobUri(_) => ErrorCode::InvalidBlobUri,
             Error::CiphertextHashMismatch(_) => ErrorCode::CiphertextHashMismatch,
             Error::BlobDecryptionFailed(_) => ErrorCode::BlobDecryptionFailed,
@@ -236,6 +260,8 @@ impl Error {
             | Error::StateDiverged(msg)
             | Error::UnknownSender(msg)
             | Error::ConflictUnresolved(msg)
+            | Error::OwnEvent(msg)
+            | Error::StaleEpoch(msg)
             | Error::InvalidBlobUri(msg)
             | Error::CiphertextHashMismatch(msg)
             | Error::BlobDecryptionFailed(msg)

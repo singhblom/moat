@@ -48,14 +48,6 @@ List<Uint8List> generateCandidateTags(
         fromCounter: fromCounter,
         count: count);
 
-/// Derive the next unique tag for publishing an event (increments counter).
-Uint8List deriveNextTag(
-        {required MoatSessionHandle handle,
-        required List<int> groupId,
-        required List<int> keyBundle}) =>
-    RustLib.instance.api.crateApiSimpleDeriveNextTag(
-        handle: handle, groupId: groupId, keyBundle: keyBundle);
-
 /// Sign a Drawbridge challenge with the Ed25519 identity key from a key bundle.
 ///
 /// Returns (signature_bytes, public_key_bytes) as raw bytes (64 and 32 bytes).
@@ -1771,12 +1763,16 @@ class WelcomeResultDto {
   final Uint8List newGroupState;
   final Uint8List welcome;
   final Uint8List commit;
+
+  /// Tag to publish `commit` under (16 bytes).
+  final Uint8List commitTag;
   final Uint8List groupId;
 
   const WelcomeResultDto({
     required this.newGroupState,
     required this.welcome,
     required this.commit,
+    required this.commitTag,
     required this.groupId,
   });
 
@@ -1785,6 +1781,7 @@ class WelcomeResultDto {
       newGroupState.hashCode ^
       welcome.hashCode ^
       commit.hashCode ^
+      commitTag.hashCode ^
       groupId.hashCode;
 
   @override
@@ -1795,5 +1792,6 @@ class WelcomeResultDto {
           newGroupState == other.newGroupState &&
           welcome == other.welcome &&
           commit == other.commit &&
+          commitTag == other.commitTag &&
           groupId == other.groupId;
 }

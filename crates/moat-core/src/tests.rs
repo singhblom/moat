@@ -1354,3 +1354,72 @@ fn test_long_text_message_with_external_blob() {
     }
 }
 
+
+#[test]
+fn test_own_events_fail_permanently() {
+    let alice = MoatSession::new();
+    let bob = MoatSession::new();
+
+    let alice_cred = MoatCredential::new("did:plc:alice123", "Alice Phone", *alice.device_id());
+    let (_alice_kp, alice_bundle) = alice.generate_key_package(&alice_cred).unwrap();
+    let bob_cred = MoatCredential::new("did:plc:bob456", "Bob Laptop", *bob.device_id());
+    let (bob_kp, _bob_bundle) = bob.generate_key_package(&bob_cred).unwrap();
+
+    let group_id = alice.create_group(&alice_cred, &alice_bundle).unwrap();
+    let added = alice.add_member(&group_id, &alice_bundle, &bob_kp).unwrap();
+    bob.process_welcome(&added.welcome).unwrap();
+
+    // Alice reads back her own application message
+    let sent = alice
+        .encrypt_event(&group_id, &alice_bundle, &text_event(group_id.clone(), 1, "hi"))
+        .unwrap();
+    let err = alice
+        .decrypt_event(&group_id, &sent.ciphertext)
+        .err()
+        .expect("a sender cannot decrypt its own message");
+    assert_eq!(err.code(), ErrorCode::OwnEvent);
+    assert!(err.is_permanent());
+
+    // Alice reads back the Add commit she has already applied
+    let err = alice
+        .decrypt_event(&group_id, &added.commit)
+        .err()
+        .expect("an applied commit cannot be processed again");
+    assert_eq!(err.code(), ErrorCode::StaleEpoch);
+    assert!(err.is_permanent());
+}
+
+#[test]
+fn test_commit_from_future_epoch_is_retryable() {
+    let alice = MoatSession::new();
+    let bob = MoatSession::new();
+    let carol = MoatSession::new();
+    let dave = MoatSession::new();
+
+    let alice_cred = MoatCredential::new("did:plc:alice123", "Alice Phone", *alice.device_id());
+    let (_alice_kp, alice_bundle) = alice.generate_key_package(&alice_cred).unwrap();
+    let (bob_kp, _) = bob
+        .generate_key_package(&MoatCredential::new("did:plc:bob456", "Bob", *bob.device_id()))
+        .unwrap();
+    let (carol_kp, _) = carol
+        .generate_key_package(&MoatCredential::new("did:plc:carol", "Carol", *carol.device_id()))
+        .unwrap();
+    let (dave_kp, _) = dave
+        .generate_key_package(&MoatCredential::new("did:plc:dave", "Dave", *dave.device_id()))
+        .unwrap();
+
+    let group_id = alice.create_group(&alice_cred, &alice_bundle).unwrap();
+    let added_bob = alice.add_member(&group_id, &alice_bundle, &bob_kp).unwrap();
+    bob.process_welcome(&added_bob.welcome).unwrap();
+
+    let _added_carol = alice.add_member(&group_id, &alice_bundle, &carol_kp).unwrap();
+    let added_dave = alice.add_member(&group_id, &alice_bundle, &dave_kp).unwrap();
+
+    // Bob sees the second commit before the first: it belongs to an epoch he
+    // has not reached yet, so it must stay eligible for retry.
+    let err = bob
+        .decrypt_event(&group_id, &added_dave.commit)
+        .err()
+        .expect("a commit for a future epoch cannot be processed yet");
+    assert!(!err.is_permanent(), "future-epoch commit classified permanent: {err}");
+}

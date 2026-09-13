@@ -388,13 +388,18 @@ class AuthService {
     return tryDecryptStealth(scanPrivkey: stealthPrivkey, payload: ciphertext);
   }
 
-  /// Populate candidate tags for all members in a group.
+  /// Populate candidate tags for all members in a group, and watch them on
+  /// this device's Drawbridge relay.
   Future<void> populateConversationTags(Uint8List groupId) async {
     if (_moatSession == null) return;
-    final tags = _moatSession!.populateCandidateTags(groupId: groupId);
+    final tags = _moatSession!
+        .populateCandidateTags(groupId: groupId)
+        .map((t) => Uint8List.fromList(t))
+        .toList();
     for (final tag in tags) {
-      await registerTag(Uint8List.fromList(tag), groupId);
+      await registerTag(tag, groupId);
     }
+    DrawbridgeService.instance.addTags(tags);
   }
 
   /// Register a tag in the tag map.

@@ -295,10 +295,6 @@ class PollingService {
 
           final tagHex = event.tag.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
-          if (did == myDid) {
-            continue;
-          }
-
           final groupIdHex = tagMap[tagHex];
 
           if (groupIdHex == null) {
@@ -426,14 +422,6 @@ class PollingService {
           }
 
           await _authService.populateConversationTags(conversation.groupId);
-          // Update Drawbridge watched tags.
-          final session = _authService.moatSession;
-          if (session != null) {
-            final tags = session.populateCandidateTags(groupId: conversation.groupId);
-            DrawbridgeService.instance.addTags(
-              tags.map((t) => Uint8List.fromList(t)).toList(),
-            );
-          }
           return false;
 
         case EventKindDto.reaction:
@@ -563,12 +551,8 @@ class PollingService {
 
     await _conversationsService.saveConversation(conversation);
 
-    // Register tags on own Drawbridge and fetch partner config.
+    // Fetch partner config.
     final db = DrawbridgeService.instance;
-    if (session != null) {
-      final tags = session.populateCandidateTags(groupId: groupId);
-      db.addTags(tags.map((t) => Uint8List.fromList(t)).toList());
-    }
 
     for (final did in otherDids) {
       try {

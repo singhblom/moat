@@ -359,6 +359,7 @@ pub struct WelcomeResultDto {
     pub new_group_state: Vec<u8>,
     pub welcome: Vec<u8>,
     pub commit: Vec<u8>,
+    pub commit_tag: Vec<u8>,
     pub group_id: Vec<u8>,
 }
 
@@ -368,6 +369,7 @@ impl From<WelcomeResult> for WelcomeResultDto {
             new_group_state: r.new_group_state,
             welcome: r.welcome,
             commit: r.commit,
+            commit_tag: r.commit_tag.to_vec(),
             group_id: r.group_id,
         }
     }
@@ -377,7 +379,6 @@ pub struct EncryptResultDto {
     pub new_group_state: Vec<u8>,
     pub tag: Vec<u8>,
     pub ciphertext: Vec<u8>,
-    /// The message_id assigned to the event (16 bytes for Message/Reaction, None otherwise)
     pub message_id: Option<Vec<u8>>,
 }
 
@@ -402,7 +403,6 @@ pub struct DecryptResultDto {
 
 /// Information about the sender of a message, extracted from MLS credentials.
 pub struct SenderInfoDto {
-    /// The sender's DID (e.g., "did:plc:abc123")
     pub did: String,
     /// The sender's device name (format: "did:plc:xxx/Device Name")
     pub device_name: String,
@@ -586,19 +586,6 @@ pub fn generate_candidate_tags(
         .map_err(|e| e.to_string())
 }
 
-/// Derive the next unique tag for publishing an event (increments counter).
-#[frb(sync)]
-pub fn derive_next_tag(
-    handle: &MoatSessionHandle,
-    group_id: Vec<u8>,
-    key_bundle: Vec<u8>,
-) -> Result<Vec<u8>, String> {
-    let session = handle.inner.lock().unwrap();
-    session
-        .derive_next_tag(&group_id, &key_bundle)
-        .map(|t| t.to_vec())
-        .map_err(|e| e.to_string())
-}
 
 /// Sign a Drawbridge challenge with the Ed25519 identity key from a key bundle.
 ///
@@ -2805,21 +2792,6 @@ mod tests {
                 assert_ne!(tags[i], tags[j]);
             }
         }
-    }
-
-    #[test]
-    fn test_derive_next_tag() {
-        let handle = MoatSessionHandle::new_session();
-        let device_id = *handle.inner.lock().unwrap().device_id();
-        let cred = MoatCredential::new("did:plc:alice", "Phone", device_id);
-        let (_, key_bundle) = handle.inner.lock().unwrap().generate_key_package(&cred).unwrap();
-        let group_id = handle.inner.lock().unwrap().create_group(&cred, &key_bundle).unwrap();
-
-        let tag1 = derive_next_tag(&handle, group_id.clone(), key_bundle.to_vec()).unwrap();
-        assert_eq!(tag1.len(), 16);
-
-        let tag2 = derive_next_tag(&handle, group_id, key_bundle.to_vec()).unwrap();
-        assert_ne!(tag1, tag2); // Counter increments, so tags differ
     }
 
     #[test]

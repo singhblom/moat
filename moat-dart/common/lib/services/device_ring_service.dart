@@ -520,13 +520,6 @@ class DeviceRingService {
           continue;
         }
 
-        // Derive the tag at the CURRENT epoch, before add_device advances it.
-        final commitTag = ffi.deriveNextTag(
-          handle: session,
-          groupId: groupId.toList(),
-          keyBundle: keyBundle,
-        );
-
         final ffi.WelcomeResultDto welcomeResult;
         try {
           welcomeResult = await session.addMember(
@@ -545,7 +538,7 @@ class DeviceRingService {
 
         // Publish the commit so cross-user members of this group see it.
         try {
-          await client.publishEvent(commitTag, welcomeResult.commit);
+          await client.publishEvent(welcomeResult.commitTag, welcomeResult.commit);
         } catch (e) {
           moatLog(
               'DeviceRingService: pollForNewDevices publish commit failed: $e');

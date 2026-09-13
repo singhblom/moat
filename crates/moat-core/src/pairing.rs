@@ -1046,12 +1046,8 @@ impl PairingSession {
             None => mls.create_device_ring(credential, key_bundle)?,
             Some(ring_id) => ring_id.to_vec(),
         };
-        // Derive the commit's tag at the *current* epoch, before add_member
-        // advances it — invite-lane-duplication.md §3's rule; deriving it
-        // after would tag the commit under the epoch it produces, not the
-        // one a bystander still at the old epoch is scanning for.
-        let commit_tag = mls.derive_next_tag(&ring_id, key_bundle)?;
         let welcome_result = mls.add_member(&ring_id, key_bundle, &enroll.ring_kp)?;
+        let commit_tag = welcome_result.commit_tag;
 
         let mut roster = vec![SiblingInfo {
             device_id: *mls.device_id(),

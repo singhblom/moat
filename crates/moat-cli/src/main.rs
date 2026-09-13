@@ -736,11 +736,8 @@ async fn cmd_remove_device(
     std::fs::write(&temp_path, &state)?;
     std::fs::rename(&temp_path, &mls_path)?;
 
-    // Derive tag for the commit
-    let tag = mls.derive_next_tag(&group_id, &key_bundle)?;
-
     // Publish the commit
-    let uri = client.publish_event(&tag, &result.commit, None).await?;
+    let uri = client.publish_event(&result.commit_tag, &result.commit, None).await?;
     println!("Removed device at leaf index {}", leaf_index);
     println!("Published commit: {}", uri);
 
@@ -785,11 +782,8 @@ async fn cmd_kick(
     std::fs::write(&temp_path, &state)?;
     std::fs::rename(&temp_path, &mls_path)?;
 
-    // Derive tag for the commit
-    let tag = mls.derive_next_tag(&group_id, &key_bundle)?;
-
     // Publish the commit
-    let uri = client.publish_event(&tag, &result.commit, None).await?;
+    let uri = client.publish_event(&result.commit_tag, &result.commit, None).await?;
     println!("Kicked user {}", did_to_kick);
     println!("Published commit: {}", uri);
 
@@ -830,11 +824,8 @@ async fn cmd_leave(storage_dir: Option<PathBuf>, conversation: &str) -> anyhow::
     std::fs::write(&temp_path, &state)?;
     std::fs::rename(&temp_path, &mls_path)?;
 
-    // Derive tag for the commit
-    let tag = mls.derive_next_tag(&group_id, &key_bundle)?;
-
     // Publish the commit
-    let uri = client.publish_event(&tag, &result.commit, None).await?;
+    let uri = client.publish_event(&result.commit_tag, &result.commit, None).await?;
     println!(
         "Left conversation {}",
         &conversation[..16.min(conversation.len())]

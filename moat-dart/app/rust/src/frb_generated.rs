@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1872086296;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 480339046;
 
 // Section: executor
 
@@ -4016,60 +4016,6 @@ fn wire__crate__api__simple__decrypt_push_payload_impl(
         },
     )
 }
-fn wire__crate__api__simple__derive_next_tag_impl(
-    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
-    rust_vec_len_: i32,
-    data_len_: i32,
-) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
-        flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "derive_next_tag",
-            port: None,
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
-        },
-        move || {
-            let message = unsafe {
-                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
-                    ptr_,
-                    rust_vec_len_,
-                    data_len_,
-                )
-            };
-            let mut deserializer =
-                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_handle = <RustOpaqueMoi<
-                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MoatSessionHandle>,
-            >>::sse_decode(&mut deserializer);
-            let api_group_id = <Vec<u8>>::sse_decode(&mut deserializer);
-            let api_key_bundle = <Vec<u8>>::sse_decode(&mut deserializer);
-            deserializer.end();
-            transform_result_sse::<_, String>((move || {
-                let mut api_handle_guard = None;
-                let decode_indices_ =
-                    flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
-                        flutter_rust_bridge::for_generated::LockableOrderInfo::new(
-                            &api_handle,
-                            0,
-                            false,
-                        ),
-                    ]);
-                for i in decode_indices_ {
-                    match i {
-                        0 => api_handle_guard = Some(api_handle.lockable_decode_sync_ref()),
-                        _ => unreachable!(),
-                    }
-                }
-                let api_handle_guard = api_handle_guard.unwrap();
-                let output_ok = crate::api::simple::derive_next_tag(
-                    &*api_handle_guard,
-                    api_group_id,
-                    api_key_bundle,
-                )?;
-                Ok(output_ok)
-            })())
-        },
-    )
-}
 fn wire__crate__api__simple__encrypt_for_stealth_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -6388,11 +6334,13 @@ impl SseDecode for crate::api::simple::WelcomeResultDto {
         let mut var_newGroupState = <Vec<u8>>::sse_decode(deserializer);
         let mut var_welcome = <Vec<u8>>::sse_decode(deserializer);
         let mut var_commit = <Vec<u8>>::sse_decode(deserializer);
+        let mut var_commitTag = <Vec<u8>>::sse_decode(deserializer);
         let mut var_groupId = <Vec<u8>>::sse_decode(deserializer);
         return crate::api::simple::WelcomeResultDto {
             new_group_state: var_newGroupState,
             welcome: var_welcome,
             commit: var_commit,
+            commit_tag: var_commitTag,
             group_id: var_groupId,
         };
     }
@@ -6572,75 +6520,75 @@ fn pde_ffi_dispatcher_primary_impl(
         80 => {
             wire__crate__api__simple__decrypt_push_payload_impl(port, ptr, rust_vec_len, data_len)
         }
-        82 => wire__crate__api__simple__encrypt_for_stealth_impl(port, ptr, rust_vec_len, data_len),
-        84 => {
+        81 => wire__crate__api__simple__encrypt_for_stealth_impl(port, ptr, rust_vec_len, data_len),
+        83 => {
             wire__crate__api__simple__fit_hello_inventories_impl(port, ptr, rust_vec_len, data_len)
         }
-        89 => {
+        88 => {
             wire__crate__api__simple__history_summary_decode_impl(port, ptr, rust_vec_len, data_len)
         }
-        90 => {
+        89 => {
             wire__crate__api__simple__history_summary_encode_impl(port, ptr, rust_vec_len, data_len)
         }
-        91 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
-        95 => wire__crate__api__simple__pairing_open_frame_impl(port, ptr, rust_vec_len, data_len),
-        96 => wire__crate__api__simple__pairing_payload_from_text_impl(
+        90 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
+        94 => wire__crate__api__simple__pairing_open_frame_impl(port, ptr, rust_vec_len, data_len),
+        95 => wire__crate__api__simple__pairing_payload_from_text_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        97 => wire__crate__api__simple__pairing_payload_from_uri_impl(
+        96 => wire__crate__api__simple__pairing_payload_from_uri_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        98 => wire__crate__api__simple__pairing_payload_to_text_impl(
+        97 => wire__crate__api__simple__pairing_payload_to_text_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        99 => {
+        98 => {
             wire__crate__api__simple__pairing_payload_to_uri_impl(port, ptr, rust_vec_len, data_len)
         }
-        100 => wire__crate__api__simple__pairing_seal_frame_impl(port, ptr, rust_vec_len, data_len),
-        101 => {
+        99 => wire__crate__api__simple__pairing_seal_frame_impl(port, ptr, rust_vec_len, data_len),
+        100 => {
             wire__crate__api__simple__process_image_for_send_impl(port, ptr, rust_vec_len, data_len)
         }
-        102 => wire__crate__api__simple__ring_msg_decode_impl(port, ptr, rust_vec_len, data_len),
-        103 => wire__crate__api__simple__ring_msg_decode_sync_request_impl(
+        101 => wire__crate__api__simple__ring_msg_decode_impl(port, ptr, rust_vec_len, data_len),
+        102 => wire__crate__api__simple__ring_msg_decode_sync_request_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        104 => wire__crate__api__simple__ring_msg_encode_history_summary_impl(
+        103 => wire__crate__api__simple__ring_msg_encode_history_summary_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        105 => wire__crate__api__simple__ring_msg_encode_sync_offer_impl(
+        104 => wire__crate__api__simple__ring_msg_encode_sync_offer_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        106 => wire__crate__api__simple__ring_msg_encode_sync_request_impl(
+        105 => wire__crate__api__simple__ring_msg_encode_sync_request_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        107 => wire__crate__api__simple__sign_drawbridge_challenge_impl(
+        106 => wire__crate__api__simple__sign_drawbridge_challenge_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        109 => {
+        108 => {
             wire__crate__api__simple__sync_tally_dto_default_impl(port, ptr, rust_vec_len, data_len)
         }
         _ => unreachable!(),
@@ -6876,22 +6824,21 @@ fn pde_ffi_dispatcher_sync_impl(
             data_len,
         ),
         76 => wire__crate__api__simple__SyncSessionHandle_tally_impl(ptr, rust_vec_len, data_len),
-        81 => wire__crate__api__simple__derive_next_tag_impl(ptr, rust_vec_len, data_len),
-        83 => {
+        82 => {
             wire__crate__api__simple__event_dto_reaction_payload_impl(ptr, rust_vec_len, data_len)
         }
-        85 => wire__crate__api__simple__frame_unpadded_impl(ptr, rust_vec_len, data_len),
-        86 => wire__crate__api__simple__generate_candidate_tags_impl(ptr, rust_vec_len, data_len),
-        87 => wire__crate__api__simple__generate_stealth_keypair_impl(ptr, rust_vec_len, data_len),
-        88 => {
+        84 => wire__crate__api__simple__frame_unpadded_impl(ptr, rust_vec_len, data_len),
+        85 => wire__crate__api__simple__generate_candidate_tags_impl(ptr, rust_vec_len, data_len),
+        86 => wire__crate__api__simple__generate_stealth_keypair_impl(ptr, rust_vec_len, data_len),
+        87 => {
             wire__crate__api__simple__hello_inventory_budget_bytes_impl(ptr, rust_vec_len, data_len)
         }
-        92 => wire__crate__api__simple__kp_pool_target_impl(ptr, rust_vec_len, data_len),
-        93 => wire__crate__api__simple__pad_to_bucket_impl(ptr, rust_vec_len, data_len),
-        94 => wire__crate__api__simple__pairing_frame_is_done_impl(ptr, rust_vec_len, data_len),
-        108 => wire__crate__api__simple__sync_request_ttl_ms_impl(ptr, rust_vec_len, data_len),
-        110 => wire__crate__api__simple__try_decrypt_stealth_impl(ptr, rust_vec_len, data_len),
-        111 => wire__crate__api__simple__unpad_impl(ptr, rust_vec_len, data_len),
+        91 => wire__crate__api__simple__kp_pool_target_impl(ptr, rust_vec_len, data_len),
+        92 => wire__crate__api__simple__pad_to_bucket_impl(ptr, rust_vec_len, data_len),
+        93 => wire__crate__api__simple__pairing_frame_is_done_impl(ptr, rust_vec_len, data_len),
+        107 => wire__crate__api__simple__sync_request_ttl_ms_impl(ptr, rust_vec_len, data_len),
+        109 => wire__crate__api__simple__try_decrypt_stealth_impl(ptr, rust_vec_len, data_len),
+        110 => wire__crate__api__simple__unpad_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -7953,6 +7900,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::simple::WelcomeResultDto {
             self.new_group_state.into_into_dart().into_dart(),
             self.welcome.into_into_dart().into_dart(),
             self.commit.into_into_dart().into_dart(),
+            self.commit_tag.into_into_dart().into_dart(),
             self.group_id.into_into_dart().into_dart(),
         ]
         .into_dart()
@@ -8964,6 +8912,7 @@ impl SseEncode for crate::api::simple::WelcomeResultDto {
         <Vec<u8>>::sse_encode(self.new_group_state, serializer);
         <Vec<u8>>::sse_encode(self.welcome, serializer);
         <Vec<u8>>::sse_encode(self.commit, serializer);
+        <Vec<u8>>::sse_encode(self.commit_tag, serializer);
         <Vec<u8>>::sse_encode(self.group_id, serializer);
     }
 }

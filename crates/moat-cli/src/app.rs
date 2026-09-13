@@ -3221,9 +3221,8 @@ impl App {
                 // Epoch advanced — regenerate candidate tags
                 if let Some(idx) = conv_idx {
                     let group_id = hex::decode(conv_id).unwrap_or_default();
-                    self.populate_candidate_tags(conv_id, &group_id);
+                    self.register_group_tags(conv_id, &group_id);
                     self.conversations[idx].current_epoch += 1;
-                    self.schedule_watch_tags_update();
                 }
                 self.keys.store_group_state(conv_id, &decrypted.new_group_state).ok();
             }
@@ -3354,6 +3353,13 @@ impl App {
         }
     }
 
+    /// Populate a group's candidate tags and bring the Drawbridge watch list
+    /// up to date with them.
+    fn register_group_tags(&mut self, conv_id: &str, group_id: &[u8]) {
+        self.populate_candidate_tags(conv_id, group_id);
+        self.schedule_watch_tags_update();
+    }
+
     /// Collect (DID, device_id) pairs for pending ex-members whose device_ids
     /// are known from the persisted member_device_ids map.
     fn extra_members_for_tags(&self, conv_id: &str) -> Vec<(String, Vec<u8>)> {
@@ -3410,12 +3416,6 @@ impl App {
             let mut still_unprocessed = Vec::new();
 
             for (conv_indices, event_record, did) in all_events {
-                // Skip own-DID events only when this device has no siblings.
-                // With sibling devices, own-DID events may come from another
-                // device and must be processed.
-                if did == my_did && self.ring_driver.ring_id().is_none() {
-                    continue;
-                }
                 let tag_hex: String =
                     event_record.tag.iter().map(|b| format!("{b:02x}")).collect();
 
@@ -3425,20 +3425,18 @@ impl App {
                         tag_hex, event_record.rkey
                     ));
                     match self.process_matched_event(&conv_indices, &event_record, &my_did) {
-                        Some(true) => {
+                        Ok(true) => {
                             new_messages += 1;
                             made_progress = true;
                         }
-                        Some(false) => {
+                        Ok(false) => {
                             made_progress = true;
                         }
-                        None => {
-                            // Decrypt failed — cache for retry, but not for
-                            // own-DID events (MLS cannot self-decrypt, so
-                            // these would accumulate forever).
-                            if did != my_did {
-                                still_unprocessed.push((conv_indices, event_record, did));
-                            }
+                        // This device's own event, or one from an epoch
+                        // already left: no later event can make it decrypt.
+                        Err(e) if e.is_permanent() => {}
+                        Err(_) => {
+                            still_unprocessed.push((conv_indices, event_record, did));
                         }
                     }
                 } else {
@@ -3450,8 +3448,10 @@ impl App {
                     ) {
                         made_progress = true;
                     } else {
-                        // Neither tag match nor welcome — cache for retry
-                        // (same own-DID guard as above).
+                        // Neither tag match nor welcome — cache for retry,
+                        // unless it is on our own PDS: a stealth payload this
+                        // device published never decrypts here, and would be
+                        // retried forever.
                         if did != my_did {
                             still_unprocessed.push((conv_indices, event_record, did));
                         }
@@ -3513,11 +3513,8 @@ impl App {
         }
         // Decrypt watched events that matched the tag_map (e.g. events
         // arriving in the same batch as the Welcome that created the conversation).
-        for (conv_indices, event_record, did) in reprocess {
-            if did == my_did {
-                continue;
-            }
-            if let Some(true) = self.process_matched_event(&conv_indices, &event_record, &my_did) { new_messages += 1; }
+        for (conv_indices, event_record, _did) in reprocess {
+            if let Ok(true) = self.process_matched_event(&conv_indices, &event_record, &my_did) { new_messages += 1; }
         }
 
         // Save MLS state if modified
@@ -3573,22 +3570,23 @@ impl App {
     }
 
     /// Decrypt and handle a single event whose tag matched the tag_map.
-    /// Returns `Some(true)` if a new message was stored, `Some(false)` if
-    /// processed successfully but no message (commit/reaction), or `None`
-    /// if decryption failed (caller should cache for retry).
+    /// Returns `Ok(true)` if a new message was stored, `Ok(false)` if
+    /// processed successfully but no message (commit/reaction), or the
+    /// decryption error — [`moat_core::Error::is_permanent`] tells the caller
+    /// whether keeping the event for retry can help.
     fn process_matched_event(
         &mut self,
         conv_indices: &[usize],
         event_record: &moat_atproto::EventRecord,
         my_did: &str,
-    ) -> Option<bool> {
+    ) -> std::result::Result<bool, moat_core::Error> {
         let conv_id = match self.tag_map.get(&event_record.tag).cloned() {
             Some(id) => id,
-            None => return Some(false),
+            None => return Ok(false),
         };
         let group_id = match hex::decode(&conv_id) {
             Ok(id) => id,
-            Err(_) => return Some(false),
+            Err(_) => return Ok(false),
         };
 
         let mut msg_stored = false;
@@ -3680,7 +3678,7 @@ impl App {
                             }
                             Ok(false) => {
                                 // Duplicate rkey — already stored, skip in-memory insert.
-                                return Some(msg_stored);
+                                return Ok(msg_stored);
                             }
                             Ok(true) => {
                                 msg_stored = true;
@@ -3875,11 +3873,7 @@ impl App {
                         }
 
                         // Regenerate candidate tags for the new epoch
-                        self.populate_candidate_tags(&conv_id, &group_id);
-
-                        // Update watched tags on own Drawbridge for the new epoch
-                        self.schedule_watch_tags_update();
-
+                        self.register_group_tags(&conv_id, &group_id);
                     }
                     EventKind::Modifier(ModifierKind::Reaction) => {
                         if let Some(rp) = decrypted.event.reaction_payload() {
@@ -4001,10 +3995,10 @@ impl App {
             Err(e) => {
                 self.debug_log
                     .log(&format!("poll: decryption failed: {}", e));
-                return None;
+                return Err(e);
             }
         }
-        Some(msg_stored)
+        Ok(msg_stored)
     }
 
     /// Synchronous welcome processing (no handle resolution — uses DID as name).
@@ -4063,7 +4057,7 @@ impl App {
         // tags so we don't lose track of an already-joined MLS group, but
         // don't surface a conversation.
         if participant_dids.is_empty() {
-            self.populate_candidate_tags(&conv_id, &group_id);
+            self.register_group_tags(&conv_id, &group_id);
             self.replenish_key_package();
             self.debug_log.log(
                 "process_welcome: same-DID Welcome via stealth is unexpected (registered tags only)",
@@ -4095,7 +4089,7 @@ impl App {
             is_member: true,
         });
 
-        self.populate_candidate_tags(&conv_id, &group_id);
+        self.register_group_tags(&conv_id, &group_id);
 
         // Resolve DID → handle in background for each participant
         if let Some(conv) = self.conversations.last() {
@@ -4104,8 +4098,6 @@ impl App {
 
         // Fetch relay configs for the new conversation's partners
         self.fetch_partner_drawbridge_configs(&conv_id);
-        // Register new conversation tags on own Drawbridge relay
-        self.schedule_watch_tags_update();
 
         self.debug_log
             .log("process_welcome: successfully joined group");
@@ -4824,15 +4816,14 @@ impl App {
         });
 
         // 11. Register candidate tags for this conversation
-        self.populate_candidate_tags(&conv_id, &group_id);
+        self.register_group_tags(&conv_id, &group_id);
         self.debug_log.log(&format!(
             "start_conv: registered candidate tags for conv {}",
             &conv_id[..16]
         ));
 
-        // 12. Fetch partner relay configs and update watched tags
+        // 12. Fetch partner relay configs
         self.fetch_partner_drawbridge_configs(&conv_id);
-        self.schedule_watch_tags_update();
 
         // 13. Select the new conversation and switch to input mode
         self.active_conversation = Some(self.conversations.len() - 1);
@@ -4905,10 +4896,7 @@ impl App {
         // 5. Load our key bundle
         let key_bundle = self.keys.load_identity_key()?;
 
-        // 6. Derive commit tag BEFORE add_member (pre-epoch-advance)
-        let commit_tag = self.mls.derive_next_tag(&group_id, &key_bundle)?;
-
-        // 7. Add member to MLS group
+        // 6. Add member to MLS group
         let welcome_result = self.mls.add_member(&group_id, &key_bundle, &kp_bytes)?;
         self.save_mls_state()?;
 
@@ -4923,7 +4911,7 @@ impl App {
 
         // 10. Publish the Commit with pre-epoch tag for existing members
         client
-            .publish_event(&commit_tag, &welcome_result.commit, None)
+            .publish_event(&welcome_result.commit_tag, &welcome_result.commit, None)
             .await?;
 
         // 11. Update GroupMetadata — add new DID/handle
@@ -4946,10 +4934,9 @@ impl App {
         }
 
         // 12. Re-populate candidate tags for the new epoch
-        self.populate_candidate_tags(group_id_hex, &group_id);
+        self.register_group_tags(group_id_hex, &group_id);
 
-        // 13. Update watched tags and fetch new member's relay config
-        self.schedule_watch_tags_update();
+        // 13. Fetch new member's relay config
         self.fetch_partner_drawbridge_configs(group_id_hex);
 
         self.debug_log.log(&format!(
@@ -4978,15 +4965,12 @@ impl App {
         // 3. Load key bundle
         let key_bundle = self.keys.load_identity_key()?;
 
-        // 4. Derive commit tag BEFORE kick (pre-epoch-advance)
-        let commit_tag = self.mls.derive_next_tag(&group_id, &key_bundle)?;
-
-        // 5. Kick user from MLS group
+        // 4. Kick user from MLS group
         let result = self.mls.kick_user(&group_id, &key_bundle, &did_to_kick)?;
         self.save_mls_state()?;
 
         // 6. Publish the Commit with pre-epoch tag
-        client.publish_event(&commit_tag, &result.commit, None).await?;
+        client.publish_event(&result.commit_tag, &result.commit, None).await?;
 
         // 7. Update GroupMetadata — remove DID/handle
         if let Some(conv) = self.conversations.iter_mut().find(|c| c.id == group_id_hex) {
@@ -5006,10 +4990,7 @@ impl App {
         }
 
         // 8. Re-populate candidate tags for the new epoch
-        self.populate_candidate_tags(group_id_hex, &group_id);
-
-        // 9. Update watched tags
-        self.schedule_watch_tags_update();
+        self.register_group_tags(group_id_hex, &group_id);
 
         self.debug_log.log(&format!(
             "kick_member: removed {handle} ({did_to_kick}) from group {}",
@@ -5515,17 +5496,6 @@ impl App {
                     }
                 };
 
-                // Derive the tag at the CURRENT epoch before add_device
-                // advances it — same as the pre-Phase-E flow.
-                let commit_tag = match self.mls.derive_next_tag(group_id, &key_bundle) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        self.debug_log
-                            .log(&format!("poll_devices: derive_next_tag: {e}"));
-                        continue;
-                    }
-                };
-
                 let welcome_result = match self.mls.add_device(group_id, &key_bundle, &kp.key_package) {
                     Ok(w) => w,
                     Err(e) => {
@@ -5542,14 +5512,10 @@ impl App {
                         .log(&format!("poll_devices: save_mls_state: {e}"));
                 }
 
-                if let Ok(tags) = self.mls.populate_candidate_tags(group_id, &[]) {
-                    for t in tags {
-                        self.tag_map.insert(t, conv_id.clone());
-                    }
-                }
+                self.register_group_tags(conv_id, group_id);
 
                 if let Err(e) = client
-                    .publish_event(&commit_tag, &welcome_result.commit, None)
+                    .publish_event(&welcome_result.commit_tag, &welcome_result.commit, None)
                     .await
                 {
                     self.debug_log
@@ -5820,7 +5786,7 @@ impl App {
                             member_device_ids: Default::default(),
                         },
                     );
-                    self.populate_candidate_tags(&group_id_hex, &group_id);
+                    self.register_group_tags(&group_id_hex, &group_id);
 
                     // User conversations discovered via ring_tick step-3 stealth
                     // Welcome scan, and same-user fan-out via Phase E
@@ -7082,7 +7048,7 @@ impl App {
                             member_device_ids: Default::default(),
                         },
                     );
-                    self.populate_candidate_tags(&ring_id_hex, ring_id);
+                    self.register_group_tags(&ring_id_hex, ring_id);
                 }
                 if let Some((device_id, scan_pubkey)) = newcomer_stealth {
                     if let Some(existing) = self
@@ -7190,7 +7156,7 @@ impl App {
                             member_device_ids: Default::default(),
                         },
                     );
-                    self.populate_candidate_tags(&ring_id_hex, &ring_id);
+                    self.register_group_tags(&ring_id_hex, &ring_id);
                     let _ = self.bg_tx.send(BgEvent::RingTickNow);
                 }
                 PairingCommand::RosterReceived { roster } => {

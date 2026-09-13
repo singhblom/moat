@@ -38,6 +38,7 @@ pub(crate) mod tag;
 
 pub mod api;
 
+use openmls::framing::errors::{MessageDecryptionError, SecretTreeError};
 use openmls::framing::MlsMessageBodyIn;
 use openmls::prelude::tls_codec::{Deserialize, Serialize as TlsSerialize};
 use openmls::prelude::*;
@@ -122,6 +123,7 @@ pub struct WelcomeResult {
     pub new_group_state: Vec<u8>,
     pub welcome: Vec<u8>,
     pub commit: Vec<u8>,
+    pub commit_tag: [u8; 16],
     pub group_id: Vec<u8>,
 }
 
@@ -130,7 +132,6 @@ pub struct EncryptResult {
     pub new_group_state: Vec<u8>,
     pub tag: [u8; 16],
     pub ciphertext: Vec<u8>,
-    /// The message_id assigned to the event (16 bytes for Message/Reaction, None otherwise)
     pub message_id: Option<Vec<u8>>,
 }
 
@@ -145,10 +146,16 @@ pub struct DecryptResult {
 
 /// Result of removing a member from a group
 pub struct RemoveResult {
-    /// The commit message to broadcast to other members
     pub commit: Vec<u8>,
-    /// The group ID
+    pub commit_tag: [u8; 16],
     pub group_id: Vec<u8>,
+}
+
+/// A commit this device created and has already applied to its own state.
+struct LocalCommit {
+    commit: Vec<u8>,
+    commit_tag: [u8; 16],
+    welcome: Option<Vec<u8>>,
 }
 
 
@@ -757,74 +764,41 @@ impl MoatSession {
 
     /// Add a member to an existing group.
     ///
-    /// Returns (commit_bytes, welcome_bytes) to send to the new member.
+    /// Returns the commit with the tag to publish it under, and the Welcome
+    /// for the new member.
     pub fn add_member(
         &self,
         group_id: &[u8],
         key_bundle: &[u8],
         new_member_key_package: &[u8],
     ) -> Result<WelcomeResult> {
-        // Load the group
-        let mut group = self
-            .load_group(group_id)?
-            .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
-
-        // Deserialize our key bundle to get signature keys
-        let bundle: KeyBundle = serde_json::from_slice(key_bundle)
-            .map_err(|e| Error::Deserialization(e.to_string()))?;
-        let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
-            .map_err(|e| Error::Deserialization(e.to_string()))?;
-
-        // Deserialize the new member's key package
-        let new_key_package = KeyPackageIn::tls_deserialize_exact(new_member_key_package)
-            .map_err(|e| Error::Deserialization(e.to_string()))?;
-
-        // Validate the key package
-        let validated_key_package = new_key_package
+        let validated_key_package = KeyPackageIn::tls_deserialize_exact(new_member_key_package)
+            .map_err(|e| Error::Deserialization(e.to_string()))?
             .validate(self.provider.crypto(), ProtocolVersion::Mls10)
             .map_err(|e| Error::KeyPackageValidation(e.to_string()))?;
 
-        // Save current export secret before epoch advances
-        self.save_prior_export_secret(&group, group_id);
-
-        // Add the member
-        let (commit, welcome, _group_info) = group
-            .add_members(&self.provider, &signature_keys, &[validated_key_package])
-            .map_err(|e| Error::AddMember(e.to_string()))?;
-
-        // Track pending operation for conflict recovery
-        {
-            let mut ops = self.pending_ops.write().unwrap();
-            ops.insert(
-                group_id.to_vec(),
-                PendingOperation::AddMember {
-                    key_bundle: key_bundle.to_vec(),
-                    new_member_key_package: new_member_key_package.to_vec(),
-                },
-            );
-        }
-
-        // Merge the pending commit
-        group
-            .merge_pending_commit(&self.provider)
-            .map_err(|e| Error::MergeCommit(e.to_string()))?;
-
-        // Clear pending op on success
-        self.pending_ops.write().unwrap().remove(group_id);
-
-        // Serialize results
-        let commit_bytes = commit
-            .tls_serialize_detached()
-            .map_err(|e| Error::Serialization(e.to_string()))?;
-
-        let welcome_bytes = welcome
-            .tls_serialize_detached()
-            .map_err(|e| Error::Serialization(e.to_string()))?;
+        let local = self.commit_locally(
+            group_id,
+            key_bundle,
+            PendingOperation::AddMember {
+                key_bundle: key_bundle.to_vec(),
+                new_member_key_package: new_member_key_package.to_vec(),
+            },
+            |group, provider, signature_keys| {
+                let (commit, welcome, _group_info) = group
+                    .add_members(provider, signature_keys, &[validated_key_package])
+                    .map_err(|e| Error::AddMember(e.to_string()))?;
+                Ok((commit, Some(welcome)))
+            },
+        )?;
 
         Ok(WelcomeResult {
             new_group_state: Vec::new(), // No longer needed - state is in provider
-            welcome: welcome_bytes,
-            commit: commit_bytes,
+            welcome: local
+                .welcome
+                .ok_or_else(|| Error::AddMember("Add commit produced no Welcome".to_string()))?,
+            commit: local.commit,
+            commit_tag: local.commit_tag,
             group_id: group_id.to_vec(),
         })
     }
@@ -856,15 +830,7 @@ impl MoatSession {
 
         let group_id = group.group_id().as_slice().to_vec();
 
-        // Clear any stale seen counters / tag metadata for this group
-        {
-            let mut seen = self.seen_counters.write().unwrap();
-            seen.retain(|(gid, _, _), _| gid != &group_id);
-        }
-        {
-            let mut metadata = self.tag_metadata.write().unwrap();
-            metadata.retain(|_, m| m.group_id != group_id);
-        }
+        self.reset_scan_state(&group_id);
 
         Ok(group_id)
     }
@@ -945,27 +911,7 @@ impl MoatSession {
             .tls_serialize_detached()
             .map_err(|e| Error::Serialization(e.to_string()))?;
 
-        // Derive per-event tag using counter-based HD scheme
-        let epoch = group.epoch().as_u64();
-        let export_secret = self.derive_tag_export_secret(&group)?;
-        let counter_key = (group_id.to_vec(), epoch);
-
-        // Pre-increment counter for crash safety
-        let counter = {
-            let mut counters = self.tag_counters.write().unwrap();
-            let counter = counters.entry(counter_key).or_insert(0);
-            let current = *counter;
-            *counter = current + 1;
-            current
-        };
-
-        let tag = tag::derive_event_tag(
-            &export_secret,
-            group_id,
-            &sender_did,
-            &self.device_id,
-            counter,
-        )?;
+        let tag = self.next_tag_in(&group, group_id, &sender_did)?;
 
         Ok(EncryptResult {
             new_group_state: Vec::new(), // State is managed by provider
@@ -998,12 +944,14 @@ impl MoatSession {
         let protocol_message = mls_message
             .try_into_protocol_message()
             .map_err(|e| Error::Deserialization(e.to_string()))?;
+        let message_epoch = protocol_message.epoch().as_u64();
 
         // Process the message with structured error classification
         let processed = match group.process_message(&self.provider, protocol_message) {
             Ok(msg) => msg,
             Err(e) => {
-                return Err(Self::classify_process_error(e, group_id));
+                let group_epoch = group.epoch().as_u64();
+                return Err(Self::classify_process_error(e, group_id, message_epoch, group_epoch));
             }
         };
 
@@ -1050,18 +998,7 @@ impl MoatSession {
                 // Get the new epoch after merging
                 let new_epoch = group.epoch().as_u64();
 
-                // Clear seen counters and tag metadata for this group — the export
-                // secret changes with the epoch, so old counter values are meaningless.
-                // Senders also reset their counters per epoch, so recipients must
-                // start scanning from 0 in the new epoch.
-                {
-                    let mut seen = self.seen_counters.write().unwrap();
-                    seen.retain(|(gid, _, _), _| gid != group_id);
-                }
-                {
-                    let mut metadata = self.tag_metadata.write().unwrap();
-                    metadata.retain(|_, m| m.group_id != group_id);
-                }
+                self.reset_scan_state(group_id);
 
                 // Return a commit event to signal the epoch has advanced
                 let event = Event::commit(group_id.to_vec(), new_epoch, Vec::new());
@@ -1102,9 +1039,38 @@ impl MoatSession {
     }
 
     /// Classify a `ProcessMessageError` into a structured moat-core `Error`.
-    fn classify_process_error(e: ProcessMessageError, group_id: &[u8]) -> Error {
+    fn classify_process_error(
+        e: ProcessMessageError,
+        group_id: &[u8],
+        message_epoch: u64,
+        group_epoch: u64,
+    ) -> Error {
         let group_hex: String = group_id.iter().map(|b| format!("{:02x}", b)).collect();
         match &e {
+            // Decryption secrets are never derived from this device's own
+            // sender ratchet, so this is the one failure that identifies the
+            // sender as us.
+            ProcessMessageError::ValidationError(ValidationError::UnableToDecrypt(
+                MessageDecryptionError::SecretTreeError(SecretTreeError::RatchetTypeError),
+            )) => Error::OwnEvent(format!("group {}: published by this device", group_hex)),
+            // OpenMLS accepts application messages from retained past epochs,
+            // so a past-epoch rejection is a commit for an epoch already left,
+            // or a message older than the retained window. A *future* epoch is
+            // not stale: the commit that reaches it may simply not be here yet.
+            ProcessMessageError::ValidationError(ValidationError::WrongEpoch)
+                if message_epoch < group_epoch =>
+            {
+                Error::StaleEpoch(format!(
+                    "group {}: event from epoch {} (group is at {})",
+                    group_hex, message_epoch, group_epoch
+                ))
+            }
+            ProcessMessageError::ValidationError(ValidationError::NoPastEpochData) => {
+                Error::StaleEpoch(format!(
+                    "group {}: event from epoch {} is past the retained window (group is at {})",
+                    group_hex, message_epoch, group_epoch
+                ))
+            }
             ProcessMessageError::GroupStateError(state_err) => match state_err {
                 MlsGroupStateError::PendingCommit => Error::StaleCommit(format!(
                     "group {}: pending local commit conflicts with incoming message",
@@ -1712,25 +1678,25 @@ impl MoatSession {
 
     /// Derive the next tag for a group event and advance the counter.
     ///
-    /// Use this for events that bypass `encrypt_event` (e.g., raw commits from
-    /// `add_member`/`add_device`/`remove_member`). The tag is derived using the
-    /// pre-advance epoch (the commit is the last event of the old epoch).
+    /// Commits created by `add_member`, `add_device`, `remove_member`,
+    /// `kick_user` and `leave_group` already carry the tag to publish them
+    /// under; this is for anything else that bypasses `encrypt_event`.
     ///
     /// Returns the derived tag.
     pub fn derive_next_tag(&self, group_id: &[u8], key_bundle: &[u8]) -> Result<[u8; 16]> {
         let group = self
             .load_group(group_id)?
             .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
+        let signature_keys = Self::parse_signature_keys(key_bundle)?;
+        let sender_did = self.extract_own_did(&group, &signature_keys.to_public_vec())?;
+        self.next_tag_in(&group, group_id, &sender_did)
+    }
 
-        let bundle: KeyBundle = serde_json::from_slice(key_bundle)
-            .map_err(|e| Error::Deserialization(e.to_string()))?;
-        let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
-            .map_err(|e| Error::Deserialization(e.to_string()))?;
-        let our_pubkey = signature_keys.to_public_vec();
-        let sender_did = self.extract_own_did(&group, &our_pubkey)?;
-
+    /// Derive this device's next outgoing tag in `group`'s current epoch and
+    /// advance the counter.
+    fn next_tag_in(&self, group: &MlsGroup, group_id: &[u8], sender_did: &str) -> Result<[u8; 16]> {
         let epoch = group.epoch().as_u64();
-        let export_secret = self.derive_tag_export_secret(&group)?;
+        let export_secret = self.derive_tag_export_secret(group)?;
         let counter_key = (group_id.to_vec(), epoch);
 
         let counter = {
@@ -1744,10 +1710,92 @@ impl MoatSession {
         tag::derive_event_tag(
             &export_secret,
             group_id,
-            &sender_did,
+            sender_did,
             &self.device_id,
             counter,
         )
+    }
+
+    fn parse_signature_keys(key_bundle: &[u8]) -> Result<SignatureKeyPair> {
+        let bundle: KeyBundle = serde_json::from_slice(key_bundle)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
+        SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
+            .map_err(|e| Error::Deserialization(e.to_string()))
+    }
+
+    /// Create a commit with `build` and apply it to this device's own state.
+    ///
+    /// Every epoch change this device makes itself goes through here, so the
+    /// bookkeeping owed to an epoch change happens in one place: the commit's
+    /// tag is derived in the epoch being left, where the other members are
+    /// still scanning; that epoch's export secret is kept for tags of
+    /// messages stranded there; and scanning restarts for the epoch entered,
+    /// exactly as when a commit arrives from someone else. `pending` is held
+    /// until the merge succeeds, for conflict recovery.
+    fn commit_locally(
+        &self,
+        group_id: &[u8],
+        key_bundle: &[u8],
+        pending: PendingOperation,
+        build: impl FnOnce(
+            &mut MlsGroup,
+            &MoatProvider,
+            &SignatureKeyPair,
+        ) -> Result<(MlsMessageOut, Option<MlsMessageOut>)>,
+    ) -> Result<LocalCommit> {
+        let mut group = self
+            .load_group(group_id)?
+            .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
+        let signature_keys = Self::parse_signature_keys(key_bundle)?;
+        let sender_did = self.extract_own_did(&group, &signature_keys.to_public_vec())?;
+
+        let commit_tag = self.next_tag_in(&group, group_id, &sender_did)?;
+        self.save_prior_export_secret(&group, group_id);
+
+        let (commit, welcome) = build(&mut group, &self.provider, &signature_keys)?;
+
+        self.pending_ops
+            .write()
+            .unwrap()
+            .insert(group_id.to_vec(), pending);
+
+        group
+            .merge_pending_commit(&self.provider)
+            .map_err(|e| Error::MergeCommit(e.to_string()))?;
+
+        self.pending_ops.write().unwrap().remove(group_id);
+        self.reset_scan_state(group_id);
+
+        let commit = commit
+            .tls_serialize_detached()
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+        let welcome = welcome
+            .map(|w| w.tls_serialize_detached())
+            .transpose()
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+
+        Ok(LocalCommit {
+            commit_tag,
+            commit,
+            welcome,
+        })
+    }
+
+    /// Forget the recipient-side scanning state for `group_id`.
+    ///
+    /// The export secret changes with the epoch, and senders restart their
+    /// tag counters in every epoch, so both the seen counters and the tag
+    /// metadata derived from them are meaningless afterwards: scanning must
+    /// start again from counter 0.
+    fn reset_scan_state(&self, group_id: &[u8]) {
+        self.seen_counters
+            .write()
+            .unwrap()
+            .retain(|(gid, _, _), _| gid != group_id);
+        self.tag_metadata
+            .write()
+            .unwrap()
+            .retain(|_, m| m.group_id != group_id);
     }
 
     /// Generate candidate tags for recipient scanning.
@@ -2062,52 +2110,24 @@ impl MoatSession {
         key_bundle: &[u8],
         leaf_index: u32,
     ) -> Result<RemoveResult> {
-        // Load the group
-        let mut group = self
-            .load_group(group_id)?
-            .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
-
-        // Deserialize our key bundle to get signature keys
-        let bundle: KeyBundle = serde_json::from_slice(key_bundle)
-            .map_err(|e| Error::Deserialization(e.to_string()))?;
-        let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
-            .map_err(|e| Error::Deserialization(e.to_string()))?;
-
-        // Save current export secret before epoch advances
-        self.save_prior_export_secret(&group, group_id);
-
-        // Create the remove proposal
-        let leaf_node_index = LeafNodeIndex::new(leaf_index);
-        let (commit, _welcome, _group_info) = group
-            .remove_members(&self.provider, &signature_keys, &[leaf_node_index])
-            .map_err(|e| Error::RemoveMember(e.to_string()))?;
-
-        // Track pending operation
-        {
-            let mut ops = self.pending_ops.write().unwrap();
-            ops.insert(
-                group_id.to_vec(),
-                PendingOperation::RemoveMember {
-                    key_bundle: key_bundle.to_vec(),
-                    leaf_index,
-                },
-            );
-        }
-
-        // Merge the pending commit
-        group
-            .merge_pending_commit(&self.provider)
-            .map_err(|e| Error::MergeCommit(e.to_string()))?;
-
-        self.pending_ops.write().unwrap().remove(group_id);
-
-        // Serialize the commit
-        let commit_bytes = commit
-            .tls_serialize_detached()
-            .map_err(|e| Error::Serialization(e.to_string()))?;
+        let local = self.commit_locally(
+            group_id,
+            key_bundle,
+            PendingOperation::RemoveMember {
+                key_bundle: key_bundle.to_vec(),
+                leaf_index,
+            },
+            |group, provider, signature_keys| {
+                let (commit, _welcome, _group_info) = group
+                    .remove_members(provider, signature_keys, &[LeafNodeIndex::new(leaf_index)])
+                    .map_err(|e| Error::RemoveMember(e.to_string()))?;
+                Ok((commit, None))
+            },
+        )?;
 
         Ok(RemoveResult {
-            commit: commit_bytes,
+            commit: local.commit,
+            commit_tag: local.commit_tag,
             group_id: group_id.to_vec(),
         })
     }
@@ -2136,57 +2156,29 @@ impl MoatSession {
             )));
         }
 
-        // Load the group
-        let mut group = self
-            .load_group(group_id)?
-            .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
-
-        // Deserialize our key bundle to get signature keys
-        let bundle: KeyBundle = serde_json::from_slice(key_bundle)
-            .map_err(|e| Error::Deserialization(e.to_string()))?;
-        let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
-            .map_err(|e| Error::Deserialization(e.to_string()))?;
-
-        // Create leaf node indices
         let leaf_node_indices: Vec<LeafNodeIndex> = leaf_indices
             .iter()
             .map(|&idx| LeafNodeIndex::new(idx))
             .collect();
 
-        // Save current export secret before epoch advances
-        self.save_prior_export_secret(&group, group_id);
-
-        // Remove all members with this DID
-        let (commit, _welcome, _group_info) = group
-            .remove_members(&self.provider, &signature_keys, &leaf_node_indices)
-            .map_err(|e| Error::RemoveMember(e.to_string()))?;
-
-        // Track pending operation
-        {
-            let mut ops = self.pending_ops.write().unwrap();
-            ops.insert(
-                group_id.to_vec(),
-                PendingOperation::KickUser {
-                    key_bundle: key_bundle.to_vec(),
-                    did: did_to_kick.to_string(),
-                },
-            );
-        }
-
-        // Merge the pending commit
-        group
-            .merge_pending_commit(&self.provider)
-            .map_err(|e| Error::MergeCommit(e.to_string()))?;
-
-        self.pending_ops.write().unwrap().remove(group_id);
-
-        // Serialize the commit
-        let commit_bytes = commit
-            .tls_serialize_detached()
-            .map_err(|e| Error::Serialization(e.to_string()))?;
+        let local = self.commit_locally(
+            group_id,
+            key_bundle,
+            PendingOperation::KickUser {
+                key_bundle: key_bundle.to_vec(),
+                did: did_to_kick.to_string(),
+            },
+            |group, provider, signature_keys| {
+                let (commit, _welcome, _group_info) = group
+                    .remove_members(provider, signature_keys, &leaf_node_indices)
+                    .map_err(|e| Error::RemoveMember(e.to_string()))?;
+                Ok((commit, None))
+            },
+        )?;
 
         Ok(RemoveResult {
-            commit: commit_bytes,
+            commit: local.commit,
+            commit_tag: local.commit_tag,
             group_id: group_id.to_vec(),
         })
     }
@@ -2248,55 +2240,29 @@ impl MoatSession {
     /// Returns the commit message to broadcast. After calling this, the caller
     /// will no longer be able to decrypt messages in this group.
     pub fn leave_group(&self, group_id: &[u8], key_bundle: &[u8]) -> Result<RemoveResult> {
-        // Load the group
-        let mut group = self
-            .load_group(group_id)?
-            .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
-
-        // Deserialize our key bundle to get signature keys
-        let bundle: KeyBundle = serde_json::from_slice(key_bundle)
-            .map_err(|e| Error::Deserialization(e.to_string()))?;
-        let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
-            .map_err(|e| Error::Deserialization(e.to_string()))?;
-
-        // Find our own leaf index
-        let our_pubkey = signature_keys.to_public_vec();
-        let members: Vec<_> = group.members().collect();
-        let our_leaf = members
-            .iter()
-            .find(|m| m.signature_key == our_pubkey)
-            .ok_or_else(|| Error::RemoveMember("Cannot find self in group".to_string()))?;
-
-        // Create remove proposal for ourselves
-        let (commit, _welcome, _group_info) = group
-            .remove_members(&self.provider, &signature_keys, &[our_leaf.index])
-            .map_err(|e| Error::RemoveMember(e.to_string()))?;
-
-        // Track pending operation
-        {
-            let mut ops = self.pending_ops.write().unwrap();
-            ops.insert(
-                group_id.to_vec(),
-                PendingOperation::LeaveGroup {
-                    key_bundle: key_bundle.to_vec(),
-                },
-            );
-        }
-
-        // Merge the pending commit
-        group
-            .merge_pending_commit(&self.provider)
-            .map_err(|e| Error::MergeCommit(e.to_string()))?;
-
-        self.pending_ops.write().unwrap().remove(group_id);
-
-        // Serialize the commit
-        let commit_bytes = commit
-            .tls_serialize_detached()
-            .map_err(|e| Error::Serialization(e.to_string()))?;
+        let local = self.commit_locally(
+            group_id,
+            key_bundle,
+            PendingOperation::LeaveGroup {
+                key_bundle: key_bundle.to_vec(),
+            },
+            |group, provider, signature_keys| {
+                let our_pubkey = signature_keys.to_public_vec();
+                let our_leaf = group
+                    .members()
+                    .find(|m| m.signature_key == our_pubkey)
+                    .map(|m| m.index)
+                    .ok_or_else(|| Error::RemoveMember("Cannot find self in group".to_string()))?;
+                let (commit, _welcome, _group_info) = group
+                    .remove_members(provider, signature_keys, &[our_leaf])
+                    .map_err(|e| Error::RemoveMember(e.to_string()))?;
+                Ok((commit, None))
+            },
+        )?;
 
         Ok(RemoveResult {
-            commit: commit_bytes,
+            commit: local.commit,
+            commit_tag: local.commit_tag,
             group_id: group_id.to_vec(),
         })
     }
