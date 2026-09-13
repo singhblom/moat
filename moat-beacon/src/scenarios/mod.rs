@@ -29,6 +29,7 @@ pub mod mixed_two_party_chat;
 pub mod pairing_cancelled;
 pub mod pairing_rejected;
 pub mod pairing_retry_after_abandoned;
+pub mod post_fan_out_delivery;
 pub mod push_latency;
 pub mod push_latency_restart;
 pub mod same_drawbridge_local;
@@ -865,6 +866,27 @@ pub static SCENARIOS: &[Scenario] = &[
         name: "three-device-pairing-history-sync-dr",
         description: "Same as three-device-pairing-history-sync, but D2/D3 (new devices) run Dart, D1 stays Rust",
         run_fn: three_device_pairing_history_sync_dr::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "post-fan-out-delivery",
+        description: "D1 and Bob converse, D2 pairs in; every direction must deliver after D1's fan-out commit",
+        run_fn: post_fan_out_delivery::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "post-fan-out-delivery-dr",
+        description: "Same as post-fan-out-delivery, but D2 (new device) runs Dart, D1 stays Rust",
+        run_fn: post_fan_out_delivery::run_dr_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "post-fan-out-delivery-rd",
+        description: "Same as post-fan-out-delivery, but D1 (existing device) runs Dart, D2 runs Rust",
+        run_fn: post_fan_out_delivery::run_rd_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },

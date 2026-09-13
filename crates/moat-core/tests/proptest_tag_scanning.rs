@@ -350,6 +350,92 @@ proptest! {
             scanner.mark_and_rebuild(&sim, 1, &record.tag);
         }
     }
+
+    /// P7b: Seen counters are epoch-scoped for the committer too.
+    /// Alice applies her own Add locally and never decrypts the commit, so
+    /// her scanning window for Bob must reset without a merged remote commit.
+    #[test]
+    fn committer_seen_counters_reset_after_own_add(
+        n_old in 1usize..10,
+        n_new in 1usize..10,
+    ) {
+        let mut sim = ConversationSim::new(&["Alice", "Bob"]);
+        let mut scanner = TagScanner::new(2);
+        scanner.rebuild_all(&sim);
+
+        // Alice sees n_old messages from Bob in epoch N
+        for _ in 0..n_old {
+            let record = sim.send_message(1, b"old");
+            sim.deliver_next(0).unwrap();
+            scanner.mark_and_rebuild(&sim, 0, &record.tag);
+        }
+
+        // Alice advances the epoch herself; only Bob processes the commit
+        let (commit, _, new_idx) = sim.add_member_sim(0, "Charlie");
+        scanner.grow();
+        sim.deliver_commit(1, &commit).unwrap();
+        scanner.rebuild_all(&sim);
+
+        // Bob sends n_new messages in the new epoch (counter 0, 1, ...)
+        for _ in 0..n_new {
+            let record = sim.send_message(1, b"new");
+            prop_assert!(
+                scanner.is_candidate(0, &record.tag),
+                "post-epoch message must be scannable by the committer (seen_counter must reset)"
+            );
+            sim.deliver_next(0).unwrap();
+            sim.deliver_next(new_idx).unwrap();
+            scanner.mark_and_rebuild(&sim, 0, &record.tag);
+        }
+    }
+
+    /// P7c: As P7b, for a Remove the committer applies locally.
+    #[test]
+    fn committer_seen_counters_reset_after_own_remove(
+        n_old in 1usize..10,
+        n_new in 1usize..10,
+    ) {
+        let mut sim = ConversationSim::new(&["Alice", "Bob", "Charlie"]);
+        let mut scanner = TagScanner::new(3);
+        scanner.rebuild_all(&sim);
+
+        // Alice sees n_old messages from Bob in epoch N
+        for _ in 0..n_old {
+            let record = sim.send_message(1, b"old");
+            sim.deliver_next(0).unwrap();
+            sim.deliver_next(2).unwrap();
+            scanner.mark_and_rebuild(&sim, 0, &record.tag);
+        }
+
+        // Alice removes Charlie; only Bob processes the commit
+        let charlie_did = sim.participants[2].credential.did().to_string();
+        let charlie_leaf = sim.participants[0]
+            .session
+            .get_group_members(&sim.group_id)
+            .unwrap()
+            .into_iter()
+            .find(|(_, c)| c.as_ref().is_some_and(|c| c.did() == charlie_did))
+            .map(|(leaf, _)| leaf)
+            .expect("Charlie should be a member");
+        let removed = sim.participants[0]
+            .session
+            .remove_member(&sim.group_id, &sim.participants[0].key_bundle, charlie_leaf)
+            .unwrap();
+        sim.deliver_commit(1, &removed.commit).unwrap();
+        scanner.rebuild(&sim, 0);
+        scanner.rebuild(&sim, 1);
+
+        // Bob sends n_new messages in the new epoch (counter 0, 1, ...)
+        for _ in 0..n_new {
+            let record = sim.send_message(1, b"new");
+            prop_assert!(
+                scanner.is_candidate(0, &record.tag),
+                "post-epoch message must be scannable by the committer (seen_counter must reset)"
+            );
+            sim.deliver_next(0).unwrap();
+            scanner.mark_and_rebuild(&sim, 0, &record.tag);
+        }
+    }
 }
 
 // --- Group 7: Multi-Epoch Tag Retention ---
