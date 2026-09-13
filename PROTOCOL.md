@@ -56,7 +56,7 @@ Large payloads (full-resolution images, long text, video) live off-chain as repo
 
 ## Receiving Messages
 
-1. Poll each contact's PDS for new `social.moat.event` records (cursor-based, using TID ordering)
+1. Poll each contact's PDS for new `social.moat.event` records (cursor-based, using TID ordering). A DID watched for invites keeps a cursor separate from its conversation cursor: a watch fetch can read messages from a group whose Welcome has not arrived yet, and those must be fetched again once the device joins
 2. For each group, generate candidate tags for all members using the scanning window (see [Tag Derivation](#tag-derivation))
 3. Match the event's tag against candidate tags; on match, advance the seen counter for that sender
 4. MLS-decrypt, unpad, deserialize the inner JSON event
@@ -200,7 +200,7 @@ The decay schedule:
 
 **Total tags per sender-device per conversation: 36** (10 + 5 + 3 + 2 + 16×1). The budget is comparable to a single-epoch window of 50 but covers 20 epochs of history.
 
-The `GAP_LIMIT` (10) is the maximum number of consecutive missed events tolerated per sender device in the current epoch. When a tag matches an incoming event, the recipient calls `mark_tag_seen` to advance the seen counter, sliding the scanning window forward. On epoch change, seen counters are cleared (senders reset their counters per epoch).
+The `GAP_LIMIT` (10) is the maximum number of consecutive missed events tolerated per sender device in the current epoch. When a tag matches an incoming event, the recipient calls `mark_tag_seen` to advance the seen counter, sliding the scanning window forward. On epoch change, seen counters are cleared (senders reset their counters per epoch) — including an epoch change the device made itself by committing, which it never processes from the PDS.
 
 The `seen_counters` map is persisted across sessions. The `tag_metadata` reverse lookup (tag → sender identity + counter) is ephemeral and rebuilt each polling cycle. The `prior_export_secrets` ring buffer (up to 19 entries per group) is persisted across sessions.
 
