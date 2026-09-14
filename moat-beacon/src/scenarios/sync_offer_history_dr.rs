@@ -2,8 +2,8 @@
 //! the Rust CLI.
 //!
 //! Same story as [`super::sync_offer_history`], on the axis that matters:
-//! D1 is the device that records the advertisement, decides it is worth
-//! prompting about, and offers. That whole path is Dart's here.
+//! D1 is the device that lists its siblings and offers. That whole path is
+//! Dart's here.
 
 use std::future::Future;
 use std::pin::Pin;

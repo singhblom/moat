@@ -30,9 +30,51 @@ pub(crate) fn run_boxed(
     Box::pin(run(verbose))
 }
 
+pub(crate) fn run_after_idle_boxed(
+    _actions: Vec<Action>,
+    verbose: bool,
+) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    Box::pin(run_after_idle(verbose))
+}
+
+pub(crate) fn run_after_idle_dd_boxed(
+    _actions: Vec<Action>,
+    verbose: bool,
+) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    Box::pin(run_after_idle_dd(verbose))
+}
+
 /// All-Rust cell.
 pub async fn run(verbose: bool) {
     run_with(ParticipantKind::RustCli, ParticipantKind::RustCli, "rr", verbose).await
+}
+
+/// Ring ticks driven on both devices between pairing and the request —
+/// more than one candidate-tag window's worth.
+const IDLE_TICKS: usize = 12;
+
+/// All-Rust cell, after the ring has sat idle.
+pub async fn run_after_idle(verbose: bool) {
+    run_with_idle(
+        ParticipantKind::RustCli,
+        ParticipantKind::RustCli,
+        "rr-idle",
+        IDLE_TICKS,
+        verbose,
+    )
+    .await
+}
+
+/// All-Dart cell, after the ring has sat idle.
+pub async fn run_after_idle_dd(verbose: bool) {
+    run_with_idle(
+        ParticipantKind::DartServer,
+        ParticipantKind::DartServer,
+        "dd-idle",
+        IDLE_TICKS,
+        verbose,
+    )
+    .await
 }
 
 const TIMEOUT: Duration = Duration::from_secs(30);
@@ -101,6 +143,20 @@ pub async fn run_with(
     cell: &str,
     verbose: bool,
 ) {
+    run_with_idle(donor_kind, requester_kind, cell, 0, verbose).await
+}
+
+/// [`run_with`], with `idle_ticks` ring ticks on both devices right after
+/// pairing. A ring that sits idle must stay usable: whatever the devices
+/// publish on it in the meantime spends counters of each sender's tag
+/// window, and the request and its approval must still be recognised.
+pub async fn run_with_idle(
+    donor_kind: ParticipantKind,
+    requester_kind: ParticipantKind,
+    cell: &str,
+    idle_ticks: usize,
+    verbose: bool,
+) {
     macro_rules! vlog {
         ($($t:tt)*) => { if verbose { eprintln!($($t)*); } }
     }
@@ -131,6 +187,14 @@ pub async fn run_with(
 
     vlog!("[pair] d1 <- d2...");
     pair_devices(&d1, &d2, verbose).await;
+
+    for tick in 0..idle_ticks {
+        let _ = d1.ring_tick().await;
+        let _ = d2.ring_tick().await;
+        let _ = d1.poll().await;
+        let _ = d2.poll().await;
+        vlog!("[idle] ring tick {}/{idle_ticks}", tick + 1);
+    }
 
     // ── D2 sleeps through a whole conversation ───────────────────────────────
     //
@@ -415,38 +479,6 @@ pub async fn run_with(
         !name.is_empty(),
         "the report must name the device the history came from; got {completion:?}"
     );
-
-    // ── The advertisement ────────────────────────────────────────────────────
-    //
-    // Finishing a sync is one of the two moments a device's holdings
-    // change, so both sides re-advertise. The record carries only a blob
-    // reference, so it stays a fixed size however much there is to
-    // describe — a summary listing more than about twenty conversations
-    // would not fit the largest padding bucket at all.
-    //
-    // Asserted wherever D1 (the donor, and therefore the advertiser with
-    // something to say) is the Rust CLI or the Dart server — which is
-    // every cell. Both runtimes publish the same record and record the
-    // same state, so this is also the cross-runtime check that they agree
-    // on the wire format.
-    {
-        let deadline = std::time::Instant::now() + TIMEOUT;
-        loop {
-            let _ = d1.poll().await;
-            let _ = d2.poll().await;
-            let seen = d2.sync_summaries().await.unwrap_or_default();
-            vlog!("[summary] d2 holds {} sibling advertisement(s): {seen:?}", seen.len());
-            if seen.iter().any(|s| s.messages as usize >= expected_total) {
-                break;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "d2 never recorded d1's advertisement within {TIMEOUT:?} \
-                 (saw {seen:?}); this must fail the test, not hang it"
-            );
-            tokio::time::sleep(POLL_INTERVAL).await;
-        }
-    }
 
     vlog!("[check] sync request history ({cell})... ok");
     if verbose {

@@ -504,30 +504,6 @@ async fn post_sync_offer(
     Ok(Json(json!({ "ok": true })))
 }
 
-/// `POST /sync/dismiss` — stop a sibling's current advertisement from
-/// prompting again until it says something new.
-async fn post_sync_dismiss(
-    State(state): State<Arc<ServerState>>,
-    Json(body): Json<DeviceIdRequest>,
-) -> HandlerResult<Json<Value>> {
-    let device_id = parse_device_id(&body.device_id)?;
-    let mut app = state.app.lock().await;
-    app.api_dismiss_summary(device_id).map_err(app_err)?;
-    Ok(Json(json!({ "ok": true })))
-}
-
-/// `GET /sync/offerable` — siblings worth offering history to.
-async fn get_sync_offerable(State(state): State<Arc<ServerState>>) -> Json<Value> {
-    let app = state.app.lock().await;
-    Json(json!({ "siblings": app.offerable_siblings() }))
-}
-
-/// `GET /sync/summaries` — what each sibling last advertised holding.
-async fn get_sync_summaries(State(state): State<Arc<ServerState>>) -> Json<Value> {
-    let app = state.app.lock().await;
-    Json(app.sibling_summaries_json())
-}
-
 async fn post_sync_request(State(state): State<Arc<ServerState>>) -> HandlerResult<Json<Value>> {
     let mut app = state.app.lock().await;
     app.api_sync_request().map_err(app_err)?;
@@ -661,10 +637,7 @@ pub async fn run_http(
         .route("/pair/status", get(get_pair_status))
         .route("/sync/start", post(post_sync_start))
         .route("/sync/request", post(post_sync_request))
-        .route("/sync/summaries", get(get_sync_summaries))
         .route("/sync/offer", post(post_sync_offer))
-        .route("/sync/dismiss", post(post_sync_dismiss))
-        .route("/sync/offerable", get(get_sync_offerable))
         .route("/sync/accept", post(post_sync_accept))
         .route("/sync/decline", post(post_sync_decline))
         .route("/sync/status", get(get_sync_status))

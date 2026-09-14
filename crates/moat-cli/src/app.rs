@@ -173,11 +173,6 @@ pub enum Focus {
     /// The linked-device list: who else can read this account's messages,
     /// and the state of any sync in flight.
     Devices,
-    /// A sibling has advertised that it holds no history and this device
-    /// does: offer to send it. Raised on app open and whenever such an
-    /// advertisement arrives, because a new device with nothing on it is
-    /// exactly when the user cares.
-    SyncOfferPrompt,
 }
 
 /// Login form state
@@ -462,43 +457,6 @@ pub(crate) enum BgEvent {
     /// connection see it at once instead of on their next 30 s poll.
     PublishRingEvent { tag: [u8; 16], ciphertext: Vec<u8> },
 
-    /// Encrypt and upload the history-summary blob, off the UI thread.
-    /// Answered by [`BgEvent::HistorySummaryBlobUploaded`].
-    UploadHistorySummary { plaintext: Vec<u8> },
-
-    /// The summary blob is on the PDS; the foreground can now build the
-    /// `ExternalBlob`, MLS-encrypt the ring message, and publish it.
-    HistorySummaryBlobUploaded { blob: UploadedBlob },
-
-    /// Publish a history summary and retire the one it supersedes.
-    ///
-    /// `blob_ref` must ride along: the PDS garbage-collects a blob that
-    /// no record points at, so the reference is what keeps the summary's
-    /// bytes alive. `supersedes` is the previous summary's record URI,
-    /// deleted only after the new one is safely published.
-    PublishHistorySummary {
-        tag: [u8; 16],
-        ciphertext: Vec<u8>,
-        blob_ref: BlobRef,
-        supersedes: Option<String>,
-    },
-
-    /// A summary was published; remember its URI so the next publish
-    /// knows what to retire.
-    HistorySummaryPublished { uri: Option<String> },
-
-    /// A sibling advertised a summary; fetch and decrypt its blob.
-    FetchHistorySummary {
-        device_id: moat_core::DeviceId,
-        did: String,
-        external: moat_core::ExternalBlob,
-    },
-
-    /// A sibling's summary, decoded and ready to record.
-    HistorySummaryFetched {
-        device_id: moat_core::DeviceId,
-        convs: Vec<moat_core::ConvSummary>,
-    },
     /// A binary frame arrived on the pair WS.
     PairFrameReceived {
         data: Vec<u8>,
@@ -525,10 +483,7 @@ impl BgEvent {
             | BgEvent::PollForNewDevicesNow
             | BgEvent::RingTickNow
             | BgEvent::PublishRingCommit { .. }
-            | BgEvent::PublishRingEvent { .. }
-            | BgEvent::UploadHistorySummary { .. }
-            | BgEvent::PublishHistorySummary { .. }
-            | BgEvent::FetchHistorySummary { .. } => true,
+            | BgEvent::PublishRingEvent { .. } => true,
 
             BgEvent::PollFetched { .. }
             | BgEvent::SendPublished { .. }
@@ -548,9 +503,6 @@ impl BgEvent {
             | BgEvent::PairPending
             | BgEvent::PairReady { .. }
             | BgEvent::PairClosed { .. }
-            | BgEvent::HistorySummaryBlobUploaded { .. }
-            | BgEvent::HistorySummaryPublished { .. }
-            | BgEvent::HistorySummaryFetched { .. }
             | BgEvent::PairFrameReceived { .. }
             | BgEvent::PairConnected => false,
         }
@@ -610,8 +562,9 @@ pub struct App {
 
     // Events that were fetched but could not be processed (tag miss or decrypt
     // failure). Retried each poll cycle after new events are processed, since
-    // commits in new events may advance epochs and unlock these.
-    unprocessed_events: Vec<(Vec<usize>, moat_atproto::EventRecord, String)>,
+    // commits in new events may advance epochs and unlock these, until
+    // `moat_core::keep_for_retry` says they are no longer worth it.
+    unprocessed_events: Vec<crate::retry_buffer::UnprocessedEvent>,
 
     // Polling state
     last_poll: Option<Instant>,
@@ -666,11 +619,6 @@ pub struct App {
     /// `(conv_id, did)`. Cleared from `pending_ex_members` once the
     /// results have been processed — see the note where it is populated.
     swept_ex_members: Vec<(String, String)>,
-
-    /// The sibling an open offer prompt is about, hex device id. `Some`
-    /// exactly while `Focus::SyncOfferPrompt` is showing, so the screen
-    /// and the decision cannot disagree about who is being offered to.
-    pending_offer_device: Option<String>,
 
     /// The device on the other end of the current sync, as MLS named it
     /// on the frames it sent. Read from the leaf credential rather than
@@ -812,12 +760,7 @@ impl App {
         let drawbridge = DrawbridgeManager::new(bg_tx.clone());
 
         let ring_driver = keys.load_ring_state().unwrap_or_default();
-        let restored_unprocessed: Vec<(Vec<usize>, moat_atproto::EventRecord, String)> = keys
-            .load_unprocessed_events()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(ev, did)| (Vec::new(), ev, did))
-            .collect();
+        let restored_unprocessed = keys.load_unprocessed_events().unwrap_or_default();
 
         Ok(Self {
             keys,
@@ -864,7 +807,6 @@ impl App {
             last_ring_tick: None,
             sync_session: None,
             swept_ex_members: Vec::new(),
-            pending_offer_device: None,
             sync_peer_name: None,
             pending_pair_token: None,
             cached_sibling_stealth: Vec::new(),
@@ -1293,24 +1235,11 @@ impl App {
             .into_iter()
             .filter_map(|(leaf, cred)| {
                 let cred = cred?;
-                // What this sibling last said it holds, if it has said
-                // anything. A hint for the user's next move, never a
-                // claim about who is in sync with whom — two devices can
-                // hold entirely different messages and report the same
-                // number.
-                let advertised = self.ring_driver.sibling_summary(cred.device_id()).map(|s| {
-                    serde_json::json!({
-                        "conversations": s.convs.len(),
-                        "messages": s.total_messages(),
-                        "received_at_ms": s.received_at_ms,
-                    })
-                });
                 Some(serde_json::json!({
                     "leaf": leaf,
                     "device_id": hex::encode(cred.device_id()),
                     "device_name": cred.device_name(),
                     "is_self": cred.device_id() == &my_device_id,
-                    "advertised": advertised,
                 }))
             })
             .collect();
@@ -1484,7 +1413,6 @@ impl App {
             Focus::PairApprove => self.handle_pair_approve_key(key), // sync — no await
             Focus::SyncApprove => self.handle_sync_approve_key(key), // sync — no await
             Focus::Devices => self.handle_devices_key(key), // sync — no await
-            Focus::SyncOfferPrompt => self.handle_sync_offer_prompt_key(key),
         }
     }
 
@@ -1892,6 +1820,7 @@ impl App {
                         let group_id = hex::decode(&conv_id).unwrap_or_default();
                         if let Ok(decrypted) = self.mls.decrypt_event(&group_id, ciphertext) {
                             self.debug_log.log("drawbridge: inline payload decrypted successfully");
+                            self.note_tag_seen(&conv_id, &tag);
                             // Process the decrypted event inline — skip PDS fetch
                             self.process_inline_decrypted(&conv_id, &rkey, decrypted);
                             self.save_mls_state().ok();
@@ -1993,37 +1922,6 @@ impl App {
                 }
             }
 
-            BgEvent::HistorySummaryBlobUploaded { blob } => {
-                self.publish_history_summary_event(blob);
-            }
-
-            BgEvent::HistorySummaryPublished { uri } => {
-                self.ring_driver.set_published_summary_record(uri);
-                if let Err(e) = self.keys.save_ring_state(&self.ring_driver) {
-                    self.debug_log
-                        .log(&format!("summary: could not persist published record: {e}"));
-                }
-            }
-
-            BgEvent::HistorySummaryFetched { device_id, convs } => {
-                let now_ms = chrono::Utc::now().timestamp_millis();
-                self.ring_driver
-                    .record_sibling_summary(&device_id, convs, now_ms);
-                if let Err(e) = self.keys.save_ring_state(&self.ring_driver) {
-                    self.debug_log
-                        .log(&format!("summary: could not persist sibling summary: {e}"));
-                }
-                self.debug_log.log(&format!(
-                    "summary: recorded advertisement from {}",
-                    hex::encode(device_id.as_slice())
-                ));
-                // This is the "as soon as possible" half: a device that
-                // just joined says it holds nothing, and the user is
-                // holding the one that can fix it. Waiting for them to go
-                // looking would miss the moment they care about.
-                self.maybe_prompt_sync_offer();
-            }
-
             BgEvent::ImageUploaded { blob, image, pending_message_id, conv_id } => {
                 self.handle_image_uploaded(
                     blob,
@@ -2055,10 +1953,7 @@ impl App {
             | BgEvent::PollForNewDevicesNow
             | BgEvent::RingTickNow
             | BgEvent::PublishRingCommit { .. }
-            | BgEvent::PublishRingEvent { .. }
-            | BgEvent::UploadHistorySummary { .. }
-            | BgEvent::PublishHistorySummary { .. }
-            | BgEvent::FetchHistorySummary { .. } => {}
+            | BgEvent::PublishRingEvent { .. } => {}
 
             BgEvent::PairPending => {
                 self.debug_log.log("sync: pair offer registered, waiting for joiner");
@@ -2459,114 +2354,6 @@ impl App {
                         .debug_log
                         .log(&format!("pairing: publish ring Add commit failed: {e}")),
                 }
-            }
-
-            BgEvent::UploadHistorySummary { plaintext } => {
-                let Some(client) = self.client.clone() else { return };
-                let tx = self.bg_tx.clone();
-                tokio::spawn(async move {
-                    let encrypted = match moat_core::blob_encrypt(&plaintext) {
-                        Ok(e) => e,
-                        Err(_) => return,
-                    };
-                    let ciphertext_size = encrypted.blob.len() as u64;
-                    let Ok(cid) = client.upload_blob(&encrypted.blob).await else { return };
-                    let _ = tx.send(BgEvent::HistorySummaryBlobUploaded {
-                        blob: UploadedBlob {
-                            cid,
-                            key: encrypted.key.to_vec(),
-                            ciphertext_hash: encrypted.ciphertext_hash,
-                            ciphertext_size,
-                            content_hash: encrypted.content_hash,
-                        },
-                    });
-                });
-            }
-
-            BgEvent::PublishHistorySummary { tag, ciphertext, blob_ref, supersedes } => {
-                let Some(client) = self.client.clone() else { return };
-                match client.publish_event(&tag, &ciphertext, Some(blob_ref)).await {
-                    Ok(uri) => {
-                        self.debug_log.log("summary: published advertisement");
-                        // Retire the previous one only now: deleting it
-                        // first would leave a window with no summary at
-                        // all if this publish failed. A stale extra
-                        // summary is harmless — a hint, and the newest
-                        // wins — where a missing one is not.
-                        if let Some(old) = supersedes {
-                            match client.delete_event(&old).await {
-                                Ok(()) => self
-                                    .debug_log
-                                    .log("summary: retired the superseded advertisement"),
-                                Err(e) => self.debug_log.log(&format!(
-                                    "summary: could not retire the previous advertisement: {e}"
-                                )),
-                            }
-                        }
-                        let rkey = uri.split('/').next_back().unwrap_or("").to_string();
-                        if self.drawbridge.has_own_connection() {
-                            let did = self
-                                .client
-                                .as_ref()
-                                .map(|c| c.did().to_string())
-                                .unwrap_or_default();
-                            let _ = self.bg_tx.send(BgEvent::DrawbridgeNotifyEventPosted {
-                                did,
-                                tag,
-                                rkey,
-                                payload: ciphertext,
-                                drawbridge_urls: Vec::new(),
-                            });
-                        }
-                        let _ = self
-                            .bg_tx
-                            .send(BgEvent::HistorySummaryPublished { uri: Some(uri) });
-                    }
-                    Err(e) => {
-                        // Non-fatal by design: the advertisement is a
-                        // hint. Losing one costs a sibling a stale view,
-                        // never a wrong outcome, because a sync session's
-                        // own Hello still decides what moves.
-                        self.debug_log
-                            .log(&format!("summary: publish failed: {e}"));
-                    }
-                }
-            }
-
-            BgEvent::FetchHistorySummary { device_id, did, external } => {
-                let Some(client) = self.client.clone() else { return };
-                let tx = self.bg_tx.clone();
-                // Every failure below is silent by design, and the same
-                // reasoning covers all of them: a summary we cannot read
-                // leaves this device with a stale view of a sibling, never
-                // a wrong outcome, because a sync session's own Hello
-                // still decides what actually moves.
-                let cid = external.uri.rsplit('/').next().unwrap_or_default().to_string();
-                let key: [u8; 32] = match external.key.as_slice().try_into() {
-                    Ok(k) => k,
-                    Err(_) => {
-                        self.debug_log
-                            .log("summary: advertisement had a malformed key");
-                        return;
-                    }
-                };
-                let ciphertext_hash = external.ciphertext_hash.clone();
-                let content_hash = external.content_hash.clone();
-                tokio::spawn(async move {
-                    let Ok(bytes) = client.fetch_blob(&did, &cid).await else { return };
-                    let Ok(plaintext) =
-                        moat_core::blob_decrypt(&bytes, &key, &ciphertext_hash, &content_hash)
-                    else {
-                        return;
-                    };
-                    let Ok(payload) = moat_core::decode_history_summary(&plaintext) else {
-                        return;
-                    };
-                    let _ = tx.send(BgEvent::HistorySummaryFetched {
-                        device_id,
-                        convs: payload.convs,
-                    });
-                });
             }
 
             BgEvent::PublishRingEvent { tag, ciphertext } => {
@@ -3365,6 +3152,19 @@ impl App {
         self.schedule_watch_tags_update();
     }
 
+    /// Advance the scanning window for a tag that matched `conv_id`, and
+    /// register whatever candidate tags that newly covers.
+    fn note_tag_seen(&mut self, conv_id: &str, tag: &[u8; 16]) {
+        let added = self.mls.advance_scan_window(tag);
+        if added.is_empty() {
+            return;
+        }
+        for t in added {
+            self.tag_map.insert(t, conv_id.to_string());
+        }
+        self.schedule_watch_tags_update();
+    }
+
     /// Collect (DID, device_id) pairs for pending ex-members whose device_ids
     /// are known from the persisted member_device_ids map.
     fn extra_members_for_tags(&self, conv_id: &str) -> Vec<(String, Vec<u8>)> {
@@ -3399,11 +3199,20 @@ impl App {
 
         // Combine new events with previously unprocessed cached events.
         // Sort by rkey so events are processed in chronological order.
+        let now_ms = chrono::Utc::now().timestamp_millis();
         let cached_count = self.unprocessed_events.len();
         let mut all_events = std::mem::take(&mut self.unprocessed_events);
         let new_count = participant_events.len();
-        all_events.extend(participant_events);
-        all_events.sort_by(|a, b| a.1.rkey.cmp(&b.1.rkey));
+        all_events.extend(participant_events.into_iter().map(|(conv_indices, record, source_did)| {
+            crate::retry_buffer::UnprocessedEvent {
+                conv_indices,
+                record,
+                source_did,
+                first_seen_ms: now_ms,
+                attempts: 0,
+            }
+        }));
+        all_events.sort_by(|a, b| a.record.rkey.cmp(&b.record.rkey));
 
         if !all_events.is_empty() {
             self.debug_log.log(&format!(
@@ -3420,7 +3229,8 @@ impl App {
             let mut made_progress = false;
             let mut still_unprocessed = Vec::new();
 
-            for (conv_indices, event_record, did) in all_events {
+            for event in all_events {
+                let event_record = &event.record;
                 let tag_hex: String =
                     event_record.tag.iter().map(|b| format!("{b:02x}")).collect();
 
@@ -3429,7 +3239,7 @@ impl App {
                         "poll: tag matched: {} rkey={}",
                         tag_hex, event_record.rkey
                     ));
-                    match self.process_matched_event(&conv_indices, &event_record, &my_did) {
+                    match self.process_matched_event(&event.conv_indices, event_record, &my_did) {
                         Ok(true) => {
                             new_messages += 1;
                             made_progress = true;
@@ -3441,7 +3251,7 @@ impl App {
                         // already left: no later event can make it decrypt.
                         Err(e) if e.is_permanent() => {}
                         Err(_) => {
-                            still_unprocessed.push((conv_indices, event_record, did));
+                            still_unprocessed.push(event);
                         }
                     }
                 } else {
@@ -3457,8 +3267,8 @@ impl App {
                         // unless it is on our own PDS: a stealth payload this
                         // device published never decrypts here, and would be
                         // retried forever.
-                        if did != my_did {
-                            still_unprocessed.push((conv_indices, event_record, did));
+                        if event.source_did != my_did {
+                            still_unprocessed.push(event);
                         }
                     }
                 }
@@ -3470,7 +3280,19 @@ impl App {
             }
         }
 
-        // Store remaining unprocessed events for next poll cycle
+        // One more cycle failed for whatever is left; keep only what is still
+        // worth retrying on the next poll.
+        let before_expiry = all_events.len();
+        all_events.retain_mut(|e| {
+            e.attempts = e.attempts.saturating_add(1);
+            moat_core::keep_for_retry(e.first_seen_ms, e.attempts, now_ms)
+        });
+        let expired = before_expiry - all_events.len();
+        if expired > 0 {
+            self.debug_log.log(&format!(
+                "poll: stopped retrying {expired} event(s) that never became readable",
+            ));
+        }
         self.unprocessed_events = all_events;
 
         // Sort watched events by rkey (ascending) so Welcomes are processed
@@ -3597,7 +3419,7 @@ impl App {
         let mut msg_stored = false;
         match self.mls.decrypt_event(&group_id, &event_record.ciphertext) {
             Ok(outcome) => {
-                self.mls.mark_tag_seen(&event_record.tag);
+                self.note_tag_seen(&conv_id, &event_record.tag);
                 for w in outcome.warnings() {
                     self.debug_log
                         .log(&format!("poll: transcript warning: {}", w));
@@ -3966,28 +3788,6 @@ impl App {
                                         );
                                     }
                                 }
-                                Ok(RingMsg::HistorySummary { external }) => {
-                                    // The advertisement names no device;
-                                    // MLS does, from the leaf credential.
-                                    match decrypted
-                                        .sender
-                                        .as_ref()
-                                        .map(|s| s.device_id)
-                                    {
-                                        Some(device_id) => {
-                                            let _ = self.bg_tx.send(
-                                                BgEvent::FetchHistorySummary {
-                                                    device_id,
-                                                    did: my_did.to_string(),
-                                                    external,
-                                                },
-                                            );
-                                        }
-                                        None => self.debug_log.log(
-                                            "summary: ignoring an advertisement MLS could not attribute",
-                                        ),
-                                    }
-                                }
                                 Err(e) => self
                                     .debug_log
                                     .log(&format!("poll: undecodable ring message: {e}")),
@@ -4268,13 +4068,6 @@ impl App {
 
         self.load_conversations_sync();
 
-        // App open: a sibling may already have advertised that it holds
-        // nothing, in which case the user should be asked now rather than
-        // when they next happen to open the Devices screen. Persisted
-        // advertisements survive restarts, so this fires even when the
-        // pairing happened in an earlier session.
-        self.maybe_prompt_sync_offer();
-
         // Resolve handles for all conversations on login
         for conv in self.conversations.clone() {
             self.resolve_conversation_handle(&conv);
@@ -4520,33 +4313,25 @@ impl App {
                     self.set_error(format!("Sync history failed: {e}"));
                 }
             }
-            // The offer direction. Offers to the first sibling that has
-            // advertised holding less than this device — with one other
-            // device, which is the case this exists for, that is the only
-            // candidate. Pressing this *is* the approval; the other side
-            // joins without a prompt.
+            // Send this device's history to the other device in the ring.
+            // Pressing this *is* the approval; the other side joins without
+            // a prompt. With more than one other device, the first one
+            // listed is the target.
             KeyCode::Char('o') => {
                 let target = self
-                    .offerable_siblings()
-                    .first()
-                    .and_then(|d| d["device_id"].as_str().map(str::to_string));
+                    .api_ring_devices()
+                    .into_iter()
+                    .find(|d| !d["is_self"].as_bool().unwrap_or(false))
+                    .and_then(|d| d["device_id"].as_str().map(str::to_string))
+                    .and_then(|hex_id| hex::decode(&hex_id).ok())
+                    .and_then(|b| <[u8; moat_core::DEVICE_ID_LEN]>::try_from(b.as_slice()).ok());
                 match target {
-                    Some(hex_id) => {
-                        match hex::decode(&hex_id)
-                            .ok()
-                            .and_then(|b| <[u8; moat_core::DEVICE_ID_LEN]>::try_from(b.as_slice()).ok())
-                        {
-                            Some(device_id) => {
-                                if let Err(e) = self.api_sync_offer(device_id) {
-                                    self.set_error(format!("Offer failed: {e}"));
-                                }
-                            }
-                            None => self.set_error("Malformed device id".to_string()),
+                    Some(device_id) => {
+                        if let Err(e) = self.api_sync_offer(device_id) {
+                            self.set_error(format!("Send history failed: {e}"));
                         }
                     }
-                    None => self.set_error(
-                        "No device has said it is missing history.".to_string(),
-                    ),
+                    None => self.set_error("No other linked device.".to_string()),
                 }
             }
             KeyCode::Esc | KeyCode::Char('q') => {
@@ -4555,82 +4340,6 @@ impl App {
             _ => {}
         }
         Ok(false)
-    }
-
-    /// The offer prompt: `y`/Enter sends this device's history to the
-    /// sibling that said it has none, `n`/Esc declines.
-    ///
-    /// Declining is what sets the dismissal flag, so the same
-    /// advertisement will not ask again. A sibling that later advertises
-    /// something different is asking a new question and may prompt again.
-    fn handle_sync_offer_prompt_key(&mut self, key: KeyEvent) -> Result<bool> {
-        let Some(hex_id) = self.pending_offer_device.clone() else {
-            self.focus = Focus::Conversations;
-            return Ok(false);
-        };
-        let device_id = hex::decode(&hex_id)
-            .ok()
-            .and_then(|b| <[u8; moat_core::DEVICE_ID_LEN]>::try_from(b.as_slice()).ok());
-
-        match key.code {
-            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
-                self.pending_offer_device = None;
-                self.focus = Focus::Conversations;
-                if let Some(device_id) = device_id {
-                    if let Err(e) = self.api_sync_offer(device_id) {
-                        self.set_error(format!("Offer failed: {e}"));
-                    }
-                }
-            }
-            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                self.pending_offer_device = None;
-                self.focus = Focus::Conversations;
-                if let Some(device_id) = device_id {
-                    let _ = self.api_dismiss_summary(device_id);
-                }
-            }
-            _ => {}
-        }
-        Ok(false)
-    }
-
-    /// Raise the offer prompt if a sibling has said it holds less than we
-    /// do and the user has not already answered that.
-    ///
-    /// Called on app open and whenever an advertisement arrives — a new
-    /// device with no history on it is precisely when the user wants to
-    /// be asked, and waiting for them to go looking would miss the
-    /// moment. Never interrupts a screen that is already asking something:
-    /// a prompt that steals a pairing or sync decision is worse than a
-    /// late one.
-    pub fn maybe_prompt_sync_offer(&mut self) {
-        if self.pending_offer_device.is_some() {
-            return;
-        }
-        if !matches!(self.focus, Focus::Conversations | Focus::Messages) {
-            return;
-        }
-        if self.sync_request.as_ref().is_some_and(|s| !s.is_terminal()) {
-            return;
-        }
-        let Some(device) = self.offerable_siblings().into_iter().next() else {
-            return;
-        };
-        let Some(hex_id) = device["device_id"].as_str() else { return };
-        self.debug_log.log(&format!(
-            "sync: prompting to offer history to {hex_id}"
-        ));
-        self.pending_offer_device = Some(hex_id.to_string());
-        self.focus = Focus::SyncOfferPrompt;
-    }
-
-    /// The device an open offer prompt is about, as the screen needs it.
-    pub fn pending_offer_device_name(&self) -> Option<String> {
-        let hex_id = self.pending_offer_device.as_deref()?;
-        self.api_ring_devices()
-            .into_iter()
-            .find(|d| d["device_id"].as_str() == Some(hex_id))
-            .and_then(|d| d["device_name"].as_str().map(str::to_string))
     }
 
     /// Approval screen for a sibling's sync request: `y`/Enter sends this
@@ -5851,12 +5560,6 @@ impl App {
                 }
                 RingCommand::PollForNewDevices => {
                     needs_poll_for_new_devices = true;
-                    // A new sibling has joined, so tell it what we have.
-                    // Driven from here rather than from the approval
-                    // because this fires after the Add commit has merged:
-                    // a summary sealed at the *previous* ring epoch would
-                    // be unreadable by the very device it is meant for.
-                    self.publish_history_summary();
                 }
             }
         }
@@ -6125,10 +5828,6 @@ impl App {
             if let Some(session) = self.sync_request.as_mut() {
                 session.on_complete(tally, peer_name);
             }
-            // What this device holds has just changed, which is one of
-            // the two moments an advertisement is worth spending a record
-            // on.
-            self.publish_history_summary();
         }
     }
 
@@ -6276,10 +5975,6 @@ impl App {
             // never cleared (see its field doc).
             self.pairing_is_new_device = None;
             self.drawbridge.clear_pair();
-            // Onboarding sync has just filled this device, so its
-            // advertisement — published as empty when it joined the ring
-            // — is now wrong. Replace it.
-            self.publish_history_summary();
         }
     }
 
@@ -6355,135 +6050,6 @@ impl App {
                 self.drawbridge.clear_pair();
             }
         }
-    }
-
-    // ── History advertisement ──────────────────────────────────────────────
-
-    /// Advertise what this device holds, so siblings can tell whether it
-    /// is worth asking — or worth offering to.
-    ///
-    /// Published at the two moments the answer actually changes: joining
-    /// the ring, and finishing a sync. Deliberately *not* periodically —
-    /// every extra PDS record is timing surface, and between those two
-    /// events a device's holdings only change in ways its siblings learn
-    /// about anyway.
-    ///
-    /// The conversation list goes in a blob and the record carries only
-    /// the reference, so the record is a fixed size in the 512 B bucket
-    /// however much this device holds. A summary listing more than about
-    /// twenty conversations would not fit the largest bucket at all.
-    pub fn publish_history_summary(&mut self) {
-        if self.client.is_none() || self.ring_driver.ring_id().is_none() {
-            return;
-        }
-
-        let convs: Vec<moat_core::ConvSummary> = self
-            .conversations
-            .iter()
-            .filter_map(|conv| {
-                let group_id = hex::decode(&conv.id).ok()?;
-                let rkeys: Vec<String> = self
-                    .keys
-                    .load_messages(&conv.id)
-                    .map(|cm| cm.messages)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|m| m.rkey != "pending")
-                    .map(|m| m.rkey)
-                    .collect();
-                // A span, never an enumeration: a summary that listed
-                // every rkey would be the inventory, not a summary of it.
-                let inventory = match (rkeys.iter().min(), rkeys.iter().max()) {
-                    (Some(oldest), Some(newest)) => moat_core::ConvInventory::Range {
-                        oldest: oldest.clone(),
-                        newest: newest.clone(),
-                        count: rkeys.len() as u64,
-                    },
-                    _ => moat_core::ConvInventory::Empty,
-                };
-                Some(moat_core::ConvSummary { group_id, inventory })
-            })
-            .collect();
-
-        let payload = moat_core::HistorySummaryPayload { convs };
-        self.debug_log.log(&format!(
-            "summary: advertising {} conversation(s), {} message(s)",
-            payload.convs.len(),
-            payload.total_messages()
-        ));
-        let _ = self.bg_tx.send(BgEvent::UploadHistorySummary {
-            plaintext: moat_core::encode_history_summary(&payload),
-        });
-    }
-
-    /// Second half of [`publish_history_summary`], once the blob is up:
-    /// seal the reference to the ring and publish it.
-    fn publish_history_summary_event(&mut self, blob: UploadedBlob) {
-        let Some(ring_id) = self.ring_driver.ring_id().map(<[u8]>::to_vec) else { return };
-        let Some(did) = self.client.as_ref().map(|c| c.did().to_string()) else { return };
-        let Ok(key_bundle) = self.keys.load_identity_key() else { return };
-
-        let ciphertext_size = blob.ciphertext_size;
-        let external = match moat_core::ExternalBlob::new(
-            format!("at://{did}/{}", blob.cid),
-            blob.key,
-            blob.ciphertext_hash,
-            ciphertext_size,
-            blob.content_hash,
-        ) {
-            Ok(e) => e,
-            Err(e) => {
-                self.debug_log
-                    .log(&format!("summary: could not build blob reference: {e}"));
-                return;
-            }
-        };
-        let blob_ref = BlobRef::new(&blob.cid, ciphertext_size);
-
-        let epoch = self.mls.get_group_epoch(&ring_id).ok().flatten().unwrap_or(0);
-        let payload = moat_core::encode_ring_msg(&RingMsg::HistorySummary { external });
-        let event = Event::ring_msg(ring_id.clone(), epoch, payload);
-        let encrypted = match self.mls.encrypt_event(&ring_id, &key_bundle, &event) {
-            Ok(e) => e,
-            Err(e) => {
-                self.debug_log
-                    .log(&format!("summary: encrypt failed: {e}"));
-                return;
-            }
-        };
-        let _ = self.save_mls_state();
-
-        let _ = self.bg_tx.send(BgEvent::PublishHistorySummary {
-            tag: encrypted.tag,
-            ciphertext: encrypted.ciphertext,
-            blob_ref,
-            supersedes: self.ring_driver.published_summary_record().map(str::to_string),
-        });
-    }
-
-    /// What each sibling last advertised, for `/sync/summaries` and the
-    /// Devices screen.
-    ///
-    /// A hint, never the truth: two devices can hold a hundred different
-    /// messages each and report the same count, so this narrows where to
-    /// ask rather than deciding anything. What actually moves is settled
-    /// by a session's `Hello`.
-    pub fn sibling_summaries_json(&self) -> serde_json::Value {
-        let entries: Vec<serde_json::Value> = self
-            .ring_driver
-            .sibling_summaries()
-            .iter()
-            .map(|(device_id, summary)| {
-                serde_json::json!({
-                    "device_id": device_id,
-                    "conversations": summary.convs.len(),
-                    "messages": summary.total_messages(),
-                    "received_at_ms": summary.received_at_ms,
-                    "dismissed": summary.dismissed,
-                })
-            })
-            .collect();
-        serde_json::json!({ "siblings": entries })
     }
 
     /// Return the current sync status for the HTTP API.
@@ -6596,12 +6162,11 @@ impl App {
         Ok(())
     }
 
-    /// HTTP `POST /sync/offer` — send history to a sibling that lacks it.
+    /// HTTP `POST /sync/offer` — send history to another device.
     ///
     /// The mirror of a request, for when the device holding the history
-    /// is the one in the user's hands: "New device added — send it your
-    /// history?" answered here rather than by walking to the other
-    /// device.
+    /// is the one in the user's hands, so the user can send from here
+    /// rather than walking to the other device to ask.
     ///
     /// This call *is* the human approval, so the target joins without a
     /// prompt of its own — exactly one approval per session, on the side
@@ -6653,11 +6218,6 @@ impl App {
             chrono::Utc::now().timestamp_millis(),
         ));
 
-        // Offering is itself an answer to that sibling's advertisement,
-        // so it should not keep prompting about it either way.
-        self.ring_driver.dismiss_sibling_summary(&target_device_id);
-        let _ = self.keys.save_ring_state(&self.ring_driver);
-
         let _ = self
             .bg_tx
             .send(BgEvent::DrawbridgeSendPairOffer { token: token.to_vec() });
@@ -6666,61 +6226,6 @@ impl App {
             ciphertext: encrypted.ciphertext,
         });
         Ok(())
-    }
-
-    /// Stop a sibling's current advertisement from prompting again.
-    ///
-    /// Scoped to *this* advertisement, not the device: a sibling that
-    /// later says something different is asking a different question, and
-    /// this dismissal does not answer it. Without the flag a device
-    /// holding an unacted-on summary would re-prompt on every launch,
-    /// which is how people learn to dismiss reflexively.
-    pub fn api_dismiss_summary(
-        &mut self,
-        device_id: [u8; moat_core::DEVICE_ID_LEN],
-    ) -> Result<()> {
-        self.ring_driver.dismiss_sibling_summary(&device_id);
-        self.keys
-            .save_ring_state(&self.ring_driver)
-            .map_err(|e| AppError::Other(e.to_string()))?;
-        Ok(())
-    }
-
-    /// Siblings worth prompting the user to send history to, as full
-    /// device records for the screen that asks.
-    ///
-    /// The *rule* lives in `DeviceRingState::offerable_siblings` so both
-    /// runtimes decide identically; this only supplies the local totals
-    /// and joins the result back to the ring's credentials for a name.
-    pub fn offerable_siblings(&self) -> Vec<serde_json::Value> {
-        let ours = self.total_held_messages();
-        let offerable = self.ring_driver.offerable_siblings(ours);
-        if offerable.is_empty() {
-            return Vec::new();
-        }
-        let wanted: Vec<String> = offerable.iter().map(|id| hex::encode(id)).collect();
-        self.api_ring_devices()
-            .into_iter()
-            .filter(|d| {
-                d["device_id"]
-                    .as_str()
-                    .is_some_and(|id| wanted.iter().any(|w| w == id))
-            })
-            .collect()
-    }
-
-    /// How many messages this device holds across every conversation —
-    /// the figure a sibling's advertisement is compared against.
-    fn total_held_messages(&self) -> u64 {
-        self.conversations
-            .iter()
-            .map(|c| {
-                self.keys
-                    .load_messages(&c.id)
-                    .map(|cm| cm.messages.iter().filter(|m| m.rkey != "pending").count() as u64)
-                    .unwrap_or(0)
-            })
-            .sum()
     }
 
     /// HTTP `POST /sync/accept` — send this device's history to the
@@ -7138,12 +6643,6 @@ impl App {
                             .log(&format!("pairing: record_ring_membership failed: {e}"));
                     }
                     let _ = self.keys.save_ring_state(&self.ring_driver);
-                    // Advertise straight away, before the pairing sync
-                    // has run: what this device holds right now is
-                    // nothing, and a sibling seeing an empty summary is
-                    // exactly what makes it worth offering history to.
-                    // The post-sync publish then replaces it.
-                    self.publish_history_summary();
                     // Candidate tags + group metadata for the ring — see
                     // the matching note in `approve_pending_pairing`. The
                     // new device needs this too: if a *third* device later

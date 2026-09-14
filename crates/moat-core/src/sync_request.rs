@@ -29,8 +29,7 @@
 use serde::{Deserialize, Serialize};
 use serde_with::{base64::Base64, serde_as};
 
-use crate::message::ExternalBlob;
-use crate::sync::{ConvInventory, SyncTally};
+use crate::sync::SyncTally;
 use crate::{Error, Result};
 
 /// Length of the Drawbridge rendezvous token carried in a sync request.
@@ -92,72 +91,6 @@ pub enum RingMsg {
         #[serde_as(as = "Base64")]
         target_device_id: [u8; DEVICE_ID_LEN],
     },
-
-    /// "Here is what I hold." An advertisement, so a sibling can tell
-    /// whether it is worth asking this device — or worth offering to it.
-    ///
-    /// The conversation list lives in an external blob rather than in the
-    /// record, and the record carries only the reference. That is not an
-    /// optimisation: a summary of more than ~22 conversations does not fit
-    /// the largest padding bucket at all, and there is no bucket above it.
-    /// A reference is a fixed ~200 bytes, so the record sits in the 512 B
-    /// bucket whatever the device holds — which also means an observer
-    /// learns nothing about how many conversations that is, where an
-    /// inline list would have leaked the count at bucket resolution.
-    ///
-    /// Same shape `message.long_text` and `message.image` already use.
-    HistorySummary { external: ExternalBlob },
-}
-
-/// What one device holds for one conversation, as advertised.
-///
-/// Reuses [`ConvInventory`] rather than inventing a second shape for the
-/// same idea, so the advertisement and the sync wire agree on what "what
-/// I hold" means. In practice this is always the `range` variant —
-/// enumerating every rkey would defeat the point of a summary.
-#[serde_as]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConvSummary {
-    #[serde_as(as = "Base64")]
-    pub group_id: Vec<u8>,
-    pub inventory: ConvInventory,
-}
-
-/// The blob a [`RingMsg::HistorySummary`] points at.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub struct HistorySummaryPayload {
-    pub convs: Vec<ConvSummary>,
-}
-
-impl HistorySummaryPayload {
-    /// Total messages advertised, across every conversation.
-    pub fn total_messages(&self) -> u64 {
-        self.convs
-            .iter()
-            .map(|c| match &c.inventory {
-                ConvInventory::Range { count, .. } => *count,
-                ConvInventory::Complete { rkeys } => rkeys.len() as u64,
-                ConvInventory::Empty => 0,
-            })
-            .sum()
-    }
-
-    /// `true` when this device advertises nothing at all — a fresh
-    /// device, and the case a sibling should offer to fill.
-    pub fn is_empty(&self) -> bool {
-        self.convs.is_empty() || self.total_messages() == 0
-    }
-}
-
-/// Encode a summary payload for the blob. Plain JSON: the blob is
-/// encrypted by [`crate::blob_encrypt`] before it leaves the device.
-pub fn encode_history_summary(payload: &HistorySummaryPayload) -> Vec<u8> {
-    serde_json::to_vec(payload).expect("HistorySummaryPayload serialization should never fail")
-}
-
-/// Decode a summary payload from decrypted blob bytes.
-pub fn decode_history_summary(bytes: &[u8]) -> Result<HistorySummaryPayload> {
-    serde_json::from_slice(bytes).map_err(|e| Error::Deserialization(e.to_string()))
 }
 
 /// Encode a [`RingMsg`] to bytes suitable for use as `Event.payload`.

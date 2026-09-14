@@ -7,10 +7,8 @@ import '../utils/platform_int64.dart';
 import 'auth_service.dart';
 import 'conversations_service.dart';
 import 'debug_log.dart';
-import 'atproto_client.dart';
 import 'document_backend.dart';
 import 'drawbridge_service.dart';
-import 'message_storage.dart';
 
 /// Owns a [ffi.RingDriverHandle] and drives the moat-core ring state machine.
 ///
@@ -68,10 +66,6 @@ class DeviceRingService {
   /// Injected by the server/app setup so pollForNewDevices and registerGroup
   /// for User groups can surface conversations.
   ConversationsService? convsService;
-
-  /// Injected so the history advertisement can say how much this device
-  /// holds per conversation. Unset means this host does not advertise.
-  MessageStorage? messageStorage;
 
   /// Injected by the owner (e.g. ConversationManager) so the ring tick can
   /// suppress a new SyncOffer while a sync session is already in progress.
@@ -200,12 +194,6 @@ class DeviceRingService {
     if (convsService == null) {
       throw StateError(
         'DeviceRingService.convsService is null — '
-        'set it before the first tick (use createServiceBundle)',
-      );
-    }
-    if (messageStorage == null) {
-      throw StateError(
-        'DeviceRingService.messageStorage is null — '
         'set it before the first tick (use createServiceBundle)',
       );
     }
@@ -357,12 +345,6 @@ class DeviceRingService {
           },
           pollForNewDevices: () async {
             await _pollForNewDevices(did);
-            // A new sibling has joined, so tell it what we have. Driven
-            // from here rather than from the approval because this fires
-            // after the Add commit has merged: a summary sealed at the
-            // *previous* ring epoch would be unreadable by the very
-            // device it is meant for.
-            await publishHistorySummary();
           },
         );
       } catch (e, st) {
@@ -577,229 +559,6 @@ class DeviceRingService {
     // The /pair WS handshake itself is owned by SyncService, which subscribes
     // to onPairConnected / onPairFrame. We only need to forward the connect.
     _drawbridge.connectPair(ready.pairUrl, ready.token);
-  }
-
-  // ── History advertisement ───────────────────────────────────────────────
-
-  /// Advertise what this device holds, so siblings can tell whether it is
-  /// worth asking — or worth offering to.
-  ///
-  /// Published at the two moments the answer changes: joining the ring,
-  /// and finishing a sync. Deliberately not periodic — every extra record
-  /// is timing surface, and in between a device's holdings only change in
-  /// ways its siblings learn about anyway.
-  ///
-  /// The conversation list goes in a blob and the record carries only the
-  /// reference, so the record is a fixed size in the smallest bucket
-  /// however much there is to describe. A summary listing more than about
-  /// twenty conversations would not fit the largest bucket at all.
-  ///
-  /// Mirrors `App::publish_history_summary` in `crates/moat-cli/src/app.rs`.
-  Future<void> publishHistorySummary() async {
-    final driver = _driver;
-    final cs = convsService;
-    final storage = messageStorage;
-    final session = _auth.moatSession;
-    final client = _auth.atprotoClient;
-    final ringId = driver?.ringGroupId();
-    if (driver == null ||
-        cs == null ||
-        storage == null ||
-        session == null ||
-        ringId == null) {
-      return;
-    }
-    final keyBundle = await _auth.secureStorage.loadKeyBundle();
-    if (keyBundle == null) return;
-
-    try {
-      final convs = <ffi.ConvSummaryDto>[];
-      for (final conv in cs.conversations) {
-        final rkeys = (await storage.loadMessages(conv.groupIdHex))
-            .map((m) => m.rkey)
-            .where((r) => r != 'pending')
-            .toList()
-          ..sort();
-        // A span, never an enumeration: a summary that listed every rkey
-        // would be the inventory, not a summary of it.
-        convs.add(ffi.ConvSummaryDto(
-          groupId: conv.groupId,
-          inventory: rkeys.isEmpty
-              ? const ffi.ConvInventoryDto.empty()
-              : ffi.ConvInventoryDto.range(
-                  oldest: rkeys.first,
-                  newest: rkeys.last,
-                  count: BigInt.from(rkeys.length),
-                ),
-        ));
-      }
-
-      final plaintext = await ffi.historySummaryEncode(convs: convs);
-      final encryptedBlob = await ffi.blobEncrypt(plaintext: plaintext);
-      final cid = await client.uploadBlob(encryptedBlob.blob);
-
-      final payload = await ffi.ringMsgEncodeHistorySummary(
-        uri: 'at://${_auth.did}/$cid',
-        key: encryptedBlob.key,
-        ciphertextHash: encryptedBlob.ciphertextHash,
-        ciphertextSize: BigInt.from(encryptedBlob.blob.length),
-        contentHash: encryptedBlob.contentHash,
-      );
-      final epoch = (await session.getGroupEpoch(groupId: ringId)) ?? BigInt.zero;
-      final encrypted = await session.encryptEvent(
-        groupId: ringId,
-        keyBundle: keyBundle,
-        event: ffi.EventDto(
-          kind: ffi.EventKindDto.ringMsg,
-          groupId: ringId,
-          epoch: epoch,
-          payload: payload,
-        ),
-      );
-      await _auth.saveMlsState();
-
-      final uri = await client.publishEvent(
-        Uint8List.fromList(encrypted.tag),
-        Uint8List.fromList(encrypted.ciphertext),
-        // The reference must ride along or the PDS collects the blob:
-        // it keeps only what a record points at.
-        blobRef: BlobRef(
-          cid: cid,
-          mimeType: 'application/octet-stream',
-          size: encryptedBlob.blob.length,
-        ),
-      );
-
-      // Retire the previous advertisement only now. Deleting it first
-      // would leave a window with no summary at all if this publish
-      // failed — and a stale extra summary is harmless, since the
-      // advertisement is a hint and the newest wins.
-      final superseded = driver.publishedSummaryRecord();
-      if (superseded != null) {
-        try {
-          await client.deleteEvent(superseded);
-        } catch (e) {
-          moatLog('DeviceRingService: could not retire previous summary: $e');
-        }
-      }
-      driver.setPublishedSummaryRecord(uri: uri);
-      await _persist();
-
-      _drawbridge.notifyEventPosted(
-        tag: encrypted.tag,
-        rkey: uri.split('/').last,
-        payload: encrypted.ciphertext,
-        relayUrls: const [],
-      );
-      moatLog('DeviceRingService: advertised ${convs.length} conversation(s)');
-    } catch (e) {
-      // Non-fatal by design: the advertisement is a hint. Losing one costs
-      // a sibling a stale view, never a wrong outcome, because a sync
-      // session's own Hello still decides what moves.
-      moatLog('DeviceRingService: publishHistorySummary failed: $e');
-    }
-  }
-
-  /// A sibling advertised what it holds: fetch the blob it points at and
-  /// record the contents against that device.
-  ///
-  /// `deviceId` must come from the sender's MLS leaf credential — the
-  /// payload names no device, which is the point of riding the ring.
-  Future<void> onHistorySummary({
-    required Uint8List deviceId,
-    required String uri,
-    required Uint8List key,
-    required Uint8List ciphertextHash,
-    required Uint8List contentHash,
-  }) async {
-    final driver = _driver;
-    final client = _auth.atprotoClient;
-    final did = _auth.did;
-    if (driver == null || did == null) return;
-
-    try {
-      final cid = uri.split('/').last;
-      final blob = await client.fetchBlob(did, cid);
-      final plaintext = await ffi.blobDecrypt(
-        blob: blob,
-        key: key,
-        ciphertextHash: ciphertextHash,
-        contentHash: contentHash,
-      );
-      final convs = await ffi.historySummaryDecode(bytes: plaintext);
-      driver.recordSiblingSummary(
-        deviceId: deviceId,
-        convs: convs,
-        receivedAtMs: toPlatformInt64(DateTime.now().millisecondsSinceEpoch),
-      );
-      await _persist();
-      // The "as soon as possible" half: a device that just joined says it
-      // holds nothing, and the user is holding the one that can fix it.
-      // Waiting for them to go looking would miss the moment they care.
-      await _maybePromptOffer();
-      moatLog('DeviceRingService: recorded advertisement from '
-          '${deviceId.map((b) => b.toRadixString(16).padLeft(2, '0')).join()}');
-    } catch (e) {
-      // Same reasoning as a failed publish: a summary we cannot read
-      // leaves a stale view of a sibling, never a wrong outcome.
-      moatLog('DeviceRingService: onHistorySummary failed: $e');
-    }
-  }
-
-  /// What each sibling last advertised holding.
-  List<ffi.SiblingSummaryDto> siblingSummaries() =>
-      _driver?.siblingSummaries() ?? const [];
-
-  /// Siblings worth prompting the user to send history to — ones that
-  /// have advertised holding less than this device, and that the user has
-  /// not already answered. Returns hex device ids.
-  ///
-  /// The rule lives in moat-core so both runtimes decide identically;
-  /// this only supplies the local total.
-  ///
-  /// A device that has said nothing is *not* included: silence is not an
-  /// invitation, since it might hold everything.
-  Future<List<String>> offerableSiblings() async {
-    final driver = _driver;
-    final cs = convsService;
-    final storage = messageStorage;
-    if (driver == null || cs == null || storage == null) return const [];
-
-    var ours = 0;
-    for (final conv in cs.conversations) {
-      final held = await storage.loadMessages(conv.groupIdHex);
-      ours += held.where((m) => m.rkey != 'pending').length;
-    }
-    return driver.offerableSiblings(ourMessages: BigInt.from(ours));
-  }
-
-  /// Called when a sibling becomes worth offering history to. The host
-  /// decides how to ask; unset means this host does not prompt.
-  ///
-  /// Passed the hex device id, which the screen joins back to the ring's
-  /// credentials for a name.
-  Future<void> Function(String deviceIdHex)? onOfferableSibling;
-
-  /// Raise the host's offer prompt if any sibling now qualifies. Safe to
-  /// call repeatedly: the dismissal flag is what stops it repeating.
-  Future<void> _maybePromptOffer() async {
-    final handler = onOfferableSibling;
-    if (handler == null) return;
-    final offerable = await offerableSiblings();
-    if (offerable.isEmpty) return;
-    await handler(offerable.first);
-  }
-
-  /// App open: a sibling may already have advertised holding nothing in
-  /// an earlier session — advertisements are persisted — so ask now
-  /// rather than when the user next happens to open the Devices screen.
-  Future<void> promptOfferOnOpen() => _maybePromptOffer();
-
-  /// Stop a sibling's current advertisement from prompting again until it
-  /// says something new.
-  Future<void> dismissSiblingSummary(Uint8List deviceId) async {
-    _driver?.dismissSiblingSummary(deviceId: deviceId);
-    await _persist();
   }
 
   Future<void> _persist() async {

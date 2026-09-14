@@ -18,7 +18,6 @@ import 'providers/profile_provider.dart';
 import 'providers/theme_provider.dart';
 import 'providers/watch_list_provider.dart';
 import 'screens/login_screen.dart';
-import 'screens/offer_history_screen.dart';
 import 'screens/conversations_screen.dart';
 import 'screens/approve_pairing_screen.dart';
 import 'screens/approve_sync_request_screen.dart';
@@ -448,25 +447,6 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
           );
         }
       });
-      // The offer direction. Raised the moment a sibling advertises that
-      // it holds nothing — a newly added device is exactly when the user
-      // cares — and again below on app open, for an advertisement that
-      // arrived in an earlier session.
-      bundle.ring.onOfferableSibling = (deviceIdHex) async {
-        rootNavigatorKey.currentState?.push(
-          MaterialPageRoute(
-            builder: (_) => OfferHistoryScreen(
-              deviceIdHex: deviceIdHex,
-              authService: auth.service,
-            ),
-          ),
-        );
-      };
-      // App open: advertisements are persisted, so a device paired in an
-      // earlier session still gets asked about now rather than whenever
-      // the user next opens the Devices screen.
-      // ignore: discarded_futures
-      bundle.ring.promptOfferOnOpen();
 
       _pollingService!.onMessages = app_cm.ConversationManager.instance.notify;
       _pollingService!.onReaction = app_cm.ConversationManager.instance.notifyReaction;

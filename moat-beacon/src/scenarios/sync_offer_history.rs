@@ -11,9 +11,6 @@
 //! recipient joins without a prompt of its own. A second prompt would be
 //! asking someone to approve receiving their own messages from a device
 //! that can already read them.
-//!
-//! What makes the offer findable is the advertisement: D1 learns from
-//! D2's summary that D2 holds nothing, and that is what it offers to fix.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -39,8 +36,8 @@ pub async fn run(verbose: bool) {
 }
 
 /// The scenario body, parameterised by which runtime each device uses.
-/// `offerer_kind` is D1 — the device that holds the history, is prompted,
-/// and offers — so that is the axis worth varying.
+/// `offerer_kind` is D1 — the device that holds the history and offers —
+/// so that is the axis worth varying.
 pub async fn run_with(
     offerer_kind: ParticipantKind,
     recipient_kind: ParticipantKind,
@@ -112,65 +109,33 @@ pub async fn run_with(
     world.restart_participant("alice-d2").await.expect("restart d2");
     d2.login("alice.postern.test", "any-password").await.expect("d2 re-login");
 
-    // ── D1 is prompted, from D2's own advertisement ──────────────────────────
+    // ── The user picks D2 from D1's device list ─────────────────────────────
     //
-    // This is what makes the offer findable rather than guessed: without
-    // the advertisement, D1 has no way to know which sibling is short.
-    // `/sync/offerable` is the prompt condition itself — the app raises a
-    // screen on it, and the headless server reports it — so asserting on
-    // it is asserting that the user really would be asked.
+    // D1's ring membership is what the Devices screen lists, so the target
+    // comes from there, and it must carry the name the screen shows.
     let deadline = std::time::Instant::now() + TIMEOUT;
     let target = loop {
         let _ = d2.ring_tick().await;
         let _ = d1.ring_tick().await;
-        let _ = d1.poll().await;
-        let _ = d2.poll().await;
-        let offerable = d1.sync_offerable().await.unwrap_or_default();
-        vlog!("[prompt] d1 would offer to: {offerable:?}");
-        if let Some(sibling) = offerable.first() {
-            // The prompt names the device, so both runtimes have to
-            // supply the name here — not merely the id that happens to be
-            // enough for this test to drive the offer.
+        let status = d1.ring_status().await.unwrap_or_default();
+        if let Some(device) = status.devices.iter().find(|d| !d.is_self) {
             assert!(
-                sibling.device_name.as_deref().is_some_and(|n| !n.is_empty()),
-                "an offerable sibling must carry the name the prompt shows; \
-                 got {sibling:?}"
+                !device.device_name.is_empty(),
+                "a linked device must carry the name the Devices screen shows; \
+                 got {device:?}"
             );
-            break sibling.device_id.clone();
+            break device.device_id.clone();
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "d1 was never prompted to offer within {TIMEOUT:?}; a new device \
-             with no history is exactly when the user should be asked"
+            "d1 never listed d2 as a linked device within {TIMEOUT:?}"
         );
         tokio::time::sleep(POLL_INTERVAL).await;
     };
 
-    // ── Declining silences that advertisement, and only that one ─────────────
-    //
-    // The prompt must not return on the next app open, or people learn to
-    // dismiss reflexively and the mechanism defeats itself.
-    d1.sync_dismiss(&target).await.expect("d1 sync_dismiss");
-    let after_dismiss = d1.sync_offerable().await.expect("d1 offerable");
-    assert!(
-        !after_dismiss.iter().any(|s| s.device_id == target),
-        "a dismissed advertisement must stop prompting; still offered {after_dismiss:?}"
-    );
-    // The advertisement is still *held* — dismissal answers the prompt,
-    // it does not forget what the sibling said.
-    let summaries = d1.sync_summaries().await.expect("d1 summaries");
-    assert!(
-        summaries.iter().any(|s| s.device_id == target),
-        "dismissal must silence the prompt, not discard the advertisement"
-    );
-
     vlog!("[offer] d1 offers history to {target}");
 
     // ── D1's user approves; D2 joins without being asked ─────────────────────
-    //
-    // Offering works whether or not the prompt was dismissed: dismissal
-    // answers the question, and the user can still change their mind from
-    // the Devices screen.
     d1.sync_offer(&target).await.expect("d1 sync_offer");
 
     let deadline = std::time::Instant::now() + TIMEOUT;

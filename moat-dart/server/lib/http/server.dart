@@ -663,22 +663,6 @@ Handler buildRouter({
     }
   });
 
-  // POST /sync/dismiss — stop a sibling's current advertisement from
-  // prompting again until it says something new.
-  router.post('/sync/dismiss', (Request request) async {
-    try {
-      final body =
-          jsonDecode(await request.readAsString()) as Map<String, dynamic>;
-      await ringService.dismissSiblingSummary(
-          _hexToBytes(body['device_id'] as String));
-      return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
-    } catch (e) {
-      moatLog('Server: sync/dismiss error: $e');
-      return Response(500,
-          body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
-    }
-  });
-
   // POST /sync/accept — send this device's history to the sibling that
   // asked for it.
   router.post('/sync/accept', (Request request) async {
@@ -703,67 +687,6 @@ Handler buildRouter({
       return Response(500,
           body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
     }
-  });
-
-  // GET /sync/offerable — siblings worth prompting the user to send
-  // history to. The headless server has no user to prompt, so it reports
-  // the condition instead; the app raises a screen on the same signal.
-  router.get('/sync/offerable', (Request request) async {
-    final offerable = (await ringService.offerableSiblings()).toSet();
-    // Joined back to the ring's MLS leaf credentials for a name, so this
-    // returns the same records as moat-cli's `/sync/offerable`.
-    final siblings = <Map<String, dynamic>>[];
-    final ringId = await ringService.ringGroupId();
-    final session = authService.moatSession;
-    if (ringId != null && session != null) {
-      try {
-        final creds = await session.getGroupMemberCredentials(groupId: ringId);
-        final myDeviceIdHex = _hexBytes(session.deviceId());
-        final summaries = {
-          for (final s in ringService.siblingSummaries()) s.deviceId: s
-        };
-        for (final c in creds) {
-          final hex = _hexBytes(c.deviceId);
-          if (!offerable.contains(hex)) continue;
-          final advertised = summaries[hex];
-          siblings.add({
-            'device_id': hex,
-            'device_name': c.deviceName,
-            'is_self': hex == myDeviceIdHex,
-            'advertised': advertised == null
-                ? null
-                : {
-                    'conversations': advertised.conversations.toInt(),
-                    'messages': advertised.messages.toInt(),
-                    'received_at_ms': advertised.receivedAtMs.toInt(),
-                  },
-          });
-        }
-      } catch (e) {
-        moatLog('Server: sync/offerable credentials failed: $e');
-      }
-    }
-    return Response.ok(
-      jsonEncode({'siblings': siblings}),
-      headers: _jsonHeaders,
-    );
-  });
-
-  // GET /sync/summaries — what each sibling last advertised holding.
-  // Same shape as moat-cli's, so a beacon assertion reads one thing from
-  // either runtime.
-  router.get('/sync/summaries', (Request request) {
-    final siblings = ringService.siblingSummaries().map((s) => {
-          'device_id': s.deviceId,
-          'conversations': s.conversations.toInt(),
-          'messages': s.messages.toInt(),
-          'received_at_ms': s.receivedAtMs.toInt(),
-          'dismissed': s.dismissed,
-        }).toList();
-    return Response.ok(
-      jsonEncode({'siblings': siblings}),
-      headers: _jsonHeaders,
-    );
   });
 
   // GET /sync/status — whether a transfer is running, plus the

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'atproto_client.dart';
 import 'storage_backend.dart';
+import 'unprocessed_event.dart';
 
 /// Keys for secure storage
 const _sessionKey = 'moat_session';
@@ -14,6 +15,7 @@ const _watchListKey = 'moat_watch_list';
 const _lastRkeysKey = 'moat_last_rkeys';
 const _tagMapKey = 'moat_tag_map';
 const _deviceIdKey = 'moat_device_id';
+const _unprocessedEventsKey = 'moat_unprocessed_events';
 
 /// Secure storage service for credentials and cryptographic keys.
 /// Backend-agnostic: use [FileStorageBackend] for server, FlutterStorageBackend for app.
@@ -213,8 +215,15 @@ class SecureStorageService {
   }
 
   Future<void> registerTag(String tagHex, String groupIdHex) async {
+    await registerTags([tagHex], groupIdHex);
+  }
+
+  /// Route every tag in [tagHexes] to [groupIdHex], in a single write.
+  Future<void> registerTags(Iterable<String> tagHexes, String groupIdHex) async {
     final map = await loadTagMap();
-    map[tagHex] = groupIdHex;
+    for (final tagHex in tagHexes) {
+      map[tagHex] = groupIdHex;
+    }
     await saveTagMap(map);
   }
 
@@ -225,6 +234,33 @@ class SecureStorageService {
 
   Future<void> deleteTagMap() async {
     await _storage.delete(_tagMapKey);
+  }
+
+  // --- Events kept for retry ---
+
+  /// Persist the retry buffer, so the events in it survive a restart: the
+  /// polling cursor has already moved past them.
+  Future<void> saveUnprocessedEvents(List<UnprocessedEvent> events) async {
+    if (events.isEmpty) {
+      await _storage.delete(_unprocessedEventsKey);
+      return;
+    }
+    await _storage.write(
+      _unprocessedEventsKey,
+      jsonEncode(events.map((e) => e.toJson()).toList()),
+    );
+  }
+
+  Future<List<UnprocessedEvent>> loadUnprocessedEvents() async {
+    final json = await _storage.read(_unprocessedEventsKey);
+    if (json == null) return [];
+    try {
+      return (jsonDecode(json) as List<dynamic>)
+          .map((e) => UnprocessedEvent.fromJson(e as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      return [];
+    }
   }
 
   // --- Device ID management ---

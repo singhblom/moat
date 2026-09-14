@@ -53,6 +53,13 @@ impl TagScanner {
         self.rebuild(sim, participant);
     }
 
+    /// Advance the scanning window for a matched tag and add only the tags
+    /// that returns — what a host does, with no full rebuild.
+    fn mark_and_extend(&mut self, sim: &ConversationSim, participant: usize, tag: &[u8; 16]) {
+        let added = sim.participants[participant].session.advance_scan_window(tag);
+        self.candidates[participant].extend(added);
+    }
+
     /// Add a slot for a new participant (after add_member_sim).
     fn grow(&mut self) {
         self.candidates.push(HashSet::new());
@@ -531,6 +538,83 @@ fn tags_differ_across_senders_at_same_counter() {
         alice_msg.tag, bob_msg.tag,
         "different senders at counter=0 should produce different tags"
     );
+}
+
+// --- Group 8: Sliding Window ---
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(16))]
+
+    /// P16: The window keeps sliding without a full rebuild.
+    /// A recipient seeds its candidates once and afterwards adds only what
+    /// `advance_scan_window` returns for each matched tag — all a host does —
+    /// yet every message in a burst longer than the gap limit stays
+    /// scannable.
+    #[test]
+    fn window_slides_with_advance_scan_window(n_messages in 11usize..40) {
+        let mut sim = ConversationSim::new(&["Alice", "Bob"]);
+        let mut scanner = TagScanner::new(2);
+        scanner.rebuild(&sim, 1);
+
+        for i in 0..n_messages {
+            let record = sim.send_message(0, b"burst");
+            prop_assert!(
+                scanner.is_candidate(1, &record.tag),
+                "message {} of a single sender's burst is not scannable",
+                i
+            );
+            sim.deliver_next(1).unwrap();
+            scanner.mark_and_extend(&sim, 1, &record.tag);
+        }
+    }
+
+    /// P17: Matching a prior-epoch tag does not move the current window.
+    /// Prior-epoch candidates count from 0 in their own epoch; letting them
+    /// advance the current epoch's seen counter would skip the sender's
+    /// first messages after the commit.
+    #[test]
+    fn prior_epoch_match_does_not_move_current_window(
+        n_old in 1usize..=5,
+        n_new in 1usize..=10,
+    ) {
+        let mut sim = ConversationSim::new(&["Alice", "Bob"]);
+        let mut scanner = TagScanner::new(2);
+
+        // Alice sends n_old messages that are still in transit to Bob
+        let old: Vec<_> = (0..n_old)
+            .map(|_| {
+                sim.send_message(0, b"old");
+                sim.drop_next(1).expect("old message in bob's inbox")
+            })
+            .collect();
+
+        // The epoch advances, and Bob processes the commit
+        let (commit, _, _new_idx) = sim.add_member_sim(0, "Charlie");
+        scanner.grow();
+        sim.deliver_commit(1, &commit).unwrap();
+        scanner.rebuild(&sim, 1);
+
+        // The stranded old-epoch messages arrive and are matched
+        for record in &old {
+            prop_assert!(
+                scanner.is_candidate(1, &record.tag),
+                "stranded prior-epoch message must be scannable"
+            );
+            scanner.mark_and_extend(&sim, 1, &record.tag);
+        }
+
+        // Alice's new-epoch messages start again at counter 0
+        for i in 0..n_new {
+            let record = sim.send_message(0, b"new");
+            prop_assert!(
+                scanner.is_candidate(1, &record.tag),
+                "new-epoch message {} is not scannable after prior-epoch matches",
+                i
+            );
+            sim.deliver_next(1).unwrap();
+            scanner.mark_and_extend(&sim, 1, &record.tag);
+        }
+    }
 }
 
 // --- Group 4: State Persistence ---

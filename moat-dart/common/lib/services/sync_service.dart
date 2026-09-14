@@ -244,8 +244,6 @@ class SyncService {
       onSessionComplete?.call(tally, _peerDeviceName);
       await _reset();
       await _drawbridge.clearPair();
-      // Holdings just changed — one of the two moments worth advertising.
-      await _ring.publishHistorySummary();
     }
   }
 

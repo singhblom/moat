@@ -72,8 +72,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_sync_approve_popup(frame, app);
     } else if app.focus == Focus::Devices {
         draw_devices_popup(frame, app);
-    } else if app.focus == Focus::SyncOfferPrompt {
-        draw_sync_offer_prompt(frame, app);
     }
 
     // Draw message info popup if toggled
@@ -885,15 +883,6 @@ fn draw_devices_popup(frame: &mut Frame, app: &App) {
                     Style::default().fg(Color::DarkGray),
                 ),
             ]));
-            // What that device last said it holds. This is what turns
-            // "ask a device and hope" into a choice the user can make:
-            // approve on the one that actually has the history.
-            if !is_self {
-                lines.push(Line::from(Span::styled(
-                    format!("    {}", advertisement_text(&device["advertised"])),
-                    Style::default().fg(Color::DarkGray),
-                )));
-            }
         }
     }
 
@@ -935,28 +924,6 @@ fn draw_devices_popup(frame: &mut Frame, app: &App) {
 
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true });
     frame.render_widget(paragraph, inner);
-}
-
-/// What a sibling last advertised holding, for its line on the Devices
-/// screen.
-///
-/// A hint, never a verdict: two devices can hold a hundred *different*
-/// messages each and advertise the same count, so this narrows where to
-/// ask rather than saying anyone is in sync. The wording states what was
-/// said and when, and claims nothing further.
-fn advertisement_text(advertised: &serde_json::Value) -> String {
-    let Some(messages) = advertised["messages"].as_u64() else {
-        return "hasn't said what it has yet".to_string();
-    };
-    if messages == 0 {
-        return "says it has no history".to_string();
-    }
-    let convs = advertised["conversations"].as_u64().unwrap_or(0);
-    format!(
-        "says it has {} across {}",
-        plural(messages, "message", "messages"),
-        plural(convs, "conversation", "conversations"),
-    )
 }
 
 /// How a finished sync reads, on either side of it.
@@ -1022,50 +989,6 @@ fn requester_failure_text(reason: &SyncFailure) -> String {
         SyncFailure::RequestExpired => "This request expired.".to_string(),
         SyncFailure::Declined => "Declined on this device.".to_string(),
     }
-}
-
-/// A sibling has said it holds no history, and this device does.
-///
-/// Raised on app open and the moment such an advertisement arrives,
-/// because a newly added device with nothing on it is exactly when the
-/// user cares — telling them a week later is worth much less.
-///
-/// Answering either way settles it: sending offers, declining sets the
-/// dismissal flag so this same advertisement will not ask again. Only a
-/// sibling that later says something *different* can prompt again.
-fn draw_sync_offer_prompt(frame: &mut Frame, app: &App) {
-    let area = frame.area();
-
-    let popup_width = 60.min(area.width.saturating_sub(4));
-    let popup_height = 9;
-    let popup_x = (area.width - popup_width) / 2;
-    let popup_y = (area.height - popup_height) / 2;
-    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
-
-    frame.render_widget(Clear, popup_area);
-    let block = Block::default()
-        .title(" New Device ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Magenta));
-    let inner = block.inner(popup_area);
-    frame.render_widget(block, popup_area);
-
-    let name = app
-        .pending_offer_device_name()
-        .unwrap_or_else(|| "A new device".to_string());
-    let lines = vec![
-        Line::from(vec![
-            Span::styled("Device: ", Style::default().fg(Color::Yellow)),
-            Span::raw(name),
-        ]),
-        Line::from(""),
-        Line::from("says it has none of your message history."),
-        Line::from(""),
-        Line::from("Send it your history? (y/Enter to send, n/Esc to dismiss)"),
-    ];
-
-    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true });
-    frame.render_widget(paragraph, inner);
 }
 
 /// A sibling asked for history. Names the requesting device from its MLS
@@ -1255,34 +1178,6 @@ mod tests {
 
     /// Every completed transfer carries a credential, so this is the
     /// pairing-time caller rather than a peer that stayed anonymous.
-    /// The Devices screen's per-sibling line. Deliberately factual: a
-    /// count is a hint about where to ask, not a claim that anyone is in
-    /// sync.
-    #[test]
-    fn an_advertisement_reads_as_what_the_device_said() {
-        let advertised = serde_json::json!({ "messages": 412, "conversations": 6 });
-        assert_eq!(
-            advertisement_text(&advertised),
-            "says it has 412 messages across 6 conversations"
-        );
-    }
-
-    #[test]
-    fn a_device_with_no_history_says_so_rather_than_showing_zero() {
-        let advertised = serde_json::json!({ "messages": 0, "conversations": 0 });
-        assert_eq!(advertisement_text(&advertised), "says it has no history");
-    }
-
-    /// A sibling that has not advertised yet is not the same as one that
-    /// advertised nothing — the first is silence, the second an answer.
-    #[test]
-    fn a_silent_device_is_distinguished_from_an_empty_one() {
-        assert_eq!(
-            advertisement_text(&serde_json::Value::Null),
-            "hasn't said what it has yet"
-        );
-    }
-
     #[test]
     fn an_unnamed_peer_still_reads_as_a_sentence() {
         let text = sync_complete_text(&SyncTally::default(), None);

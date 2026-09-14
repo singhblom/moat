@@ -3803,37 +3803,26 @@ abstract class RingCommandDto_PollForNewDevices extends RingCommandDto {
 
 /// @nodoc
 mixin _$RingMsgDto {
+  Uint8List get token => throw _privateConstructorUsedError;
+  Uint8List? get targetDeviceId => throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
     required TResult Function(Uint8List token, Uint8List? targetDeviceId)
         syncRequest,
     required TResult Function(Uint8List token, Uint8List targetDeviceId)
         syncOffer,
-    required TResult Function(
-            String uri,
-            Uint8List key,
-            Uint8List ciphertextHash,
-            BigInt ciphertextSize,
-            Uint8List contentHash)
-        historySummary,
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
     TResult? Function(Uint8List token, Uint8List? targetDeviceId)? syncRequest,
     TResult? Function(Uint8List token, Uint8List targetDeviceId)? syncOffer,
-    TResult? Function(String uri, Uint8List key, Uint8List ciphertextHash,
-            BigInt ciphertextSize, Uint8List contentHash)?
-        historySummary,
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
     TResult Function(Uint8List token, Uint8List? targetDeviceId)? syncRequest,
     TResult Function(Uint8List token, Uint8List targetDeviceId)? syncOffer,
-    TResult Function(String uri, Uint8List key, Uint8List ciphertextHash,
-            BigInt ciphertextSize, Uint8List contentHash)?
-        historySummary,
     required TResult orElse(),
   }) =>
       throw _privateConstructorUsedError;
@@ -3841,23 +3830,26 @@ mixin _$RingMsgDto {
   TResult map<TResult extends Object?>({
     required TResult Function(RingMsgDto_SyncRequest value) syncRequest,
     required TResult Function(RingMsgDto_SyncOffer value) syncOffer,
-    required TResult Function(RingMsgDto_HistorySummary value) historySummary,
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult? mapOrNull<TResult extends Object?>({
     TResult? Function(RingMsgDto_SyncRequest value)? syncRequest,
     TResult? Function(RingMsgDto_SyncOffer value)? syncOffer,
-    TResult? Function(RingMsgDto_HistorySummary value)? historySummary,
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult maybeMap<TResult extends Object?>({
     TResult Function(RingMsgDto_SyncRequest value)? syncRequest,
     TResult Function(RingMsgDto_SyncOffer value)? syncOffer,
-    TResult Function(RingMsgDto_HistorySummary value)? historySummary,
     required TResult orElse(),
   }) =>
+      throw _privateConstructorUsedError;
+
+  /// Create a copy of RingMsgDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  $RingMsgDtoCopyWith<RingMsgDto> get copyWith =>
       throw _privateConstructorUsedError;
 }
 
@@ -3866,6 +3858,8 @@ abstract class $RingMsgDtoCopyWith<$Res> {
   factory $RingMsgDtoCopyWith(
           RingMsgDto value, $Res Function(RingMsgDto) then) =
       _$RingMsgDtoCopyWithImpl<$Res, RingMsgDto>;
+  @useResult
+  $Res call({Uint8List token, Uint8List targetDeviceId});
 }
 
 /// @nodoc
@@ -3880,14 +3874,33 @@ class _$RingMsgDtoCopyWithImpl<$Res, $Val extends RingMsgDto>
 
   /// Create a copy of RingMsgDto
   /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? token = null,
+    Object? targetDeviceId = null,
+  }) {
+    return _then(_value.copyWith(
+      token: null == token
+          ? _value.token
+          : token // ignore: cast_nullable_to_non_nullable
+              as Uint8List,
+      targetDeviceId: null == targetDeviceId
+          ? _value.targetDeviceId!
+          : targetDeviceId // ignore: cast_nullable_to_non_nullable
+              as Uint8List,
+    ) as $Val);
+  }
 }
 
 /// @nodoc
-abstract class _$$RingMsgDto_SyncRequestImplCopyWith<$Res> {
+abstract class _$$RingMsgDto_SyncRequestImplCopyWith<$Res>
+    implements $RingMsgDtoCopyWith<$Res> {
   factory _$$RingMsgDto_SyncRequestImplCopyWith(
           _$RingMsgDto_SyncRequestImpl value,
           $Res Function(_$RingMsgDto_SyncRequestImpl) then) =
       __$$RingMsgDto_SyncRequestImplCopyWithImpl<$Res>;
+  @override
   @useResult
   $Res call({Uint8List token, Uint8List? targetDeviceId});
 }
@@ -3970,13 +3983,6 @@ class _$RingMsgDto_SyncRequestImpl extends RingMsgDto_SyncRequest {
         syncRequest,
     required TResult Function(Uint8List token, Uint8List targetDeviceId)
         syncOffer,
-    required TResult Function(
-            String uri,
-            Uint8List key,
-            Uint8List ciphertextHash,
-            BigInt ciphertextSize,
-            Uint8List contentHash)
-        historySummary,
   }) {
     return syncRequest(token, targetDeviceId);
   }
@@ -3986,9 +3992,6 @@ class _$RingMsgDto_SyncRequestImpl extends RingMsgDto_SyncRequest {
   TResult? whenOrNull<TResult extends Object?>({
     TResult? Function(Uint8List token, Uint8List? targetDeviceId)? syncRequest,
     TResult? Function(Uint8List token, Uint8List targetDeviceId)? syncOffer,
-    TResult? Function(String uri, Uint8List key, Uint8List ciphertextHash,
-            BigInt ciphertextSize, Uint8List contentHash)?
-        historySummary,
   }) {
     return syncRequest?.call(token, targetDeviceId);
   }
@@ -3998,9 +4001,6 @@ class _$RingMsgDto_SyncRequestImpl extends RingMsgDto_SyncRequest {
   TResult maybeWhen<TResult extends Object?>({
     TResult Function(Uint8List token, Uint8List? targetDeviceId)? syncRequest,
     TResult Function(Uint8List token, Uint8List targetDeviceId)? syncOffer,
-    TResult Function(String uri, Uint8List key, Uint8List ciphertextHash,
-            BigInt ciphertextSize, Uint8List contentHash)?
-        historySummary,
     required TResult orElse(),
   }) {
     if (syncRequest != null) {
@@ -4014,7 +4014,6 @@ class _$RingMsgDto_SyncRequestImpl extends RingMsgDto_SyncRequest {
   TResult map<TResult extends Object?>({
     required TResult Function(RingMsgDto_SyncRequest value) syncRequest,
     required TResult Function(RingMsgDto_SyncOffer value) syncOffer,
-    required TResult Function(RingMsgDto_HistorySummary value) historySummary,
   }) {
     return syncRequest(this);
   }
@@ -4024,7 +4023,6 @@ class _$RingMsgDto_SyncRequestImpl extends RingMsgDto_SyncRequest {
   TResult? mapOrNull<TResult extends Object?>({
     TResult? Function(RingMsgDto_SyncRequest value)? syncRequest,
     TResult? Function(RingMsgDto_SyncOffer value)? syncOffer,
-    TResult? Function(RingMsgDto_HistorySummary value)? historySummary,
   }) {
     return syncRequest?.call(this);
   }
@@ -4034,7 +4032,6 @@ class _$RingMsgDto_SyncRequestImpl extends RingMsgDto_SyncRequest {
   TResult maybeMap<TResult extends Object?>({
     TResult Function(RingMsgDto_SyncRequest value)? syncRequest,
     TResult Function(RingMsgDto_SyncOffer value)? syncOffer,
-    TResult Function(RingMsgDto_HistorySummary value)? historySummary,
     required TResult orElse(),
   }) {
     if (syncRequest != null) {
@@ -4050,21 +4047,26 @@ abstract class RingMsgDto_SyncRequest extends RingMsgDto {
       final Uint8List? targetDeviceId}) = _$RingMsgDto_SyncRequestImpl;
   const RingMsgDto_SyncRequest._() : super._();
 
+  @override
   Uint8List get token;
+  @override
   Uint8List? get targetDeviceId;
 
   /// Create a copy of RingMsgDto
   /// with the given fields replaced by the non-null parameter values.
+  @override
   @JsonKey(includeFromJson: false, includeToJson: false)
   _$$RingMsgDto_SyncRequestImplCopyWith<_$RingMsgDto_SyncRequestImpl>
       get copyWith => throw _privateConstructorUsedError;
 }
 
 /// @nodoc
-abstract class _$$RingMsgDto_SyncOfferImplCopyWith<$Res> {
+abstract class _$$RingMsgDto_SyncOfferImplCopyWith<$Res>
+    implements $RingMsgDtoCopyWith<$Res> {
   factory _$$RingMsgDto_SyncOfferImplCopyWith(_$RingMsgDto_SyncOfferImpl value,
           $Res Function(_$RingMsgDto_SyncOfferImpl) then) =
       __$$RingMsgDto_SyncOfferImplCopyWithImpl<$Res>;
+  @override
   @useResult
   $Res call({Uint8List token, Uint8List targetDeviceId});
 }
@@ -4148,13 +4150,6 @@ class _$RingMsgDto_SyncOfferImpl extends RingMsgDto_SyncOffer {
         syncRequest,
     required TResult Function(Uint8List token, Uint8List targetDeviceId)
         syncOffer,
-    required TResult Function(
-            String uri,
-            Uint8List key,
-            Uint8List ciphertextHash,
-            BigInt ciphertextSize,
-            Uint8List contentHash)
-        historySummary,
   }) {
     return syncOffer(token, targetDeviceId);
   }
@@ -4164,9 +4159,6 @@ class _$RingMsgDto_SyncOfferImpl extends RingMsgDto_SyncOffer {
   TResult? whenOrNull<TResult extends Object?>({
     TResult? Function(Uint8List token, Uint8List? targetDeviceId)? syncRequest,
     TResult? Function(Uint8List token, Uint8List targetDeviceId)? syncOffer,
-    TResult? Function(String uri, Uint8List key, Uint8List ciphertextHash,
-            BigInt ciphertextSize, Uint8List contentHash)?
-        historySummary,
   }) {
     return syncOffer?.call(token, targetDeviceId);
   }
@@ -4176,9 +4168,6 @@ class _$RingMsgDto_SyncOfferImpl extends RingMsgDto_SyncOffer {
   TResult maybeWhen<TResult extends Object?>({
     TResult Function(Uint8List token, Uint8List? targetDeviceId)? syncRequest,
     TResult Function(Uint8List token, Uint8List targetDeviceId)? syncOffer,
-    TResult Function(String uri, Uint8List key, Uint8List ciphertextHash,
-            BigInt ciphertextSize, Uint8List contentHash)?
-        historySummary,
     required TResult orElse(),
   }) {
     if (syncOffer != null) {
@@ -4192,7 +4181,6 @@ class _$RingMsgDto_SyncOfferImpl extends RingMsgDto_SyncOffer {
   TResult map<TResult extends Object?>({
     required TResult Function(RingMsgDto_SyncRequest value) syncRequest,
     required TResult Function(RingMsgDto_SyncOffer value) syncOffer,
-    required TResult Function(RingMsgDto_HistorySummary value) historySummary,
   }) {
     return syncOffer(this);
   }
@@ -4202,7 +4190,6 @@ class _$RingMsgDto_SyncOfferImpl extends RingMsgDto_SyncOffer {
   TResult? mapOrNull<TResult extends Object?>({
     TResult? Function(RingMsgDto_SyncRequest value)? syncRequest,
     TResult? Function(RingMsgDto_SyncOffer value)? syncOffer,
-    TResult? Function(RingMsgDto_HistorySummary value)? historySummary,
   }) {
     return syncOffer?.call(this);
   }
@@ -4212,7 +4199,6 @@ class _$RingMsgDto_SyncOfferImpl extends RingMsgDto_SyncOffer {
   TResult maybeMap<TResult extends Object?>({
     TResult Function(RingMsgDto_SyncRequest value)? syncRequest,
     TResult Function(RingMsgDto_SyncOffer value)? syncOffer,
-    TResult Function(RingMsgDto_HistorySummary value)? historySummary,
     required TResult orElse(),
   }) {
     if (syncOffer != null) {
@@ -4228,239 +4214,16 @@ abstract class RingMsgDto_SyncOffer extends RingMsgDto {
       required final Uint8List targetDeviceId}) = _$RingMsgDto_SyncOfferImpl;
   const RingMsgDto_SyncOffer._() : super._();
 
+  @override
   Uint8List get token;
+  @override
   Uint8List get targetDeviceId;
 
   /// Create a copy of RingMsgDto
   /// with the given fields replaced by the non-null parameter values.
+  @override
   @JsonKey(includeFromJson: false, includeToJson: false)
   _$$RingMsgDto_SyncOfferImplCopyWith<_$RingMsgDto_SyncOfferImpl>
-      get copyWith => throw _privateConstructorUsedError;
-}
-
-/// @nodoc
-abstract class _$$RingMsgDto_HistorySummaryImplCopyWith<$Res> {
-  factory _$$RingMsgDto_HistorySummaryImplCopyWith(
-          _$RingMsgDto_HistorySummaryImpl value,
-          $Res Function(_$RingMsgDto_HistorySummaryImpl) then) =
-      __$$RingMsgDto_HistorySummaryImplCopyWithImpl<$Res>;
-  @useResult
-  $Res call(
-      {String uri,
-      Uint8List key,
-      Uint8List ciphertextHash,
-      BigInt ciphertextSize,
-      Uint8List contentHash});
-}
-
-/// @nodoc
-class __$$RingMsgDto_HistorySummaryImplCopyWithImpl<$Res>
-    extends _$RingMsgDtoCopyWithImpl<$Res, _$RingMsgDto_HistorySummaryImpl>
-    implements _$$RingMsgDto_HistorySummaryImplCopyWith<$Res> {
-  __$$RingMsgDto_HistorySummaryImplCopyWithImpl(
-      _$RingMsgDto_HistorySummaryImpl _value,
-      $Res Function(_$RingMsgDto_HistorySummaryImpl) _then)
-      : super(_value, _then);
-
-  /// Create a copy of RingMsgDto
-  /// with the given fields replaced by the non-null parameter values.
-  @pragma('vm:prefer-inline')
-  @override
-  $Res call({
-    Object? uri = null,
-    Object? key = null,
-    Object? ciphertextHash = null,
-    Object? ciphertextSize = null,
-    Object? contentHash = null,
-  }) {
-    return _then(_$RingMsgDto_HistorySummaryImpl(
-      uri: null == uri
-          ? _value.uri
-          : uri // ignore: cast_nullable_to_non_nullable
-              as String,
-      key: null == key
-          ? _value.key
-          : key // ignore: cast_nullable_to_non_nullable
-              as Uint8List,
-      ciphertextHash: null == ciphertextHash
-          ? _value.ciphertextHash
-          : ciphertextHash // ignore: cast_nullable_to_non_nullable
-              as Uint8List,
-      ciphertextSize: null == ciphertextSize
-          ? _value.ciphertextSize
-          : ciphertextSize // ignore: cast_nullable_to_non_nullable
-              as BigInt,
-      contentHash: null == contentHash
-          ? _value.contentHash
-          : contentHash // ignore: cast_nullable_to_non_nullable
-              as Uint8List,
-    ));
-  }
-}
-
-/// @nodoc
-
-class _$RingMsgDto_HistorySummaryImpl extends RingMsgDto_HistorySummary {
-  const _$RingMsgDto_HistorySummaryImpl(
-      {required this.uri,
-      required this.key,
-      required this.ciphertextHash,
-      required this.ciphertextSize,
-      required this.contentHash})
-      : super._();
-
-  @override
-  final String uri;
-  @override
-  final Uint8List key;
-  @override
-  final Uint8List ciphertextHash;
-  @override
-  final BigInt ciphertextSize;
-  @override
-  final Uint8List contentHash;
-
-  @override
-  String toString() {
-    return 'RingMsgDto.historySummary(uri: $uri, key: $key, ciphertextHash: $ciphertextHash, ciphertextSize: $ciphertextSize, contentHash: $contentHash)';
-  }
-
-  @override
-  bool operator ==(Object other) {
-    return identical(this, other) ||
-        (other.runtimeType == runtimeType &&
-            other is _$RingMsgDto_HistorySummaryImpl &&
-            (identical(other.uri, uri) || other.uri == uri) &&
-            const DeepCollectionEquality().equals(other.key, key) &&
-            const DeepCollectionEquality()
-                .equals(other.ciphertextHash, ciphertextHash) &&
-            (identical(other.ciphertextSize, ciphertextSize) ||
-                other.ciphertextSize == ciphertextSize) &&
-            const DeepCollectionEquality()
-                .equals(other.contentHash, contentHash));
-  }
-
-  @override
-  int get hashCode => Object.hash(
-      runtimeType,
-      uri,
-      const DeepCollectionEquality().hash(key),
-      const DeepCollectionEquality().hash(ciphertextHash),
-      ciphertextSize,
-      const DeepCollectionEquality().hash(contentHash));
-
-  /// Create a copy of RingMsgDto
-  /// with the given fields replaced by the non-null parameter values.
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  @override
-  @pragma('vm:prefer-inline')
-  _$$RingMsgDto_HistorySummaryImplCopyWith<_$RingMsgDto_HistorySummaryImpl>
-      get copyWith => __$$RingMsgDto_HistorySummaryImplCopyWithImpl<
-          _$RingMsgDto_HistorySummaryImpl>(this, _$identity);
-
-  @override
-  @optionalTypeArgs
-  TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List token, Uint8List? targetDeviceId)
-        syncRequest,
-    required TResult Function(Uint8List token, Uint8List targetDeviceId)
-        syncOffer,
-    required TResult Function(
-            String uri,
-            Uint8List key,
-            Uint8List ciphertextHash,
-            BigInt ciphertextSize,
-            Uint8List contentHash)
-        historySummary,
-  }) {
-    return historySummary(
-        uri, key, ciphertextHash, ciphertextSize, contentHash);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List token, Uint8List? targetDeviceId)? syncRequest,
-    TResult? Function(Uint8List token, Uint8List targetDeviceId)? syncOffer,
-    TResult? Function(String uri, Uint8List key, Uint8List ciphertextHash,
-            BigInt ciphertextSize, Uint8List contentHash)?
-        historySummary,
-  }) {
-    return historySummary?.call(
-        uri, key, ciphertextHash, ciphertextSize, contentHash);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List token, Uint8List? targetDeviceId)? syncRequest,
-    TResult Function(Uint8List token, Uint8List targetDeviceId)? syncOffer,
-    TResult Function(String uri, Uint8List key, Uint8List ciphertextHash,
-            BigInt ciphertextSize, Uint8List contentHash)?
-        historySummary,
-    required TResult orElse(),
-  }) {
-    if (historySummary != null) {
-      return historySummary(
-          uri, key, ciphertextHash, ciphertextSize, contentHash);
-    }
-    return orElse();
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult map<TResult extends Object?>({
-    required TResult Function(RingMsgDto_SyncRequest value) syncRequest,
-    required TResult Function(RingMsgDto_SyncOffer value) syncOffer,
-    required TResult Function(RingMsgDto_HistorySummary value) historySummary,
-  }) {
-    return historySummary(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(RingMsgDto_SyncRequest value)? syncRequest,
-    TResult? Function(RingMsgDto_SyncOffer value)? syncOffer,
-    TResult? Function(RingMsgDto_HistorySummary value)? historySummary,
-  }) {
-    return historySummary?.call(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeMap<TResult extends Object?>({
-    TResult Function(RingMsgDto_SyncRequest value)? syncRequest,
-    TResult Function(RingMsgDto_SyncOffer value)? syncOffer,
-    TResult Function(RingMsgDto_HistorySummary value)? historySummary,
-    required TResult orElse(),
-  }) {
-    if (historySummary != null) {
-      return historySummary(this);
-    }
-    return orElse();
-  }
-}
-
-abstract class RingMsgDto_HistorySummary extends RingMsgDto {
-  const factory RingMsgDto_HistorySummary(
-      {required final String uri,
-      required final Uint8List key,
-      required final Uint8List ciphertextHash,
-      required final BigInt ciphertextSize,
-      required final Uint8List contentHash}) = _$RingMsgDto_HistorySummaryImpl;
-  const RingMsgDto_HistorySummary._() : super._();
-
-  String get uri;
-  Uint8List get key;
-  Uint8List get ciphertextHash;
-  BigInt get ciphertextSize;
-  Uint8List get contentHash;
-
-  /// Create a copy of RingMsgDto
-  /// with the given fields replaced by the non-null parameter values.
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  _$$RingMsgDto_HistorySummaryImplCopyWith<_$RingMsgDto_HistorySummaryImpl>
       get copyWith => throw _privateConstructorUsedError;
 }
 

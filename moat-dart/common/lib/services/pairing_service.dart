@@ -535,11 +535,6 @@ class PairingService {
         persistRing: (ringId) async {
           await _ring.recordRingMembership(ringId);
           await _auth.populateConversationTags(ringId);
-          // Advertise straight away, before the pairing sync has run:
-          // what this device holds right now is nothing, and a sibling
-          // seeing an empty summary is exactly what makes it worth
-          // offering history to. The post-sync publish replaces it.
-          await _ring.publishHistorySummary();
           // New device, right after persisting ring membership:
           // proactively scan for the UserConvWelcomes an existing
           // sibling's fan-out may already have published, rather than
@@ -664,7 +659,6 @@ class PairingService {
       _pairingSyncKeyNewToOld = null;
       _pairingSyncKeyOldToNew = null;
       await _releaseTransport();
-      await _ring.publishHistorySummary();
       await _ring.tick();
       // ignore: avoid_print
       print('[moat] PairingService: post-sync tick done, historyReady=true');

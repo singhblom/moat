@@ -9,8 +9,7 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'simple.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `credential_from_dto`, `from_core`, `into_core`, `payload_from_core`, `payload_to_core`, `push_media_label`, `push_plaintext_preview`, `sibling_info_to_core`, `to_core_sibling_stealth`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `MoatError`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 /// Generate a stealth keypair. Returns (private_key, public_key) each 32 bytes.
 StealthKeypair generateStealthKeypair() =>
@@ -174,29 +173,6 @@ Future<Uint8List> ringMsgDecodeSyncRequest({required List<int> payload}) =>
 Future<RingMsgDto> ringMsgDecode({required List<int> payload}) =>
     RustLib.instance.api.crateApiSimpleRingMsgDecode(payload: payload);
 
-/// Build a `ring.msg` payload advertising what this device holds. The
-/// conversation list itself lives in the blob the reference points at.
-Future<Uint8List> ringMsgEncodeHistorySummary(
-        {required String uri,
-        required List<int> key,
-        required List<int> ciphertextHash,
-        required BigInt ciphertextSize,
-        required List<int> contentHash}) =>
-    RustLib.instance.api.crateApiSimpleRingMsgEncodeHistorySummary(
-        uri: uri,
-        key: key,
-        ciphertextHash: ciphertextHash,
-        ciphertextSize: ciphertextSize,
-        contentHash: contentHash);
-
-/// Encode the summary blob's plaintext.
-Future<Uint8List> historySummaryEncode({required List<ConvSummaryDto> convs}) =>
-    RustLib.instance.api.crateApiSimpleHistorySummaryEncode(convs: convs);
-
-/// Decode the summary blob's plaintext.
-Future<List<ConvSummaryDto>> historySummaryDecode({required List<int> bytes}) =>
-    RustLib.instance.api.crateApiSimpleHistorySummaryDecode(bytes: bytes);
-
 /// How long a published sync request stays valid, matching the relay's
 /// token TTL.
 PlatformInt64 syncRequestTtlMs() =>
@@ -249,6 +225,17 @@ bool pairingFrameIsDone({required List<int> plaintext}) =>
 /// hand-duplicate the literal.
 BigInt kpPoolTarget() => RustLib.instance.api.crateApiSimpleKpPoolTarget();
 
+/// Whether an event that has just failed another poll cycle is still worth
+/// retrying. `first_seen_ms` is when this device first fetched it (0 when
+/// unknown); `attempts` is how many poll cycles have now ended with it
+/// unprocessed. See `moat_core::retry`.
+bool keepForRetry(
+        {required PlatformInt64 firstSeenMs,
+        required int attempts,
+        required PlatformInt64 nowMs}) =>
+    RustLib.instance.api.crateApiSimpleKeepForRetry(
+        firstSeenMs: firstSeenMs, attempts: attempts, nowMs: nowMs);
+
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MoatSessionHandle>>
 abstract class MoatSessionHandle implements RustOpaqueInterface {
   /// Add a member to a group. Returns welcome result.
@@ -256,6 +243,12 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
       {required List<int> groupId,
       required List<int> keyBundle,
       required List<int> newMemberKeyPackage});
+
+  /// Mark a matched tag as seen and extend its sender's scanning window.
+  ///
+  /// Returns the candidate tags the window newly covers; register them in
+  /// the tag map and on the Drawbridge watch list.
+  List<Uint8List> advanceScanWindow({required List<int> tag});
 
   /// Create a new MLS group with DID and device name. Returns the group ID.
   Future<Uint8List> createGroup(
@@ -324,12 +317,6 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
 
   /// Check if a DID already has a device in the group.
   bool isDidInGroup({required List<int> groupId, required String did});
-
-  /// Mark a tag as seen, advancing the seen counter for that sender.
-  ///
-  /// Call this after matching a tag from `populate_candidate_tags`.
-  /// Returns true if the tag was found and the counter was updated.
-  bool markTagSeen({required List<int> tag});
 
   /// Create a new session with empty state.
   static MoatSessionHandle newSession() =>
@@ -465,10 +452,6 @@ abstract class RingDriverHandle implements RustOpaqueInterface {
   /// beacon failure produces comparable lines from both sides.
   String debugSummary();
 
-  /// Mark a sibling's current advertisement as already asked about, so
-  /// it stops prompting until that sibling says something new.
-  void dismissSiblingSummary({required List<int> deviceId});
-
   /// Emit a `KpRequest` to `owner` asking it to top up our pool.  The host
   /// publishes the returned commands.  Empty if not in a ring or if the
   /// sibling's stealth record is not yet known (self-healing: the next poll
@@ -515,20 +498,8 @@ abstract class RingDriverHandle implements RustOpaqueInterface {
   static RingDriverHandle newEmpty() =>
       RustLib.instance.api.crateApiSimpleRingDriverHandleNewEmpty();
 
-  /// Siblings worth prompting the user to send history to: ones that
-  /// have advertised holding less than `our_messages`, and that the
-  /// user has not already answered. Returns hex device ids.
-  ///
-  /// The rule itself lives in moat-core so both runtimes decide
-  /// identically — see `DeviceRingState::offerable_siblings`.
-  List<String> offerableSiblings({required BigInt ourMessages});
-
   /// Cursor (rkey) for incremental own-PDS stealth scan.
   String? ownEventsCursor();
-
-  /// The record URI of our last published summary, which the next
-  /// publish supersedes and should delete.
-  String? publishedSummaryRecord();
 
   /// Record that we are now an MLS member of `ring_id`, looking up our
   /// own leaf index from the group's member list. Called once, host-side,
@@ -542,27 +513,12 @@ abstract class RingDriverHandle implements RustOpaqueInterface {
       required List<int> ringId,
       required PlatformInt64 nowMs});
 
-  /// Record a sibling's advertisement, replacing whatever it said
-  /// before. A dismissal is carried over only when the contents are
-  /// unchanged — a sibling that now holds something different is
-  /// asking a different question.
-  void recordSiblingSummary(
-      {required List<int> deviceId,
-      required List<ConvSummaryDto> convs,
-      required PlatformInt64 receivedAtMs});
-
   /// Raw ring group ID, if a ring exists.
   Uint8List? ringGroupId();
 
   /// Device ids of siblings confirmed to be in the ring.  Drives the
   /// same-user fan-out loop in the host.
   List<Uint8List> ringJoinedSiblings({required MoatSessionHandle session});
-
-  /// Record the URI of the summary we just published.
-  void setPublishedSummaryRecord({String? uri});
-
-  /// Every advertisement this device holds.
-  List<SiblingSummaryDto> siblingSummaries();
 
   /// Drive one ring coordination tick. Returns commands for the host to interpret.
   Future<List<RingCommandDto>> tick(
@@ -756,28 +712,6 @@ class ConvStateDto {
           inventory == other.inventory;
 }
 
-/// What one device holds for one conversation, as advertised.
-class ConvSummaryDto {
-  final Uint8List groupId;
-  final ConvInventoryDto inventory;
-
-  const ConvSummaryDto({
-    required this.groupId,
-    required this.inventory,
-  });
-
-  @override
-  int get hashCode => groupId.hashCode ^ inventory.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is ConvSummaryDto &&
-          runtimeType == other.runtimeType &&
-          groupId == other.groupId &&
-          inventory == other.inventory;
-}
-
 /// Credential fields for a group member or key package.
 class CredentialDto {
   final String did;
@@ -906,8 +840,6 @@ class EncryptResultDto {
   final Uint8List newGroupState;
   final Uint8List tag;
   final Uint8List ciphertext;
-
-  /// The message_id assigned to the event (16 bytes for Message/Reaction, None otherwise)
   final Uint8List? messageId;
 
   const EncryptResultDto({
@@ -1089,6 +1021,35 @@ class KeyPackageResult {
           runtimeType == other.runtimeType &&
           keyPackage == other.keyPackage &&
           keyBundle == other.keyBundle;
+}
+
+/// Moat error with code and message, suitable for Dart exceptions.
+class MoatError implements FrbException {
+  final int code;
+  final String message;
+
+  /// No later event can make this operation succeed, so a host keeping
+  /// failed events for retry should drop this one. See
+  /// `moat_core::Error::is_permanent`.
+  final bool permanent;
+
+  const MoatError({
+    required this.code,
+    required this.message,
+    required this.permanent,
+  });
+
+  @override
+  int get hashCode => code.hashCode ^ message.hashCode ^ permanent.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MoatError &&
+          runtimeType == other.runtimeType &&
+          code == other.code &&
+          message == other.message &&
+          permanent == other.permanent;
 }
 
 /// One key package drawn from the same-user KP pool.
@@ -1281,21 +1242,10 @@ sealed class RingMsgDto with _$RingMsgDto {
     required Uint8List token,
     required Uint8List targetDeviceId,
   }) = RingMsgDto_SyncOffer;
-
-  /// "Here is what I hold", as a reference to an external blob. See
-  /// `moat_core::RingMsg::HistorySummary` for why the list is not inline.
-  const factory RingMsgDto.historySummary({
-    required String uri,
-    required Uint8List key,
-    required Uint8List ciphertextHash,
-    required BigInt ciphertextSize,
-    required Uint8List contentHash,
-  }) = RingMsgDto_HistorySummary;
 }
 
 /// Information about the sender of a message, extracted from MLS credentials.
 class SenderInfoDto {
-  /// The sender's DID (e.g., "did:plc:abc123")
   final String did;
 
   /// The sender's device name (format: "did:plc:xxx/Device Name")
@@ -1371,45 +1321,6 @@ class SiblingStealthDto {
           runtimeType == other.runtimeType &&
           scanPubkey == other.scanPubkey &&
           deviceId == other.deviceId;
-}
-
-/// What a sibling last advertised, as this device recorded it.
-class SiblingSummaryDto {
-  /// Hex-encoded 16-byte device id.
-  final String deviceId;
-  final BigInt conversations;
-  final BigInt messages;
-  final PlatformInt64 receivedAtMs;
-
-  /// Whether the user has already been asked about *this* advertisement.
-  final bool dismissed;
-
-  const SiblingSummaryDto({
-    required this.deviceId,
-    required this.conversations,
-    required this.messages,
-    required this.receivedAtMs,
-    required this.dismissed,
-  });
-
-  @override
-  int get hashCode =>
-      deviceId.hashCode ^
-      conversations.hashCode ^
-      messages.hashCode ^
-      receivedAtMs.hashCode ^
-      dismissed.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is SiblingSummaryDto &&
-          runtimeType == other.runtimeType &&
-          deviceId == other.deviceId &&
-          conversations == other.conversations &&
-          messages == other.messages &&
-          receivedAtMs == other.receivedAtMs &&
-          dismissed == other.dismissed;
 }
 
 class StealthKeypair {
@@ -1763,8 +1674,6 @@ class WelcomeResultDto {
   final Uint8List newGroupState;
   final Uint8List welcome;
   final Uint8List commit;
-
-  /// Tag to publish `commit` under (16 bytes).
   final Uint8List commitTag;
   final Uint8List groupId;
 

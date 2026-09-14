@@ -61,7 +61,6 @@ Future<ServiceBundle> createServiceBundle({
   );
   await ring.init();
   ring.convsService = conversationsService;
-  ring.messageStorage = messageStorage;
 
   final sync = SyncService(
     auth: auth,

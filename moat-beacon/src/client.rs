@@ -83,22 +83,6 @@ pub struct ImageAttachmentInfo {
     pub mime: Option<String>,
 }
 
-/// A sibling this device would prompt the user to send history to. The
-/// prompt names the device, so the name has to come back with it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OfferableSibling {
-    pub device_id: String,
-    pub device_name: Option<String>,
-}
-
-/// What one sibling last advertised holding, as this device recorded it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SiblingSummary {
-    pub device_id: String,
-    pub conversations: u64,
-    pub messages: u64,
-}
-
 /// What a finished sync reported: the counts and the donor that served
 /// them. Read from `/sync/status`, so it covers both runtimes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,6 +101,17 @@ pub struct RingStatus {
     /// another device's pairing, not just that "a ring exists."
     #[serde(default)]
     pub ring_member_count: usize,
+    /// The ring's members, read from their MLS leaf credentials.
+    #[serde(default)]
+    pub devices: Vec<RingDevice>,
+}
+
+/// One ring member, as `/ring-status` lists it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RingDevice {
+    pub device_id: String,
+    pub device_name: String,
+    pub is_self: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -479,64 +474,6 @@ impl MoatCliClient {
             .context("parse ring-status response")
     }
 
-    /// `GET /sync/offerable` — siblings this device would prompt the user
-    /// to send history to. Hex device ids.
-    ///
-    /// This is the prompt *condition*: the app raises a screen on it, and
-    /// the headless server reports it, so a test can assert the prompt
-    /// would appear without needing a UI.
-    pub async fn sync_offerable(&self) -> Result<Vec<OfferableSibling>> {
-        let val: serde_json::Value = self
-            .http
-            .get(format!("{}/sync/offerable", self.base_url))
-            .send()
-            .await
-            .context("GET /sync/offerable")?
-            .json()
-            .await
-            .context("parse sync/offerable response")?;
-        Ok(val
-            .get("siblings")
-            .and_then(serde_json::Value::as_array)
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|s| {
-                        Some(OfferableSibling {
-                            device_id: s
-                                .get("device_id")
-                                .and_then(serde_json::Value::as_str)?
-                                .to_string(),
-                            // Read deliberately: both runtimes must supply
-                            // it, and a shape that differs only in a field
-                            // nothing reads is a trap for whoever reads it
-                            // next.
-                            device_name: s
-                                .get("device_name")
-                                .and_then(serde_json::Value::as_str)
-                                .map(str::to_string),
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default())
-    }
-
-    /// `POST /sync/dismiss` — stop a sibling's current advertisement from
-    /// prompting again until it says something new.
-    pub async fn sync_dismiss(&self, device_id: &str) -> Result<()> {
-        let resp = self
-            .http
-            .post(format!("{}/sync/dismiss", self.base_url))
-            .json(&serde_json::json!({ "device_id": device_id }))
-            .send()
-            .await
-            .context("POST /sync/dismiss")?;
-        if !resp.status().is_success() {
-            anyhow::bail!("sync/dismiss failed: {}", resp.text().await.unwrap_or_default());
-        }
-        Ok(())
-    }
-
     /// `POST /sync/offer` — send history to the named sibling.
     pub async fn sync_offer(&self, device_id: &str) -> Result<()> {
         let resp = self
@@ -550,42 +487,6 @@ impl MoatCliClient {
             anyhow::bail!("sync/offer failed: {}", resp.text().await.unwrap_or_default());
         }
         Ok(())
-    }
-
-    /// `GET /sync/summaries` — what each sibling last advertised holding.
-    pub async fn sync_summaries(&self) -> Result<Vec<SiblingSummary>> {
-        let val: serde_json::Value = self
-            .http
-            .get(format!("{}/sync/summaries", self.base_url))
-            .send()
-            .await
-            .context("GET /sync/summaries")?
-            .json()
-            .await
-            .context("parse sync/summaries response")?;
-        let siblings = val
-            .get("siblings")
-            .and_then(serde_json::Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        Ok(siblings
-            .into_iter()
-            .map(|s| SiblingSummary {
-                device_id: s
-                    .get("device_id")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                conversations: s
-                    .get("conversations")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(0),
-                messages: s
-                    .get("messages")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(0),
-            })
-            .collect())
     }
 
     /// `GET /sync/status` — return whether a sync session is active.

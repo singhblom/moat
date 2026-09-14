@@ -34,6 +34,7 @@ pub(crate) mod stealth;
 pub(crate) mod storage;
 pub mod sync;
 pub mod sync_request;
+pub mod retry;
 pub(crate) mod tag;
 
 pub mod api;
@@ -53,10 +54,11 @@ use std::sync::RwLock;
 // Disambiguate from openmls::prelude::* and make accessible as moat_core::X
 pub use crate::credential::MoatCredential;
 pub use crate::error::{Error, ErrorCode, Result};
+pub use crate::retry::{keep_for_retry, MAX_RETRY_AGE_MS, MIN_RETRY_ATTEMPTS};
 pub use crate::device_ring::{
     decode_coord_msg, encode_coord_msg, summarize_ring_commands, CoordMsg, DeviceId,
     DeviceRingState, GroupKind, KeyPackageInput, OfferedKp, OwnEventInput, RingCommand, RingEvent,
-    RingMembership, SiblingStealth, SiblingSummary, StepEnv, TickInputs, KP_POOL_TARGET,
+    RingMembership, SiblingStealth, StepEnv, TickInputs, KP_POOL_TARGET,
 };
 pub use crate::event::{
     ControlKind, DecryptOutcome, Event, EventKind, MessageKind, ModifierKind, ReactionPayload,
@@ -84,8 +86,7 @@ pub use crate::sync::{
     HELLO_INVENTORY_BUDGET_BYTES,
 };
 pub use crate::sync_request::{
-    decode_history_summary, decode_ring_msg, encode_history_summary, encode_ring_msg,
-    ConvSummary, HistorySummaryPayload, RingMsg, SyncFailure, SyncRequestSession,
+    decode_ring_msg, encode_ring_msg, RingMsg, SyncFailure, SyncRequestSession,
     SyncRequestUiState, DEVICE_ID_LEN, SYNC_REQUEST_TOKEN_LEN, SYNC_REQUEST_TTL_MS,
 };
 pub use crate::pairing::{
@@ -191,6 +192,10 @@ struct TagMetadata {
     sender_did: String,
     device_id: [u8; 16],
     counter: u64,
+    /// Whether `counter` belongs to the current epoch. Prior-epoch
+    /// candidates count from 0 in their own epoch, so they never move the
+    /// current epoch's scanning window.
+    current_epoch: bool,
 }
 
 /// Return type for the `deserialize_*_rest` helpers: parsed value plus the
@@ -1889,6 +1894,7 @@ impl MoatSession {
                         sender_did: did.to_string(),
                         device_id: *device_id,
                         counter,
+                        current_epoch: true,
                     },
                 );
                 all_tags.push(t);
@@ -1921,6 +1927,7 @@ impl MoatSession {
                                 sender_did: did.to_string(),
                                 device_id: *device_id,
                                 counter,
+                                current_epoch: false,
                             },
                         );
                         all_tags.push(t);
@@ -1945,6 +1952,10 @@ impl MoatSession {
         };
         drop(meta);
 
+        if !entry.current_epoch {
+            return true;
+        }
+
         let key = (entry.group_id, entry.sender_did, entry.device_id);
         let counter = entry.counter;
         let mut seen = self.seen_counters.write().unwrap();
@@ -1953,6 +1964,79 @@ impl MoatSession {
             *current = counter;
         }
         true
+    }
+
+    /// Mark a matched tag as seen and extend its sender's scanning window.
+    ///
+    /// Returns the candidate tags the window newly covers — the ones a host
+    /// must add to its tag map and Drawbridge watch list. Candidates exist
+    /// for only `TAG_GAP_LIMIT` counters past the highest one seen, so
+    /// without this a sender's events stop matching once it has used that
+    /// many in an epoch. Empty when the tag is unknown, belongs to a prior
+    /// epoch, or does not advance the window.
+    pub fn advance_scan_window(&self, tag: &[u8; 16]) -> Vec<[u8; 16]> {
+        let entry = match self.tag_metadata.read().unwrap().get(tag) {
+            Some(e) if e.current_epoch => e.clone(),
+            _ => return Vec::new(),
+        };
+
+        let key = (entry.group_id.clone(), entry.sender_did.clone(), entry.device_id);
+        let previous = {
+            let mut seen = self.seen_counters.write().unwrap();
+            let previous = seen.get(&key).copied();
+            if previous.is_some_and(|p| entry.counter <= p) {
+                return Vec::new();
+            }
+            seen.insert(key, entry.counter);
+            previous
+        };
+
+        // The window covered [previous + 1, previous + 1 + GAP) — [0, GAP)
+        // with nothing seen — and now covers [counter + 1, counter + 1 + GAP).
+        let covered_until = previous.map_or(0, |p| p + 1) + tag::TAG_GAP_LIMIT;
+        let window_end = entry.counter + 1 + tag::TAG_GAP_LIMIT;
+        let from = covered_until.max(entry.counter + 1);
+        if from >= window_end {
+            return Vec::new();
+        }
+
+        let generated = self
+            .load_group(&entry.group_id)
+            .ok()
+            .flatten()
+            .and_then(|group| self.derive_tag_export_secret(&group).ok())
+            .and_then(|secret| {
+                tag::generate_candidate_tags(
+                    &secret,
+                    &entry.group_id,
+                    &entry.sender_did,
+                    &entry.device_id,
+                    from,
+                    window_end - from,
+                )
+                .ok()
+            });
+        let Some(generated) = generated else {
+            return Vec::new();
+        };
+
+        let mut metadata = self.tag_metadata.write().unwrap();
+        generated
+            .into_iter()
+            .map(|(t, counter)| {
+                metadata.insert(
+                    t,
+                    TagMetadata {
+                        group_id: entry.group_id.clone(),
+                        sender_did: entry.sender_did.clone(),
+                        device_id: entry.device_id,
+                        counter,
+                        current_epoch: true,
+                    },
+                );
+                t
+            })
+            .collect()
     }
 
     /// Scan ahead with a wider window to try matching an unknown tag.
@@ -2002,6 +2086,7 @@ impl MoatSession {
                             sender_did: cred.did().to_string(),
                             device_id: *device_id,
                             counter,
+                            current_epoch: true,
                         },
                     );
                     drop(metadata);
@@ -2044,6 +2129,7 @@ impl MoatSession {
                                     sender_did: cred.did().to_string(),
                                     device_id: *device_id,
                                     counter,
+                                    current_epoch: false,
                                 },
                             );
                             drop(metadata);

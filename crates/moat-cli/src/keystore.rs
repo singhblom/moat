@@ -195,6 +195,8 @@ pub struct StoredUnprocessedEvent {
     pub ciphertext_b64: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub source_did: String,
+    pub first_seen_ms: i64,
+    pub attempts: u32,
 }
 
 pub type Result<T> = std::result::Result<T, KeyStoreError>;
@@ -394,18 +396,21 @@ impl KeyStore {
 
     pub fn store_unprocessed_events(
         &self,
-        events: &[(Vec<usize>, moat_atproto::EventRecord, String)],
+        events: &[crate::retry_buffer::UnprocessedEvent],
     ) -> Result<()> {
         use base64::Engine;
         let stored: Vec<StoredUnprocessedEvent> = events
             .iter()
-            .map(|(_, ev, did)| StoredUnprocessedEvent {
-                rkey: ev.rkey.clone(),
-                author_did: ev.author_did.clone(),
-                tag_hex: hex::encode(ev.tag.as_slice()),
-                ciphertext_b64: base64::engine::general_purpose::STANDARD.encode(&ev.ciphertext),
-                created_at: ev.created_at,
-                source_did: did.clone(),
+            .map(|e| StoredUnprocessedEvent {
+                rkey: e.record.rkey.clone(),
+                author_did: e.record.author_did.clone(),
+                tag_hex: hex::encode(e.record.tag.as_slice()),
+                ciphertext_b64: base64::engine::general_purpose::STANDARD
+                    .encode(&e.record.ciphertext),
+                created_at: e.record.created_at,
+                source_did: e.source_did.clone(),
+                first_seen_ms: e.first_seen_ms,
+                attempts: e.attempts,
             })
             .collect();
         let path = self.base_path.join("unprocessed_events.json");
@@ -418,7 +423,7 @@ impl KeyStore {
         Ok(())
     }
 
-    pub fn load_unprocessed_events(&self) -> Result<Vec<(moat_atproto::EventRecord, String)>> {
+    pub fn load_unprocessed_events(&self) -> Result<Vec<crate::retry_buffer::UnprocessedEvent>> {
         use base64::Engine;
         let path = self.base_path.join("unprocessed_events.json");
         if !path.exists() {
@@ -446,7 +451,13 @@ impl KeyStore {
                 ciphertext,
                 created_at: s.created_at,
             };
-            events.push((ev, s.source_did));
+            events.push(crate::retry_buffer::UnprocessedEvent {
+                conv_indices: Vec::new(),
+                record: ev,
+                source_did: s.source_did,
+                first_seen_ms: s.first_seen_ms,
+                attempts: s.attempts,
+            });
         }
         Ok(events)
     }
@@ -848,6 +859,66 @@ pub mod hex {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    fn unprocessed(rkey: &str, first_seen_ms: i64, attempts: u32) -> crate::retry_buffer::UnprocessedEvent {
+        crate::retry_buffer::UnprocessedEvent {
+            conv_indices: vec![0],
+            record: moat_atproto::EventRecord {
+                uri: String::new(),
+                rkey: rkey.to_string(),
+                author_did: "did:plc:bob".to_string(),
+                v: 1,
+                tag: [7u8; 16],
+                ciphertext: vec![1, 2, 3],
+                created_at: chrono::Utc::now(),
+            },
+            source_did: "did:plc:bob".to_string(),
+            first_seen_ms,
+            attempts,
+        }
+    }
+
+    #[test]
+    fn unprocessed_events_keep_their_retry_state_across_a_restart() {
+        let dir = tempdir().unwrap();
+        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+        store
+            .store_unprocessed_events(&[unprocessed("a", 1_234, 2)])
+            .unwrap();
+
+        let loaded = store.load_unprocessed_events().unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].record.rkey, "a");
+        assert_eq!(loaded[0].record.ciphertext, vec![1, 2, 3]);
+        assert_eq!(loaded[0].first_seen_ms, 1_234);
+        assert_eq!(loaded[0].attempts, 2);
+    }
+
+    /// A buffer written before retry state was recorded still loads, with
+    /// no first-seen time and no attempts.
+    #[test]
+    fn unprocessed_events_without_retry_state_still_load() {
+        let dir = tempdir().unwrap();
+        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+        let legacy = serde_json::json!([{
+            "rkey": "a",
+            "author_did": "did:plc:bob",
+            "tag_hex": "07070707070707070707070707070707",
+            "ciphertext_b64": "AQID",
+            "created_at": "2026-09-13T08:00:00Z",
+            "source_did": "did:plc:bob",
+        }]);
+        fs::write(
+            dir.path().join("unprocessed_events.json"),
+            serde_json::to_vec(&legacy).unwrap(),
+        )
+        .unwrap();
+
+        let loaded = store.load_unprocessed_events().unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].first_seen_ms, 0);
+        assert_eq!(loaded[0].attempts, 0);
+    }
 
     fn pending_msg(message_id: &[u8], content: &str) -> StoredMessage {
         StoredMessage {

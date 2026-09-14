@@ -4,29 +4,16 @@ import 'package:flutter/material.dart';
 import 'package:moat_dart_common/moat_dart_common.dart' as common;
 import '../services/sync_request_manager.dart';
 
-/// One linked device, as read from the ring's MLS leaf credentials, with
-/// whatever that device last advertised holding.
+/// One linked device, as read from the ring's MLS leaf credentials.
 class _LinkedDevice {
   final String name;
   final bool isSelf;
   final String deviceIdHex;
-  /// `null` when this sibling has not advertised — silence, not an answer.
-  final common.SiblingSummaryDto? advertised;
   const _LinkedDevice({
     required this.name,
     required this.isSelf,
     required this.deviceIdHex,
-    this.advertised,
   });
-
-  /// Worth offering history to: it has said it holds less than nothing we
-  /// know of, and the user has not already answered that. Silence is not
-  /// an invitation — a device that has not advertised might hold
-  /// everything.
-  bool get isOfferable {
-    final a = advertised;
-    return !isSelf && a != null && !a.dismissed && a.messages == BigInt.zero;
-  }
 }
 
 /// The linked devices, and what any in-flight sync is doing.
@@ -85,16 +72,12 @@ class _DevicesScreenState extends State<DevicesScreen> {
     try {
       final creds = await session.getGroupMemberCredentials(groupId: ringId);
       final myDeviceId = _hex(session.deviceId());
-      final summaries = {
-        for (final s in widget.ringService.siblingSummaries()) s.deviceId: s
-      };
       final devices = [
         for (final c in creds)
           _LinkedDevice(
             name: c.deviceName.isEmpty ? 'Unnamed device' : c.deviceName,
             isSelf: _hex(c.deviceId) == myDeviceId,
             deviceIdHex: _hex(c.deviceId),
-            advertised: summaries[_hex(c.deviceId)],
           )
       ];
       if (mounted) setState(() => _devices = devices);
@@ -186,25 +169,17 @@ class _DevicesScreenState extends State<DevicesScreen> {
                         color: Theme.of(context).colorScheme.primary,
                       ),
                       title: Text(d.name),
-                      // What that device last said it holds. This is what
-                      // turns "ask a device and hope" into a choice:
-                      // approve on the one that actually has the history.
-                      subtitle: Text(
-                        d.isSelf
-                            ? 'This device'
-                            : common.advertisementText(d.advertised),
-                      ),
-                      // The offer direction: this device has the history
-                      // and that one does not, so the decision can be
-                      // made here rather than by walking over there.
-                      // Pressing it *is* the approval — the other side
-                      // joins without a prompt of its own.
-                      trailing: d.isOfferable
-                          ? TextButton(
+                      subtitle: d.isSelf ? const Text('This device') : null,
+                      // Send this device's history to that one, decided
+                      // here rather than by walking over there. Pressing it
+                      // *is* the approval — the other side joins without a
+                      // prompt of its own.
+                      trailing: d.isSelf
+                          ? null
+                          : TextButton(
                               onPressed: _isBusy ? null : () => _offer(d),
                               child: const Text('Send history'),
-                            )
-                          : null,
+                            ),
                     ),
                   ),
                 const Divider(),

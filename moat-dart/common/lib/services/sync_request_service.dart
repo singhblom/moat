@@ -208,10 +208,6 @@ class SyncRequestService {
     );
     _syncState();
 
-    // Offering is itself an answer to that sibling's advertisement, so it
-    // should stop prompting about it either way.
-    await _ring.dismissSiblingSummary(targetDeviceId);
-
     _drawbridge.sendPairOffer(token);
 
     try {
@@ -235,8 +231,8 @@ class SyncRequestService {
     }
   }
 
-  /// A sibling's `ring.msg` arrived: either a request for history, or an
-  /// advertisement of what that sibling holds.
+  /// A sibling's `ring.msg` arrived: a request for history, or an offer of
+  /// it.
   ///
   /// `deviceName` and `deviceId` must both come from the MLS leaf
   /// credential of the sender, not from the payload — that is the whole
@@ -255,22 +251,6 @@ class SyncRequestService {
     }
 
     switch (msg) {
-      case ffi.RingMsgDto_HistorySummary(
-          :final uri,
-          :final key,
-          :final ciphertextHash,
-          :final contentHash,
-        ):
-        // Fetching and recording belongs to the ring service, which owns
-        // the state the advertisement lands in.
-        await _ring.onHistorySummary(
-          deviceId: deviceId,
-          uri: uri,
-          key: key,
-          ciphertextHash: ciphertextHash,
-          contentHash: contentHash,
-        );
-        return;
       case ffi.RingMsgDto_SyncRequest(:final token, :final targetDeviceId):
         // A request naming another device is not ours to answer:
         // prompting would ask the user about someone else's business, and

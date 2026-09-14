@@ -167,9 +167,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ConvStateDto dco_decode_conv_state_dto(dynamic raw);
 
   @protected
-  ConvSummaryDto dco_decode_conv_summary_dto(dynamic raw);
-
-  @protected
   CredentialDto dco_decode_credential_dto(dynamic raw);
 
   @protected
@@ -216,9 +213,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<ConvStateDto> dco_decode_list_conv_state_dto(dynamic raw);
 
   @protected
-  List<ConvSummaryDto> dco_decode_list_conv_summary_dto(dynamic raw);
-
-  @protected
   List<CredentialDto> dco_decode_list_credential_dto(dynamic raw);
 
   @protected
@@ -252,9 +246,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<SiblingStealthDto> dco_decode_list_sibling_stealth_dto(dynamic raw);
 
   @protected
-  List<SiblingSummaryDto> dco_decode_list_sibling_summary_dto(dynamic raw);
-
-  @protected
   List<SyncMessageDto> dco_decode_list_sync_message_dto(dynamic raw);
 
   @protected
@@ -262,6 +253,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<SyncReactionDto> dco_decode_list_sync_reaction_dto(dynamic raw);
+
+  @protected
+  MoatError dco_decode_moat_error(dynamic raw);
 
   @protected
   OfferedKpDto dco_decode_offered_kp_dto(dynamic raw);
@@ -326,9 +320,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SiblingStealthDto dco_decode_sibling_stealth_dto(dynamic raw);
-
-  @protected
-  SiblingSummaryDto dco_decode_sibling_summary_dto(dynamic raw);
 
   @protected
   StealthKeypair dco_decode_stealth_keypair(dynamic raw);
@@ -514,9 +505,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ConvStateDto sse_decode_conv_state_dto(SseDeserializer deserializer);
 
   @protected
-  ConvSummaryDto sse_decode_conv_summary_dto(SseDeserializer deserializer);
-
-  @protected
   CredentialDto sse_decode_credential_dto(SseDeserializer deserializer);
 
   @protected
@@ -565,10 +553,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
-  List<ConvSummaryDto> sse_decode_list_conv_summary_dto(
-      SseDeserializer deserializer);
-
-  @protected
   List<CredentialDto> sse_decode_list_credential_dto(
       SseDeserializer deserializer);
 
@@ -610,10 +594,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
-  List<SiblingSummaryDto> sse_decode_list_sibling_summary_dto(
-      SseDeserializer deserializer);
-
-  @protected
   List<SyncMessageDto> sse_decode_list_sync_message_dto(
       SseDeserializer deserializer);
 
@@ -624,6 +604,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   List<SyncReactionDto> sse_decode_list_sync_reaction_dto(
       SseDeserializer deserializer);
+
+  @protected
+  MoatError sse_decode_moat_error(SseDeserializer deserializer);
 
   @protected
   OfferedKpDto sse_decode_offered_kp_dto(SseDeserializer deserializer);
@@ -697,10 +680,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SiblingStealthDto sse_decode_sibling_stealth_dto(
-      SseDeserializer deserializer);
-
-  @protected
-  SiblingSummaryDto sse_decode_sibling_summary_dto(
       SseDeserializer deserializer);
 
   @protected
@@ -891,10 +870,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_conv_state_dto(ConvStateDto self, SseSerializer serializer);
 
   @protected
-  void sse_encode_conv_summary_dto(
-      ConvSummaryDto self, SseSerializer serializer);
-
-  @protected
   void sse_encode_credential_dto(CredentialDto self, SseSerializer serializer);
 
   @protected
@@ -946,10 +921,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       List<ConvStateDto> self, SseSerializer serializer);
 
   @protected
-  void sse_encode_list_conv_summary_dto(
-      List<ConvSummaryDto> self, SseSerializer serializer);
-
-  @protected
   void sse_encode_list_credential_dto(
       List<CredentialDto> self, SseSerializer serializer);
 
@@ -993,10 +964,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       List<SiblingStealthDto> self, SseSerializer serializer);
 
   @protected
-  void sse_encode_list_sibling_summary_dto(
-      List<SiblingSummaryDto> self, SseSerializer serializer);
-
-  @protected
   void sse_encode_list_sync_message_dto(
       List<SyncMessageDto> self, SseSerializer serializer);
 
@@ -1007,6 +974,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_sync_reaction_dto(
       List<SyncReactionDto> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_moat_error(MoatError self, SseSerializer serializer);
 
   @protected
   void sse_encode_offered_kp_dto(OfferedKpDto self, SseSerializer serializer);
@@ -1085,10 +1055,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_sibling_stealth_dto(
       SiblingStealthDto self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_sibling_summary_dto(
-      SiblingSummaryDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_stealth_keypair(

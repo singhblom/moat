@@ -16,9 +16,14 @@ use std::sync::Mutex;
 // --- Error handling ---
 
 /// Moat error with code and message, suitable for Dart exceptions.
+#[derive(Debug)]
 pub struct MoatError {
     pub code: u32,
     pub message: String,
+    /// No later event can make this operation succeed, so a host keeping
+    /// failed events for retry should drop this one. See
+    /// `moat_core::Error::is_permanent`.
+    pub permanent: bool,
 }
 
 impl From<moat_core::Error> for MoatError {
@@ -26,6 +31,7 @@ impl From<moat_core::Error> for MoatError {
         MoatError {
             code: e.code() as u32,
             message: e.message().to_string(),
+            permanent: e.is_permanent(),
         }
     }
 }
@@ -167,18 +173,22 @@ impl MoatSessionHandle {
             .map_err(|e| e.to_string())
     }
 
-    /// Mark a tag as seen, advancing the seen counter for that sender.
+    /// Mark a matched tag as seen and extend its sender's scanning window.
     ///
-    /// Call this after matching a tag from `populate_candidate_tags`.
-    /// Returns true if the tag was found and the counter was updated.
+    /// Returns the candidate tags the window newly covers; register them in
+    /// the tag map and on the Drawbridge watch list.
     #[frb(sync)]
-    pub fn mark_tag_seen(&self, tag: Vec<u8>) -> bool {
-        if tag.len() != 16 {
-            return false;
-        }
-        let mut arr = [0u8; 16];
-        arr.copy_from_slice(&tag);
-        self.inner.lock().unwrap().mark_tag_seen(&arr)
+    pub fn advance_scan_window(&self, tag: Vec<u8>) -> Vec<Vec<u8>> {
+        let Ok(tag) = <[u8; 16]>::try_from(tag.as_slice()) else {
+            return Vec::new();
+        };
+        self.inner
+            .lock()
+            .unwrap()
+            .advance_scan_window(&tag)
+            .into_iter()
+            .map(|t| t.to_vec())
+            .collect()
     }
 
     /// Check if a DID already has a device in the group.
@@ -328,13 +338,13 @@ impl MoatSessionHandle {
         &self,
         group_id: Vec<u8>,
         ciphertext: Vec<u8>,
-    ) -> Result<DecryptResultDto, String> {
+    ) -> Result<DecryptResultDto, MoatError> {
         let outcome = self
             .inner
             .lock()
             .unwrap()
             .decrypt_event(&group_id, &ciphertext)
-            .map_err(|e| e.to_string())?;
+            .map_err(MoatError::from)?;
 
         let warnings: Vec<String> = outcome.warnings().iter().map(|w| w.to_string()).collect();
         let result = outcome.into_result();
@@ -962,92 +972,6 @@ impl RingDriverHandle {
     /// Serialise the current ring state as JSON.
     pub fn to_state_json(&self) -> Result<String, String> {
         serde_json::to_string(&*self.inner.lock().unwrap()).map_err(|e| e.to_string())
-    }
-
-    /// Record a sibling's advertisement, replacing whatever it said
-    /// before. A dismissal is carried over only when the contents are
-    /// unchanged — a sibling that now holds something different is
-    /// asking a different question.
-    #[frb(sync)]
-    pub fn record_sibling_summary(
-        &self,
-        device_id: Vec<u8>,
-        convs: Vec<ConvSummaryDto>,
-        received_at_ms: i64,
-    ) -> Result<(), String> {
-        let device_id: [u8; 16] = device_id
-            .try_into()
-            .map_err(|_| "device_id must be 16 bytes".to_string())?;
-        let convs: Vec<moat_core::ConvSummary> =
-            convs.into_iter().map(Into::into).collect();
-        self.inner
-            .lock()
-            .unwrap()
-            .record_sibling_summary(&device_id, convs, received_at_ms);
-        Ok(())
-    }
-
-    /// Every advertisement this device holds.
-    #[frb(sync)]
-    pub fn sibling_summaries(&self) -> Vec<SiblingSummaryDto> {
-        self.inner
-            .lock()
-            .unwrap()
-            .sibling_summaries()
-            .iter()
-            .map(|(device_id, s)| SiblingSummaryDto {
-                device_id: device_id.clone(),
-                conversations: s.convs.len() as u64,
-                messages: s.total_messages(),
-                received_at_ms: s.received_at_ms,
-                dismissed: s.dismissed,
-            })
-            .collect()
-    }
-
-    /// Siblings worth prompting the user to send history to: ones that
-    /// have advertised holding less than `our_messages`, and that the
-    /// user has not already answered. Returns hex device ids.
-    ///
-    /// The rule itself lives in moat-core so both runtimes decide
-    /// identically — see `DeviceRingState::offerable_siblings`.
-    #[frb(sync)]
-    pub fn offerable_siblings(&self, our_messages: u64) -> Vec<String> {
-        self.inner
-            .lock()
-            .unwrap()
-            .offerable_siblings(our_messages)
-            .iter()
-            .map(|id| id.iter().map(|b| format!("{b:02x}")).collect::<String>())
-            .collect()
-    }
-
-    /// Mark a sibling's current advertisement as already asked about, so
-    /// it stops prompting until that sibling says something new.
-    #[frb(sync)]
-    pub fn dismiss_sibling_summary(&self, device_id: Vec<u8>) -> Result<(), String> {
-        let device_id: [u8; 16] = device_id
-            .try_into()
-            .map_err(|_| "device_id must be 16 bytes".to_string())?;
-        self.inner.lock().unwrap().dismiss_sibling_summary(&device_id);
-        Ok(())
-    }
-
-    /// The record URI of our last published summary, which the next
-    /// publish supersedes and should delete.
-    #[frb(sync)]
-    pub fn published_summary_record(&self) -> Option<String> {
-        self.inner
-            .lock()
-            .unwrap()
-            .published_summary_record()
-            .map(str::to_string)
-    }
-
-    /// Record the URI of the summary we just published.
-    #[frb(sync)]
-    pub fn set_published_summary_record(&self, uri: Option<String>) {
-        self.inner.lock().unwrap().set_published_summary_record(uri);
     }
 
     /// Raw ring group ID, if a ring exists.
@@ -1849,41 +1773,6 @@ pub fn ring_msg_decode_sync_request(payload: Vec<u8>) -> Result<Vec<u8>, String>
     }
 }
 
-/// What one device holds for one conversation, as advertised.
-pub struct ConvSummaryDto {
-    pub group_id: Vec<u8>,
-    pub inventory: ConvInventoryDto,
-}
-
-impl From<ConvSummaryDto> for moat_core::ConvSummary {
-    fn from(c: ConvSummaryDto) -> Self {
-        moat_core::ConvSummary {
-            group_id: c.group_id,
-            inventory: c.inventory.into(),
-        }
-    }
-}
-
-impl From<moat_core::ConvSummary> for ConvSummaryDto {
-    fn from(c: moat_core::ConvSummary) -> Self {
-        ConvSummaryDto {
-            group_id: c.group_id,
-            inventory: c.inventory.into(),
-        }
-    }
-}
-
-/// What a sibling last advertised, as this device recorded it.
-pub struct SiblingSummaryDto {
-    /// Hex-encoded 16-byte device id.
-    pub device_id: String,
-    pub conversations: u64,
-    pub messages: u64,
-    pub received_at_ms: i64,
-    /// Whether the user has already been asked about *this* advertisement.
-    pub dismissed: bool,
-}
-
 /// A decoded `ring.msg` payload.
 pub enum RingMsgDto {
     /// "I am missing history — open a sync channel with me at this token."
@@ -1896,15 +1785,6 @@ pub enum RingMsgDto {
     SyncOffer {
         token: Vec<u8>,
         target_device_id: Vec<u8>,
-    },
-    /// "Here is what I hold", as a reference to an external blob. See
-    /// `moat_core::RingMsg::HistorySummary` for why the list is not inline.
-    HistorySummary {
-        uri: String,
-        key: Vec<u8>,
-        ciphertext_hash: Vec<u8>,
-        ciphertext_size: u64,
-        content_hash: Vec<u8>,
     },
 }
 
@@ -1921,51 +1801,7 @@ pub fn ring_msg_decode(payload: Vec<u8>) -> Result<RingMsgDto, String> {
             token: token.to_vec(),
             target_device_id: target_device_id.to_vec(),
         }),
-        moat_core::RingMsg::HistorySummary { external } => Ok(RingMsgDto::HistorySummary {
-            uri: external.uri,
-            key: external.key,
-            ciphertext_hash: external.ciphertext_hash,
-            ciphertext_size: external.ciphertext_size,
-            content_hash: external.content_hash,
-        }),
     }
-}
-
-/// Build a `ring.msg` payload advertising what this device holds. The
-/// conversation list itself lives in the blob the reference points at.
-pub fn ring_msg_encode_history_summary(
-    uri: String,
-    key: Vec<u8>,
-    ciphertext_hash: Vec<u8>,
-    ciphertext_size: u64,
-    content_hash: Vec<u8>,
-) -> Result<Vec<u8>, String> {
-    let external = moat_core::ExternalBlob::new(
-        uri,
-        key,
-        ciphertext_hash,
-        ciphertext_size,
-        content_hash,
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(moat_core::encode_ring_msg(&moat_core::RingMsg::HistorySummary { external }))
-}
-
-/// Encode the summary blob's plaintext.
-pub fn history_summary_encode(convs: Vec<ConvSummaryDto>) -> Vec<u8> {
-    moat_core::encode_history_summary(&moat_core::HistorySummaryPayload {
-        convs: convs.into_iter().map(Into::into).collect(),
-    })
-}
-
-/// Decode the summary blob's plaintext.
-pub fn history_summary_decode(bytes: Vec<u8>) -> Result<Vec<ConvSummaryDto>, String> {
-    Ok(moat_core::decode_history_summary(&bytes)
-        .map_err(|e| e.to_string())?
-        .convs
-        .into_iter()
-        .map(Into::into)
-        .collect())
 }
 
 /// How long a published sync request stays valid, matching the relay's
@@ -3497,4 +3333,13 @@ mod pairing_ffi_tests {
         assert!(existing_pairing.is_done());
         assert_eq!(new_pairing.ring_id(), existing_pairing.ring_id());
     }
+}
+
+/// Whether an event that has just failed another poll cycle is still worth
+/// retrying. `first_seen_ms` is when this device first fetched it (0 when
+/// unknown); `attempts` is how many poll cycles have now ended with it
+/// unprocessed. See `moat_core::retry`.
+#[frb(sync)]
+pub fn keep_for_retry(first_seen_ms: i64, attempts: u32, now_ms: i64) -> bool {
+    moat_core::keep_for_retry(first_seen_ms, attempts, now_ms)
 }

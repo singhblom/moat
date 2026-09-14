@@ -33,6 +33,7 @@ pub mod post_fan_out_delivery;
 pub mod push_latency;
 pub mod push_latency_restart;
 pub mod same_drawbridge_local;
+pub mod sender_exceeds_tag_window;
 pub mod staggered_device_pairing;
 pub mod sync_history_before_membership;
 pub mod sync_offer_history;
@@ -902,6 +903,34 @@ pub static SCENARIOS: &[Scenario] = &[
         name: "watched-before-welcome-d",
         description: "Same as watched-before-welcome, but Carol (the joiner) runs Dart",
         run_fn: watched_before_welcome::run_dart_joiner_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "sender-exceeds-tag-window",
+        description: "Alice sends Bob (Rust) several tag windows of messages; all must arrive by poll, then by push alone",
+        run_fn: sender_exceeds_tag_window::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "sender-exceeds-tag-window-d",
+        description: "Same as sender-exceeds-tag-window with a Dart recipient, poll path only",
+        run_fn: sender_exceeds_tag_window::run_dart_recipient_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "sync-request-after-idle",
+        description: "sync-request-history after the ring sat idle for more than a tag window of ticks (all Rust)",
+        run_fn: sync_request_history::run_after_idle_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "sync-request-after-idle-dd",
+        description: "Same as sync-request-after-idle, both of Alice's devices on Dart",
+        run_fn: sync_request_history::run_after_idle_dd_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },

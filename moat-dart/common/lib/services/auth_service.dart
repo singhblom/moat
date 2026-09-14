@@ -396,9 +396,13 @@ class AuthService {
         .populateCandidateTags(groupId: groupId)
         .map((t) => Uint8List.fromList(t))
         .toList();
-    for (final tag in tags) {
-      await registerTag(tag, groupId);
-    }
+    await registerTags(tags, _bytesToHex(groupId));
+  }
+
+  /// Route [tags] to the group [groupIdHex] in the tag map, in one write,
+  /// and watch them on this device's Drawbridge relay.
+  Future<void> registerTags(List<Uint8List> tags, String groupIdHex) async {
+    await _secureStorage.registerTags(tags.map(_bytesToHex), groupIdHex);
     DrawbridgeService.instance.addTags(tags);
   }
 

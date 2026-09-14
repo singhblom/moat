@@ -61,6 +61,7 @@ Large payloads (full-resolution images, long text, video) live off-chain as repo
 3. Match the event's tag against candidate tags; on match, advance the seen counter for that sender
 4. MLS-decrypt, unpad, deserialize the inner JSON event
 5. If it's a commit, merge it to advance the local epoch and regenerate candidate tags
+6. Keep any event that matched no tag or failed to decrypt, and retry it on later polls: the commit that reaches its epoch, or its group's Welcome, may be fetched after it. Events are processed in rkey order, repeating until a pass makes no progress, and the kept events are persisted before the cursors move past them. An event that failed as this device's own or from an epoch already left is dropped at once; any other is dropped after it has survived at least 3 poll cycles and 10 minutes (`moat_core::keep_for_retry`). A message dropped this way predates the device's membership and reaches it through history sync
 
 ## Starting a Conversation (Stealth Invite)
 
@@ -590,8 +591,7 @@ the deepest history: the person holding the devices decides.
    event on the device ring. Siblings watch the ring's tags with
    Drawbridge, so an online one sees it at once rather than on its next
    poll. `target_device_id` names one sibling when the user has picked a
-   device to ask — usually from its [advertisement](#history-advertisement)
-   — and is absent for a broadcast. A sibling that is named but is not the
+   device to ask, and is absent for a broadcast. A sibling that is named but is not the
    target ignores the message rather than prompting about another device's
    business.
 2. Every sibling that decrypts it prompts its user, naming the requesting
@@ -652,9 +652,14 @@ recourse is to pair again, which is a first-class affordance.
 
 A request asks the user to walk to the device that holds the history and
 approve there. That is the wrong way round whenever the device already in
-their hands is the one with the history — the ordinary case just after
-adding a phone. `RingMsg::SyncOffer { token, target_device_id }` is the
-mirror: the holder opens the rendezvous and the recipient joins it.
+their hands is the one with the history.
+`RingMsg::SyncOffer { token, target_device_id }` is the mirror: the user
+picks another device to send to, the holder opens the rendezvous, and the
+recipient joins it.
+
+Both gestures are manual. Nothing publishes what a device holds and nothing
+prompts on its own: the device that lacks history shows the gap, and the
+user asks from it or sends from the device that has it.
 
 The rule that keeps this from becoming an election is **exactly one human
 approval per session, on the side that can judge**:
@@ -678,43 +683,6 @@ already exists — same person, same pocket.
 A device drives one sync at a time, so an offer arriving while a sync or a
 pairing is in flight is ignored rather than allowed to supersede a decision
 the user is already looking at.
-
-#### When the Offer Is Raised
-
-Publishing a summary is confined to two moments, but *reading* stored
-summaries is free and local, so it happens on app open and whenever an
-advertisement arrives. Both raise the offer prompt, and the second is the
-one that matters: a device the user has just added says it holds nothing
-within seconds of joining, and they are holding the device that can fix
-that. Asking then is worth far more than asking a week later, when they
-happen to open a settings screen.
-
-App open covers the rest, since advertisements are persisted: a device
-paired in an earlier session is still asked about on the next launch.
-
-A sibling is worth prompting about when all three hold:
-
-| Condition | Why |
-|---|---|
-| it has advertised | Silence is not an invitation — a device that has said nothing might hold everything |
-| it advertised less than this device holds | Offering what the other side already has is a prompt with nothing behind it |
-| the user has not already answered this advertisement | Re-asking a declined question is how people learn to dismiss reflexively |
-
-Counts can coincide across devices holding entirely different messages, so
-this is a heuristic like the rest of the lane: a false negative costs a
-prompt that was never shown, never a wrong transfer.
-
-The prompt never interrupts a screen that is already asking something. A
-pairing or sync decision the user is mid-way through outranks it, because
-a prompt that steals one of those is worse than a late prompt.
-
-Dismissal is scoped to the *advertisement*, not the device: re-seeing the
-same summary stays dismissed, but a sibling that later advertises something
-different is asking a different question, and the old refusal does not
-answer it. Offering also dismisses, since it is itself an answer.
-Dismissing silences the prompt without discarding what the sibling said —
-the Devices screen still shows it, and the user can still offer from
-there.
 
 ### History Sync
 
@@ -800,67 +768,6 @@ guaranteed to be brief: an MLS `Add` can only come from a member, so if the
 donor was the group's only member and it goes offline immediately after the
 transfer, nothing adds the requester until it returns. The wording is
 chosen accordingly — it does not promise imminent resolution.
-
-### History Advertisement
-
-Requested sync tells a user to go and approve on the device that has their
-history — without saying which device that is. The advertisement is what
-narrows it: each device publishes what it holds, and siblings keep the
-latest per device.
-
-The invariant that keeps this cheap: **the advertisement is a hint, the
-session is the truth.** A stale advertisement costs a wasted prompt and a
-session that transfers nothing — never a wrong outcome, because a `Hello`'s
-inventory still decides what actually moves. So there is no freshness
-protocol, no ordering, and no reconciliation. Counts are a heuristic in
-particular: two devices can hold a hundred *different* messages each and
-advertise the same number, so "counts match" never means "in sync".
-
-`RingMsg::HistorySummary` carries an `external` blob reference and nothing
-else. The conversation list lives in the blob:
-
-```json
-{ "convs": [ { "group_id": "<base64>", "inventory": { "kind": "range", … } } ] }
-```
-
-Each entry reuses `ConvInventory` from [History Sync](#history-sync) rather
-than inventing a second shape for the same idea, and is always the `range`
-variant — enumerating every rkey would be the inventory itself, not a
-summary of it.
-
-The indirection is not an optimisation. A summary listing more than about
-twenty-two conversations does not fit the largest padding bucket, and there
-is no bucket above it. A blob reference is a fixed ~200 bytes, so the
-record sits in the 512 B bucket whatever the device holds — which also
-means an observer learns *nothing* about the conversation count, where an
-inline list would have leaked it at bucket resolution.
-
-Publication is confined to the two moments a device's holdings actually
-change:
-
-- **joining the ring** — the joining device advertises what is initially
-  nothing, which is exactly the signal that makes it worth offering history
-  to; and each existing sibling advertises in turn once the `Add` commit has
-  merged, so the new device learns who holds what. The commit must merge
-  first: a summary sealed at the previous ring epoch is unreadable by the
-  very device it is meant for.
-- **finishing a sync** — both sides re-advertise, and the picture converges.
-
-It is deliberately *not* periodic. Every extra record is timing surface,
-and between those two moments a device's holdings only change in ways its
-siblings learn about anyway. Reading stored summaries and deciding whether
-to prompt is free and local, and still happens whenever the app opens.
-
-Each device keeps exactly one live summary: publishing a new one deletes
-the record the previous one lived in, which is also what releases its blob,
-since a PDS garbage-collects a blob nothing references. The new record is
-published *before* the old one is deleted — a stale extra summary is
-harmless under the hint-not-truth invariant, where a window with no summary
-at all is not.
-
-A summary that cannot be published, fetched, or decrypted is dropped
-silently for the same reason: it leaves a sibling with a stale view, never
-a wrong one.
 
 ### Same-user Key Distribution
 

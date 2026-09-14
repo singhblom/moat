@@ -7,6 +7,7 @@ mod http_server;
 mod image_processing;
 mod keystore;
 mod message_helpers;
+mod retry_buffer;
 mod sync;
 mod ui;
 

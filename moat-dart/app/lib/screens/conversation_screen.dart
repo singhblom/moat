@@ -308,14 +308,9 @@ class _ConversationScreenState extends State<ConversationScreen> {
     return ListView.builder(
       controller: _scrollController,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 16),
-      itemCount: provider.messages.length + 1, // +1 for history boundary
+      itemCount: provider.messages.length,
       itemBuilder: (context, index) {
-        // History boundary at the top
-        if (index == 0) {
-          return _buildHistoryBoundary(context, provider.messages);
-        }
-
-        final messageIndex = index - 1;
+        final messageIndex = index;
         final message = provider.messages[messageIndex];
         final previousMessage =
             messageIndex > 0 ? provider.messages[messageIndex - 1] : null;
@@ -344,32 +339,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
           imageFuture: imageFuture,
         );
       },
-    );
-  }
-
-  Widget _buildHistoryBoundary(BuildContext context, List<Message> messages) {
-    if (messages.isEmpty) return const SizedBox.shrink();
-
-    final firstMessage = messages.first;
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: Center(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Text(
-            'Messages before ${_formatDate(firstMessage.timestamp)} are on your other devices',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-            textAlign: TextAlign.center,
-          ),
-        ),
-      ),
     );
   }
 
@@ -792,11 +761,8 @@ class _ConversationScreenState extends State<ConversationScreen> {
     );
   }
 
-  String _formatDate(DateTime time) {
-    return '${time.month}/${time.day}/${time.year}';
-  }
-
   String _formatDateTime(DateTime time) {
-    return '${time.month}/${time.day}/${time.year} ${time.hour}:${time.minute.toString().padLeft(2, '0')}';
+    final local = time.toLocal();
+    return '${local.month}/${local.day}/${local.year} ${local.hour}:${local.minute.toString().padLeft(2, '0')}';
   }
 }
