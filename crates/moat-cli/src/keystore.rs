@@ -184,19 +184,17 @@ pub struct ConversationMessages {
     pub messages: Vec<StoredMessage>,
 }
 
-/// An event that was fetched but could not be processed, serialised to disk
-/// so it survives a restart. Without this, the cursor advances past the
-/// event and a restart loses it permanently.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StoredUnprocessedEvent {
-    pub rkey: String,
-    pub author_did: String,
-    pub tag_hex: String,
-    pub ciphertext_b64: String,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub source_did: String,
-    pub first_seen_ms: i64,
-    pub attempts: u32,
+/// An event from the retry buffer that `parked_events.bin` replaced, as
+/// written to `unprocessed_events.json`. Read once, to hand its events to the
+/// inbox.
+#[derive(Debug, Clone, Deserialize)]
+struct LegacyUnprocessedEvent {
+    rkey: String,
+    author_did: String,
+    tag_hex: String,
+    ciphertext_b64: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+    source_did: String,
 }
 
 pub type Result<T> = std::result::Result<T, KeyStoreError>;
@@ -394,71 +392,49 @@ impl KeyStore {
         self.store_pagination_state(&state)
     }
 
-    pub fn store_unprocessed_events(
-        &self,
-        events: &[crate::retry_buffer::UnprocessedEvent],
-    ) -> Result<()> {
-        use base64::Engine;
-        let stored: Vec<StoredUnprocessedEvent> = events
-            .iter()
-            .map(|e| StoredUnprocessedEvent {
-                rkey: e.record.rkey.clone(),
-                author_did: e.record.author_did.clone(),
-                tag_hex: hex::encode(e.record.tag.as_slice()),
-                ciphertext_b64: base64::engine::general_purpose::STANDARD
-                    .encode(&e.record.ciphertext),
-                created_at: e.record.created_at,
-                source_did: e.source_did.clone(),
-                first_seen_ms: e.first_seen_ms,
-                attempts: e.attempts,
-            })
-            .collect();
-        let path = self.base_path.join("unprocessed_events.json");
-        if stored.is_empty() {
-            let _ = fs::remove_file(&path);
-            return Ok(());
-        }
-        let json = serde_json::to_vec(&stored)?;
-        fs::write(&path, json)?;
+    /// Persist the session inbox's parked events
+    /// (`MoatSession::export_parked_events`).
+    pub fn store_parked_events(&self, bytes: &[u8]) -> Result<()> {
+        fs::write(self.base_path.join("parked_events.bin"), bytes)?;
         Ok(())
     }
 
-    pub fn load_unprocessed_events(&self) -> Result<Vec<crate::retry_buffer::UnprocessedEvent>> {
+    /// The parked events persisted by [`Self::store_parked_events`], if any.
+    pub fn load_parked_events(&self) -> Result<Option<Vec<u8>>> {
+        let path = self.base_path.join("parked_events.bin");
+        if !path.exists() {
+            return Ok(None);
+        }
+        Ok(Some(fs::read(&path)?))
+    }
+
+    /// Take the events left in the retry buffer the inbox replaced, deleting
+    /// the file. They are queued in the inbox like freshly fetched ones.
+    pub fn take_legacy_unprocessed_events(&self) -> Result<Vec<moat_core::InboxEvent>> {
         use base64::Engine;
         let path = self.base_path.join("unprocessed_events.json");
         if !path.exists() {
             return Ok(Vec::new());
         }
         let data = fs::read(&path)?;
-        let stored: Vec<StoredUnprocessedEvent> = serde_json::from_slice(&data)?;
-        let mut events = Vec::new();
-        for s in stored {
-            let tag_bytes = hex::decode(&s.tag_hex).unwrap_or_default();
-            if tag_bytes.len() != 16 {
-                continue;
-            }
-            let mut tag = [0u8; 16];
-            tag.copy_from_slice(&tag_bytes);
-            let ciphertext = base64::engine::general_purpose::STANDARD
-                .decode(&s.ciphertext_b64)
-                .unwrap_or_default();
-            let ev = moat_atproto::EventRecord {
-                uri: String::new(),
-                rkey: s.rkey,
-                author_did: s.author_did,
-                v: 1,
-                tag,
-                ciphertext,
-                created_at: s.created_at,
-            };
-            events.push(crate::retry_buffer::UnprocessedEvent {
-                conv_indices: Vec::new(),
-                record: ev,
-                source_did: s.source_did,
-                first_seen_ms: s.first_seen_ms,
-                attempts: s.attempts,
-            });
-        }
+        let stored: Vec<LegacyUnprocessedEvent> = serde_json::from_slice(&data)?;
+        let events = stored
+            .into_iter()
+            .filter_map(|s| {
+                let tag: [u8; 16] = hex::decode(&s.tag_hex).ok()?.try_into().ok()?;
+                Some(moat_core::InboxEvent {
+                    source_did: s.source_did,
+                    rkey: s.rkey,
+                    author_did: s.author_did,
+                    tag,
+                    ciphertext: base64::engine::general_purpose::STANDARD
+                        .decode(&s.ciphertext_b64)
+                        .ok()?,
+                    created_at_ms: s.created_at.timestamp_millis(),
+                })
+            })
+            .collect();
+        fs::remove_file(&path)?;
         Ok(events)
     }
 
@@ -860,44 +836,21 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    fn unprocessed(rkey: &str, first_seen_ms: i64, attempts: u32) -> crate::retry_buffer::UnprocessedEvent {
-        crate::retry_buffer::UnprocessedEvent {
-            conv_indices: vec![0],
-            record: moat_atproto::EventRecord {
-                uri: String::new(),
-                rkey: rkey.to_string(),
-                author_did: "did:plc:bob".to_string(),
-                v: 1,
-                tag: [7u8; 16],
-                ciphertext: vec![1, 2, 3],
-                created_at: chrono::Utc::now(),
-            },
-            source_did: "did:plc:bob".to_string(),
-            first_seen_ms,
-            attempts,
-        }
-    }
-
     #[test]
-    fn unprocessed_events_keep_their_retry_state_across_a_restart() {
+    fn parked_events_survive_a_restart() {
         let dir = tempdir().unwrap();
         let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
-        store
-            .store_unprocessed_events(&[unprocessed("a", 1_234, 2)])
-            .unwrap();
+        assert_eq!(store.load_parked_events().unwrap(), None);
 
-        let loaded = store.load_unprocessed_events().unwrap();
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].record.rkey, "a");
-        assert_eq!(loaded[0].record.ciphertext, vec![1, 2, 3]);
-        assert_eq!(loaded[0].first_seen_ms, 1_234);
-        assert_eq!(loaded[0].attempts, 2);
+        store.store_parked_events(b"parked").unwrap();
+        let reopened = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+        assert_eq!(reopened.load_parked_events().unwrap().as_deref(), Some(&b"parked"[..]));
     }
 
-    /// A buffer written before retry state was recorded still loads, with
-    /// no first-seen time and no attempts.
+    /// Events left in the old retry buffer are handed to the inbox once,
+    /// whichever fields that buffer carried.
     #[test]
-    fn unprocessed_events_without_retry_state_still_load() {
+    fn legacy_unprocessed_events_are_taken_once() {
         let dir = tempdir().unwrap();
         let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
         let legacy = serde_json::json!([{
@@ -907,6 +860,8 @@ mod tests {
             "ciphertext_b64": "AQID",
             "created_at": "2026-09-13T08:00:00Z",
             "source_did": "did:plc:bob",
+            "first_seen_ms": 1234,
+            "attempts": 2,
         }]);
         fs::write(
             dir.path().join("unprocessed_events.json"),
@@ -914,10 +869,12 @@ mod tests {
         )
         .unwrap();
 
-        let loaded = store.load_unprocessed_events().unwrap();
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].first_seen_ms, 0);
-        assert_eq!(loaded[0].attempts, 0);
+        let taken = store.take_legacy_unprocessed_events().unwrap();
+        assert_eq!(taken.len(), 1);
+        assert_eq!(taken[0].rkey, "a");
+        assert_eq!(taken[0].tag, [7u8; 16]);
+        assert_eq!(taken[0].ciphertext, vec![1, 2, 3]);
+        assert!(store.take_legacy_unprocessed_events().unwrap().is_empty());
     }
 
     fn pending_msg(message_id: &[u8], content: &str) -> StoredMessage {

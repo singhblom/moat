@@ -13,7 +13,6 @@ import 'conversation_manager.dart';
 import 'device_ring_service.dart';
 import 'drawbridge_service.dart';
 import 'secure_storage.dart';
-import 'unprocessed_event.dart';
 import 'debug_log.dart';
 import '../utils/welcome_envelope.dart';
 
@@ -274,11 +273,10 @@ class PollingService {
     final ringGroupIdHex =
         ringGroupId?.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
-    // Fetch from every DID before processing anything, so an event can be
-    // unlocked by a commit fetched from a different DID in the same poll.
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
-    final pending = await _secureStorage.loadUnprocessedEvents();
-    final cachedCount = pending.length;
+    await _prepareSession(session);
+
+    // Fetch from every DID before processing anything: the inbox hands
+    // events back in rkey order across all of them.
     final cursors = <String, String>{};
     for (final did in allParticipantDids) {
       try {
@@ -295,7 +293,16 @@ class PollingService {
           if (maxRkey == null || event.rkey.compareTo(maxRkey) > 0) {
             maxRkey = event.rkey;
           }
-          pending.add(UnprocessedEvent(sourceDid: did, record: event, firstSeenMs: nowMs));
+          session.inboxPush(
+            event: InboxEventDto(
+              sourceDid: did,
+              rkey: event.rkey,
+              authorDid: did,
+              tag: event.tag,
+              ciphertext: event.ciphertext,
+              createdAtMs: toPlatformInt64(event.createdAt.millisecondsSinceEpoch),
+            ),
+          );
         }
         if (maxRkey != null) cursors[messageRkeyKey] = maxRkey;
       } catch (e, stack) {
@@ -303,58 +310,26 @@ class PollingService {
         moatLog('PollingService: Stack: $stack');
       }
     }
-    if (pending.isEmpty) return 0;
 
-    moatLog('PollingService: processing ${pending.length} events '
-        '(${pending.length - cachedCount} new, $cachedCount cached)');
-    pending.sort((a, b) => a.record.rkey.compareTo(b.record.rkey));
-
-    // A commit processed in one pass can unlock events that failed earlier
-    // in it, so repeat until a pass makes no progress.
+    // Processing a commit or Welcome generates tags, which moves the events
+    // parked under them back into the queue.
+    final tagMap = await _secureStorage.loadTagMap();
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
     var newMsgs = 0;
-    var remaining = pending;
-    while (true) {
-      var madeProgress = false;
-      final stillUnprocessed = <UnprocessedEvent>[];
-      final tagMap = await _secureStorage.loadTagMap();
-      for (final pendingEvent in remaining) {
-        final outcome = await _processPolledEvent(
-            pendingEvent, tagMap, ringGroupId, ringGroupIdHex, myDid, session);
-        switch (outcome) {
-          case _EventOutcome.storedMessage:
-            newMsgs++;
-            madeProgress = true;
-          case _EventOutcome.processed:
-            madeProgress = true;
-          case _EventOutcome.retry:
-            stillUnprocessed.add(pendingEvent);
-          case _EventOutcome.drop:
-            break;
-        }
+    for (var event = session.inboxPopReady(); event != null; event = session.inboxPopReady()) {
+      if (await _processInboxEvent(event, tagMap, ringGroupId, ringGroupIdHex, myDid, session, nowMs)) {
+        newMsgs++;
       }
-      remaining = stillUnprocessed;
-      if (!madeProgress) break;
     }
 
-    // One more cycle failed for whatever is left; keep only what is still
-    // worth retrying on the next poll.
-    final beforeExpiry = remaining.length;
-    remaining.retainWhere((e) {
-      e.attempts++;
-      return keepForRetry(
-        firstSeenMs: toPlatformInt64(e.firstSeenMs),
-        attempts: e.attempts,
-        nowMs: toPlatformInt64(nowMs),
-      );
-    });
-    final expired = beforeExpiry - remaining.length;
+    final expired = session.inboxExpire(nowMs: toPlatformInt64(nowMs));
     if (expired > 0) {
-      moatLog('PollingService: stopped retrying $expired event(s) that never became readable');
+      moatLog('PollingService: dropped $expired parked event(s) that never became readable');
     }
-    await _secureStorage.saveUnprocessedEvents(remaining);
+    await _secureStorage.saveParkedEvents(session.exportParkedEvents());
 
     // Cursors move only once every event they pass has been processed or
-    // saved for retry.
+    // parked.
     for (final entry in cursors.entries) {
       await _secureStorage.saveLastRkey(entry.key, entry.value);
     }
@@ -362,54 +337,95 @@ class PollingService {
     return newMsgs;
   }
 
-  /// Process one polled event, and say what should happen to it.
-  Future<_EventOutcome> _processPolledEvent(
-    UnprocessedEvent pendingEvent,
+  /// The session [_prepareSession] last ran for.
+  MoatSessionHandle? _preparedSession;
+
+  /// Bring a newly loaded session up to date before its first poll: the
+  /// candidate tags of every group, which the session does not persist, and
+  /// the parked events, which this device does. Runs once per session, in
+  /// both the app and the headless server. Mirrors moat-cli's
+  /// `load_conversations_sync`.
+  Future<void> _prepareSession(MoatSessionHandle session) async {
+    if (identical(_preparedSession, session)) return;
+    _preparedSession = session;
+
+    final groupIds = [
+      for (final conv in _conversationsService.conversations) conv.groupId,
+      if (await _ringService.ringGroupId() case final ringId?) ringId,
+    ];
+    for (final groupId in groupIds) {
+      try {
+        await _authService.populateConversationTags(groupId);
+      } catch (e) {
+        moatLog('PollingService: could not populate tags for a group: $e');
+      }
+    }
+
+    final bytes = await _secureStorage.loadParkedEvents();
+    if (bytes == null) return;
+    try {
+      session.importParkedEvents(bytes: bytes);
+    } catch (e) {
+      moatLog('PollingService: could not restore parked events: $e');
+    }
+  }
+
+  /// Process one event from the inbox, or park it if its tag is not a
+  /// candidate tag yet. Returns true if a new message was stored.
+  Future<bool> _processInboxEvent(
+    InboxEventDto event,
     Map<String, String> tagMap,
     Uint8List? ringGroupId,
     String? ringGroupIdHex,
     String myDid,
     MoatSessionHandle session,
+    int nowMs,
   ) async {
-    final event = pendingEvent.record;
     final tagHex = event.tag.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-    final groupIdHex = tagMap[tagHex];
+    // The session knows every tag it generated since it was created; the
+    // persisted tag map also covers groups not repopulated since a restart.
+    final groupId = session.groupForTag(tag: event.tag);
+    final groupIdHex = groupId != null
+        ? groupId.map((b) => b.toRadixString(16).padLeft(2, '0')).join()
+        : tagMap[tagHex];
 
     if (groupIdHex == null) {
       // A stealth payload this device published never decrypts here.
-      if (pendingEvent.sourceDid == myDid) return _EventOutcome.drop;
-      moatLog('PollingService: event ${event.rkey} tag=$tagHex not in tagMap (map size=${tagMap.length})');
-      return _EventOutcome.retry;
+      if (event.sourceDid != myDid) {
+        session.inboxPark(event: event, nowMs: toPlatformInt64(nowMs));
+      }
+      return false;
     }
 
-    try {
-      if (ringGroupId != null && groupIdHex == ringGroupIdHex) {
-        moatLog('PollingService: dispatching ring event rkey=${event.rkey} to _processRingEvent');
-        await _processRingEvent(event, ringGroupId, session);
-        await _advanceScanWindow(event.tag, groupIdHex, tagMap, session);
-        return _EventOutcome.processed;
-      }
+    final record = EventRecord(
+      uri: '',
+      rkey: event.rkey,
+      tag: event.tag,
+      ciphertext: event.ciphertext,
+      createdAt: DateTime.fromMillisecondsSinceEpoch(
+        platformInt64ToInt(event.createdAtMs),
+        isUtc: true,
+      ),
+    );
 
-      final conversation = _conversationsService.conversations
-          .where((c) => c.groupIdHex == groupIdHex)
-          .firstOrNull;
-      if (conversation == null) {
-        moatLog('PollingService: event ${event.rkey} tag=$tagHex matched group $groupIdHex, not yet a conversation');
-        return _EventOutcome.retry;
-      }
-
-      final stored = await _processConversationEvent(
-          event, conversation, pendingEvent.sourceDid, session);
+    if (ringGroupId != null && groupIdHex == ringGroupIdHex) {
+      moatLog('PollingService: dispatching ring event rkey=${event.rkey} to _processRingEvent');
+      await _processRingEvent(record, ringGroupId, session);
       await _advanceScanWindow(event.tag, groupIdHex, tagMap, session);
-      return stored ? _EventOutcome.storedMessage : _EventOutcome.processed;
-    } on MoatError catch (e) {
-      if (e.permanent) {
-        moatLog('PollingService: dropping event ${event.rkey}: ${e.message}');
-        return _EventOutcome.drop;
-      }
-      moatLog('PollingService: keeping event ${event.rkey} for retry: ${e.message}');
-      return _EventOutcome.retry;
+      return false;
     }
+
+    final conversation = _conversationsService.conversations
+        .where((c) => c.groupIdHex == groupIdHex)
+        .firstOrNull;
+    if (conversation == null) {
+      moatLog('PollingService: event ${event.rkey} tag=$tagHex matched an unknown group $groupIdHex — dropped');
+      return false;
+    }
+
+    final stored = await _processConversationEvent(record, conversation, event.sourceDid, session);
+    await _advanceScanWindow(event.tag, groupIdHex, tagMap, session);
+    return stored;
   }
 
   /// Slide the tag window past a matched event, and register the tags that
@@ -544,10 +560,8 @@ class PollingService {
         case EventKindDto.unknown:
           return false;
       }
-    } on MoatError {
-      rethrow;
     } catch (e) {
-      moatLog('PollingService: Failed to process event ${event.rkey} for ${conversation.groupIdHex}: $e');
+      moatLog('PollingService: Failed to decrypt event ${event.rkey} for ${conversation.groupIdHex}: $e');
       return false;
     }
   }
@@ -593,10 +607,8 @@ class PollingService {
           Uint8List.fromList(sender.deviceId),
         );
       }
-    } on MoatError {
-      rethrow;
     } catch (e) {
-      moatLog('PollingService: Failed to process ring event ${event.rkey}: $e');
+      moatLog('PollingService: Failed to decrypt ring event ${event.rkey}: $e');
     }
   }
 
@@ -669,19 +681,4 @@ class PollingService {
     stopPolling();
   }
 
-}
-
-/// What a poll should do with an event it just tried to process.
-enum _EventOutcome {
-  /// Processed, and a new message was stored.
-  storedMessage,
-
-  /// Processed, with nothing new to show (a commit, a reaction, ring traffic).
-  processed,
-
-  /// Not readable yet; keep it for the next poll.
-  retry,
-
-  /// Never readable on this device.
-  drop,
 }

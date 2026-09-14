@@ -16,14 +16,9 @@ use std::sync::Mutex;
 // --- Error handling ---
 
 /// Moat error with code and message, suitable for Dart exceptions.
-#[derive(Debug)]
 pub struct MoatError {
     pub code: u32,
     pub message: String,
-    /// No later event can make this operation succeed, so a host keeping
-    /// failed events for retry should drop this one. See
-    /// `moat_core::Error::is_permanent`.
-    pub permanent: bool,
 }
 
 impl From<moat_core::Error> for MoatError {
@@ -31,7 +26,6 @@ impl From<moat_core::Error> for MoatError {
         MoatError {
             code: e.code() as u32,
             message: e.message().to_string(),
-            permanent: e.is_permanent(),
         }
     }
 }
@@ -338,13 +332,13 @@ impl MoatSessionHandle {
         &self,
         group_id: Vec<u8>,
         ciphertext: Vec<u8>,
-    ) -> Result<DecryptResultDto, MoatError> {
+    ) -> Result<DecryptResultDto, String> {
         let outcome = self
             .inner
             .lock()
             .unwrap()
             .decrypt_event(&group_id, &ciphertext)
-            .map_err(MoatError::from)?;
+            .map_err(|e| e.to_string())?;
 
         let warnings: Vec<String> = outcome.warnings().iter().map(|w| w.to_string()).collect();
         let result = outcome.into_result();
@@ -356,9 +350,101 @@ impl MoatSessionHandle {
             warnings,
         })
     }
+
+    // --- Inbox (see `moat_core::inbox`) ---
+
+    /// Queue a fetched event for processing. Returns false if the same
+    /// record is already queued or parked.
+    #[frb(sync)]
+    pub fn inbox_push(&self, event: InboxEventDto) -> Result<bool, String> {
+        Ok(self.inner.lock().unwrap().inbox_push(event.try_into()?))
+    }
+
+    /// The queued event with the lowest rkey, including events woken since
+    /// they were parked.
+    #[frb(sync)]
+    pub fn inbox_pop_ready(&self) -> Option<InboxEventDto> {
+        self.inner.lock().unwrap().inbox_pop_ready().map(Into::into)
+    }
+
+    /// Park an event whose tag is not a candidate tag yet. Generating that
+    /// tag moves it back into the queue.
+    #[frb(sync)]
+    pub fn inbox_park(&self, event: InboxEventDto, now_ms: i64) -> Result<(), String> {
+        self.inner.lock().unwrap().inbox_park(event.try_into()?, now_ms);
+        Ok(())
+    }
+
+    /// Drop events parked too long. Returns how many were dropped.
+    #[frb(sync)]
+    pub fn inbox_expire(&self, now_ms: i64) -> u32 {
+        self.inner.lock().unwrap().inbox_expire(now_ms) as u32
+    }
+
+    /// The parked events, serialized for the host to persist.
+    #[frb(sync)]
+    pub fn export_parked_events(&self) -> Vec<u8> {
+        self.inner.lock().unwrap().export_parked_events()
+    }
+
+    /// Restore parked events persisted with `export_parked_events`.
+    #[frb(sync)]
+    pub fn import_parked_events(&self, bytes: Vec<u8>) -> Result<u32, String> {
+        self.inner
+            .lock()
+            .unwrap()
+            .import_parked_events(&bytes)
+            .map(|n| n as u32)
+            .map_err(|e| e.to_string())
+    }
+
+    /// The group a candidate tag belongs to, if it is one.
+    #[frb(sync)]
+    pub fn group_for_tag(&self, tag: Vec<u8>) -> Option<Vec<u8>> {
+        let tag: [u8; 16] = tag.try_into().ok()?;
+        self.inner.lock().unwrap().group_for_tag(&tag)
+    }
 }
 
 // --- DTO types for FRB ---
+
+/// A fetched `social.moat.event` record, as the inbox holds it.
+pub struct InboxEventDto {
+    /// The DID whose PDS the record was fetched from.
+    pub source_did: String,
+    pub rkey: String,
+    pub author_did: String,
+    pub tag: Vec<u8>,
+    pub ciphertext: Vec<u8>,
+    pub created_at_ms: i64,
+}
+
+impl TryFrom<InboxEventDto> for moat_core::InboxEvent {
+    type Error = String;
+    fn try_from(e: InboxEventDto) -> Result<Self, String> {
+        Ok(moat_core::InboxEvent {
+            source_did: e.source_did,
+            rkey: e.rkey,
+            author_did: e.author_did,
+            tag: e.tag.try_into().map_err(|_| "tag must be 16 bytes".to_string())?,
+            ciphertext: e.ciphertext,
+            created_at_ms: e.created_at_ms,
+        })
+    }
+}
+
+impl From<moat_core::InboxEvent> for InboxEventDto {
+    fn from(e: moat_core::InboxEvent) -> Self {
+        InboxEventDto {
+            source_did: e.source_did,
+            rkey: e.rkey,
+            author_did: e.author_did,
+            tag: e.tag.to_vec(),
+            ciphertext: e.ciphertext,
+            created_at_ms: e.created_at_ms,
+        }
+    }
+}
 
 pub struct KeyPackageResult {
     pub key_package: Vec<u8>,
@@ -3333,13 +3419,4 @@ mod pairing_ffi_tests {
         assert!(existing_pairing.is_done());
         assert_eq!(new_pairing.ring_id(), existing_pairing.ring_id());
     }
-}
-
-/// Whether an event that has just failed another poll cycle is still worth
-/// retrying. `first_seen_ms` is when this device first fetched it (0 when
-/// unknown); `attempts` is how many poll cycles have now ended with it
-/// unprocessed. See `moat_core::retry`.
-#[frb(sync)]
-pub fn keep_for_retry(first_seen_ms: i64, attempts: u32, now_ms: i64) -> bool {
-    moat_core::keep_for_retry(first_seen_ms, attempts, now_ms)
 }

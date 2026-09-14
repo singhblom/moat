@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'atproto_client.dart';
 import 'storage_backend.dart';
-import 'unprocessed_event.dart';
 
 /// Keys for secure storage
 const _sessionKey = 'moat_session';
@@ -15,7 +14,7 @@ const _watchListKey = 'moat_watch_list';
 const _lastRkeysKey = 'moat_last_rkeys';
 const _tagMapKey = 'moat_tag_map';
 const _deviceIdKey = 'moat_device_id';
-const _unprocessedEventsKey = 'moat_unprocessed_events';
+const _parkedEventsKey = 'moat_parked_events';
 
 /// Secure storage service for credentials and cryptographic keys.
 /// Backend-agnostic: use [FileStorageBackend] for server, FlutterStorageBackend for app.
@@ -236,30 +235,21 @@ class SecureStorageService {
     await _storage.delete(_tagMapKey);
   }
 
-  // --- Events kept for retry ---
+  // --- Parked events ---
 
-  /// Persist the retry buffer, so the events in it survive a restart: the
-  /// polling cursor has already moved past them.
-  Future<void> saveUnprocessedEvents(List<UnprocessedEvent> events) async {
-    if (events.isEmpty) {
-      await _storage.delete(_unprocessedEventsKey);
-      return;
-    }
-    await _storage.write(
-      _unprocessedEventsKey,
-      jsonEncode(events.map((e) => e.toJson()).toList()),
-    );
+  /// Persist the session inbox's parked events: the polling cursor has
+  /// already moved past them.
+  Future<void> saveParkedEvents(Uint8List bytes) async {
+    await _storage.write(_parkedEventsKey, base64Encode(bytes));
   }
 
-  Future<List<UnprocessedEvent>> loadUnprocessedEvents() async {
-    final json = await _storage.read(_unprocessedEventsKey);
-    if (json == null) return [];
+  Future<Uint8List?> loadParkedEvents() async {
+    final b64 = await _storage.read(_parkedEventsKey);
+    if (b64 == null) return null;
     try {
-      return (jsonDecode(json) as List<dynamic>)
-          .map((e) => UnprocessedEvent.fromJson(e as Map<String, dynamic>))
-          .toList();
+      return base64Decode(b64);
     } catch (_) {
-      return [];
+      return null;
     }
   }
 

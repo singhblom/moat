@@ -52,6 +52,10 @@ pub struct DrawbridgeManager {
 
 struct OwnDrawbridge {
     writer: WsWriter,
+    /// Abort handle for the connection's `own_read_loop` task. Aborting it
+    /// drops the read half, closing the socket without the loop reporting a
+    /// disconnect.
+    read_task: tokio::task::AbortHandle,
 }
 
 /// Persisted Drawbridge state (stored in drawbridge.json).
@@ -117,6 +121,11 @@ impl DrawbridgeManager {
         did: &str,
         identity_key_bundle: &[u8],
     ) -> Result<(), String> {
+        // A device holds one connection to its own relay. Connecting again —
+        // auto-login followed by an explicit login does — replaces the old
+        // one rather than leaving it open beside the new.
+        self.close_own();
+
         let (ws_stream, _) = tokio_tungstenite::connect_async(url)
             .await
             .map_err(|e| format!("WebSocket connect failed: {e}"))?;
@@ -191,12 +200,13 @@ impl DrawbridgeManager {
         // 6. Spawn read loop
         let bg_tx = self.bg_tx.clone();
         let url_clone = url.to_string();
-        tokio::spawn(async move {
+        let read_task = tokio::spawn(async move {
             own_read_loop(reader, bg_tx, url_clone).await;
-        });
+        })
+        .abort_handle();
 
         // 7. Store connection, reset reconnect backoff
-        self.own = Some(OwnDrawbridge { writer });
+        self.own = Some(OwnDrawbridge { writer, read_task });
         self.reconnect_attempt = 0;
 
         Ok(())
@@ -415,6 +425,13 @@ impl DrawbridgeManager {
     /// Mark the connection as dropped (called on disconnect).
     pub fn clear_connection(&mut self) {
         self.own = None;
+    }
+
+    /// Close the connection to our own relay, if one is open.
+    fn close_own(&mut self) {
+        if let Some(own) = self.own.take() {
+            own.read_task.abort();
+        }
     }
 
     /// Get the backoff delay for the next reconnect attempt and increment the counter.

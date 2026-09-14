@@ -288,7 +288,7 @@ pub(crate) struct ImageMeta {
 pub(crate) enum BgEvent {
     /// Network portion of poll_messages completed.
     PollFetched {
-        participant_events: Vec<(Vec<usize>, moat_atproto::EventRecord, String)>,
+        participant_events: Vec<(moat_atproto::EventRecord, String)>,
         watched_events: Vec<(String, moat_atproto::EventRecord)>,
         new_rkeys: Vec<(String, String)>,
     },
@@ -560,12 +560,6 @@ pub struct App {
     // Tag -> conversation mapping (tag -> hex-encoded group_id)
     pub tag_map: HashMap<[u8; 16], String>,
 
-    // Events that were fetched but could not be processed (tag miss or decrypt
-    // failure). Retried each poll cycle after new events are processed, since
-    // commits in new events may advance epochs and unlock these, until
-    // `moat_core::keep_for_retry` says they are no longer worth it.
-    unprocessed_events: Vec<crate::retry_buffer::UnprocessedEvent>,
-
     // Polling state
     last_poll: Option<Instant>,
     last_device_poll: Option<Instant>,
@@ -760,7 +754,14 @@ impl App {
         let drawbridge = DrawbridgeManager::new(bg_tx.clone());
 
         let ring_driver = keys.load_ring_state().unwrap_or_default();
-        let restored_unprocessed = keys.load_unprocessed_events().unwrap_or_default();
+        // Events parked in the session inbox survive a restart; the retry
+        // buffer the inbox replaced is handed to it once.
+        if let Ok(Some(bytes)) = keys.load_parked_events() {
+            let _ = mls.import_parked_events(&bytes);
+        }
+        for event in keys.take_legacy_unprocessed_events().unwrap_or_default() {
+            mls.inbox_push(event);
+        }
 
         Ok(Self {
             keys,
@@ -787,7 +788,6 @@ impl App {
             cursor_position: 0,
             new_conv_handle: String::new(),
             tag_map: HashMap::new(),
-            unprocessed_events: restored_unprocessed,
             last_poll: None,
             last_device_poll: None,
             watched_dids: std::collections::HashSet::new(),
@@ -1596,11 +1596,11 @@ impl App {
             })
             .collect();
 
-        let dids_with_rkeys: Vec<(String, Vec<usize>, Option<String>)> = dids_to_poll
+        let dids_with_rkeys: Vec<(String, Option<String>)> = dids_to_poll
             .into_iter()
-            .map(|(did, indices)| {
+            .map(|(did, _)| {
                 let last_rkey = self.keys.get_last_rkey(&did).ok().flatten();
-                (did, indices, last_rkey)
+                (did, last_rkey)
             })
             .collect();
 
@@ -1610,7 +1610,7 @@ impl App {
             let mut participant_events = Vec::new();
             let mut new_rkeys = Vec::new();
 
-            for (participant_did, conv_indices, last_rkey) in &dids_with_rkeys {
+            for (participant_did, last_rkey) in &dids_with_rkeys {
                 if let Ok(events) = client
                     .fetch_events_from_did(participant_did, last_rkey.as_deref())
                     .await {
@@ -1624,11 +1624,7 @@ impl App {
                         if max_rkey.as_ref().map_or(true, |m| event.rkey > *m) {
                             max_rkey = Some(event.rkey.clone());
                         }
-                        participant_events.push((
-                            conv_indices.clone(),
-                            event,
-                            participant_did.clone(),
-                        ));
+                        participant_events.push((event, participant_did.clone()));
                     }
                     if let Some(rkey) = max_rkey {
                         new_rkeys.push((participant_did.clone(), rkey));
@@ -3185,7 +3181,7 @@ impl App {
     /// Process poll results on the main thread (decrypt, update state).
     fn process_poll_results(
         &mut self,
-        participant_events: Vec<(Vec<usize>, moat_atproto::EventRecord, String)>,
+        participant_events: Vec<(moat_atproto::EventRecord, String)>,
         mut watched_events: Vec<(String, moat_atproto::EventRecord)>,
         new_rkeys: Vec<(String, String)>,
     ) -> PollStats {
@@ -3197,103 +3193,77 @@ impl App {
             .map(|c| c.did().to_string())
             .unwrap_or_default();
 
-        // Combine new events with previously unprocessed cached events.
-        // Sort by rkey so events are processed in chronological order.
+        // Queue what was fetched. The inbox hands events back in rkey order,
+        // together with any parked earlier whose tag has since been generated.
         let now_ms = chrono::Utc::now().timestamp_millis();
-        let cached_count = self.unprocessed_events.len();
-        let mut all_events = std::mem::take(&mut self.unprocessed_events);
-        let new_count = participant_events.len();
-        all_events.extend(participant_events.into_iter().map(|(conv_indices, record, source_did)| {
-            crate::retry_buffer::UnprocessedEvent {
-                conv_indices,
-                record,
+        let fetched = participant_events.len();
+        for (record, source_did) in participant_events {
+            self.mls.inbox_push(moat_core::InboxEvent {
                 source_did,
-                first_seen_ms: now_ms,
-                attempts: 0,
-            }
-        }));
-        all_events.sort_by(|a, b| a.record.rkey.cmp(&b.record.rkey));
-
-        if !all_events.is_empty() {
+                rkey: record.rkey,
+                author_did: record.author_did,
+                tag: record.tag,
+                ciphertext: record.ciphertext,
+                created_at_ms: record.created_at.timestamp_millis(),
+            });
+        }
+        if fetched > 0 {
             self.debug_log.log(&format!(
-                "poll: processing {} events ({} new, {} cached)",
-                all_events.len(),
-                new_count,
-                cached_count,
+                "poll: processing {fetched} fetched events ({} parked)",
+                self.mls.inbox_parked_len(),
             ));
         }
 
-        // Process events in a loop: commits may advance epochs and unlock
-        // previously unprocessable events (new tags or new decryption keys).
-        loop {
-            let mut made_progress = false;
-            let mut still_unprocessed = Vec::new();
-
-            for event in all_events {
-                let event_record = &event.record;
-                let tag_hex: String =
-                    event_record.tag.iter().map(|b| format!("{b:02x}")).collect();
-
-                if self.tag_map.contains_key(&event_record.tag) {
-                    self.debug_log.log(&format!(
-                        "poll: tag matched: {} rkey={}",
-                        tag_hex, event_record.rkey
-                    ));
-                    match self.process_matched_event(&event.conv_indices, event_record, &my_did) {
-                        Ok(true) => {
-                            new_messages += 1;
-                            made_progress = true;
-                        }
-                        Ok(false) => {
-                            made_progress = true;
-                        }
-                        // This device's own event, or one from an epoch
-                        // already left: no later event can make it decrypt.
-                        Err(e) if e.is_permanent() => {}
-                        Err(_) => {
-                            still_unprocessed.push(event);
-                        }
-                    }
-                } else {
-                    // Unknown tag — try as welcome
-                    if self.try_process_welcome_sync(
-                        &event_record.ciphertext,
-                        &event_record.author_did,
-                        event_record.tag,
-                    ) {
-                        made_progress = true;
-                    } else {
-                        // Neither tag match nor welcome — cache for retry,
-                        // unless it is on our own PDS: a stealth payload this
-                        // device published never decrypts here, and would be
-                        // retried forever.
-                        if event.source_did != my_did {
-                            still_unprocessed.push(event);
-                        }
-                    }
-                }
-            }
-
-            all_events = still_unprocessed;
-            if !made_progress {
-                break;
+        fn event_record(event: moat_core::InboxEvent) -> moat_atproto::EventRecord {
+            moat_atproto::EventRecord {
+                uri: String::new(),
+                rkey: event.rkey,
+                author_did: event.author_did,
+                v: 1,
+                tag: event.tag,
+                ciphertext: event.ciphertext,
+                created_at: chrono::DateTime::from_timestamp_millis(event.created_at_ms)
+                    .unwrap_or_default(),
             }
         }
 
-        // One more cycle failed for whatever is left; keep only what is still
-        // worth retrying on the next poll.
-        let before_expiry = all_events.len();
-        all_events.retain_mut(|e| {
-            e.attempts = e.attempts.saturating_add(1);
-            moat_core::keep_for_retry(e.first_seen_ms, e.attempts, now_ms)
-        });
-        let expired = before_expiry - all_events.len();
+        // Processing a commit or Welcome generates tags, which moves the events
+        // parked under them back into the queue.
+        while let Some(event) = self.mls.inbox_pop_ready() {
+            if self.tag_map.contains_key(&event.tag) {
+                let tag_hex: String = event.tag.iter().map(|b| format!("{b:02x}")).collect();
+                self.debug_log
+                    .log(&format!("poll: tag matched: {} rkey={}", tag_hex, event.rkey));
+                let record = event_record(event);
+                match self.process_matched_event(&record, &my_did) {
+                    Ok(true) => new_messages += 1,
+                    Ok(false) => {}
+                    Err(e) => self
+                        .debug_log
+                        .log(&format!("poll: dropping event rkey={}: {e}", record.rkey)),
+                }
+            } else if self.try_process_welcome_sync(&event.ciphertext, &event.author_did, event.tag) {
+                // Joining generated the group's tags, waking what was parked
+                // under them.
+            } else if event.source_did != my_did {
+                // Parked until its tag is generated. Events on this device's
+                // own PDS are not: a stealth payload it published never
+                // decrypts here.
+                self.mls.inbox_park(event, now_ms);
+            }
+        }
+
+        let expired = self.mls.inbox_expire(now_ms);
         if expired > 0 {
             self.debug_log.log(&format!(
-                "poll: stopped retrying {expired} event(s) that never became readable",
+                "poll: dropped {expired} parked event(s) that never became readable",
             ));
         }
-        self.unprocessed_events = all_events;
+        // Saved before the cursors move past the events.
+        if let Err(e) = self.keys.store_parked_events(&self.mls.export_parked_events()) {
+            self.debug_log
+                .log(&format!("poll: failed to persist parked events: {e}"));
+        }
 
         // Sort watched events by rkey (ascending) so Welcomes are processed
         // before derived-tag events.
@@ -3311,15 +3281,8 @@ impl App {
             let tag_hex: String = event_record.tag.iter().map(|b| format!("{b:02x}")).collect();
             if self.tag_map.contains_key(&event_record.tag) {
                 // Tag matched a known conversation — decrypt instead of trying as Welcome.
-                let conv_indices: Vec<usize> = self
-                    .conversations
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, c)| c.participant_dids.contains(&did))
-                    .map(|(i, _)| i)
-                    .collect();
-                if !conv_indices.is_empty() {
-                    reprocess.push((conv_indices, event_record, did));
+                if self.conversations.iter().any(|c| c.participant_dids.contains(&did)) {
+                    reprocess.push(event_record);
                 }
                 continue;
             }
@@ -3340,8 +3303,8 @@ impl App {
         }
         // Decrypt watched events that matched the tag_map (e.g. events
         // arriving in the same batch as the Welcome that created the conversation).
-        for (conv_indices, event_record, _did) in reprocess {
-            if let Ok(true) = self.process_matched_event(&conv_indices, &event_record, &my_did) { new_messages += 1; }
+        for event_record in reprocess {
+            if let Ok(true) = self.process_matched_event(&event_record, &my_did) { new_messages += 1; }
         }
 
         // Save MLS state if modified
@@ -3361,14 +3324,6 @@ impl App {
                     e
                 ));
             }
-        }
-
-        // Persist unprocessed events so they survive a restart. Without
-        // this the cursor advances past them and they are lost.
-        if let Err(e) = self.keys.store_unprocessed_events(&self.unprocessed_events) {
-            self.debug_log.log(&format!(
-                "poll: failed to persist unprocessed events: {e}",
-            ));
         }
 
         // The ex-members this cycle asked for events have now been swept:
@@ -3403,7 +3358,6 @@ impl App {
     /// whether keeping the event for retry can help.
     fn process_matched_event(
         &mut self,
-        conv_indices: &[usize],
         event_record: &moat_atproto::EventRecord,
         my_did: &str,
     ) -> std::result::Result<bool, moat_core::Error> {
@@ -3434,7 +3388,7 @@ impl App {
                         .log(&format!("poll: failed to store group state: {}", e));
                 }
 
-                let conv_idx = conv_indices.first().copied();
+                let conv_idx = self.conversations.iter().position(|c| c.id == conv_id);
 
                 match decrypted.event.kind {
                     EventKind::Message(_) => {

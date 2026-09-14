@@ -6,7 +6,9 @@
 //! on the poll path, and (for the Rust recipient) on the push path, whose
 //! Drawbridge subscription is built from the same tag set. Alice sends
 //! several windows' worth of messages to Bob with no membership change in
-//! between, and Bob must receive every one.
+//! between, and Bob must receive every one — before and after Bob
+//! restarts, since a restarted session holds no candidate tags until the
+//! host populates them.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -38,12 +40,14 @@ pub(crate) fn run_dart_recipient_boxed(
     Box::pin(run_dart_recipient(verbose))
 }
 
-/// Bob runs the Rust CLI: the poll path, then the push path alone.
+/// Bob runs the Rust CLI: the poll path, again after a restart, then the
+/// push path alone.
 pub async fn run(verbose: bool) {
     run_with(ParticipantKind::RustCli, "sender-exceeds-tag-window", true, verbose).await;
 }
 
-/// Bob runs the Dart server: the poll path. The headless server does not
+/// Bob runs the Dart server: the poll path, again after a restart. The
+/// headless server does not
 /// turn Drawbridge notifications into polls — the Flutter app does — so
 /// there is no push-only path to exercise here.
 pub async fn run_dart_recipient(verbose: bool) {
@@ -57,7 +61,7 @@ async fn run_with(recipient_kind: ParticipantKind, name: &str, push_phase: bool,
 
     vlog!("=== Scenario: {name} ===");
 
-    let world = TestWorld::new_with_kinds_and_drawbridge(
+    let mut world = TestWorld::new_with_kinds_and_drawbridge(
         &[("alice", "alice"), ("bob", "bob")],
         &[ParticipantKind::RustCli, recipient_kind],
         ".postern.test",
@@ -95,6 +99,31 @@ async fn run_with(recipient_kind: ParticipantKind, name: &str, push_phase: bool,
         missing.len()
     );
     vlog!("[check] poll path: all {BURST} received");
+
+    // ── After a restart ──────────────────────────────────────────────────────
+    //
+    // The restarted session has no candidate tags until the host populates
+    // them from its groups. Without that, the window can slide no further
+    // than whatever tags the host persisted.
+    world.kill_participant("bob").expect("kill bob");
+    world.restart_participant("bob").await.expect("restart bob");
+    bob.login("bob.postern.test", "any-password").await.expect("bob re-login");
+    vlog!("[restart] bob back up");
+    for n in 1..=BURST {
+        alice
+            .send_message(&group_id, &format!("restarted {n}"))
+            .await
+            .expect("alice send");
+    }
+    vlog!("[send] alice sent {BURST} messages");
+    let missing = wait_for_all(&bob, &group_id, "restarted", true, verbose).await;
+    assert!(
+        missing.is_empty(),
+        "bob, after restarting, never received {} of {BURST} messages from one \
+         sender: {missing:?}",
+        missing.len()
+    );
+    vlog!("[check] after restart: all {BURST} received");
 
     if !push_phase {
         vlog!("\n=== PASSED ===");

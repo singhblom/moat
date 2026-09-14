@@ -9,7 +9,8 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'simple.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `credential_from_dto`, `from_core`, `into_core`, `payload_from_core`, `payload_to_core`, `push_media_label`, `push_plaintext_preview`, `sibling_info_to_core`, `to_core_sibling_stealth`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `MoatError`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `try_from`
 
 /// Generate a stealth keypair. Returns (private_key, public_key) each 32 bytes.
 StealthKeypair generateStealthKeypair() =>
@@ -225,17 +226,6 @@ bool pairingFrameIsDone({required List<int> plaintext}) =>
 /// hand-duplicate the literal.
 BigInt kpPoolTarget() => RustLib.instance.api.crateApiSimpleKpPoolTarget();
 
-/// Whether an event that has just failed another poll cycle is still worth
-/// retrying. `first_seen_ms` is when this device first fetched it (0 when
-/// unknown); `attempts` is how many poll cycles have now ended with it
-/// unprocessed. See `moat_core::retry`.
-bool keepForRetry(
-        {required PlatformInt64 firstSeenMs,
-        required int attempts,
-        required PlatformInt64 nowMs}) =>
-    RustLib.instance.api.crateApiSimpleKeepForRetry(
-        firstSeenMs: firstSeenMs, attempts: attempts, nowMs: nowMs);
-
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MoatSessionHandle>>
 abstract class MoatSessionHandle implements RustOpaqueInterface {
   /// Add a member to a group. Returns welcome result.
@@ -284,6 +274,9 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
       required List<int> keyBundle,
       required List<int> payload});
 
+  /// The parked events, serialized for the host to persist.
+  Uint8List exportParkedEvents();
+
   /// Export the full session state as bytes for persistence.
   Future<Uint8List> exportState();
 
@@ -312,8 +305,29 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
   Future<List<CredentialDto>> getGroupMemberCredentials(
       {required List<int> groupId});
 
+  /// The group a candidate tag belongs to, if it is one.
+  Uint8List? groupForTag({required List<int> tag});
+
   /// Check if there are unsaved changes.
   bool hasPendingChanges();
+
+  /// Restore parked events persisted with `export_parked_events`.
+  int importParkedEvents({required List<int> bytes});
+
+  /// Drop events parked too long. Returns how many were dropped.
+  int inboxExpire({required PlatformInt64 nowMs});
+
+  /// Park an event whose tag is not a candidate tag yet. Generating that
+  /// tag moves it back into the queue.
+  void inboxPark({required InboxEventDto event, required PlatformInt64 nowMs});
+
+  /// The queued event with the lowest rkey, including events woken since
+  /// they were parked.
+  InboxEventDto? inboxPopReady();
+
+  /// Queue a fetched event for processing. Returns false if the same
+  /// record is already queued or parked.
+  bool inboxPush({required InboxEventDto event});
 
   /// Check if a DID already has a device in the group.
   bool isDidInGroup({required List<int> groupId, required String did});
@@ -1002,6 +1016,47 @@ class ImageProcessResult {
           mimeType == other.mimeType;
 }
 
+/// A fetched `social.moat.event` record, as the inbox holds it.
+class InboxEventDto {
+  /// The DID whose PDS the record was fetched from.
+  final String sourceDid;
+  final String rkey;
+  final String authorDid;
+  final Uint8List tag;
+  final Uint8List ciphertext;
+  final PlatformInt64 createdAtMs;
+
+  const InboxEventDto({
+    required this.sourceDid,
+    required this.rkey,
+    required this.authorDid,
+    required this.tag,
+    required this.ciphertext,
+    required this.createdAtMs,
+  });
+
+  @override
+  int get hashCode =>
+      sourceDid.hashCode ^
+      rkey.hashCode ^
+      authorDid.hashCode ^
+      tag.hashCode ^
+      ciphertext.hashCode ^
+      createdAtMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is InboxEventDto &&
+          runtimeType == other.runtimeType &&
+          sourceDid == other.sourceDid &&
+          rkey == other.rkey &&
+          authorDid == other.authorDid &&
+          tag == other.tag &&
+          ciphertext == other.ciphertext &&
+          createdAtMs == other.createdAtMs;
+}
+
 class KeyPackageResult {
   final Uint8List keyPackage;
   final Uint8List keyBundle;
@@ -1021,35 +1076,6 @@ class KeyPackageResult {
           runtimeType == other.runtimeType &&
           keyPackage == other.keyPackage &&
           keyBundle == other.keyBundle;
-}
-
-/// Moat error with code and message, suitable for Dart exceptions.
-class MoatError implements FrbException {
-  final int code;
-  final String message;
-
-  /// No later event can make this operation succeed, so a host keeping
-  /// failed events for retry should drop this one. See
-  /// `moat_core::Error::is_permanent`.
-  final bool permanent;
-
-  const MoatError({
-    required this.code,
-    required this.message,
-    required this.permanent,
-  });
-
-  @override
-  int get hashCode => code.hashCode ^ message.hashCode ^ permanent.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is MoatError &&
-          runtimeType == other.runtimeType &&
-          code == other.code &&
-          message == other.message &&
-          permanent == other.permanent;
 }
 
 /// One key package drawn from the same-user KP pool.

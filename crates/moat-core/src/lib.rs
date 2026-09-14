@@ -34,7 +34,7 @@ pub(crate) mod stealth;
 pub(crate) mod storage;
 pub mod sync;
 pub mod sync_request;
-pub mod retry;
+pub mod inbox;
 pub(crate) mod tag;
 
 pub mod api;
@@ -54,7 +54,7 @@ use std::sync::RwLock;
 // Disambiguate from openmls::prelude::* and make accessible as moat_core::X
 pub use crate::credential::MoatCredential;
 pub use crate::error::{Error, ErrorCode, Result};
-pub use crate::retry::{keep_for_retry, MAX_RETRY_AGE_MS, MIN_RETRY_ATTEMPTS};
+pub use crate::inbox::{Inbox, InboxEvent, MAX_PARKED_AGE_MS, MAX_PARKED_EVENTS};
 pub use crate::device_ring::{
     decode_coord_msg, encode_coord_msg, summarize_ring_commands, CoordMsg, DeviceId,
     DeviceRingState, GroupKind, KeyPackageInput, OfferedKp, OwnEventInput, RingCommand, RingEvent,
@@ -320,6 +320,10 @@ pub struct MoatSession {
     /// Used by `populate_candidate_tags` to generate candidate tags with decaying
     /// gap limits for prior epochs, catching messages stranded across epoch boundaries.
     prior_export_secrets: RwLock<HashMap<Vec<u8>, VecDeque<Vec<u8>>>>,
+    /// Fetched events waiting to be processed, and the ones parked until
+    /// their tag is generated. Persisted by the host through
+    /// `export_parked_events`, not as part of the session state.
+    inbox: RwLock<Inbox>,
 }
 
 impl Default for MoatSession {
@@ -360,6 +364,7 @@ impl MoatSession {
             tag_metadata: RwLock::new(HashMap::new()),
             pending_ops: RwLock::new(HashMap::new()),
             prior_export_secrets: RwLock::new(HashMap::new()),
+            inbox: RwLock::new(Inbox::new()),
         }
     }
 
@@ -442,6 +447,7 @@ impl MoatSession {
             tag_metadata: RwLock::new(HashMap::new()),
             pending_ops: RwLock::new(HashMap::new()),
             prior_export_secrets: RwLock::new(prior_export_secrets),
+            inbox: RwLock::new(Inbox::new()),
         })
     }
 
@@ -1936,7 +1942,57 @@ impl MoatSession {
             }
         }
 
+        self.inbox.write().unwrap().wake(all_tags.iter());
         Ok(all_tags)
+    }
+
+    // ── Inbox ───────────────────────────────────────────────────────────────
+
+    /// Queue a fetched event for processing. Returns false if the same record
+    /// is already queued or parked. See [`inbox`].
+    pub fn inbox_push(&self, event: InboxEvent) -> bool {
+        self.inbox.write().unwrap().push(event)
+    }
+
+    /// The queued event with the lowest rkey, including events woken since
+    /// they were parked.
+    pub fn inbox_pop_ready(&self) -> Option<InboxEvent> {
+        self.inbox.write().unwrap().pop_ready()
+    }
+
+    /// Park an event whose tag is not a candidate tag yet. Generating that
+    /// tag moves it back into the queue.
+    pub fn inbox_park(&self, event: InboxEvent, now_ms: i64) {
+        self.inbox.write().unwrap().park(event, now_ms)
+    }
+
+    /// Drop events parked longer than [`MAX_PARKED_AGE_MS`]. Returns how many.
+    pub fn inbox_expire(&self, now_ms: i64) -> usize {
+        self.inbox.write().unwrap().expire(now_ms)
+    }
+
+    pub fn inbox_parked_len(&self) -> usize {
+        self.inbox.read().unwrap().parked_len()
+    }
+
+    /// The parked events, serialized for the host to persist.
+    pub fn export_parked_events(&self) -> Vec<u8> {
+        self.inbox.read().unwrap().export_parked()
+    }
+
+    /// Restore parked events persisted with [`Self::export_parked_events`].
+    /// Returns how many were restored.
+    pub fn import_parked_events(&self, bytes: &[u8]) -> Result<usize> {
+        self.inbox.write().unwrap().import_parked(bytes)
+    }
+
+    /// The group a candidate tag belongs to, if it is one.
+    pub fn group_for_tag(&self, tag: &[u8; 16]) -> Option<Vec<u8>> {
+        self.tag_metadata
+            .read()
+            .unwrap()
+            .get(tag)
+            .map(|m| m.group_id.clone())
     }
 
     /// Mark a tag as seen, advancing the seen counter for the corresponding sender.
@@ -2020,23 +2076,27 @@ impl MoatSession {
             return Vec::new();
         };
 
-        let mut metadata = self.tag_metadata.write().unwrap();
-        generated
-            .into_iter()
-            .map(|(t, counter)| {
-                metadata.insert(
-                    t,
-                    TagMetadata {
-                        group_id: entry.group_id.clone(),
-                        sender_did: entry.sender_did.clone(),
-                        device_id: entry.device_id,
-                        counter,
-                        current_epoch: true,
-                    },
-                );
-                t
-            })
-            .collect()
+        let added: Vec<[u8; 16]> = {
+            let mut metadata = self.tag_metadata.write().unwrap();
+            generated
+                .into_iter()
+                .map(|(t, counter)| {
+                    metadata.insert(
+                        t,
+                        TagMetadata {
+                            group_id: entry.group_id.clone(),
+                            sender_did: entry.sender_did.clone(),
+                            device_id: entry.device_id,
+                            counter,
+                            current_epoch: true,
+                        },
+                    );
+                    t
+                })
+                .collect()
+        };
+        self.inbox.write().unwrap().wake(added.iter());
+        added
     }
 
     /// Scan ahead with a wider window to try matching an unknown tag.

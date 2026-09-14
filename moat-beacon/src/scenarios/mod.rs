@@ -908,14 +908,14 @@ pub static SCENARIOS: &[Scenario] = &[
     },
     Scenario {
         name: "sender-exceeds-tag-window",
-        description: "Alice sends Bob (Rust) several tag windows of messages; all must arrive by poll, then by push alone",
+        description: "Alice sends Bob (Rust) several tag windows of messages; all must arrive by poll, after Bob restarts, then by push alone",
         run_fn: sender_exceeds_tag_window::run_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
         name: "sender-exceeds-tag-window-d",
-        description: "Same as sender-exceeds-tag-window with a Dart recipient, poll path only",
+        description: "Same as sender-exceeds-tag-window with a Dart recipient, poll path and restart only",
         run_fn: sender_exceeds_tag_window::run_dart_recipient_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),

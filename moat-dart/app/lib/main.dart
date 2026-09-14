@@ -381,23 +381,6 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
     }
   }
 
-  void _registerAllTags() {
-    final auth = context.read<AuthProvider>();
-    final conversations = context.read<ConversationsProvider>().conversations;
-    if (!auth.isAuthenticated) return;
-
-    final session = auth.moatSession;
-    if (session == null) return;
-
-    final allTags = <Uint8List>[];
-    for (final conv in conversations) {
-      final tags = session.populateCandidateTags(groupId: conv.groupId);
-      allTags.addAll(tags.map((t) => Uint8List.fromList(t)));
-    }
-
-    DrawbridgeService.instance.watchTags(allTags);
-  }
-
   Future<void> _startPollingIfNeeded(AuthProvider auth) async {
     if (auth.isAuthenticated && !_pollingStarted) {
       _pollingStarted = true;
@@ -487,15 +470,14 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   }
 
   Future<void> _initDrawbridge(AuthProvider auth) async {
-    // Wire the app-specific poll-on-push callback and register conversation tags.
+    // Wire the app-specific poll-on-push callback. Conversation tags are
+    // registered by PollingService before its first poll.
     // AuthService handles the Drawbridge connection itself (via login/resume).
     DrawbridgeService.instance.onNewEvent = (event) {
       // For now, trigger a poll on any new event notification.
       // Inline decryption using event.payload can be added later.
       _pollingService?.poll();
     };
-
-    _registerAllTags();
 
     // Fetch partner drawbridge configs for all conversations.
     final conversations = context.read<ConversationsProvider>().conversations;

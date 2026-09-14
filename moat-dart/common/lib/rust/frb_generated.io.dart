@@ -132,6 +132,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   EventDto dco_decode_box_autoadd_event_dto(dynamic raw);
 
   @protected
+  InboxEventDto dco_decode_box_autoadd_inbox_event_dto(dynamic raw);
+
+  @protected
   OfferedKpDto dco_decode_box_autoadd_offered_kp_dto(dynamic raw);
 
   @protected
@@ -202,6 +205,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ImageProcessResult dco_decode_image_process_result(dynamic raw);
 
   @protected
+  InboxEventDto dco_decode_inbox_event_dto(dynamic raw);
+
+  @protected
   KeyPackageResult dco_decode_key_package_result(dynamic raw);
 
   @protected
@@ -253,9 +259,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<SyncReactionDto> dco_decode_list_sync_reaction_dto(dynamic raw);
 
   @protected
-  MoatError dco_decode_moat_error(dynamic raw);
-
-  @protected
   OfferedKpDto dco_decode_offered_kp_dto(dynamic raw);
 
   @protected
@@ -266,6 +269,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   EnrollDto? dco_decode_opt_box_autoadd_enroll_dto(dynamic raw);
+
+  @protected
+  InboxEventDto? dco_decode_opt_box_autoadd_inbox_event_dto(dynamic raw);
 
   @protected
   OfferedKpDto? dco_decode_opt_box_autoadd_offered_kp_dto(dynamic raw);
@@ -463,6 +469,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   EventDto sse_decode_box_autoadd_event_dto(SseDeserializer deserializer);
 
   @protected
+  InboxEventDto sse_decode_box_autoadd_inbox_event_dto(
+      SseDeserializer deserializer);
+
+  @protected
   OfferedKpDto sse_decode_box_autoadd_offered_kp_dto(
       SseDeserializer deserializer);
 
@@ -541,6 +551,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
+  InboxEventDto sse_decode_inbox_event_dto(SseDeserializer deserializer);
+
+  @protected
   KeyPackageResult sse_decode_key_package_result(SseDeserializer deserializer);
 
   @protected
@@ -604,9 +617,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
-  MoatError sse_decode_moat_error(SseDeserializer deserializer);
-
-  @protected
   OfferedKpDto sse_decode_offered_kp_dto(SseDeserializer deserializer);
 
   @protected
@@ -618,6 +628,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   EnrollDto? sse_decode_opt_box_autoadd_enroll_dto(
+      SseDeserializer deserializer);
+
+  @protected
+  InboxEventDto? sse_decode_opt_box_autoadd_inbox_event_dto(
       SseDeserializer deserializer);
 
   @protected
@@ -827,6 +841,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       EventDto self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_inbox_event_dto(
+      InboxEventDto self, SseSerializer serializer);
+
+  @protected
   void sse_encode_box_autoadd_offered_kp_dto(
       OfferedKpDto self, SseSerializer serializer);
 
@@ -908,6 +926,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       ImageProcessResult self, SseSerializer serializer);
 
   @protected
+  void sse_encode_inbox_event_dto(InboxEventDto self, SseSerializer serializer);
+
+  @protected
   void sse_encode_key_package_result(
       KeyPackageResult self, SseSerializer serializer);
 
@@ -974,9 +995,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       List<SyncReactionDto> self, SseSerializer serializer);
 
   @protected
-  void sse_encode_moat_error(MoatError self, SseSerializer serializer);
-
-  @protected
   void sse_encode_offered_kp_dto(OfferedKpDto self, SseSerializer serializer);
 
   @protected
@@ -989,6 +1007,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_opt_box_autoadd_enroll_dto(
       EnrollDto? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_inbox_event_dto(
+      InboxEventDto? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_box_autoadd_offered_kp_dto(
