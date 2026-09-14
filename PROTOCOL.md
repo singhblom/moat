@@ -61,7 +61,7 @@ Large payloads (full-resolution images, long text, video) live off-chain as repo
 3. Match the event's tag against candidate tags; on match, advance the seen counter for that sender
 4. MLS-decrypt, unpad, deserialize the inner JSON event
 5. If it's a commit, merge it to advance the local epoch and regenerate candidate tags
-6. Keep any event that matched no tag or failed to decrypt, and retry it on later polls: the commit that reaches its epoch, or its group's Welcome, may be fetched after it. Events are processed in rkey order, repeating until a pass makes no progress, and the kept events are persisted before the cursors move past them. An event that failed as this device's own or from an epoch already left is dropped at once; any other is dropped after it has survived at least 3 poll cycles and 10 minutes (`moat_core::keep_for_retry`). A message dropped this way predates the device's membership and reaches it through history sync
+6. Park any event whose tag is not a candidate tag, under that tag: the commit that reaches its epoch, or its group's Welcome, may be fetched after it. Generating candidate tags (on joining, on a commit, on startup, or when the scanning window advances) moves the events parked under them back into the queue, which is processed in rkey order; an event is never attempted before its tag exists. Parked events are persisted before the cursors move past them. Events nothing wakes are dropped by storage bound only: beyond 1000 parked (oldest first) or after 24 hours (`moat_core::inbox`). A message dropped this way predates the device's membership and reaches it through history sync
 
 ## Starting a Conversation (Stealth Invite)
 
