@@ -4,14 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:moat_dart_common/moat_dart_common.dart' as common;
 import '../services/pairing_manager.dart';
-import '../widgets/common_value_listenable_builder.dart';
+import '../widgets/common_listenable.dart';
 
 /// Existing device: enter a pairing code either by scanning the other
 /// device's QR code or by typing it in. Once confirmed, waits for the
 /// other device's `Enroll` — which triggers `main.dart`'s `state` listener
 /// to push `ApprovePairingScreen` on top of this one — and for the
 /// pairing to complete. Renders straight off [PairingService.state] via
-/// [CommonValueListenableBuilder] rather than polling.
+/// [ValueListenableBuilder] rather than polling.
 ///
 /// Deliberately does *not* pop itself on `Done`: `Navigator.pop()` removes
 /// whatever is on top, and `Done` is only reached via a successful approve
@@ -177,9 +177,9 @@ class _EnterPairingCodeScreenState extends State<EnterPairingCodeScreen> {
     if (service == null) {
       return const Center(child: CircularProgressIndicator());
     }
-    return CommonValueListenableBuilder<common.PairingUiStateDto>(
-      valueListenable: service.state,
-      builder: (context, uiState) {
+    return ValueListenableBuilder<common.PairingUiStateDto>(
+      valueListenable: service.state.asFlutter,
+      builder: (context, uiState, _) {
         if (uiState is common.PairingUiStateDto_Failed) {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,

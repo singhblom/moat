@@ -204,14 +204,14 @@ func (r *Relay) unregister(c *Client) {
 	}
 	delete(r.clients, c)
 
-	// Remove from tag index; collect tags that now have no remaining watchers.
-	var emptyTags []string
+	// Remove from tag index.
+	watched := make([]string, 0, len(c.tags))
 	for tag := range c.tags {
+		watched = append(watched, tag)
 		if clients, ok := r.byTag[tag]; ok {
 			delete(clients, c)
 			if len(clients) == 0 {
 				delete(r.byTag, tag)
-				emptyTags = append(emptyTags, tag)
 			}
 		}
 	}
@@ -224,18 +224,21 @@ func (r *Relay) unregister(c *Client) {
 
 	r.mu.Unlock()
 
-	// Create a disconnect buffer for each tag that lost its last watcher.
-	// Any client that reconnects and watches one of these tags will receive
-	// the buffered events, regardless of which DID it authenticated with.
-	if len(emptyTags) > 0 {
+	// Buffer every watched tag, even ones others still watch (a sender never
+	// gets its own events); push relies on this during the grace window. Keep
+	// existing buffers.
+	if len(watched) > 0 {
+		expiresAt := time.Now().Add(30 * time.Second)
 		r.bufferMu.Lock()
-		for _, tag := range emptyTags {
-			r.buffers[tag] = &DisconnectBuffer{
-				expiresAt: time.Now().Add(30 * time.Second),
+		for _, tag := range watched {
+			if buf, ok := r.buffers[tag]; ok {
+				buf.expiresAt = expiresAt
+			} else {
+				r.buffers[tag] = &DisconnectBuffer{expiresAt: expiresAt}
 			}
 		}
 		r.bufferMu.Unlock()
-		r.log.Info("created disconnect buffers", "tag_count", len(emptyTags))
+		r.log.Info("created disconnect buffers", "tag_count", len(watched))
 	}
 
 	// Cancel any pending pairing sessions before closing the send channel so

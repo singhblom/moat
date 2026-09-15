@@ -170,10 +170,8 @@ class _DevicesScreenState extends State<DevicesScreen> {
                       ),
                       title: Text(d.name),
                       subtitle: d.isSelf ? const Text('This device') : null,
-                      // Send this device's history to that one, decided
-                      // here rather than by walking over there. Pressing it
-                      // *is* the approval — the other side joins without a
-                      // prompt of its own.
+                      // Pressing this is the approval; the recipient joins
+                      // without a prompt.
                       trailing: d.isSelf
                           ? null
                           : TextButton(

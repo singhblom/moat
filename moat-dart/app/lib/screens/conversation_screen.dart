@@ -2,12 +2,11 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:moat_dart_common/moat_dart_common.dart' hide ConversationRepository;
+import 'package:moat_dart_common/moat_dart_common.dart';
 import '../providers/auth_provider.dart';
 import '../providers/conversations_provider.dart';
 import '../providers/profile_provider.dart';
 import '../utils/display_name.dart';
-import '../services/conversation_repository.dart';
 import '../widgets/message_bubble.dart';
 
 /// Screen showing messages in a conversation

@@ -184,9 +184,7 @@ pub struct ConversationMessages {
     pub messages: Vec<StoredMessage>,
 }
 
-/// An event from the retry buffer that `parked_events.bin` replaced, as
-/// written to `unprocessed_events.json`. Read once, to hand its events to the
-/// inbox.
+/// An entry of the old `unprocessed_events.json` retry buffer, migrated once.
 #[derive(Debug, Clone, Deserialize)]
 struct LegacyUnprocessedEvent {
     rkey: String,
@@ -392,8 +390,7 @@ impl KeyStore {
         self.store_pagination_state(&state)
     }
 
-    /// Persist the session inbox's parked events
-    /// (`MoatSession::export_parked_events`).
+    /// Persist the inbox's parked events.
     pub fn store_parked_events(&self, bytes: &[u8]) -> Result<()> {
         fs::write(self.base_path.join("parked_events.bin"), bytes)?;
         Ok(())
@@ -408,8 +405,7 @@ impl KeyStore {
         Ok(Some(fs::read(&path)?))
     }
 
-    /// Take the events left in the retry buffer the inbox replaced, deleting
-    /// the file. They are queued in the inbox like freshly fetched ones.
+    /// Take the old retry buffer's events and delete its file.
     pub fn take_legacy_unprocessed_events(&self) -> Result<Vec<moat_core::InboxEvent>> {
         use base64::Engine;
         let path = self.base_path.join("unprocessed_events.json");
@@ -847,8 +843,7 @@ mod tests {
         assert_eq!(reopened.load_parked_events().unwrap().as_deref(), Some(&b"parked"[..]));
     }
 
-    /// Events left in the old retry buffer are handed to the inbox once,
-    /// whichever fields that buffer carried.
+    /// The old retry buffer migrates once, whatever fields it carried.
     #[test]
     fn legacy_unprocessed_events_are_taken_once() {
         let dir = tempdir().unwrap();

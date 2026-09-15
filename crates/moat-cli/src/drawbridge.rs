@@ -52,10 +52,10 @@ pub struct DrawbridgeManager {
 
 struct OwnDrawbridge {
     writer: WsWriter,
-    /// Abort handle for the connection's `own_read_loop` task. Aborting it
-    /// drops the read half, closing the socket without the loop reporting a
-    /// disconnect.
+    /// Aborting closes the socket without the read loop reporting a disconnect.
     read_task: tokio::task::AbortHandle,
+    /// The relay this connection is to.
+    url: String,
 }
 
 /// Persisted Drawbridge state (stored in drawbridge.json).
@@ -121,9 +121,7 @@ impl DrawbridgeManager {
         did: &str,
         identity_key_bundle: &[u8],
     ) -> Result<(), String> {
-        // A device holds one connection to its own relay. Connecting again —
-        // auto-login followed by an explicit login does — replaces the old
-        // one rather than leaving it open beside the new.
+        // Replace an existing connection rather than duplicate it.
         self.close_own();
 
         let (ws_stream, _) = tokio_tungstenite::connect_async(url)
@@ -206,7 +204,11 @@ impl DrawbridgeManager {
         .abort_handle();
 
         // 7. Store connection, reset reconnect backoff
-        self.own = Some(OwnDrawbridge { writer, read_task });
+        self.own = Some(OwnDrawbridge {
+            writer,
+            read_task,
+            url: url.to_string(),
+        });
         self.reconnect_attempt = 0;
 
         Ok(())
@@ -422,6 +424,11 @@ impl DrawbridgeManager {
         self.own.is_some()
     }
 
+    /// Whether this device is connected to its own relay at [url].
+    pub fn is_connected_to(&self, url: &str) -> bool {
+        self.own.as_ref().is_some_and(|own| own.url == url)
+    }
+
     /// Mark the connection as dropped (called on disconnect).
     pub fn clear_connection(&mut self) {
         self.own = None;
@@ -635,6 +642,13 @@ mod tests {
     fn test_drawbridge_state_default() {
         let state = DrawbridgeState::default();
         assert!(state.own_url.is_none());
+    }
+
+    #[test]
+    fn a_manager_with_no_connection_is_connected_to_nothing() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mgr = DrawbridgeManager::new(tx);
+        assert!(!mgr.is_connected_to("wss://relay.example.com/ws"));
     }
 
     #[test]

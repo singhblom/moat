@@ -1,6 +1,5 @@
-//! The inbox as a host drives it: events arrive in any order across polls,
-//! and each is processed as soon as the tag it carries becomes a candidate
-//! tag — never retried before that.
+//! The inbox as a host drives it: events arrive in any order and are
+//! processed once their tag becomes a candidate tag.
 
 use moat_core::{ControlKind, Event, EventKind, InboxEvent, MoatCredential, MoatSession};
 
@@ -62,8 +61,7 @@ enum Seen {
     Message(Vec<u8>),
 }
 
-/// The host loop: take ready events in rkey order; process one whose tag is
-/// a candidate tag, refreshing candidate tags after a commit; park the rest.
+/// The host loop: process ready events with known tags, park the rest.
 fn drain(session: &MoatSession) -> Vec<Seen> {
     let mut seen = Vec::new();
     while let Some(event) = session.inbox_pop_ready() {
@@ -160,8 +158,7 @@ fn a_message_that_arrives_before_the_welcome_is_read_after_joining() {
     bob.session.inbox_push(fetched("0002", msg_tag, msg));
     assert_eq!(drain(&bob.session), []);
 
-    // The Welcome travels by stealth, outside the inbox; joining populates
-    // the group's candidate tags.
+    // Welcomes arrive outside the inbox; joining populates candidate tags.
     bob.session.process_welcome(&added.welcome).unwrap();
     bob.session.populate_candidate_tags(&group_id, &[]).unwrap();
     assert_eq!(
@@ -177,8 +174,7 @@ fn traffic_this_device_cannot_read_stays_parked_and_is_not_attempted() {
         .inbox_push(fetched("0001", [0xAB; 16], vec![0xFF; 64]));
     assert_eq!(drain(&bob.session), []);
 
-    // New tags for the group, and a commit, wake nothing it carries: the
-    // unreadable ciphertext is never handed back to the host.
+    // New tags and a commit don't wake it.
     let carol = member("did:plc:carol", "Carol");
     let add_carol = alice
         .session

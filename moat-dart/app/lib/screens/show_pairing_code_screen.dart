@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:moat_dart_common/moat_dart_common.dart' as common;
 import 'package:qr_flutter/qr_flutter.dart';
 import '../services/pairing_manager.dart';
-import '../widgets/common_value_listenable_builder.dart';
+import '../widgets/common_listenable.dart';
 
 /// New device: requests a pairing code and displays it as a QR code (plus
 /// raw text as a manual-entry fallback), then waits for the existing
@@ -118,9 +118,9 @@ class _ShowPairingCodeScreenState extends State<ShowPairingCodeScreen> {
     if (_starting || service == null) {
       return const Center(child: CircularProgressIndicator());
     }
-    return CommonValueListenableBuilder<common.PairingUiStateDto>(
-      valueListenable: service.state,
-      builder: (context, uiState) => _buildForState(context, uiState),
+    return ValueListenableBuilder<common.PairingUiStateDto>(
+      valueListenable: service.state.asFlutter,
+      builder: (context, uiState, _) => _buildForState(context, uiState),
     );
   }
 

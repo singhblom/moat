@@ -2,8 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:moat_dart_common/moat_dart_common.dart' hide ConversationManager;
-import 'package:moat_flutter/services/conversation_manager.dart';
+import 'package:moat_dart_common/moat_dart_common.dart';
 
 // ---------------------------------------------------------------------------
 // Helpers

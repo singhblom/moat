@@ -36,8 +36,7 @@ pub async fn run(verbose: bool) {
 }
 
 /// The scenario body, parameterised by which runtime each device uses.
-/// `offerer_kind` is D1 — the device that holds the history and offers —
-/// so that is the axis worth varying.
+/// `offerer_kind` is D1, the device that holds the history and offers.
 pub async fn run_with(
     offerer_kind: ParticipantKind,
     recipient_kind: ParticipantKind,
@@ -111,8 +110,7 @@ pub async fn run_with(
 
     // ── The user picks D2 from D1's device list ─────────────────────────────
     //
-    // D1's ring membership is what the Devices screen lists, so the target
-    // comes from there, and it must carry the name the screen shows.
+    // Pick the target as the Devices screen does, from D1's ring members.
     let deadline = std::time::Instant::now() + TIMEOUT;
     let target = loop {
         let _ = d2.ring_tick().await;

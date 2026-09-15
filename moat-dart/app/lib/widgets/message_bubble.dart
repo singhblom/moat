@@ -344,8 +344,7 @@ class MessageBubble extends StatelessWidget {
   }
 
   String _formatTime(DateTime time) {
-    // Messages received live carry the PDS's UTC timestamp; ones that
-    // arrived by sync are already local.
+    // Live messages carry a UTC timestamp.
     final local = time.toLocal();
     final hour = local.hour;
     final minute = local.minute.toString().padLeft(2, '0');

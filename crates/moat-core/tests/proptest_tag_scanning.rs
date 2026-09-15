@@ -53,8 +53,7 @@ impl TagScanner {
         self.rebuild(sim, participant);
     }
 
-    /// Advance the scanning window for a matched tag and add only the tags
-    /// that returns — what a host does, with no full rebuild.
+    /// What a host does on a match: add only the tags the window slides over.
     fn mark_and_extend(&mut self, sim: &ConversationSim, participant: usize, tag: &[u8; 16]) {
         let added = sim.participants[participant].session.advance_scan_window(tag);
         self.candidates[participant].extend(added);
@@ -545,11 +544,7 @@ fn tags_differ_across_senders_at_same_counter() {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(16))]
 
-    /// P16: The window keeps sliding without a full rebuild.
-    /// A recipient seeds its candidates once and afterwards adds only what
-    /// `advance_scan_window` returns for each matched tag — all a host does —
-    /// yet every message in a burst longer than the gap limit stays
-    /// scannable.
+    /// P16: The window keeps sliding past the gap limit without a full rebuild.
     #[test]
     fn window_slides_with_advance_scan_window(n_messages in 11usize..40) {
         let mut sim = ConversationSim::new(&["Alice", "Bob"]);
@@ -569,9 +564,6 @@ proptest! {
     }
 
     /// P17: Matching a prior-epoch tag does not move the current window.
-    /// Prior-epoch candidates count from 0 in their own epoch; letting them
-    /// advance the current epoch's seen counter would skip the sender's
-    /// first messages after the commit.
     #[test]
     fn prior_epoch_match_does_not_move_current_window(
         n_old in 1usize..=5,

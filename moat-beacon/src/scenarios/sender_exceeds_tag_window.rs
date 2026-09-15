@@ -1,14 +1,6 @@
-//! One device sends more messages between membership changes than a
-//! recipient's candidate-tag window covers at once.
-//!
-//! A recipient derives tags for the next `TAG_GAP_LIMIT` counters of each
-//! sender device, and must keep deriving further ones as messages arrive —
-//! on the poll path, and (for the Rust recipient) on the push path, whose
-//! Drawbridge subscription is built from the same tag set. Alice sends
-//! several windows' worth of messages to Bob with no membership change in
-//! between, and Bob must receive every one — before and after Bob
-//! restarts, since a restarted session holds no candidate tags until the
-//! host populates them.
+//! One sender sends more messages between membership changes than the
+//! recipient's candidate-tag window covers. Every message must arrive by poll,
+//! after the recipient restarts, and (Rust recipient) by push alone.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -40,16 +32,12 @@ pub(crate) fn run_dart_recipient_boxed(
     Box::pin(run_dart_recipient(verbose))
 }
 
-/// Bob runs the Rust CLI: the poll path, again after a restart, then the
-/// push path alone.
+/// Bob on the Rust CLI: poll, restart, then push alone.
 pub async fn run(verbose: bool) {
     run_with(ParticipantKind::RustCli, "sender-exceeds-tag-window", true, verbose).await;
 }
 
-/// Bob runs the Dart server: the poll path, again after a restart. The
-/// headless server does not
-/// turn Drawbridge notifications into polls — the Flutter app does — so
-/// there is no push-only path to exercise here.
+/// Bob on the Dart server: poll, then restart.
 pub async fn run_dart_recipient(verbose: bool) {
     run_with(ParticipantKind::DartServer, "sender-exceeds-tag-window-d", false, verbose).await;
 }
@@ -102,9 +90,7 @@ async fn run_with(recipient_kind: ParticipantKind, name: &str, push_phase: bool,
 
     // ── After a restart ──────────────────────────────────────────────────────
     //
-    // The restarted session has no candidate tags until the host populates
-    // them from its groups. Without that, the window can slide no further
-    // than whatever tags the host persisted.
+    // A restarted session has no candidate tags until the host repopulates them.
     world.kill_participant("bob").expect("kill bob");
     world.restart_participant("bob").await.expect("restart bob");
     bob.login("bob.postern.test", "any-password").await.expect("bob re-login");
@@ -135,12 +121,8 @@ async fn run_with(recipient_kind: ParticipantKind, name: &str, push_phase: bool,
         .wait_for_drawbridge_connections(2, Duration::from_secs(5))
         .await;
     bob.set_poll_interval(0).await.expect("disable bob's polling");
-    // Paced, not fired back to back. Bob's Drawbridge subscription reaches
-    // TAG_GAP_LIMIT counters past the last message he has seen, so a burst
-    // sent faster than one subscription update round-trips can outrun it on
-    // push; polling recovers those. What push alone must do is keep up with
-    // a sender at any human pace — which without the sliding window it
-    // cannot past the first ten.
+    // Paced: a burst faster than a watch-list update can outrun push (polling
+    // recovers those). Push alone must keep up at human pace.
     for n in 1..=BURST {
         alice
             .send_message(&group_id, &format!("pushed {n}"))

@@ -275,8 +275,7 @@ class PollingService {
 
     await _prepareSession(session);
 
-    // Fetch from every DID before processing anything: the inbox hands
-    // events back in rkey order across all of them.
+    // Fetch every DID first; the inbox orders events across them by rkey.
     final cursors = <String, String>{};
     for (final did in allParticipantDids) {
       try {
@@ -311,8 +310,7 @@ class PollingService {
       }
     }
 
-    // Processing a commit or Welcome generates tags, which moves the events
-    // parked under them back into the queue.
+    // Processing a commit or Welcome generates tags, waking parked events.
     final tagMap = await _secureStorage.loadTagMap();
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     var newMsgs = 0;
@@ -328,8 +326,7 @@ class PollingService {
     }
     await _secureStorage.saveParkedEvents(session.exportParkedEvents());
 
-    // Cursors move only once every event they pass has been processed or
-    // parked.
+    // Move cursors only once their events are processed or parked.
     for (final entry in cursors.entries) {
       await _secureStorage.saveLastRkey(entry.key, entry.value);
     }
@@ -340,11 +337,8 @@ class PollingService {
   /// The session [_prepareSession] last ran for.
   MoatSessionHandle? _preparedSession;
 
-  /// Bring a newly loaded session up to date before its first poll: the
-  /// candidate tags of every group, which the session does not persist, and
-  /// the parked events, which this device does. Runs once per session, in
-  /// both the app and the headless server. Mirrors moat-cli's
-  /// `load_conversations_sync`.
+  /// Before a session's first poll: populate every group's candidate tags and
+  /// restore parked events. Mirrors moat-cli's `load_conversations_sync`.
   Future<void> _prepareSession(MoatSessionHandle session) async {
     if (identical(_preparedSession, session)) return;
     _preparedSession = session;
@@ -370,8 +364,7 @@ class PollingService {
     }
   }
 
-  /// Process one event from the inbox, or park it if its tag is not a
-  /// candidate tag yet. Returns true if a new message was stored.
+  /// Process an inbox event, or park it. Returns true if a message was stored.
   Future<bool> _processInboxEvent(
     InboxEventDto event,
     Map<String, String> tagMap,
@@ -382,8 +375,7 @@ class PollingService {
     int nowMs,
   ) async {
     final tagHex = event.tag.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-    // The session knows every tag it generated since it was created; the
-    // persisted tag map also covers groups not repopulated since a restart.
+    // The persisted tag map covers groups not repopulated since a restart.
     final groupId = session.groupForTag(tag: event.tag);
     final groupIdHex = groupId != null
         ? groupId.map((b) => b.toRadixString(16).padLeft(2, '0')).join()
@@ -428,9 +420,8 @@ class PollingService {
     return stored;
   }
 
-  /// Slide the tag window past a matched event, and register the tags that
-  /// newly covers — in [tagMap] too, since later events in this poll may
-  /// need them.
+  /// Slide the tag window past a matched event and register the new tags,
+  /// including in [tagMap] for later events in this poll.
   Future<void> _advanceScanWindow(
     List<int> tag,
     String groupIdHex,

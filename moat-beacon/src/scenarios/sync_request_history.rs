@@ -49,8 +49,7 @@ pub async fn run(verbose: bool) {
     run_with(ParticipantKind::RustCli, ParticipantKind::RustCli, "rr", verbose).await
 }
 
-/// Ring ticks driven on both devices between pairing and the request —
-/// more than one candidate-tag window's worth.
+/// Ring ticks between pairing and the request: more than one tag window.
 const IDLE_TICKS: usize = 12;
 
 /// All-Rust cell, after the ring has sat idle.
@@ -146,10 +145,8 @@ pub async fn run_with(
     run_with_idle(donor_kind, requester_kind, cell, 0, verbose).await
 }
 
-/// [`run_with`], with `idle_ticks` ring ticks on both devices right after
-/// pairing. A ring that sits idle must stay usable: whatever the devices
-/// publish on it in the meantime spends counters of each sender's tag
-/// window, and the request and its approval must still be recognised.
+/// [`run_with`] after `idle_ticks` ring ticks on both devices: the request
+/// must still be recognised once ring traffic has used up a tag window.
 pub async fn run_with_idle(
     donor_kind: ParticipantKind,
     requester_kind: ParticipantKind,

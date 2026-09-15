@@ -529,6 +529,34 @@ func TestDisconnectBuffer(t *testing.T) {
 	}
 }
 
+// A reconnecting client gets events it missed even when another client (here
+// the sender) still watches the tag.
+func TestDisconnectBuffer_TagStillWatchedByAnother(t *testing.T) {
+	env := newTestEnv(t)
+	tag := "11223344112233441122334411223344"
+
+	bob := env.connect("did:plc:bob")
+	bob.watchTags(tag)
+
+	alice1 := env.connect("did:plc:alice")
+	alice1.watchTags(tag)
+	time.Sleep(50 * time.Millisecond)
+	alice1.conn.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	// Bob posts while Alice is disconnected.
+	bob.postEvent(tag, "shared-rk")
+	time.Sleep(100 * time.Millisecond)
+
+	alice2 := env.connect("did:plc:alice")
+	alice2.watchTags(tag)
+
+	msg := alice2.readMsgAs("new_event")
+	if msg["rkey"] != "shared-rk" {
+		t.Fatalf("expected shared-rk, got %v", msg["rkey"])
+	}
+}
+
 func TestDisconnectBufferExpiry(t *testing.T) {
 	env := newTestEnv(t)
 	bob := env.connect("did:plc:bob")

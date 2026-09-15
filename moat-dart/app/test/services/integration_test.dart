@@ -2,8 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:moat_dart_common/moat_dart_common.dart' hide ConversationRepository;
-import 'package:moat_flutter/services/conversation_repository.dart';
+import 'package:moat_dart_common/moat_dart_common.dart';
 
 // ---------------------------------------------------------------------------
 // Test doubles
@@ -370,6 +369,47 @@ void main() {
       // All messages present on disk.
       final onDisk = await storage.loadMessages(conv.groupIdHex);
       expect(onDisk.length, 5);
+    });
+
+    // A load racing queued appends must not make the next save drop them.
+    final m1 = makeMessage(
+        id: 'msg-first', timestamp: DateTime.utc(2025, 1, 15, 12, 0, 1));
+    final m2 = makeMessage(
+        id: 'msg-second', timestamp: DateTime.utc(2025, 1, 15, 12, 0, 2));
+
+    Future<void> expectBothKept(
+        Iterable<Message> inMemory, String groupIdHex) async {
+      expect(inMemory.map((m) => m.id), containsAll(['msg-first', 'msg-second']));
+      final onDisk = await storage.loadMessages(groupIdHex);
+      expect(onDisk.map((m) => m.id), containsAll(['msg-first', 'msg-second']));
+    }
+
+    test('a load racing a queued merge loses nothing', () async {
+      final conv = makeConversation();
+      final repo = makeRepo(conv);
+      await Future.wait([repo.mergeFromPolling([m1]), repo.loadMessages()]);
+      await repo.mergeFromPolling([m2]);
+      await expectBothKept(repo.messages, conv.groupIdHex);
+    });
+
+    test('a merge that arrives while a load is reading is kept', () async {
+      final conv = makeConversation();
+      final repo = makeRepo(conv);
+      await Future.wait([repo.loadMessages(), repo.mergeFromPolling([m1])]);
+      await repo.mergeFromPolling([m2]);
+      await expectBothKept(repo.messages, conv.groupIdHex);
+    });
+
+    // A server send while loaded must survive the next polled merge.
+    test('a message sent while loaded survives the next polled merge',
+        () async {
+      final conv = makeConversation();
+      final repo = makeRepo(conv);
+      await repo.loadMessages();
+      final sent = await repo.sendMessageSync('from the server');
+      await repo.mergeFromPolling([m2]);
+      final onDisk = await storage.loadMessages(conv.groupIdHex);
+      expect(onDisk.map((m) => m.id), containsAll([sent.id, 'msg-second']));
     });
   });
 

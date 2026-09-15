@@ -13,8 +13,7 @@ import 'sync_service.dart';
 
 /// Global singleton managing [ConversationRepository] lifecycle.
 ///
-/// Replaces MessagesProvider. Lazily creates repositories on first access.
-/// No Flutter dependency — no ChangeNotifier.
+/// Shared by the app and the headless server.
 class ConversationManager {
   static final ConversationManager instance = ConversationManager._();
   ConversationManager._();
@@ -30,20 +29,24 @@ class ConversationManager {
   DeviceRingService get ringService => _ringService!;
   SyncService get syncService => _syncService!;
 
-  /// Must be called once after authentication, before any repos are created.
+  /// Call once after login, before any repository is created. Without
+  /// [authService] repositories have no send queue; without [ringService] and
+  /// [syncService] no ring tick runs.
   void init({
-    required AuthService authService,
+    AuthService? authService,
     required MessageStorage storage,
-    required DeviceRingService ringService,
-    required SyncService syncService,
+    DeviceRingService? ringService,
+    SyncService? syncService,
     Duration ringTickInterval = const Duration(seconds: 30),
   }) {
     _authService = authService;
     _storage = storage;
     _ringService = ringService;
     _syncService = syncService;
-    ringService.isSyncActive = () => syncService.isActive;
     _ringTickTimer?.cancel();
+    _ringTickTimer = null;
+    if (ringService == null || syncService == null) return;
+    ringService.isSyncActive = () => syncService.isActive;
     _ringTickTimer = Timer.periodic(ringTickInterval, (_) {
       ringService.tick().catchError((e) {
         moatLog('ConversationManager: ring tick failed: $e');
@@ -58,11 +61,13 @@ class ConversationManager {
   /// Get or lazily create a repository for a conversation.
   ConversationRepository getRepository(Conversation conversation) {
     return _repos.putIfAbsent(conversation.groupIdHex, () {
-      final sendService = SendService(authService: _authService!);
-      final sendQueue = SendQueue(
-        sendService: sendService,
-        conversation: conversation,
-      );
+      final authService = _authService;
+      final sendQueue = authService == null
+          ? null
+          : SendQueue(
+              sendService: SendService(authService: authService),
+              conversation: conversation,
+            );
       return ConversationRepository(
         groupIdHex: conversation.groupIdHex,
         groupId: conversation.groupId,

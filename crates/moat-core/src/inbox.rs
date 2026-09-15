@@ -1,24 +1,11 @@
-//! Fetched events waiting to be processed, and the ones this device cannot
-//! read yet.
+//! Fetched events awaiting processing, and events parked until readable.
 //!
-//! An event is readable once its tag is among the device's candidate tags:
-//! the device is in the group, has reached the epoch, and the sender's
-//! counter is inside the scanning window. The tag is opaque, so an unreadable
-//! event cannot say what it is waiting for — but it does not need to. The
-//! candidate set only grows when tags are generated, so an unreadable event
-//! is parked under its tag, and generating that tag wakes it. Nothing is
-//! retried: an event is attempted when it arrives and again only once the
-//! tag it carries has appeared.
-//!
-//! Hosts drive it as a queue: take ready events in rkey order, process the
-//! ones whose tag is known, park the rest. Processing a commit or Welcome
-//! generates tags, which moves the events parked under them back into the
-//! ready queue, in rkey order among whatever is already there.
-//!
-//! Events nothing will ever wake — another user's traffic, or a group's
-//! traffic from before this device joined — are bounded by
-//! [`MAX_PARKED_EVENTS`] and [`MAX_PARKED_AGE_MS`]. A message dropped that way
-//! predates the device's membership and reaches it through history sync.
+//! An event is readable once its tag is a candidate tag. Tags only appear when
+//! generated, so an unreadable event is parked under its tag and woken when
+//! that tag is generated; nothing is retried. Hosts pop ready events in rkey
+//! order, process known tags and park the rest. Events nothing wakes are
+//! bounded by [`MAX_PARKED_EVENTS`] and [`MAX_PARKED_AGE_MS`]; such messages
+//! predate the device's membership and arrive through history sync.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -66,8 +53,7 @@ fn event_id(event: &InboxEvent) -> EventId {
 pub struct Inbox {
     /// Events to process next, in rkey order. The source DID breaks ties.
     ready: BTreeMap<(String, String), InboxEvent>,
-    /// Parked events in the order they were parked. The sequence number
-    /// breaks ties between events parked in the same millisecond.
+    /// Parked events in park order; the sequence number breaks ties.
     parked: BTreeMap<(i64, u64), Parked>,
     /// Which parked events carry each tag.
     parked_by_tag: HashMap<[u8; 16], Vec<(i64, u64)>>,
@@ -81,8 +67,7 @@ impl Inbox {
         Self::default()
     }
 
-    /// Queue a fetched event. Returns false, and does nothing, if the same
-    /// record is already ready or parked.
+    /// Queue a fetched event. Returns false if it is already held.
     pub fn push(&mut self, event: InboxEvent) -> bool {
         if !self.held.insert(event_id(&event)) {
             return false;
@@ -99,8 +84,8 @@ impl Inbox {
         Some(event)
     }
 
-    /// Park an event whose tag is not a candidate tag yet. If that takes the
-    /// inbox past [`MAX_PARKED_EVENTS`], the event parked longest is dropped.
+    /// Park an event until its tag is generated, dropping the oldest past
+    /// [`MAX_PARKED_EVENTS`].
     pub fn park(&mut self, event: InboxEvent, now_ms: i64) {
         if !self.held.insert(event_id(&event)) {
             return;
@@ -111,8 +96,7 @@ impl Inbox {
         }
     }
 
-    /// Move every event parked under one of `tags` into the ready queue.
-    /// Returns how many moved.
+    /// Move events parked under `tags` to the ready queue. Returns the count.
     pub fn wake<'a>(&mut self, tags: impl IntoIterator<Item = &'a [u8; 16]>) -> usize {
         let mut woken = 0;
         for tag in tags {
@@ -129,8 +113,7 @@ impl Inbox {
         woken
     }
 
-    /// Drop events parked for longer than [`MAX_PARKED_AGE_MS`]. Returns how
-    /// many were dropped.
+    /// Drop events parked longer than [`MAX_PARKED_AGE_MS`]. Returns the count.
     pub fn expire(&mut self, now_ms: i64) -> usize {
         let mut dropped = 0;
         while let Some((&(parked_at_ms, _), _)) = self.parked.first_key_value() {
@@ -151,16 +134,14 @@ impl Inbox {
         self.parked.len()
     }
 
-    /// Serialize the parked events, for a host to persist. Ready events are
-    /// not included: a host drains the queue before persisting.
+    /// Serialize parked events (not ready ones) for the host to persist.
     pub fn export_parked(&self) -> Vec<u8> {
         let parked: Vec<&Parked> = self.parked.values().collect();
         serde_json::to_vec(&parked).expect("parked events serialize")
     }
 
-    /// Restore parked events from [`Inbox::export_parked`], keeping their
-    /// park times. Events already held are skipped. Returns how many were
-    /// restored.
+    /// Restore events from [`Inbox::export_parked`], skipping held ones.
+    /// Returns the count.
     pub fn import_parked(&mut self, bytes: &[u8]) -> Result<usize> {
         let parked: Vec<Parked> =
             serde_json::from_slice(bytes).map_err(|e| Error::Deserialization(e.to_string()))?;

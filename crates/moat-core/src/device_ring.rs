@@ -334,8 +334,7 @@ pub enum RingCommand {
         group_id: Vec<u8>,
         kind: GroupKind,
     },
-    /// Fires every tick while the device has at least one ring sibling: add
-    /// each sibling to any user conversation it is not yet in.
+    /// Every tick with a sibling: add siblings to conversations they're not in.
     PollForNewDevices,
 }
 

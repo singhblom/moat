@@ -399,8 +399,7 @@ class AuthService {
     await registerTags(tags, _bytesToHex(groupId));
   }
 
-  /// Route [tags] to the group [groupIdHex] in the tag map, in one write,
-  /// and watch them on this device's Drawbridge relay.
+  /// Route [tags] to [groupIdHex] in one write and watch them on Drawbridge.
   Future<void> registerTags(List<Uint8List> tags, String groupIdHex) async {
     await _secureStorage.registerTags(tags.map(_bytesToHex), groupIdHex);
     DrawbridgeService.instance.addTags(tags);

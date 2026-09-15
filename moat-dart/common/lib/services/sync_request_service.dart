@@ -231,8 +231,7 @@ class SyncRequestService {
     }
   }
 
-  /// A sibling's `ring.msg` arrived: a request for history, or an offer of
-  /// it.
+  /// Handle a sibling's `ring.msg`: a history request or offer.
   ///
   /// `deviceName` and `deviceId` must both come from the MLS leaf
   /// credential of the sender, not from the payload — that is the whole

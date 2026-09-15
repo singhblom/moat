@@ -1,15 +1,8 @@
-//! A device reads a watched contact's events before it holds the Welcome
-//! that makes them readable.
+//! A device fetches a watched contact's message before holding the Welcome
+//! that makes it readable, and must still receive it after joining.
 //!
-//! Bob adds Carol to his conversation with Alice, and Alice then speaks in
-//! the epoch Carol joins at. Carol watches Alice first, so her poll fetches
-//! Alice's message while she is not yet in the group; only then does she
-//! watch Bob and find his Welcome. Once joined she must still receive the
-//! message — it is on Alice's PDS, and nothing else will deliver it.
-//!
-//! The order is forced rather than raced: Carol's automatic polling is off
-//! and every one of her polls is explicit. `proptest_three_party_push` hits
-//! the same order only when an automatic poll lands between two watches.
+//! Carol polls manually to force the order: watch Alice (fetch her message),
+//! then watch Bob (find his Welcome).
 
 use std::future::Future;
 use std::pin::Pin;

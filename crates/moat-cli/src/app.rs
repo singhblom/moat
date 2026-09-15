@@ -754,8 +754,7 @@ impl App {
         let drawbridge = DrawbridgeManager::new(bg_tx.clone());
 
         let ring_driver = keys.load_ring_state().unwrap_or_default();
-        // Events parked in the session inbox survive a restart; the retry
-        // buffer the inbox replaced is handed to it once.
+        // Restore parked events, and migrate the old retry buffer once.
         if let Ok(Some(bytes)) = keys.load_parked_events() {
             let _ = mls.import_parked_events(&bytes);
         }
@@ -1581,10 +1580,8 @@ impl App {
             dids_to_poll.entry(my_did).or_insert(all_conv_indices);
         }
 
-        // Watching a DID for invites keeps its own cursor. Sharing the
-        // conversation cursor would let a watch fetch move past messages this
-        // device cannot read yet — from a group whose Welcome is still on
-        // another member's PDS — and joining would never fetch them again.
+        // Watched DIDs keep their own cursor, so a watch fetch can't skip
+        // messages from a group this device hasn't joined yet.
         let watched: Vec<(String, String, Option<String>)> = self
             .watched_dids
             .iter()
@@ -2185,6 +2182,15 @@ impl App {
                 did,
                 signature_key,
             } => {
+                // Keep a live connection to the same relay: reconnecting leaves
+                // a window with no watcher.
+                if self.drawbridge.is_connected_to(&url) {
+                    self.debug_log.log(&format!(
+                        "drawbridge: already connected to own relay at {url}"
+                    ));
+                    self.send_all_watched_tags().await;
+                    return;
+                }
                 self.debug_log.log(&format!(
                     "drawbridge: connecting to own relay at {}",
                     url
@@ -3148,8 +3154,7 @@ impl App {
         self.schedule_watch_tags_update();
     }
 
-    /// Advance the scanning window for a tag that matched `conv_id`, and
-    /// register whatever candidate tags that newly covers.
+    /// Advance the scanning window for a matched tag and register new tags.
     fn note_tag_seen(&mut self, conv_id: &str, tag: &[u8; 16]) {
         let added = self.mls.advance_scan_window(tag);
         if added.is_empty() {
@@ -3193,8 +3198,8 @@ impl App {
             .map(|c| c.did().to_string())
             .unwrap_or_default();
 
-        // Queue what was fetched. The inbox hands events back in rkey order,
-        // together with any parked earlier whose tag has since been generated.
+        // Queue fetched events; the inbox returns them, and any woken parked
+        // events, in rkey order.
         let now_ms = chrono::Utc::now().timestamp_millis();
         let fetched = participant_events.len();
         for (record, source_did) in participant_events {
@@ -3227,8 +3232,7 @@ impl App {
             }
         }
 
-        // Processing a commit or Welcome generates tags, which moves the events
-        // parked under them back into the queue.
+        // Processing a commit or Welcome generates tags, waking parked events.
         while let Some(event) = self.mls.inbox_pop_ready() {
             if self.tag_map.contains_key(&event.tag) {
                 let tag_hex: String = event.tag.iter().map(|b| format!("{b:02x}")).collect();
@@ -3243,12 +3247,10 @@ impl App {
                         .log(&format!("poll: dropping event rkey={}: {e}", record.rkey)),
                 }
             } else if self.try_process_welcome_sync(&event.ciphertext, &event.author_did, event.tag) {
-                // Joining generated the group's tags, waking what was parked
-                // under them.
+                // Joining generated tags, waking parked events.
             } else if event.source_did != my_did {
-                // Parked until its tag is generated. Events on this device's
-                // own PDS are not: a stealth payload it published never
-                // decrypts here.
+                // Park until its tag exists. Skip our own PDS: our stealth
+                // payloads never decrypt here.
                 self.mls.inbox_park(event, now_ms);
             }
         }
@@ -4267,10 +4269,8 @@ impl App {
                     self.set_error(format!("Sync history failed: {e}"));
                 }
             }
-            // Send this device's history to the other device in the ring.
-            // Pressing this *is* the approval; the other side joins without
-            // a prompt. With more than one other device, the first one
-            // listed is the target.
+            // Send history to the first other ring device. Pressing this is
+            // the approval; the recipient joins without a prompt.
             KeyCode::Char('o') => {
                 let target = self
                     .api_ring_devices()
@@ -6117,10 +6117,6 @@ impl App {
     }
 
     /// HTTP `POST /sync/offer` — send history to another device.
-    ///
-    /// The mirror of a request, for when the device holding the history
-    /// is the one in the user's hands, so the user can send from here
-    /// rather than walking to the other device to ask.
     ///
     /// This call *is* the human approval, so the target joins without a
     /// prompt of its own — exactly one approval per session, on the side

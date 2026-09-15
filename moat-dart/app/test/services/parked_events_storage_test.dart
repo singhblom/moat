@@ -4,8 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:moat_dart_common/moat_dart_common.dart';
 
-/// The session inbox's parked events are persisted because the polling
-/// cursor has already moved past them: losing them loses the events.
+/// Parked events are persisted: the polling cursor has moved past them.
 void main() {
   late Directory dir;
 

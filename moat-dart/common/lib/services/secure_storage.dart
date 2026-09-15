@@ -237,8 +237,7 @@ class SecureStorageService {
 
   // --- Parked events ---
 
-  /// Persist the session inbox's parked events: the polling cursor has
-  /// already moved past them.
+  /// Persist the inbox's parked events.
   Future<void> saveParkedEvents(Uint8List bytes) async {
     await _storage.write(_parkedEventsKey, base64Encode(bytes));
   }

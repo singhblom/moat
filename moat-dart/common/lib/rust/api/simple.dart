@@ -236,8 +236,7 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
 
   /// Mark a matched tag as seen and extend its sender's scanning window.
   ///
-  /// Returns the candidate tags the window newly covers; register them in
-  /// the tag map and on the Drawbridge watch list.
+  /// Returns the newly covered tags, for the tag map and watch list.
   List<Uint8List> advanceScanWindow({required List<int> tag});
 
   /// Create a new MLS group with DID and device name. Returns the group ID.
@@ -317,16 +316,13 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
   /// Drop events parked too long. Returns how many were dropped.
   int inboxExpire({required PlatformInt64 nowMs});
 
-  /// Park an event whose tag is not a candidate tag yet. Generating that
-  /// tag moves it back into the queue.
+  /// Park an event until its tag is generated.
   void inboxPark({required InboxEventDto event, required PlatformInt64 nowMs});
 
-  /// The queued event with the lowest rkey, including events woken since
-  /// they were parked.
+  /// The ready event with the lowest rkey.
   InboxEventDto? inboxPopReady();
 
-  /// Queue a fetched event for processing. Returns false if the same
-  /// record is already queued or parked.
+  /// Queue a fetched event. Returns false if it is already held.
   bool inboxPush({required InboxEventDto event});
 
   /// Check if a DID already has a device in the group.

@@ -8,7 +8,6 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart' hi
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:moat_dart_common/moat_dart_common.dart' hide DebugLog;
-import 'services/conversation_manager.dart' as app_cm;
 import 'services/pairing_manager.dart';
 import 'services/sync_request_manager.dart';
 import 'services/device_ring_manager.dart';
@@ -399,10 +398,6 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
 
       _pollingService = bundle.polling;
 
-      app_cm.ConversationManager.instance.init(
-        authService: auth.service,
-        storage: widget.msgStorage,
-      );
       PairingManager.instance.init(bundle: bundle);
       DeviceRingManager.instance.init(bundle.ring);
       SyncRequestManager.instance.init(bundle: bundle);
@@ -431,8 +426,6 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
         }
       });
 
-      _pollingService!.onMessages = app_cm.ConversationManager.instance.notify;
-      _pollingService!.onReaction = app_cm.ConversationManager.instance.notifyReaction;
       _pollingService!.onNewConversation = () {
         context.read<ConversationsProvider>().refresh();
       };
@@ -447,7 +440,6 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       _pushService = null;
       _pollingStarted = false;
       ConversationManager.instance.clear();
-      app_cm.ConversationManager.instance.clear();
       PairingManager.instance.clear();
       SyncRequestManager.instance.clear();
       DeviceRingManager.instance.clear();
@@ -470,8 +462,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   }
 
   Future<void> _initDrawbridge(AuthProvider auth) async {
-    // Wire the app-specific poll-on-push callback. Conversation tags are
-    // registered by PollingService before its first poll.
+    // Poll on push. PollingService registers conversation tags itself.
     // AuthService handles the Drawbridge connection itself (via login/resume).
     DrawbridgeService.instance.onNewEvent = (event) {
       // For now, trigger a poll on any new event notification.

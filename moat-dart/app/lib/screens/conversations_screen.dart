@@ -1,14 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:moat_dart_common/moat_dart_common.dart' hide ConversationManager, ConversationRepository;
+import 'package:moat_dart_common/moat_dart_common.dart';
 import '../providers/auth_provider.dart';
 import '../providers/conversations_provider.dart';
 import '../providers/theme_provider.dart';
 import '../providers/watch_list_provider.dart';
-import '../services/conversation_manager.dart';
-import '../services/conversation_repository.dart';
 import '../providers/profile_provider.dart';
 import '../utils/display_name.dart';
+import '../widgets/common_listenable.dart';
 import '../widgets/avatar_widget.dart';
 import 'conversation_screen.dart';
 import 'new_conversation_screen.dart';
@@ -301,8 +300,9 @@ class _ConversationTile extends StatelessWidget {
 
         Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (context) => ChangeNotifierProvider<ConversationRepository>.value(
+            builder: (context) => CommonListenableProvider<ConversationRepository>.value(
               value: repo,
+              listenable: (r) => r.changes,
               child: ConversationScreen(conversation: conversation),
             ),
           ),

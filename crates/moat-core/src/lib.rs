@@ -192,9 +192,8 @@ struct TagMetadata {
     sender_did: String,
     device_id: [u8; 16],
     counter: u64,
-    /// Whether `counter` belongs to the current epoch. Prior-epoch
-    /// candidates count from 0 in their own epoch, so they never move the
-    /// current epoch's scanning window.
+    /// Whether `counter` is in the current epoch. Prior-epoch matches never
+    /// move the current scanning window.
     current_epoch: bool,
 }
 
@@ -320,9 +319,7 @@ pub struct MoatSession {
     /// Used by `populate_candidate_tags` to generate candidate tags with decaying
     /// gap limits for prior epochs, catching messages stranded across epoch boundaries.
     prior_export_secrets: RwLock<HashMap<Vec<u8>, VecDeque<Vec<u8>>>>,
-    /// Fetched events waiting to be processed, and the ones parked until
-    /// their tag is generated. Persisted by the host through
-    /// `export_parked_events`, not as part of the session state.
+    /// See [`inbox`]. The host persists it via `export_parked_events`.
     inbox: RwLock<Inbox>,
 }
 
@@ -1948,20 +1945,17 @@ impl MoatSession {
 
     // ── Inbox ───────────────────────────────────────────────────────────────
 
-    /// Queue a fetched event for processing. Returns false if the same record
-    /// is already queued or parked. See [`inbox`].
+    /// Queue a fetched event. Returns false if it is already held.
     pub fn inbox_push(&self, event: InboxEvent) -> bool {
         self.inbox.write().unwrap().push(event)
     }
 
-    /// The queued event with the lowest rkey, including events woken since
-    /// they were parked.
+    /// The ready event with the lowest rkey.
     pub fn inbox_pop_ready(&self) -> Option<InboxEvent> {
         self.inbox.write().unwrap().pop_ready()
     }
 
-    /// Park an event whose tag is not a candidate tag yet. Generating that
-    /// tag moves it back into the queue.
+    /// Park an event until its tag is generated.
     pub fn inbox_park(&self, event: InboxEvent, now_ms: i64) {
         self.inbox.write().unwrap().park(event, now_ms)
     }
@@ -1980,8 +1974,7 @@ impl MoatSession {
         self.inbox.read().unwrap().export_parked()
     }
 
-    /// Restore parked events persisted with [`Self::export_parked_events`].
-    /// Returns how many were restored.
+    /// Restore events from [`Self::export_parked_events`]. Returns the count.
     pub fn import_parked_events(&self, bytes: &[u8]) -> Result<usize> {
         self.inbox.write().unwrap().import_parked(bytes)
     }
@@ -2022,14 +2015,10 @@ impl MoatSession {
         true
     }
 
-    /// Mark a matched tag as seen and extend its sender's scanning window.
+    /// Mark a matched tag as seen and slide its sender's scanning window.
     ///
-    /// Returns the candidate tags the window newly covers — the ones a host
-    /// must add to its tag map and Drawbridge watch list. Candidates exist
-    /// for only `TAG_GAP_LIMIT` counters past the highest one seen, so
-    /// without this a sender's events stop matching once it has used that
-    /// many in an epoch. Empty when the tag is unknown, belongs to a prior
-    /// epoch, or does not advance the window.
+    /// Returns the newly covered candidate tags, for the host's tag map and
+    /// watch list. Empty if nothing new is covered.
     pub fn advance_scan_window(&self, tag: &[u8; 16]) -> Vec<[u8; 16]> {
         let entry = match self.tag_metadata.read().unwrap().get(tag) {
             Some(e) if e.current_epoch => e.clone(),

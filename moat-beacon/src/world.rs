@@ -356,10 +356,7 @@ impl TestWorld {
                 .map(|(_, label)| label.map(|l| label_to_ws[l].clone()))
                 .collect();
 
-            // Advertise the first spawned relay's URL via Postern's
-            // describeServer so all participants can discover it after login
-            // without a CLI flag. It must be `dbs[0]`, the relay the
-            // `drawbridges.first()` helpers inspect.
+            // Advertise the first relay, the one `drawbridges.first()` inspects.
             if let Some(label) = unique_labels.first() {
                 postern.set_drawbridge_url(&label_to_ws[label]);
             }

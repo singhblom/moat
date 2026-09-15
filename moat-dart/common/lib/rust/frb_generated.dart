@@ -6926,8 +6926,7 @@ class MoatSessionHandleImpl extends RustOpaque implements MoatSessionHandle {
 
   /// Mark a matched tag as seen and extend its sender's scanning window.
   ///
-  /// Returns the candidate tags the window newly covers; register them in
-  /// the tag map and on the Drawbridge watch list.
+  /// Returns the newly covered tags, for the tag map and watch list.
   List<Uint8List> advanceScanWindow({required List<int> tag}) => RustLib
       .instance.api
       .crateApiSimpleMoatSessionHandleAdvanceScanWindow(that: this, tag: tag);
@@ -7045,22 +7044,19 @@ class MoatSessionHandleImpl extends RustOpaque implements MoatSessionHandle {
   int inboxExpire({required PlatformInt64 nowMs}) => RustLib.instance.api
       .crateApiSimpleMoatSessionHandleInboxExpire(that: this, nowMs: nowMs);
 
-  /// Park an event whose tag is not a candidate tag yet. Generating that
-  /// tag moves it back into the queue.
+  /// Park an event until its tag is generated.
   void inboxPark(
           {required InboxEventDto event, required PlatformInt64 nowMs}) =>
       RustLib.instance.api.crateApiSimpleMoatSessionHandleInboxPark(
           that: this, event: event, nowMs: nowMs);
 
-  /// The queued event with the lowest rkey, including events woken since
-  /// they were parked.
+  /// The ready event with the lowest rkey.
   InboxEventDto? inboxPopReady() =>
       RustLib.instance.api.crateApiSimpleMoatSessionHandleInboxPopReady(
         that: this,
       );
 
-  /// Queue a fetched event for processing. Returns false if the same
-  /// record is already queued or parked.
+  /// Queue a fetched event. Returns false if it is already held.
   bool inboxPush({required InboxEventDto event}) => RustLib.instance.api
       .crateApiSimpleMoatSessionHandleInboxPush(that: this, event: event);
 

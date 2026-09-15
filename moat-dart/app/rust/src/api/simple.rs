@@ -169,8 +169,7 @@ impl MoatSessionHandle {
 
     /// Mark a matched tag as seen and extend its sender's scanning window.
     ///
-    /// Returns the candidate tags the window newly covers; register them in
-    /// the tag map and on the Drawbridge watch list.
+    /// Returns the newly covered tags, for the tag map and watch list.
     #[frb(sync)]
     pub fn advance_scan_window(&self, tag: Vec<u8>) -> Vec<Vec<u8>> {
         let Ok(tag) = <[u8; 16]>::try_from(tag.as_slice()) else {
@@ -353,22 +352,19 @@ impl MoatSessionHandle {
 
     // --- Inbox (see `moat_core::inbox`) ---
 
-    /// Queue a fetched event for processing. Returns false if the same
-    /// record is already queued or parked.
+    /// Queue a fetched event. Returns false if it is already held.
     #[frb(sync)]
     pub fn inbox_push(&self, event: InboxEventDto) -> Result<bool, String> {
         Ok(self.inner.lock().unwrap().inbox_push(event.try_into()?))
     }
 
-    /// The queued event with the lowest rkey, including events woken since
-    /// they were parked.
+    /// The ready event with the lowest rkey.
     #[frb(sync)]
     pub fn inbox_pop_ready(&self) -> Option<InboxEventDto> {
         self.inner.lock().unwrap().inbox_pop_ready().map(Into::into)
     }
 
-    /// Park an event whose tag is not a candidate tag yet. Generating that
-    /// tag moves it back into the queue.
+    /// Park an event until its tag is generated.
     #[frb(sync)]
     pub fn inbox_park(&self, event: InboxEventDto, now_ms: i64) -> Result<(), String> {
         self.inner.lock().unwrap().inbox_park(event.try_into()?, now_ms);
