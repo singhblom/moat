@@ -137,7 +137,7 @@ class PairingService {
   Future<String> startEnroll() async {
     _supersedePreviousPairing();
     final token = _randomBytes(16);
-    final secret = _randomBytes(32);
+    final secret = _randomBytes(16);
 
     final session = ffi.PairingSessionHandle.newDevice(secret: secret, token: token);
     _session = session;

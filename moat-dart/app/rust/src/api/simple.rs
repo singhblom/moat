@@ -2186,7 +2186,7 @@ impl PairingSessionHandle {
     pub fn new_device(secret: Vec<u8>, token: Vec<u8>) -> Result<PairingSessionHandle, String> {
         let secret: [u8; moat_core::PAIRING_SECRET_LEN] = secret
             .try_into()
-            .map_err(|_| "secret must be 32 bytes".to_string())?;
+            .map_err(|_| format!("secret must be {} bytes", moat_core::PAIRING_SECRET_LEN))?;
         let token: [u8; moat_core::PAIRING_TOKEN_LEN] = token
             .try_into()
             .map_err(|_| "token must be 16 bytes".to_string())?;
@@ -2201,7 +2201,7 @@ impl PairingSessionHandle {
     pub fn existing_device(secret: Vec<u8>, token: Vec<u8>) -> Result<PairingSessionHandle, String> {
         let secret: [u8; moat_core::PAIRING_SECRET_LEN] = secret
             .try_into()
-            .map_err(|_| "secret must be 32 bytes".to_string())?;
+            .map_err(|_| format!("secret must be {} bytes", moat_core::PAIRING_SECRET_LEN))?;
         let token: [u8; moat_core::PAIRING_TOKEN_LEN] = token
             .try_into()
             .map_err(|_| "token must be 16 bytes".to_string())?;

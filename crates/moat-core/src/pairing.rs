@@ -36,12 +36,13 @@ pub const PAIRING_PAYLOAD_VERSION: u8 = 0x01;
 /// Length of a pairing token in bytes (Drawbridge rendezvous identifier).
 pub const PAIRING_TOKEN_LEN: usize = 16;
 
-/// Length of a pairing secret in bytes (channel key material). May drop to
-/// 16 bytes (128-bit) after usability testing of the text code's length;
-/// 32 is cryptographically comfortable but not required.
-pub const PAIRING_SECRET_LEN: usize = 32;
+/// Length of a pairing secret in bytes (channel key material). 128-bit: the
+/// frames transit the relay, so a captured frame allows offline brute force
+/// of the secret and its entropy sets the security level. Shortening further
+/// requires a PAKE instead of HKDF-of-the-secret.
+pub const PAIRING_SECRET_LEN: usize = 16;
 
-/// Total encoded payload length: `1 (version) + 16 (token) + 32 (secret)`.
+/// Total encoded payload length: `1 (version) + 16 (token) + 16 (secret)`.
 pub const PAIRING_PAYLOAD_LEN: usize = 1 + PAIRING_TOKEN_LEN + PAIRING_SECRET_LEN;
 
 /// URI scheme prefix used for the QR form (`moat-pair:<text-form>`).
@@ -64,7 +65,7 @@ pub struct PairingPayload {
 }
 
 impl PairingPayload {
-    /// Encode to the raw 49-byte wire form: `[version][token][secret]`.
+    /// Encode to the raw 33-byte wire form: `[version][token][secret]`.
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(PAIRING_PAYLOAD_LEN);
         out.push(PAIRING_PAYLOAD_VERSION);

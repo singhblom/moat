@@ -501,13 +501,15 @@ The code carries exactly two secrets — everything else either side needs is al
 |---|---|---|
 | version | 1 byte | `0x01`. A mismatch is rejected outright. |
 | token | 16 bytes | Drawbridge rendezvous identifier |
-| secret | 32 bytes | Channel key material |
+| secret | 16 bytes | Channel key material (128-bit) |
 
-The 49-byte payload is Crockford base32-encoded (alphabet excludes `I`, `L`, `O`, `U` to avoid visual confusion on manual entry) and hyphen-grouped in fives, giving a 79-character text form:
+The 33-byte payload is Crockford base32-encoded (alphabet excludes `I`, `L`, `O`, `U` to avoid visual confusion on manual entry) and hyphen-grouped in fives, giving a 53-character text form:
 
 ```
-07B16-BVNAM-CGZ4W-1MK0B-386NE-3E0NJ-7N6N8-BS46G-TCJ2T-JA40J-KEFCS-X0MR2-ZHTD7-Q089Q-9BZAN-JQXR
+06PE7-8NC4X-FCFS2-YSPS9-TWK83-F24KB-B0QHR-RFKWT-47SVN-ZCSG0-GDG
 ```
+
+The secret is 128-bit rather than a short human-memorable code because the AEAD frames transit the relay: a captured frame permits offline brute force of the secret, so its entropy sets the channel's security level directly. Shortening it to a 6–8 digit code would require replacing HKDF-of-the-secret with a PAKE.
 
 The QR form is that same text behind a `moat-pair:` URI scheme, so a scanner can reject foreign QRs cheaply. Decoding is case-insensitive and ignores hyphens and whitespace, so a user retyping the text form need not reproduce the grouping.
 

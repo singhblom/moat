@@ -9,7 +9,7 @@ use moat_core::{
     PairingMsg, PairingPayload, PairingSession, PairingUiState,
 };
 
-const SECRET: [u8; 32] = [0xAA; 32];
+const SECRET: [u8; 16] = [0xAA; 16];
 const TOKEN: [u8; 16] = [0xBB; 16];
 
 fn new_device_payload() -> PairingPayload {

@@ -60,7 +60,7 @@ fn run_pairing_session(
 ) -> (Vec<u8>, Vec<SiblingInfo>) {
     // A fresh secret+token per pairing session, as if freshly scanned off a
     // regenerated QR code.
-    let secret = [0x42u8; 32];
+    let secret = [0x42u8; 16];
     let token = [0x24u8; 16];
 
     let mut new_session = PairingSession::new_device(&PairingPayload { secret, token });

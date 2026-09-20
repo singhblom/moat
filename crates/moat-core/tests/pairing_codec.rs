@@ -5,7 +5,7 @@ use moat_core::{crockford_decode, crockford_encode, PairingPayload, CROCKFORD_AL
 fn sample_payload() -> PairingPayload {
     PairingPayload {
         token: [0x11; 16],
-        secret: [0x22; 32],
+        secret: [0x22; 16],
     }
 }
 
@@ -30,6 +30,24 @@ fn payload_roundtrips_through_text_form() {
 
     let decoded = PairingPayload::from_text(&text).expect("valid text should decode");
     assert_eq!(decoded, payload);
+}
+
+/// The text form is typed by hand on a CLI, so its length is a product
+/// decision, not an implementation detail: 33 payload bytes -> 53 Crockford
+/// characters. A change to `PAIRING_SECRET_LEN` moves this, and should be
+/// deliberate.
+#[test]
+fn text_form_is_53_characters_plus_grouping() {
+    let text = sample_payload().to_text();
+    let bare: String = text.chars().filter(|c| *c != '-').collect();
+
+    assert_eq!(
+        bare.len(),
+        53,
+        "expected a 53-character code for a {}-byte payload, got {}: {text}",
+        moat_core::PAIRING_PAYLOAD_LEN,
+        bare.len()
+    );
 }
 
 #[test]

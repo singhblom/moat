@@ -3,7 +3,7 @@
 use moat_core::{derive_pairing_keys, open_frame, seal_frame, PairingChannelKeys};
 
 fn keys() -> PairingChannelKeys {
-    derive_pairing_keys(&[0x33; 32], &[0x44; 16])
+    derive_pairing_keys(&[0x33; 16], &[0x44; 16])
 }
 
 #[test]
@@ -28,23 +28,23 @@ fn directional_keys_differ() {
 
 #[test]
 fn derivation_is_deterministic_given_the_same_secret_and_token() {
-    let a = derive_pairing_keys(&[0x33; 32], &[0x44; 16]);
-    let b = derive_pairing_keys(&[0x33; 32], &[0x44; 16]);
+    let a = derive_pairing_keys(&[0x33; 16], &[0x44; 16]);
+    let b = derive_pairing_keys(&[0x33; 16], &[0x44; 16]);
     assert_eq!(a.k_new_to_old, b.k_new_to_old);
     assert_eq!(a.k_old_to_new, b.k_old_to_new);
 }
 
 #[test]
 fn different_secrets_derive_different_keys() {
-    let a = derive_pairing_keys(&[0x33; 32], &[0x44; 16]);
-    let b = derive_pairing_keys(&[0x55; 32], &[0x44; 16]);
+    let a = derive_pairing_keys(&[0x33; 16], &[0x44; 16]);
+    let b = derive_pairing_keys(&[0x55; 16], &[0x44; 16]);
     assert_ne!(a.k_new_to_old, b.k_new_to_old);
 }
 
 #[test]
 fn wrong_key_fails_to_open() {
     let k = keys();
-    let other = derive_pairing_keys(&[0x55; 32], &[0x44; 16]);
+    let other = derive_pairing_keys(&[0x55; 16], &[0x44; 16]);
 
     let ciphertext = seal_frame(&k.k_new_to_old, 0, b"secret");
 
