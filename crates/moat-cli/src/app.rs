@@ -22,7 +22,7 @@ use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 use tokio::sync::mpsc;
 
@@ -149,30 +149,65 @@ pub enum AppError {
 
 pub type Result<T> = std::result::Result<T, AppError>;
 
-/// UI focus state
+/// Which fullscreen surface fills the terminal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Focus {
+pub enum Screen {
     Conversations,
-    Messages,
-    Input,
-    Login,
+    Chat,
+    Status,
+}
+
+impl Screen {
+    pub fn next(self) -> Self {
+        match self {
+            Screen::Conversations => Screen::Chat,
+            Screen::Chat => Screen::Status,
+            Screen::Status => Screen::Conversations,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        self.next().next()
+    }
+}
+
+/// Where keys go inside [`Screen::Chat`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatMode {
+    Compose,
+    Browse,
+}
+
+/// A modal above whichever screen is showing, owning the keyboard while
+/// it is up. Separate from [`Screen`] so an incoming `Enroll` can
+/// interrupt any screen without changing which one the user returns to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overlay {
+    None,
     NewConversation,
     WatchHandle,
+    /// Existing device: text-entry for a pairing code shown elsewhere.
+    PairEnterCode,
     /// New device: showing the pairing code, waiting for the existing
     /// device to enter it and approve.
     PairShowCode,
-    /// Existing device: text-entry for a pairing code scanned/typed
-    /// elsewhere.
-    PairEnterCode,
-    /// Existing device: confirmation screen naming the peer awaiting an
-    /// approval decision.
+    /// Existing device: confirmation naming the peer awaiting approval.
     PairApprove,
-    /// A sibling asked for history: confirmation screen naming it, awaiting
-    /// the decision to send.
+    /// A sibling asked for history: confirmation naming it, awaiting the
+    /// decision to send.
     SyncApprove,
-    /// The linked-device list: who else can read this account's messages,
-    /// and the state of any sync in flight.
-    Devices,
+}
+
+/// The top level: a login gate, or a session showing one screen.
+///
+/// Login is deliberately not a [`Screen`] — nothing is behind it, `Esc`
+/// quits rather than going back, and no session state exists until it
+/// completes. Keeping it out makes the screen cycle total and "Chat with
+/// no session" unrepresentable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum View {
+    Login,
+    Session(Screen),
 }
 
 /// Login form state
@@ -529,11 +564,18 @@ pub struct App {
     debug_log: DebugLog,
 
     // UI state
-    pub focus: Focus,
+    pub view: View,
+    pub chat_mode: ChatMode,
+    pub overlay: Overlay,
     pub login_form: LoginForm,
+    /// Advanced by `m`, unbounded: only the footer knows how many pages
+    /// the terminal's width makes, and takes this modulo that.
+    pub hint_page: usize,
     pub error_message: Option<String>,
-    pub status_message: Option<String>,
-    /// Cached handle of the logged-in user (for the info bar)
+    status_message: Option<String>,
+    /// When `status_message` was set — see `status_notice`.
+    status_set_at: Option<Instant>,
+    /// Cached handle of the logged-in user (shown on the Status screen)
     pub logged_in_handle: Option<String>,
 
     // Conversations
@@ -737,10 +779,10 @@ impl App {
 
         let logged_in_handle = keys.load_credentials().ok().map(|(h, _)| h);
 
-        let focus = if logged_in_handle.is_some() {
-            Focus::Conversations
+        let view = if logged_in_handle.is_some() {
+            View::Session(Screen::Conversations)
         } else {
-            Focus::Login
+            View::Login
         };
 
         let (bg_tx, bg_rx) = mpsc::unbounded_channel();
@@ -770,10 +812,14 @@ impl App {
             blob_cache,
             picker,
             debug_log,
-            focus,
+            view,
+            chat_mode: ChatMode::Compose,
+            overlay: Overlay::None,
             login_form: LoginForm::default(),
+            hint_page: 0,
             error_message: None,
             status_message: None,
+            status_set_at: None,
             logged_in_handle,
             conversations: Vec::new(),
             active_conversation: None,
@@ -919,6 +965,44 @@ impl App {
     /// Set a status message to display
     pub fn set_status(&mut self, msg: String) {
         self.status_message = Some(msg);
+        self.status_set_at = Some(Instant::now());
+    }
+
+    pub fn clear_status(&mut self) {
+        self.status_message = None;
+        self.status_set_at = None;
+    }
+
+    /// The status message while it is still worth the footer row. A status
+    /// is progress on something the user just did; once read it is only in
+    /// the way of the key hints, and nothing else expires one.
+    pub fn status_notice(&self) -> Option<&str> {
+        const LINGER: Duration = Duration::from_secs(4);
+        let set_at = self.status_set_at?;
+        if set_at.elapsed() > LINGER {
+            return None;
+        }
+        self.status_message.as_deref()
+    }
+
+    /// The `--pds-url` override; `None` means the account's own PDS.
+    pub fn pds_override(&self) -> Option<&str> {
+        self.pds_url.as_deref()
+    }
+
+    pub fn own_did(&self) -> Option<&str> {
+        self.client.as_ref().map(|c| c.did())
+    }
+
+    pub fn own_device_id(&self) -> String {
+        hex::encode(self.mls.device_id())
+    }
+
+    /// The name a sibling sees in this device's ring credential.
+    pub fn own_device_name(&self) -> String {
+        self.keys
+            .get_or_create_device_name()
+            .unwrap_or_else(|_| "This device".to_string())
     }
 
     /// Clear error message
@@ -1400,18 +1484,86 @@ impl App {
             return Ok(false);
         }
 
-        match self.focus {
-            Focus::Login => self.handle_login_key(key).await,
-            Focus::Conversations => self.handle_conversations_key(key).await,
-            Focus::Messages => self.handle_messages_key(key).await,
-            Focus::Input => self.handle_input_key(key), // sync — no await
-            Focus::NewConversation => self.handle_new_conversation_key(key).await,
-            Focus::WatchHandle => self.handle_watch_handle_key(key).await,
-            Focus::PairShowCode => self.handle_pair_show_code_key(key), // sync — no await
-            Focus::PairEnterCode => self.handle_pair_enter_code_key(key),
-            Focus::PairApprove => self.handle_pair_approve_key(key), // sync — no await
-            Focus::SyncApprove => self.handle_sync_approve_key(key), // sync — no await
-            Focus::Devices => self.handle_devices_key(key), // sync — no await
+        match self.overlay {
+            Overlay::None => {}
+            Overlay::NewConversation => return self.handle_new_conversation_key(key).await,
+            Overlay::WatchHandle => return self.handle_watch_handle_key(key).await,
+            Overlay::PairEnterCode => return self.handle_pair_enter_code_key(key),
+            Overlay::PairShowCode => return self.handle_pair_show_code_key(key),
+            Overlay::PairApprove => return self.handle_pair_approve_key(key),
+            Overlay::SyncApprove => return self.handle_sync_approve_key(key),
+        }
+
+        let screen = match self.view {
+            View::Login => return self.handle_login_key(key).await,
+            View::Session(screen) => screen,
+        };
+
+        // Tab cycles from anywhere in a session, the composer included —
+        // a tab character is not something a message needs.
+        match key.code {
+            KeyCode::Tab => {
+                self.show_screen(screen.next());
+                return Ok(false);
+            }
+            KeyCode::BackTab => {
+                self.show_screen(screen.prev());
+                return Ok(false);
+            }
+            KeyCode::Char('m') if self.hints_are_pageable() => {
+                self.hint_page = self.hint_page.wrapping_add(1);
+                return Ok(false);
+            }
+            _ => {}
+        }
+
+        match screen {
+            Screen::Conversations => self.handle_conversations_key(key).await,
+            Screen::Chat => match self.chat_mode {
+                ChatMode::Browse => self.handle_chat_browse_key(key).await,
+                ChatMode::Compose => self.handle_chat_compose_key(key), // sync — no await
+            },
+            Screen::Status => self.handle_status_key(key), // sync — no await
+        }
+    }
+
+    /// Switch screens, dropping the state that belonged to the last one.
+    pub(crate) fn show_screen(&mut self, screen: Screen) {
+        self.show_message_info = false;
+        self.reaction_picker = None;
+        self.hint_page = 0;
+        if screen == Screen::Chat {
+            self.enter_compose();
+        }
+        self.view = View::Session(screen);
+    }
+
+    /// Whether `m` can page the footer hints: not in the composer, where
+    /// it is a letter, and not where the key set always fits one row.
+    pub fn hints_are_pageable(&self) -> bool {
+        if self.overlay != Overlay::None {
+            return false;
+        }
+        match self.view {
+            View::Login => false,
+            View::Session(Screen::Chat) => self.chat_mode != ChatMode::Compose,
+            View::Session(_) => true,
+        }
+    }
+
+    fn enter_compose(&mut self) {
+        self.hint_page = 0;
+        self.chat_mode = ChatMode::Compose;
+        self.selected_message = None;
+    }
+
+    /// Selects where the view already is, so `r`/`i` act on a message
+    /// from the first keypress rather than after a scroll.
+    fn enter_browse(&mut self) {
+        self.hint_page = 0;
+        self.chat_mode = ChatMode::Browse;
+        if !self.messages.is_empty() {
+            self.selected_message = Some(self.message_scroll.min(self.messages.len() - 1));
         }
     }
 
@@ -1702,7 +1854,7 @@ impl App {
                     refresh_jwt,
                 });
                 self.client = Some(client.clone());
-                self.status_message = None;
+                self.clear_status();
                 self.load_conversations_sync();
 
                 // Resolve handles for all conversations on login
@@ -1731,7 +1883,7 @@ impl App {
                 self.set_error(format!(
                     "Login failed: {e}\n\nIf you hit rate limits, wait before trying again."
                 ));
-                self.focus = Focus::Login;
+                self.view = View::Login;
             }
             BgEvent::PollFetched {
                 participant_events,
@@ -4018,9 +4170,9 @@ impl App {
 
         let did = client.did().to_string();
         self.client = Some(client);
-        self.status_message = None;
+        self.clear_status();
         self.logged_in_handle = Some(handle);
-        self.focus = Focus::Conversations;
+        self.view = View::Session(Screen::Conversations);
 
         self.load_conversations_sync();
 
@@ -4076,29 +4228,17 @@ impl App {
             KeyCode::Char('q') => return Ok(true),
             KeyCode::Char('n') => {
                 // Switch to new conversation input mode
-                self.focus = Focus::NewConversation;
+                self.overlay = Overlay::NewConversation;
                 self.new_conv_handle.clear();
             }
             KeyCode::Char('w') => {
                 // Switch to watch handle input mode
-                self.focus = Focus::WatchHandle;
+                self.overlay = Overlay::WatchHandle;
                 self.watch_handle_input.clear();
             }
-            KeyCode::Char('p') => {
-                // New device: request a pairing code and show it.
-                match self.api_pair_new() {
-                    Ok(_) => self.focus = Focus::PairShowCode,
-                    Err(e) => self.set_error(format!("Link this device failed: {e}")),
-                }
-            }
-            KeyCode::Char('P') => {
-                // Existing device: enter a pairing code shown elsewhere.
-                self.focus = Focus::PairEnterCode;
-                self.pair_enter_code_input.clear();
-            }
-            KeyCode::Char('d') => {
-                // Linked devices, and the state of any sync in flight.
-                self.focus = Focus::Devices;
+            KeyCode::Char('s') => {
+                // Safe to press twice: the Status screen leaves `s` unbound.
+                self.show_screen(Screen::Status);
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 if !self.conversations.is_empty() {
@@ -4120,11 +4260,8 @@ impl App {
                     }
                     self.load_messages()?;
                     self.message_scroll = 0;
-                    self.focus = Focus::Input;
+                    self.show_screen(Screen::Chat);
                 }
-            }
-            KeyCode::Tab => {
-                self.focus = Focus::Messages;
             }
             _ => {}
         }
@@ -4146,7 +4283,7 @@ impl App {
                 self.new_conv_handle.pop();
             }
             KeyCode::Esc => {
-                self.focus = Focus::Conversations;
+                self.overlay = Overlay::None;
                 self.new_conv_handle.clear();
             }
             _ => {}
@@ -4169,7 +4306,7 @@ impl App {
                 self.watch_handle_input.pop();
             }
             KeyCode::Esc => {
-                self.focus = Focus::Conversations;
+                self.overlay = Overlay::None;
                 self.watch_handle_input.clear();
             }
             _ => {}
@@ -4188,10 +4325,10 @@ impl App {
                 if !terminal {
                     let _ = self.api_pair_cancel();
                 }
-                self.focus = Focus::Conversations;
+                self.overlay = Overlay::None;
             }
             _ if terminal => {
-                self.focus = Focus::Conversations;
+                self.overlay = Overlay::None;
             }
             _ => {}
         }
@@ -4207,7 +4344,7 @@ impl App {
                     match self.api_pair_confirm(&code) {
                         Ok(()) => {
                             self.pair_enter_code_input.clear();
-                            self.focus = Focus::Conversations;
+                            self.overlay = Overlay::None;
                         }
                         Err(e) => self.set_error(format!("pairing code rejected: {e}")),
                     }
@@ -4220,7 +4357,7 @@ impl App {
                 self.pair_enter_code_input.pop();
             }
             KeyCode::Esc => {
-                self.focus = Focus::Conversations;
+                self.overlay = Overlay::None;
                 self.pair_enter_code_input.clear();
             }
             _ => {}
@@ -4236,7 +4373,7 @@ impl App {
     /// `ui_state()`'s `Failed` instead of a silent teardown).
     fn handle_pair_approve_key(&mut self, key: KeyEvent) -> Result<bool> {
         if self.pairing_is_terminal() {
-            self.focus = Focus::Conversations;
+            self.overlay = Overlay::None;
             return Ok(false);
         }
         match key.code {
@@ -4244,27 +4381,45 @@ impl App {
                 // On failure, stay on this screen — `ui_state()` now shows
                 // `Failed { reason }`, dismissible by the next key press.
                 if self.approve_pending_pairing().is_ok() {
-                    self.focus = Focus::Conversations;
+                    self.overlay = Overlay::None;
                 }
             }
             KeyCode::Esc | KeyCode::Char('n') => {
                 let _ = self.api_pair_reject();
-                self.focus = Focus::Conversations;
+                self.overlay = Overlay::None;
             }
             _ => {}
         }
         Ok(false)
     }
 
-    /// Devices screen: `s` asks the other devices for history, Esc leaves.
+    /// Each key is the first letter of what it does, which a screen can
+    /// afford because it owns its letters — `s` here is not the `s` on the
+    /// conversation list.
+    ///
+    /// Pairing and sync are bound here because this is the screen that
+    /// shows the devices they act on, and because the conversation list's
+    /// own keys then fit one footer row.
     ///
     /// Requesting from here rather than from a bare keystroke on the
     /// conversation list is deliberate — this is the screen that then
     /// *shows* what the request is doing, which a fire-and-forget key
     /// press never did.
-    fn handle_devices_key(&mut self, key: KeyEvent) -> Result<bool> {
+    fn handle_status_key(&mut self, key: KeyEvent) -> Result<bool> {
         match key.code {
-            KeyCode::Char('s') => {
+            KeyCode::Char('v') => {
+                // New device: request a pairing code and show it.
+                match self.api_pair_new() {
+                    Ok(_) => self.overlay = Overlay::PairShowCode,
+                    Err(e) => self.set_error(format!("Link this device failed: {e}")),
+                }
+            }
+            KeyCode::Char('e') => {
+                // Existing device: enter a pairing code shown elsewhere.
+                self.overlay = Overlay::PairEnterCode;
+                self.pair_enter_code_input.clear();
+            }
+            KeyCode::Char('g') => {
                 if let Err(e) = self.api_sync_request() {
                     self.set_error(format!("Sync history failed: {e}"));
                 }
@@ -4288,9 +4443,10 @@ impl App {
                     None => self.set_error("No other linked device.".to_string()),
                 }
             }
-            KeyCode::Esc | KeyCode::Char('q') => {
-                self.focus = Focus::Conversations;
+            KeyCode::Esc => {
+                self.show_screen(Screen::Conversations);
             }
+            KeyCode::Char('q') => return Ok(true),
             _ => {}
         }
         Ok(false)
@@ -4304,7 +4460,7 @@ impl App {
             self.sync_request_ui_state(),
             SyncRequestUiState::AwaitingApproval { .. }
         ) {
-            self.focus = Focus::Conversations;
+            self.overlay = Overlay::None;
             return Ok(false);
         }
         match key.code {
@@ -4312,11 +4468,11 @@ impl App {
                 if let Err(e) = self.api_sync_accept() {
                     self.set_error(format!("Send history failed: {e}"));
                 }
-                self.focus = Focus::Conversations;
+                self.overlay = Overlay::None;
             }
             KeyCode::Esc | KeyCode::Char('n') => {
                 let _ = self.api_sync_decline();
-                self.focus = Focus::Conversations;
+                self.overlay = Overlay::None;
             }
             _ => {}
         }
@@ -4337,8 +4493,8 @@ impl App {
         self.watched_dids.insert(did);
         let _ = self.keys.store_watched_dids(&self.watched_dids);
 
-        self.status_message = None;
-        self.focus = Focus::Conversations;
+        self.clear_status();
+        self.overlay = Overlay::None;
         self.watch_handle_input.clear();
 
         Ok(())
@@ -4369,9 +4525,10 @@ impl App {
             // Switch to existing conversation instead of creating a duplicate
             self.active_conversation = Some(existing_idx);
             self.load_messages()?;
-            self.focus = Focus::Input;
+            self.overlay = Overlay::None;
+            self.show_screen(Screen::Chat);
             self.new_conv_handle.clear();
-            self.status_message = None;
+            self.clear_status();
             self.set_status(format!(
                 "Switched to existing conversation with {}",
                 recipient_handle
@@ -4495,9 +4652,10 @@ impl App {
 
         // 13. Select the new conversation and switch to input mode
         self.active_conversation = Some(self.conversations.len() - 1);
-        self.focus = Focus::Input;
+        self.overlay = Overlay::None;
+        self.show_screen(Screen::Chat);
         self.new_conv_handle.clear();
-        self.status_message = None;
+        self.clear_status();
 
         // Load placeholder message for the new conversation
         self.messages.clear();
@@ -4719,7 +4877,7 @@ impl App {
         Ok(())
     }
 
-    async fn handle_messages_key(&mut self, key: KeyEvent) -> Result<bool> {
+    async fn handle_chat_browse_key(&mut self, key: KeyEvent) -> Result<bool> {
         // If reaction picker popup is open, handle it separately
         if let Some(ref mut idx) = self.reaction_picker {
             match key.code {
@@ -4746,8 +4904,8 @@ impl App {
 
         match key.code {
             KeyCode::Char('q') => return Ok(true),
-            KeyCode::Tab => {
-                self.focus = Focus::Input;
+            KeyCode::Enter => {
+                self.enter_compose();
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 // Scroll up (increase offset from bottom)
@@ -4780,7 +4938,7 @@ impl App {
                 if self.show_message_info {
                     self.show_message_info = false;
                 } else {
-                    self.focus = Focus::Conversations;
+                    self.show_screen(Screen::Conversations);
                 }
             }
             _ => {}
@@ -4788,8 +4946,8 @@ impl App {
         Ok(false)
     }
 
-    /// Handle input key — fully synchronous for typing, crypto inline for send.
-    fn handle_input_key(&mut self, key: KeyEvent) -> Result<bool> {
+    /// Fully synchronous for typing, crypto inline for send.
+    fn handle_chat_compose_key(&mut self, key: KeyEvent) -> Result<bool> {
         match key.code {
             KeyCode::Enter => {
                 if self.input_buffer.starts_with("/image ") {
@@ -4828,11 +4986,8 @@ impl App {
             KeyCode::End => {
                 self.cursor_position = self.input_buffer.len();
             }
-            KeyCode::Tab => {
-                self.focus = Focus::Conversations;
-            }
             KeyCode::Esc => {
-                self.focus = Focus::Messages;
+                self.enter_browse();
             }
             _ => {}
         }
@@ -6244,7 +6399,7 @@ impl App {
         self.debug_log
             .log(&format!("sync: {device_name} is asking for history"));
         self.sync_request = Some(SyncRequestSession::received(token, device_name, now_ms));
-        self.focus = Focus::SyncApprove;
+        self.overlay = Overlay::SyncApprove;
     }
 
     /// A sibling is offering us history.
@@ -6579,7 +6734,7 @@ impl App {
                 // Nothing to cache: `ui_state()`'s `AwaitingApproval`
                 // already carries device_name/did. Approval is always an
                 // explicit step (TUI tap or `POST /pair/approve`), and
-                // `sync_pairing_focus` below opens the TUI screen.
+                // `sync_pairing_overlay` below opens the TUI prompt.
                 PairingCommand::SurfaceApprovalPrompt { .. } => {}
                 PairingCommand::PersistRing { ring_id } => {
                     let now_ms = chrono::Utc::now().timestamp_millis();
@@ -6640,24 +6795,45 @@ impl App {
         if start_sync {
             self.start_pairing_sync_session();
         }
-        self.sync_pairing_focus();
+        self.sync_pairing_overlay();
     }
 
-    /// Derive `Focus` from `ui_state()` instead of setting it imperatively
-    /// per command. Only `AwaitingApproval` needs a transition — an
-    /// incoming `Enroll` can arrive while the user is anywhere in the TUI;
-    /// the other pairing screens already render and dismiss off
-    /// `ui_state()` in their own draw/key handlers.
-    fn sync_pairing_focus(&mut self) {
+    /// Derive the overlay from `ui_state()` rather than setting it per
+    /// command. Only `AwaitingApproval` needs a transition — an incoming
+    /// `Enroll` can arrive while the user is anywhere in the TUI.
+    fn sync_pairing_overlay(&mut self) {
         if matches!(self.pairing_ui_state(), PairingUiState::AwaitingApproval { .. }) {
-            self.focus = Focus::PairApprove;
+            self.overlay = Overlay::PairApprove;
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use moat_atproto::EventRecord;
+
+    /// Nothing else expires a status, so one that outstayed its welcome
+    /// would mask the key hints for the rest of the session.
+    #[test]
+    fn a_status_notice_expires_and_gives_the_footer_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(
+            Some(dir.path().to_path_buf()),
+            None,
+            None,
+            ratatui_image::picker::Picker::halfblocks(),
+        )
+        .expect("app in a temp dir");
+
+        app.set_status("Resolving alice.test...".to_string());
+        assert_eq!(app.status_notice(), Some("Resolving alice.test..."));
+
+        // Backdated rather than slept for: a test that waits on the real
+        // clock is a test that is slow and flaky at once.
+        app.status_set_at = Some(Instant::now() - Duration::from_secs(60));
+        assert_eq!(app.status_notice(), None);
+    }
 
     fn make_event(rkey: &str, tag: [u8; 16]) -> EventRecord {
         EventRecord {

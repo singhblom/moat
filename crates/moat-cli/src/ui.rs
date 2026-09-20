@@ -1,6 +1,8 @@
 //! Terminal UI rendering with Ratatui
 
-use crate::app::{App, DeviceAlert, DisplayMessage, Focus, LoginField, QUICK_EMOJIS};
+use crate::app::{
+    App, ChatMode, DeviceAlert, DisplayMessage, LoginField, Overlay, Screen, View, QUICK_EMOJIS,
+};
 use moat_core::{PairingUiState, SyncFailure, SyncRequestUiState, SyncTally};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -35,51 +37,52 @@ fn color_pulse(
     Color::Rgb(r as u8, g as u8, b as u8)
 }
 
-/// Main draw function
+/// One fullscreen surface, an optional modal over it, and a footer
+/// carrying the keys for whatever has the keyboard.
 pub fn draw(frame: &mut Frame, app: &mut App) {
-    match app.focus {
-        Focus::Login => draw_login(frame, app),
-        _ => draw_main(frame, app),
+    let area = frame.area();
+    let outer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(area);
+    let (content, footer_area) = (outer[0], outer[1]);
+
+    match app.view {
+        View::Login => draw_login(frame, app, content),
+        View::Session(Screen::Conversations) => draw_conversations_screen(frame, app, content),
+        View::Session(Screen::Chat) => draw_chat_screen(frame, app, content),
+        View::Session(Screen::Status) => draw_status_screen(frame, app, content),
     }
 
-    // Draw input popups
-    if app.focus == Focus::NewConversation {
-        draw_handle_input_popup(
+    match app.overlay {
+        Overlay::None => {}
+        Overlay::NewConversation => draw_handle_input_popup(
             frame,
             "New Conversation",
             "Enter handle:",
             &app.new_conv_handle,
-        );
-    } else if app.focus == Focus::WatchHandle {
-        draw_handle_input_popup(
+        ),
+        Overlay::WatchHandle => draw_handle_input_popup(
             frame,
             "Watch for Invites",
             "Enter handle to watch:",
             &app.watch_handle_input,
-        );
-    } else if app.focus == Focus::PairEnterCode {
-        draw_handle_input_popup(
+        ),
+        Overlay::PairEnterCode => draw_handle_input_popup(
             frame,
             "Link a Device",
             "Enter pairing code:",
             &app.pair_enter_code_input,
-        );
-    } else if app.focus == Focus::PairShowCode {
-        draw_pair_show_code_popup(frame, app);
-    } else if app.focus == Focus::PairApprove {
-        draw_pair_approve_popup(frame, app);
-    } else if app.focus == Focus::SyncApprove {
-        draw_sync_approve_popup(frame, app);
-    } else if app.focus == Focus::Devices {
-        draw_devices_popup(frame, app);
+        ),
+        Overlay::PairShowCode => draw_pair_show_code_popup(frame, app),
+        Overlay::PairApprove => draw_pair_approve_popup(frame, app),
+        Overlay::SyncApprove => draw_sync_approve_popup(frame, app),
     }
 
     // Draw message info popup if toggled
     if app.show_message_info {
         draw_message_info_popup(frame, app);
     }
-
-    // Reaction picker is drawn inline in draw_messages
 
     // Draw device alerts if any
     if let Some(alert) = app.device_alerts.first() {
@@ -91,22 +94,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_error_popup(frame, error);
     }
 
-    // Draw bottom info bar: status message takes priority, otherwise show user info
-    if let Some(ref status) = app.status_message {
-        draw_status(frame, status);
-    } else if let Some(ref handle) = app.logged_in_handle {
-        let info = if let Some(ref url) = app.drawbridge_url {
-            format!("{handle}  ::  {url}")
-        } else {
-            handle.clone()
-        };
-        draw_info_bar(frame, &info);
-    }
+    draw_footer(frame, app, footer_area);
 }
 
-fn draw_login(frame: &mut Frame, app: &App) {
-    let area = frame.area();
-
+fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
     // Center the login form
     let vertical = Layout::default()
         .direction(Direction::Vertical)
@@ -202,63 +193,14 @@ fn draw_login(frame: &mut Frame, app: &App) {
     frame.set_cursor_position(cursor_pos);
 }
 
-fn draw_main(frame: &mut Frame, app: &mut App) {
-    let area = frame.area();
-
-    // Reserve a row at the bottom for the info bar when logged in
-    let has_info_bar = app.logged_in_handle.is_some();
-    let outer = if has_info_bar {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(5), Constraint::Length(1)])
-            .split(area)
-    } else {
-        // No info bar — give all space to content
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(5), Constraint::Length(0)])
-            .split(area)
-    };
-
-    let content_area = outer[0];
-
-    // Main layout: conversations | messages
-    let horizontal = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-        .split(content_area);
-
-    // Conversations panel
-    draw_conversations(frame, app, horizontal[0]);
-
-    // Right panel: messages + input
-    let right = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(3)])
-        .split(horizontal[1]);
-
-    draw_messages(frame, app, right[0]);
-    draw_input(frame, app, right[1]);
-}
-
-fn draw_conversations(frame: &mut Frame, app: &App, area: Rect) {
-    let is_focused = app.focus == Focus::Conversations;
-    let color = if is_focused {
-        color_pulse(38.0, 227.0, 195.0, 38.0, 195.0, 227.0, 5000)
-    } else {
-        Color::Gray
-    };
-    let style = Style::default().fg(color);
+fn draw_conversations_screen(frame: &mut Frame, app: &App, area: Rect) {
+    let style = Style::default().fg(color_pulse(38.0, 227.0, 195.0, 38.0, 195.0, 227.0, 5000));
 
     let relay_count = app.drawbridge.active_connection_count();
-    // Key hints live in the title, matching the Messages pane, because the
-    // help text below only renders while there are no conversations — so
-    // every hint it carries vanishes the moment the user has one.
-    let hints = if is_focused { "  [n]ew [d]evices" } else { "" };
     let title = if relay_count > 0 {
-        format!(" Conversations{hints}  [relay:{relay_count}] ")
+        format!(" Conversations  [relay:{relay_count}] ")
     } else {
-        format!(" Conversations{hints} ")
+        " Conversations ".to_string()
     };
 
     let block = Block::default()
@@ -267,53 +209,57 @@ fn draw_conversations(frame: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .style(style);
 
+    if app.conversations.is_empty() {
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        let help = Paragraph::new(
+            "No conversations yet.\n\n\
+             Press n to start one, or s for this account's other devices.",
+        )
+        .style(Style::default().fg(Color::Gray))
+        .wrap(Wrap { trim: true });
+        frame.render_widget(help, inner);
+        return;
+    }
+
     let items: Vec<ListItem> = app
         .conversations
         .iter()
         .enumerate()
         .map(|(i, conv)| {
-            let style = if Some(i) == app.active_conversation {
+            let selected = Some(i) == app.active_conversation;
+            let style = if selected {
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
-
-            let prefix = if Some(i) == app.active_conversation {
-                "> "
-            } else {
-                "  "
-            };
-
+            let prefix = if selected { "> " } else { "  " };
             let unread = if conv.unread > 0 {
                 format!(" ({})", conv.unread)
             } else {
                 String::new()
             };
-
             ListItem::new(format!("{}{}{}", prefix, conv.display_name(), unread)).style(style)
         })
         .collect();
 
-    // Help text at bottom if no conversations
-    if app.conversations.is_empty() {
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-        let help = Paragraph::new(
-            "'n' new conversation\n'w' watch for invites\n'd' linked devices\n\
-             'p' show pairing code\n'P' enter pairing code\n'q' to quit",
-        )
-            .style(Style::default().fg(Color::Gray));
-        frame.render_widget(help, inner);
-    } else {
-        let list = List::new(items).block(block);
-        frame.render_widget(list, area);
-    }
+    frame.render_widget(List::new(items).block(block), area);
+}
+
+/// Both halves are always drawn; `ChatMode` decides which is lit.
+fn draw_chat_screen(frame: &mut Frame, app: &mut App, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(3)])
+        .split(area);
+    draw_messages(frame, app, chunks[0]);
+    draw_input(frame, app, chunks[1]);
 }
 
 fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
-    let is_focused = app.focus == Focus::Messages;
+    let is_focused = app.chat_mode == ChatMode::Browse;
     let color = if is_focused {
         color_pulse(38.0, 227.0, 195.0, 38.0, 195.0, 227.0, 5000)
     } else {
@@ -321,10 +267,9 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     let style = Style::default().fg(color);
 
-    let title = if is_focused && app.selected_message.is_some() {
-        " Messages  [r]eact [i]nfo "
-    } else {
-        " Messages "
+    let title = match app.active_conversation.and_then(|i| app.conversations.get(i)) {
+        Some(conv) => format!(" {} ", conv.display_name()),
+        None => " Messages ".to_string(),
     };
 
     let block = Block::default()
@@ -335,8 +280,9 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.active_conversation.is_none() {
         let inner = block.inner(area);
         frame.render_widget(block, area);
-        let help = Paragraph::new("Select a conversation\nor press 'n' to start one")
-            .style(Style::default().fg(Color::Gray));
+        let help = Paragraph::new("No conversation selected.\n\nTab to the conversation list and press Enter on one.")
+            .style(Style::default().fg(Color::Gray))
+            .wrap(Wrap { trim: true });
         frame.render_widget(help, inner);
         return;
     }
@@ -611,7 +557,7 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let is_focused = app.focus == Focus::Input;
+    let is_focused = app.chat_mode == ChatMode::Compose;
     let color = if is_focused {
         color_pulse(38.0, 227.0, 195.0, 38.0, 195.0, 227.0, 5000)
     } else {
@@ -662,24 +608,204 @@ fn draw_error_popup(frame: &mut Frame, error: &str) {
     frame.render_widget(text, popup_area);
 }
 
-fn draw_status(frame: &mut Frame, status: &str) {
-    let area = frame.area();
-
-    // Bottom status bar
-    let status_area = Rect::new(0, area.height - 1, area.width, 1);
-
-    let text = Paragraph::new(status).style(Style::default().fg(Color::Yellow).bg(Color::Gray));
-
-    frame.render_widget(text, status_area);
+/// One hint: the key, and what it does.
+///
+/// A `mnemonic` hint carries its key inside the label — `quit` with the
+/// `q` in key colour, which is `[q]uit` spelled with colour instead of
+/// brackets. Two columns cheaper than naming the key separately, which is
+/// what lets a screen's whole key set fit one row.
+struct Hint {
+    key: &'static str,
+    label: &'static str,
+    mnemonic: bool,
 }
 
-fn draw_info_bar(frame: &mut Frame, info: &str) {
-    let area = frame.area();
-    let bar_area = Rect::new(0, area.height - 1, area.width, 1);
+/// A hint whose key is spelled out beside its label: `tab screens`.
+const fn hint(key: &'static str, label: &'static str) -> Hint {
+    Hint { key, label, mnemonic: false }
+}
 
-    let text = Paragraph::new(info).style(Style::default().fg(Color::DarkGray));
+/// A hint whose key is its label's first letter, highlighted in place.
+const fn mnem(label: &'static str) -> Hint {
+    Hint { key: "", label, mnemonic: true }
+}
 
-    frame.render_widget(text, bar_area);
+/// The keys that act on whatever currently has the keyboard.
+///
+/// Ordered by how likely a key is to be unknown *here*: screen-specific
+/// first, then `tab` and `q`, which every screen hints. That order decides
+/// which page a key lands on, and which is cut where nothing can page.
+fn hints(app: &App) -> Vec<Hint> {
+    match app.overlay {
+        Overlay::NewConversation | Overlay::WatchHandle | Overlay::PairEnterCode => {
+            vec![hint("⏎", "confirm"), hint("esc", "cancel")]
+        }
+        Overlay::PairShowCode => vec![hint("esc", "cancel pairing")],
+        Overlay::PairApprove => vec![hint("y", "approve"), hint("n", "reject")],
+        Overlay::SyncApprove => vec![hint("y", "send history"), hint("n", "refuse")],
+        Overlay::None => match app.view {
+            View::Login => vec![
+                hint("tab", "next field"),
+                hint("⏎", "sign in"),
+                hint("esc", "quit"),
+            ],
+            View::Session(Screen::Conversations) => vec![
+                hint("↑↓", "move"),
+                hint("⏎", "open"),
+                mnem("new"),
+                mnem("watch"),
+                mnem("status"),
+                hint("tab", "screens"),
+                mnem("quit"),
+            ],
+            View::Session(Screen::Chat) => chat_hints(app),
+            View::Session(Screen::Status) => vec![
+                mnem("view code"),
+                mnem("enter code"),
+                mnem("get history"),
+                mnem("offer history"),
+                hint("esc", "back"),
+                hint("tab", "screens"),
+                mnem("quit"),
+            ],
+        },
+    }
+}
+
+fn chat_hints(app: &App) -> Vec<Hint> {
+    // `m` is a letter here, so this set cannot page: it holds only what is
+    // usable while typing. The rest is one Esc away in Browse.
+    if app.chat_mode == ChatMode::Compose {
+        return vec![
+            hint("⏎", "send"),
+            hint("/image", "<path>"),
+            hint("esc", "browse"),
+        ];
+    }
+    if app.reaction_picker.is_some() {
+        return vec![hint("←→", "pick"), hint("⏎", "react"), hint("esc", "cancel")];
+    }
+    if app.show_message_info {
+        return vec![hint("i", "close"), hint("esc", "close")];
+    }
+    vec![
+        hint("↑↓", "scroll"),
+        mnem("react"),
+        mnem("info"),
+        hint("⏎", "compose"),
+        hint("esc", "back"),
+        hint("tab", "screens"),
+        mnem("quit"),
+    ]
+}
+
+/// Columns a hint occupies, including the gap before it.
+fn hint_cost(h: &Hint, first: bool) -> usize {
+    let sep = if first { 1 } else { 2 };
+    sep + h.label.chars().count()
+        + if h.mnemonic { 0 } else { h.key.chars().count() + 1 }
+}
+
+/// Last on every page, so it sits in the same place each time.
+const MORE: Hint = mnem("more");
+
+/// Split the hints into pages that each fit `width`, leaving room for the
+/// `more` hint. One page when they all fit, so `more` only appears when
+/// something is behind it.
+fn paginate(hints: &[Hint], width: u16) -> Vec<std::ops::Range<usize>> {
+    let budget = width as usize;
+    let total: usize = hints
+        .iter()
+        .enumerate()
+        .map(|(i, h)| hint_cost(h, i == 0))
+        .sum();
+    if total <= budget {
+        return vec![0..hints.len()];
+    }
+
+    let reserve = hint_cost(&MORE, false);
+    let mut pages = Vec::new();
+    let mut start = 0;
+    while start < hints.len() {
+        let mut used = 0;
+        let mut end = start;
+        while end < hints.len() {
+            let cost = hint_cost(&hints[end], end == start);
+            // Always take one, or a terminal narrower than a single hint
+            // would page forever.
+            if end > start && used + cost + reserve > budget {
+                break;
+            }
+            used += cost;
+            end += 1;
+        }
+        pages.push(start..end);
+        start = end;
+    }
+    pages
+}
+
+/// Render one page of hints. Where `m` cannot be spared to page with,
+/// the line is cut at a hint boundary and marked with `…` instead.
+fn footer_spans(hints: &[Hint], width: u16, page: usize, pageable: bool) -> Vec<Span<'static>> {
+    let key_style = Style::default().fg(Color::Yellow);
+    let label_style = Style::default().fg(Color::DarkGray);
+
+    let pages = if pageable {
+        paginate(hints, width)
+    } else {
+        vec![0..hints.len()]
+    };
+    let paged = pages.len() > 1;
+    let range = pages[page % pages.len()].clone();
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut used = 0usize;
+    let mut push = |h: &Hint, first: bool| {
+        spans.push(Span::raw(if first { " " } else { "  " }.to_string()));
+        if h.mnemonic {
+            let mut chars = h.label.chars();
+            let key: String = chars.by_ref().take(1).collect();
+            spans.push(Span::styled(key, key_style));
+            spans.push(Span::styled(chars.collect::<String>(), label_style));
+        } else {
+            spans.push(Span::styled(h.key.to_string(), key_style));
+            spans.push(Span::styled(format!(" {}", h.label), label_style));
+        }
+    };
+
+    for (n, h) in hints[range].iter().enumerate() {
+        let first = n == 0;
+        let cost = hint_cost(h, first);
+        // Stop at a boundary rather than letting the terminal cut a hint
+        // in half, and say that we did.
+        if !paged && !first && used + cost + 1 > width as usize {
+            spans.push(Span::styled("…", label_style));
+            return spans;
+        }
+        used += cost;
+        push(h, first);
+    }
+    if paged {
+        push(&MORE, false);
+    }
+    spans
+}
+
+fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
+    let line = match app.status_notice() {
+        Some(notice) => Line::from(Span::styled(
+            format!(" {notice}"),
+            Style::default().fg(Color::Yellow),
+        )),
+        None => Line::from(footer_spans(
+            &hints(app),
+            area.width,
+            app.hint_page,
+            app.hints_are_pageable(),
+        )),
+    };
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 fn draw_handle_input_popup(frame: &mut Frame, title: &str, label: &str, input: &str) {
@@ -763,7 +889,7 @@ fn draw_pair_show_code_popup(frame: &mut Frame, app: &App) {
                 Line::from("Press any key to continue."),
             ],
         ),
-        // Not reachable while this popup is showing (Focus::PairShowCode
+        // Not reachable while this popup is showing (Overlay::PairShowCode
         // only follows a successful `api_pair_new`), kept for exhaustiveness.
         PairingUiState::Idle | PairingUiState::AwaitingPeer | PairingUiState::AwaitingApproval { .. } => {
             (Color::Cyan, vec![Line::from("")])
@@ -835,61 +961,76 @@ fn draw_pair_approve_popup(frame: &mut Frame, app: &App) {
     frame.render_widget(paragraph, inner);
 }
 
-/// The linked devices, and what any in-flight sync is doing.
-///
-/// This is the requester's surface: every other sync screen belongs to the
-/// device being *asked*, so before this existed a device that requested
-/// history showed nothing at all — not while waiting, not on success, and
-/// not on failure.
-fn draw_devices_popup(frame: &mut Frame, app: &App) {
-    let area = frame.area();
-
-    let popup_width = 64.min(area.width.saturating_sub(4));
-    let popup_height = 16.min(area.height.saturating_sub(4));
-    let popup_x = (area.width - popup_width) / 2;
-    let popup_y = (area.height - popup_height) / 2;
-    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
-
-    frame.render_widget(Clear, popup_area);
+/// Also the requester's sync surface: every other sync screen belongs to
+/// the device being *asked*, so without this a device that requested
+/// history showed nothing at all.
+fn draw_status_screen(frame: &mut Frame, app: &App, area: Rect) {
+    let style = Style::default().fg(color_pulse(38.0, 227.0, 195.0, 38.0, 195.0, 227.0, 5000));
     let block = Block::default()
-        .title(" Linked Devices ")
+        .title(" Status ")
+        .title_style(style.add_modifier(Modifier::BOLD))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
-    let inner = block.inner(popup_area);
-    frame.render_widget(block, popup_area);
+        .style(style);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
 
     let mut lines: Vec<Line> = Vec::new();
 
+    lines.push(section("Account"));
+    lines.push(field(
+        "handle",
+        app.logged_in_handle.as_deref().unwrap_or("—").to_string(),
+    ));
+    lines.push(field("did", app.own_did().unwrap_or("—").to_string()));
+    if let Some(pds) = app.pds_override() {
+        lines.push(field("pds", pds.to_string()));
+    }
+    lines.push(field(
+        "conversations",
+        app.conversations.len().to_string(),
+    ));
+
+    lines.push(Line::from(""));
+    lines.push(section("Relay"));
+    lines.push(field(
+        "url",
+        app.drawbridge_url.clone().unwrap_or_else(|| "none".to_string()),
+    ));
+    lines.push(field(
+        "connections",
+        app.drawbridge.active_connection_count().to_string(),
+    ));
+
+    lines.push(Line::from(""));
     let devices = app.api_ring_devices();
+    let (ring_id, _coord_groups, _members) = app.api_ring_status();
+    lines.push(match ring_id {
+        Some(id) => section(&format!("Devices ({} · ring {})", devices.len(), short_id(&id))),
+        None => section("Devices"),
+    });
     if devices.is_empty() {
-        lines.push(Line::from("No linked devices."));
-        lines.push(Line::from(""));
+        // No ring yet, so no leaf credential to read a name and id from.
+        lines.push(device_line(
+            &app.own_device_name(),
+            &app.own_device_id(),
+            true,
+        ));
         lines.push(Line::from(Span::styled(
-            "Press p on the new device to show a pairing code.",
+            "  No other devices linked. Press v here for a pairing code.",
             Style::default().fg(Color::DarkGray),
         )));
     } else {
         for device in &devices {
             let name = device["device_name"].as_str().unwrap_or("Unnamed device");
+            let id = device["device_id"].as_str().unwrap_or("");
             let is_self = device["is_self"].as_bool().unwrap_or(false);
-            lines.push(Line::from(vec![
-                Span::styled(
-                    if is_self { "• " } else { "  " },
-                    Style::default().fg(Color::Cyan),
-                ),
-                Span::raw(name.to_string()),
-                Span::styled(
-                    if is_self { "  (this device)" } else { "" },
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]));
+            lines.push(device_line(name, id, is_self));
         }
     }
 
     lines.push(Line::from(""));
-    // The sync line is the whole point of the screen: it is where a
-    // request that nobody answered finally becomes visible.
-    let (label, style) = match app.sync_request_ui_state() {
+    lines.push(section("History sync"));
+    let (label, sync_style) = match app.sync_request_ui_state() {
         SyncRequestUiState::Idle => (
             "No sync in progress.".to_string(),
             Style::default().fg(Color::DarkGray),
@@ -915,15 +1056,57 @@ fn draw_devices_popup(frame: &mut Frame, app: &App) {
             Style::default().fg(Color::Red),
         ),
     };
-    lines.push(Line::from(Span::styled(label, style)));
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "s: ask for history   o: send history   Esc: close",
-        Style::default().fg(Color::DarkGray),
-    )));
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(label, sync_style),
+    ]));
 
-    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true });
-    frame.render_widget(paragraph, inner);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn section(title: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        title.to_string(),
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn field(label: &str, value: String) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("  {label:<14}"),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::raw(value),
+    ])
+}
+
+fn device_line(name: &str, device_id: &str, is_self: bool) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            if is_self { "  • " } else { "    " },
+            Style::default().fg(Color::Cyan),
+        ),
+        Span::raw(format!("{name:<30}")),
+        Span::styled(short_id(device_id), Style::default().fg(Color::Gray)),
+        Span::styled(
+            if is_self { "  this device" } else { "" },
+            Style::default().fg(Color::DarkGray),
+        ),
+    ])
+}
+
+/// Shortened the way git shortens a commit.
+///
+/// The device id has to be the discriminator: every device of one user
+/// shares the DID, and the device name is kind + hostname, so two CLI
+/// devices on one machine are identical without it.
+fn short_id(hex_id: &str) -> String {
+    const SHORT_LEN: usize = 8;
+    if hex_id.is_empty() {
+        return "?".to_string();
+    }
+    hex_id.chars().take(SHORT_LEN).collect()
 }
 
 /// How a finished sync reads, on either side of it.
@@ -1151,9 +1334,231 @@ fn draw_device_alert(frame: &mut Frame, alert: &DeviceAlert) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::{backend::TestBackend, Terminal};
 
     fn tally(messages: u64, conversations: u64) -> SyncTally {
         SyncTally { messages, conversations }
+    }
+
+    fn test_app(dir: &std::path::Path) -> App {
+        App::new(
+            Some(dir.to_path_buf()),
+            None,
+            None,
+            ratatui_image::picker::Picker::halfblocks(),
+        )
+        .expect("app in a temp dir")
+    }
+
+    fn render(app: &mut App, width: u16, height: u16) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("test terminal");
+        terminal.draw(|f| draw(f, app)).expect("draw");
+        let buffer = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    fn footer_of(lines: &[String]) -> String {
+        lines.last().cloned().unwrap_or_default()
+    }
+
+    /// The defect this footer replaces: hints that do not fit are hints
+    /// the user never sees. At 80 columns no screen should need a page.
+    #[test]
+    fn every_screen_shows_all_its_hints_at_eighty_columns() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = test_app(dir.path());
+
+        for (name, view, mode) in [
+            ("login", View::Login, ChatMode::Compose),
+            (
+                "conversations",
+                View::Session(Screen::Conversations),
+                ChatMode::Compose,
+            ),
+            ("compose", View::Session(Screen::Chat), ChatMode::Compose),
+            ("browse", View::Session(Screen::Chat), ChatMode::Browse),
+            ("status", View::Session(Screen::Status), ChatMode::Compose),
+        ] {
+            app.view = view;
+            app.chat_mode = mode;
+            let footer = footer_of(&render(&mut app, 80, 24));
+
+            assert!(!footer.contains('…'), "{name} footer is cut: {footer:?}");
+            assert!(!footer.contains("more"), "{name} footer needs a page: {footer:?}");
+        }
+    }
+
+    #[test]
+    fn a_mnemonic_hint_colours_its_key_and_nothing_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = test_app(dir.path());
+        app.view = View::Session(Screen::Conversations);
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 6)).expect("test terminal");
+        terminal.draw(|f| draw(f, &mut app)).expect("draw");
+        let buffer = terminal.backend().buffer().clone();
+
+        // Column, not byte offset — the row holds multi-byte glyphs (↑↓, ⏎).
+        let footer_y = 5;
+        let cells: Vec<String> = (0..80)
+            .map(|x| buffer[(x, footer_y)].symbol().to_string())
+            .collect();
+        let quit_at = cells
+            .windows(4)
+            .position(|w| w.concat() == "quit")
+            .expect("a quit hint") as u16;
+
+        assert_eq!(buffer[(quit_at, footer_y)].fg, Color::Yellow, "the q");
+        assert_eq!(buffer[(quit_at + 1, footer_y)].fg, Color::DarkGray, "the u");
+    }
+
+    /// Pairing had no hint anywhere at any width, which made it
+    /// undiscoverable — the keys that start it are the ones that matter.
+    #[test]
+    fn the_status_screen_hints_the_keys_that_link_a_device() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = test_app(dir.path());
+        app.view = View::Session(Screen::Status);
+
+        let footer = footer_of(&render(&mut app, 80, 24));
+
+        assert!(footer.contains("view code"), "{footer:?}");
+        assert!(footer.contains("enter code"), "{footer:?}");
+    }
+
+    fn footer_text(hints: &[Hint], width: u16, page: usize, pageable: bool) -> String {
+        footer_spans(hints, width, page, pageable)
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect()
+    }
+
+    #[test]
+    fn hints_too_wide_for_the_row_page_instead_of_vanishing() {
+        let hints = vec![
+            hint("enter", "open"),
+            mnem("new"),
+            mnem("watch"),
+            mnem("quit"),
+        ];
+
+        let first = footer_text(&hints, 24, 0, true);
+        let second = footer_text(&hints, 24, 1, true);
+
+        assert_eq!(first, " enter open  new  more");
+        assert_eq!(second, " watch  quit  more");
+        for page in [&first, &second] {
+            assert!(page.chars().count() <= 24, "{page:?} overflows 24 columns");
+            assert!(!page.contains('…'), "{page:?} dropped a hint instead of paging");
+        }
+    }
+
+    #[test]
+    fn paging_past_the_last_page_returns_to_the_first() {
+        let hints = vec![
+            hint("enter", "open"),
+            mnem("new"),
+            mnem("watch"),
+            mnem("quit"),
+        ];
+        assert_eq!(
+            footer_text(&hints, 24, 0, true),
+            footer_text(&hints, 24, 2, true)
+        );
+    }
+
+    #[test]
+    fn unpageable_hints_are_cut_at_a_boundary_and_marked() {
+        let hints = vec![
+            hint("enter", "open"),
+            mnem("new"),
+            mnem("quit"),
+        ];
+        let text = footer_text(&hints, 14, 0, false);
+
+        assert_eq!(text, " enter open…");
+        assert!(text.chars().count() <= 14);
+        assert!(!text.contains("ne"), "a hint was cut in half: {text:?}");
+    }
+
+    #[test]
+    fn the_chat_footer_follows_the_mode_the_keyboard_is_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = test_app(dir.path());
+        app.view = View::Session(Screen::Chat);
+
+        app.chat_mode = ChatMode::Compose;
+        let composing = footer_of(&render(&mut app, 80, 24));
+        app.chat_mode = ChatMode::Browse;
+        let browsing = footer_of(&render(&mut app, 80, 24));
+
+        assert!(composing.contains("send"), "composing: {composing:?}");
+        assert!(browsing.contains("react"), "browsing: {browsing:?}");
+    }
+
+    #[test]
+    fn an_overlay_replaces_the_screens_hints_with_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = test_app(dir.path());
+        app.view = View::Session(Screen::Conversations);
+        app.overlay = Overlay::PairApprove;
+
+        let footer = footer_of(&render(&mut app, 80, 24));
+        assert!(footer.contains("approve"), "{footer:?}");
+        assert!(footer.contains("reject"), "{footer:?}");
+        assert!(!footer.contains("watch"), "{footer:?}");
+    }
+
+    #[test]
+    fn the_status_screen_names_each_device_by_its_short_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = test_app(dir.path());
+        app.view = View::Session(Screen::Status);
+
+        let rendered = render(&mut app, 80, 24).join("\n");
+        let own_short: String = app.own_device_id().chars().take(8).collect();
+        assert!(rendered.contains(&own_short), "{rendered}");
+        // The full 32-hex id is noise next to a name.
+        assert!(!rendered.contains(&app.own_device_id()), "{rendered}");
+    }
+
+    /// Not an assertion: prints each screen for a human to read.
+    /// `cargo test print_screens -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn print_screens() {
+        for (name, screen) in [
+            ("conversations", Screen::Conversations),
+            ("chat", Screen::Chat),
+            ("status", Screen::Status),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut app = test_app(dir.path());
+            app.view = View::Session(screen);
+            println!("── {name} ──────────────────────────────────────────");
+            for line in render(&mut app, 80, 20) {
+                println!("|{line}");
+            }
+            for page in 0..3 {
+                app.hint_page = page;
+                let footer = render(&mut app, 40, 6).pop().unwrap_or_default();
+                println!("[40 cols, page {page}]{footer}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_short_id_is_eight_hex_characters() {
+        assert_eq!(short_id("8aaeb26be5e31013311aeb37646155e6"), "8aaeb26b");
+        assert_eq!(short_id(""), "?");
     }
 
     /// The outcome that sends the user to a different device has to read
