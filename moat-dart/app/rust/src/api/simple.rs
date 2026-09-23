@@ -3326,20 +3326,28 @@ mod pairing_ffi_tests {
 
     #[test]
     fn pairing_payload_text_roundtrip() {
-        let text = pairing_payload_to_text(vec![0x11u8; 16], vec![0x22u8; 32]).unwrap();
+        let text = pairing_payload_to_text(
+            vec![0x11u8; moat_core::PAIRING_TOKEN_LEN],
+            vec![0x22u8; moat_core::PAIRING_SECRET_LEN],
+        )
+        .unwrap();
         assert!(text.contains('-'), "text form should be hyphen-grouped");
         let decoded = pairing_payload_from_text(text).unwrap();
-        assert_eq!(decoded.token, vec![0x11u8; 16]);
-        assert_eq!(decoded.secret, vec![0x22u8; 32]);
+        assert_eq!(decoded.token, vec![0x11u8; moat_core::PAIRING_TOKEN_LEN]);
+        assert_eq!(decoded.secret, vec![0x22u8; moat_core::PAIRING_SECRET_LEN]);
     }
 
     #[test]
     fn pairing_payload_uri_roundtrip() {
-        let uri = pairing_payload_to_uri(vec![0x33u8; 16], vec![0x44u8; 32]).unwrap();
+        let uri = pairing_payload_to_uri(
+            vec![0x33u8; moat_core::PAIRING_TOKEN_LEN],
+            vec![0x44u8; moat_core::PAIRING_SECRET_LEN],
+        )
+        .unwrap();
         assert!(uri.starts_with("moat-pair:"));
         let decoded = pairing_payload_from_uri(uri).unwrap();
-        assert_eq!(decoded.token, vec![0x33u8; 16]);
-        assert_eq!(decoded.secret, vec![0x44u8; 32]);
+        assert_eq!(decoded.token, vec![0x33u8; moat_core::PAIRING_TOKEN_LEN]);
+        assert_eq!(decoded.secret, vec![0x44u8; moat_core::PAIRING_SECRET_LEN]);
     }
 
     #[test]
@@ -3361,10 +3369,16 @@ mod pairing_ffi_tests {
             .generate_key_package("did:plc:alice".into(), "Alice's Laptop".into())
             .unwrap();
 
-        let new_pairing =
-            PairingSessionHandle::new_device(vec![0x42u8; 32], vec![0x24u8; 16]).unwrap();
-        let existing_pairing =
-            PairingSessionHandle::existing_device(vec![0x42u8; 32], vec![0x24u8; 16]).unwrap();
+        let new_pairing = PairingSessionHandle::new_device(
+            vec![0x42u8; moat_core::PAIRING_SECRET_LEN],
+            vec![0x24u8; moat_core::PAIRING_TOKEN_LEN],
+        )
+        .unwrap();
+        let existing_pairing = PairingSessionHandle::existing_device(
+            vec![0x42u8; moat_core::PAIRING_SECRET_LEN],
+            vec![0x24u8; moat_core::PAIRING_TOKEN_LEN],
+        )
+        .unwrap();
 
         let enroll_cmds = new_pairing
             .start_enroll(
