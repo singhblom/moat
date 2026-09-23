@@ -5897,14 +5897,18 @@ impl App {
                 SyncOutput::Store { conv_id, messages } => {
                     self.register_synced_conversation(&conv_id, &messages);
                     let my_did = self.client.as_ref().map(|c| c.did().to_string());
-                    for sync_msg in messages {
-                        let mut stored = crate::sync::stored_from_sync_message(&sync_msg);
-                        // Mark is_own based on sender_did vs our DID.
-                        if let (Some(ref did), Some(ref sender)) = (&my_did, &stored.sender_did) {
-                            stored.is_own = sender == did;
-                        }
-                        let _ = self.keys.append_message(&conv_id, stored);
-                    }
+                    // One write for the batch; per-message append is quadratic.
+                    let stored: Vec<_> = messages
+                        .iter()
+                        .map(|sync_msg| {
+                            let mut stored = crate::sync::stored_from_sync_message(sync_msg);
+                            if let (Some(ref did), Some(ref sender)) = (&my_did, &stored.sender_did) {
+                                stored.is_own = sender == did;
+                            }
+                            stored
+                        })
+                        .collect();
+                    let _ = self.keys.append_messages(&conv_id, stored);
                     self.debug_log.log(&format!("sync: stored batch for conv {conv_id}"));
                     // Refresh UI if this is the active conversation.
                     let active_id = self.active_conversation
@@ -6049,14 +6053,18 @@ impl App {
                 SyncOutput::Store { conv_id, messages } => {
                     self.register_synced_conversation(&conv_id, &messages);
                     let my_did = self.client.as_ref().map(|c| c.did().to_string());
-                    for sync_msg in messages {
-                        let mut stored = crate::sync::stored_from_sync_message(&sync_msg);
-                        // Mark is_own based on sender_did vs our DID.
-                        if let (Some(ref did), Some(ref sender)) = (&my_did, &stored.sender_did) {
-                            stored.is_own = sender == did;
-                        }
-                        let _ = self.keys.append_message(&conv_id, stored);
-                    }
+                    // One write for the batch; per-message append is quadratic.
+                    let stored: Vec<_> = messages
+                        .iter()
+                        .map(|sync_msg| {
+                            let mut stored = crate::sync::stored_from_sync_message(sync_msg);
+                            if let (Some(ref did), Some(ref sender)) = (&my_did, &stored.sender_did) {
+                                stored.is_own = sender == did;
+                            }
+                            stored
+                        })
+                        .collect();
+                    let _ = self.keys.append_messages(&conv_id, stored);
                     self.debug_log
                         .log(&format!("pairing-sync: stored batch for conv {conv_id}"));
                     let active_id = self.active_conversation
