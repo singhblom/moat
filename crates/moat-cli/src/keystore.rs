@@ -5,7 +5,7 @@
 use moat_core::GroupKind;
 pub use moat_core::DeviceRingState;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -537,8 +537,11 @@ impl KeyStore {
     /// them carries the rkey "pending" — the image path writes twice under
     /// it, placeholder then blob metadata, and matching on rkey alone
     /// would duplicate the row. A real rkey already held is not
-    /// re-inserted, but blob metadata is merged into it if missing. Both
-    /// indexes cover rows added earlier in the same batch.
+    /// re-inserted, but blob metadata is merged into it if missing. A
+    /// published row whose `message_id` is already held under another
+    /// rkey is dropped: a retried send republishes under the same id, and
+    /// the first attempt may have landed too. All indexes cover rows added
+    /// earlier in the same batch.
     pub fn append_messages(&self, conv_id: &str, incoming: Vec<StoredMessage>) -> Result<usize> {
         if incoming.is_empty() {
             return Ok(0);
@@ -547,6 +550,7 @@ impl KeyStore {
 
         let mut by_rkey: HashMap<String, usize> = HashMap::new();
         let mut pending_by_id: HashMap<Vec<u8>, usize> = HashMap::new();
+        let mut published_ids: HashSet<Vec<u8>> = HashSet::new();
         for (i, m) in messages.messages.iter().enumerate() {
             if m.rkey == "pending" {
                 if let Some(mid) = &m.message_id {
@@ -554,6 +558,7 @@ impl KeyStore {
                 }
             } else {
                 by_rkey.entry(m.rkey.clone()).or_insert(i);
+                published_ids.extend(m.message_id.clone());
             }
         }
 
@@ -581,8 +586,11 @@ impl KeyStore {
                     changed = true;
                 }
                 continue;
+            } else if message.message_id.as_ref().is_some_and(|id| published_ids.contains(id)) {
+                continue;
             } else {
                 by_rkey.insert(message.rkey.clone(), messages.messages.len());
+                published_ids.extend(message.message_id.clone());
             }
             messages.messages.push(message);
             added += 1;
@@ -1261,11 +1269,36 @@ mod tests {
         assert!(store.fail_unsent_messages("conv", "interrupted").unwrap().is_empty());
     }
 
+    /// A published row whose message id is derived from its rkey.
     fn real_msg(rkey: &str, content: &str) -> StoredMessage {
+        let mut id = [0u8; 16];
+        let n = rkey.len().min(16);
+        id[..n].copy_from_slice(&rkey.as_bytes()[..n]);
         StoredMessage {
             rkey: rkey.to_string(),
-            ..pending_msg(&[0u8; 16], content)
+            ..pending_msg(&id, content)
         }
+    }
+
+    /// A retried send republishes under the same message id, and the
+    /// first attempt may have landed too; receivers must show it once.
+    #[test]
+    fn a_republished_message_id_is_not_shown_twice() {
+        let dir = tempdir().unwrap();
+        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+        let first = real_msg("a", "hello");
+        let retried = StoredMessage { rkey: "b".to_string(), ..first.clone() };
+        store.append_message("conv", first).unwrap();
+
+        assert!(!store.append_message("conv", retried.clone()).unwrap());
+        let fresh = real_msg("d", "other");
+        let fresh_retried = StoredMessage { rkey: "e".to_string(), ..fresh.clone() };
+        let batch = vec![StoredMessage { rkey: "c".to_string(), ..retried }, fresh, fresh_retried];
+        assert_eq!(store.append_messages("conv", batch).unwrap(), 1);
+
+        let rkeys: Vec<_> =
+            store.load_messages("conv").unwrap().messages.into_iter().map(|m| m.rkey).collect();
+        assert_eq!(rkeys, ["a", "d"]);
     }
 
     /// Real rkeys are TIDs, whose alphabet sorts below "pending" — a

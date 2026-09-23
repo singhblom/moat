@@ -95,7 +95,7 @@ Located in `lexicons/social/moat/`:
 ├── debug.log
 ├── data/
 │   ├── blobs/        # BlobCache — keyed by hex(content_hash), one file per blob
-│   └── outbox/       # Source bytes of unpublished image sends, keyed by hex(message_id); kept for retry
+│   └── outbox/       # Source of unpublished sends, {hex(message_id)}.{image,text}; kept for retry
 └── keys/
     ├── credentials.json
     ├── identity.key

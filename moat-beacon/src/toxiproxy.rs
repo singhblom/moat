@@ -138,6 +138,9 @@ impl ToxiproxyManager {
     /// `kind` is a Toxiproxy toxic type string (e.g. `"latency"`, `"timeout"`,
     /// `"bandwidth"`, `"slow_close"`, `"reset_peer"`, `"limit_data"`).
     ///
+    /// `stream` is `"upstream"` (client → server) or `"downstream"`
+    /// (server → client).
+    ///
     /// `attributes` is passed verbatim as the `attributes` JSON object.
     /// Example for latency: `json!({"latency": 200, "jitter": 50})`.
     pub async fn add_toxic(
@@ -145,6 +148,7 @@ impl ToxiproxyManager {
         proxy_name: &str,
         toxic_name: &str,
         kind: &str,
+        stream: &str,
         toxicity: f64,
         attributes: serde_json::Value,
     ) -> Result<()> {
@@ -157,7 +161,7 @@ impl ToxiproxyManager {
             .json(&json!({
                 "name":       toxic_name,
                 "type":       kind,
-                "stream":     "upstream",
+                "stream":     stream,
                 "toxicity":   toxicity,
                 "attributes": attributes,
             }))
