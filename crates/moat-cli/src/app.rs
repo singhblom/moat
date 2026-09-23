@@ -5,8 +5,9 @@ use crate::{
     drawbridge,
     drawbridge::DrawbridgeManager,
     image_processing,
-    keystore::{hex, GroupMetadata, KeyStore, StoredSession},
+    keystore::{hex, GroupMetadata, KeyStore, StoredSession, IMAGE_SENDING, LONG_TEXT_UPLOADING},
     message_helpers::{build_text_payload, needs_blob_upload, render_message_preview, truncate_to_preview},
+    outbox::Outbox,
 };
 use crossterm::event::{KeyCode, KeyEvent};
 use moat_atproto::{BlobRef, MoatAtprotoClient};
@@ -90,7 +91,18 @@ impl std::fmt::Debug for ImageProto {
     }
 }
 
+/// Short hex prefix of an id, for log lines.
+fn short_hex(id: &[u8]) -> String {
+    hex::encode(&id[..id.len().min(4)])
+}
+
+/// Short prefix of a hex conversation id, for log lines.
+fn short_hex_str(id: &str) -> String {
+    id.chars().take(16).collect()
+}
+
 /// Debug logger that writes to a file in the storage directory
+#[derive(Clone)]
 struct DebugLog {
     path: PathBuf,
 }
@@ -289,6 +301,8 @@ pub struct DisplayMessage {
     pub image_loading: bool,
     /// ATProto record key (TID), used for canonical ordering.
     pub rkey: String,
+    /// Why an own message failed to send; see `StoredMessage::send_failed`.
+    pub send_failed: Option<String>,
 }
 
 /// A notification about a new device joining a conversation
@@ -337,8 +351,13 @@ pub(crate) enum BgEvent {
         /// MLS message ID, used to correlate with the pending stored message.
         message_id: Option<Vec<u8>>,
     },
-    /// Network publish for send_message failed.
-    SendFailed(String),
+    /// A send failed at some stage. `message_id` names the unsent row to
+    /// mark failed; `None` when the row cannot be identified.
+    SendFailed {
+        conv_id: String,
+        message_id: Option<Vec<u8>>,
+        error: String,
+    },
     /// Background auto-login completed.
     LoggedIn {
         client: MoatAtprotoClient,
@@ -404,6 +423,7 @@ pub(crate) enum BgEvent {
     BlobUploaded {
         blob: UploadedBlob,
         preview_text: String,
+        pending_message_id: Vec<u8>,
         conv_id: String,
     },
 
@@ -522,7 +542,7 @@ impl BgEvent {
 
             BgEvent::PollFetched { .. }
             | BgEvent::SendPublished { .. }
-            | BgEvent::SendFailed(_)
+            | BgEvent::SendFailed { .. }
             | BgEvent::LoggedIn { .. }
             | BgEvent::LoginFailed(_)
             | BgEvent::PollError(_)
@@ -559,6 +579,8 @@ pub struct App {
     mls_path: std::path::PathBuf,
     /// Persistent disk cache for decrypted blob content, keyed by content_hash.
     blob_cache: BlobCache,
+    /// Source bytes of unpublished image sends, for retry.
+    outbox: Outbox,
     /// Terminal image renderer — auto-detects Kitty/Sixel/iTerm2/half-block protocol.
     picker: Picker,
     debug_log: DebugLog,
@@ -764,6 +786,9 @@ impl App {
         let blob_cache = BlobCache::new(data_dir.join("blobs"))
             .map_err(|e| AppError::Other(format!("Failed to create blob cache: {e}")))?;
 
+        let outbox = Outbox::new(data_dir.join("outbox"))
+            .map_err(|e| AppError::Other(format!("Failed to create outbox: {e}")))?;
+
         let debug_log = DebugLog::new(&data_dir);
 
         // If credentials.txt exists and no credentials are stored yet, import them.
@@ -810,6 +835,7 @@ impl App {
             mls,
             mls_path,
             blob_cache,
+            outbox,
             picker,
             debug_log,
             view,
@@ -1057,6 +1083,7 @@ impl App {
                                 image_proto: None,
                                 image_loading: false,
                                 rkey: stored.rkey.clone(),
+                                send_failed: stored.send_failed.clone(),
                             });
                         }
                         Ok(())
@@ -1910,8 +1937,10 @@ impl App {
                 self.set_error(format!("Poll error: {e}"));
             }
             BgEvent::SendPublished { uri, conv_id, tag, ciphertext, message_id } => {
-                self.debug_log
-                    .log(&format!("send_message: published to PDS, uri={}", uri));
+                self.debug_log.log(&format!(
+                    "send: published id={} uri={uri}",
+                    message_id.as_deref().map(short_hex).unwrap_or_else(|| "?".into()),
+                ));
                 self.tag_map.insert(tag, conv_id.clone());
 
                 let rkey = uri.split('/').next_back().unwrap_or("").to_string();
@@ -1932,6 +1961,9 @@ impl App {
                     // Re-sort display messages by rkey
                     self.messages.sort_by(|a, b| a.rkey.cmp(&b.rkey));
                 }
+                if let Some(id) = &message_id {
+                    self.outbox.remove(id);
+                }
 
                 // Notify Drawbridge about the published event with payload + relay URLs.
                 // Include our own DID in the envelope so the relay can use it for
@@ -1948,8 +1980,16 @@ impl App {
                     });
                 }
             }
-            BgEvent::SendFailed(e) => {
-                self.set_error(format!("Send error: {e}"));
+            BgEvent::SendFailed { conv_id, message_id, error } => {
+                self.debug_log.log(&format!(
+                    "send: failed id={} conv={}: {error}",
+                    message_id.as_deref().map(short_hex).unwrap_or_else(|| "?".into()),
+                    short_hex_str(&conv_id),
+                ));
+                if let Some(id) = message_id {
+                    self.mark_send_failed(&conv_id, &id, &error);
+                }
+                self.set_error(format!("Send error: {error}"));
             }
             BgEvent::DrawbridgeNewEvent { tag, rkey, payload } => {
                 self.debug_log.log(&format!(
@@ -2045,8 +2085,8 @@ impl App {
                 }
             }
 
-            BgEvent::BlobUploaded { blob, preview_text, conv_id } => {
-                self.handle_blob_uploaded(blob, preview_text, conv_id);
+            BgEvent::BlobUploaded { blob, preview_text, pending_message_id, conv_id } => {
+                self.handle_blob_uploaded(blob, preview_text, pending_message_id, conv_id);
             }
 
             BgEvent::BlobFetched { message_id, full_text } => {
@@ -2205,21 +2245,26 @@ impl App {
         &mut self,
         blob: UploadedBlob,
         preview_text: String,
+        pending_message_id: Vec<u8>,
         conv_id: String,
     ) {
+        let fail = |app: &mut Self, error: String| {
+            let _ = app.bg_tx.send(BgEvent::SendFailed {
+                conv_id: conv_id.clone(),
+                message_id: Some(pending_message_id.clone()),
+                error,
+            });
+        };
+
         let Some(client) = self.client.as_ref() else {
-            self.set_error("blob uploaded but client is gone".to_string());
-            return;
+            return fail(self, "blob uploaded but client is gone".to_string());
         };
 
         let uri = format!("at://{}/{}", client.did(), blob.cid);
 
         let key_arr: [u8; 32] = match blob.key.try_into() {
             Ok(k) => k,
-            Err(_) => {
-                self.set_error("blob key has wrong length".to_string());
-                return;
-            }
+            Err(_) => return fail(self, "blob key has wrong length".to_string()),
         };
 
         let external = match ExternalBlob::new(
@@ -2230,10 +2275,7 @@ impl App {
             blob.content_hash,
         ) {
             Ok(e) => e,
-            Err(e) => {
-                self.set_error(format!("failed to build ExternalBlob: {e}"));
-                return;
-            }
+            Err(e) => return fail(self, format!("failed to build ExternalBlob: {e}")),
         };
 
         let payload = MessagePayload::LongText(LongTextMessage {
@@ -2244,42 +2286,23 @@ impl App {
 
         let group_id = match hex::decode(&conv_id) {
             Ok(id) => id,
-            Err(e) => {
-                self.set_error(format!("invalid conv_id in BlobUploaded: {e}"));
-                return;
-            }
+            Err(e) => return fail(self, format!("invalid conv_id in BlobUploaded: {e}")),
         };
 
         let key_bundle = match self.keys.load_identity_key() {
             Ok(k) => k,
-            Err(e) => {
-                self.set_error(format!("failed to load identity key: {e}"));
-                return;
-            }
+            Err(e) => return fail(self, format!("failed to load identity key: {e}")),
         };
 
         let current_epoch = self.mls.get_group_epoch(&group_id).ok().flatten().unwrap_or(1);
-        // Same reasoning as the image path below: the optimistic row is
-        // already stored under this id, and the rkey fix-up on publish
-        // matches on it. Looked up before encrypting because
-        // `encrypt_event` copies whatever id the event carries.
-        let pending_message_id = self
-            .messages
-            .iter()
-            .rev()
-            .find(|m| m.is_own && m.content.contains("[long text — uploading…]"))
-            .and_then(|m| m.message_id.clone());
+        // Same reasoning as the image path: the optimistic row is stored
+        // under this id, and the rkey fix-up on publish matches on it.
         let mut event = Event::message(group_id.clone(), current_epoch, &payload);
-        if let Some(id) = &pending_message_id {
-            event.message_id = Some(id.clone());
-        }
+        event.message_id = Some(pending_message_id.clone());
 
         let encrypted = match self.mls.encrypt_event(&group_id, &key_bundle, &event) {
             Ok(e) => e,
-            Err(e) => {
-                self.set_error(format!("MLS encrypt failed for long text: {e}"));
-                return;
-            }
+            Err(e) => return fail(self, format!("MLS encrypt failed for long text: {e}")),
         };
 
         if let Err(e) = self.save_mls_state() {
@@ -2291,21 +2314,19 @@ impl App {
 
         // Update the pending optimistic message to the real preview.
         let display_content = format!("{preview_text} [long text]");
-        if let Some(msg) = self.messages.iter_mut().rev().find(|m| m.is_own && m.content.contains("[long text — uploading…]")) {
-            msg.content = display_content.clone();
-            if let Some(msg_id) = &msg.message_id {
-                let _ = self.keys.append_message(&conv_id, crate::keystore::StoredMessage {
-                    rkey: "pending".to_string(),
-                    content: display_content,
-                    timestamp: msg.timestamp,
-                    is_own: true,
-                    message_id: Some(msg_id.clone()),
-                    sender_did: msg.sender_did.clone(),
-                    sender_device: msg.sender_device.clone(),
-                    blob_uri: None, blob_key: None, blob_ciphertext_hash: None, blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None, blob_width: None, blob_height: None, blob_thumbhash: None,
-                    reactions: Vec::new(),
-                });
-            }
+        let stored = self.keys.update_message_by_id(&conv_id, &pending_message_id, |m| {
+            m.content = display_content.clone();
+        });
+        if let Err(e) = stored {
+            self.debug_log.log(&format!("blob_uploaded: failed to store preview: {e}"));
+        }
+        if let Some(msg) = self
+            .messages
+            .iter_mut()
+            .rev()
+            .find(|m| m.message_id.as_ref() == Some(&pending_message_id))
+        {
+            msg.content = display_content;
         }
 
         // Publish the MLS-encrypted event.
@@ -2320,7 +2341,11 @@ impl App {
                     let _ = tx.send(BgEvent::SendPublished { uri, conv_id, tag, ciphertext, message_id: msg_id });
                 }
                 Err(e) => {
-                    let _ = tx.send(BgEvent::SendFailed(format!("{e}")));
+                    let _ = tx.send(BgEvent::SendFailed {
+                        conv_id,
+                        message_id: Some(pending_message_id),
+                        error: format!("publish failed: {e}"),
+                    });
                 }
             }
         });
@@ -2669,7 +2694,7 @@ impl App {
         let device_name = self.keys.get_or_create_device_name().ok();
         self.messages.push(DisplayMessage {
             from: "You".to_string(),
-            content: "[image — processing…]".to_string(),
+            content: IMAGE_SENDING.to_string(),
             timestamp,
             is_own: true,
             sender_did: Some(my_did.clone()),
@@ -2679,12 +2704,13 @@ impl App {
             image_proto: None,
             image_loading: true,
             rkey: "pending".to_string(),
+            send_failed: None,
         });
 
         // Persist the placeholder so the message survives a restart.
         let stored_msg = crate::keystore::StoredMessage {
             rkey: "pending".to_string(),
-            content: "[image — processing…]".to_string(),
+            content: IMAGE_SENDING.to_string(),
             timestamp,
             is_own: true,
             message_id: Some(pending_message_id.clone()),
@@ -2694,19 +2720,50 @@ impl App {
             blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None,
             blob_width: None, blob_height: None, blob_thumbhash: None,
             reactions: Vec::new(),
+            send_failed: None,
         };
         if let Err(e) = self.keys.append_message(&conv_id, stored_msg) {
             self.debug_log
                 .log(&format!("send_image: failed to store locally: {e}"));
         }
+        // Kept until published, so a failed send can be retried.
+        if let Err(e) = self.outbox.put(&pending_message_id, &bytes) {
+            self.debug_log
+                .log(&format!("send_image: failed to keep source for retry: {e}"));
+        }
 
         self.input_buffer.clear();
         self.cursor_position = 0;
 
-        let client = self.client.as_ref().unwrap().clone();
+        self.spawn_image_upload(conv_id, pending_message_id, bytes);
+        Ok(())
+    }
+
+    /// Process, encrypt and upload an image in the background; the result
+    /// arrives as `ImageUploaded` or `SendFailed`.
+    fn spawn_image_upload(&self, conv_id: String, pending_message_id: Vec<u8>, bytes: Vec<u8>) {
+        let Some(client) = self.client.clone() else {
+            let _ = self.bg_tx.send(BgEvent::SendFailed {
+                conv_id,
+                message_id: Some(pending_message_id),
+                error: "not logged in".to_string(),
+            });
+            return;
+        };
         let tx = self.bg_tx.clone();
+        let log = self.debug_log.clone();
+        let id = short_hex(&pending_message_id);
+        log.log(&format!("send_image: start id={id} input={}B", bytes.len()));
 
         tokio::spawn(async move {
+            let fail = |error: String| {
+                let _ = tx.send(BgEvent::SendFailed {
+                    conv_id: conv_id.clone(),
+                    message_id: Some(pending_message_id.clone()),
+                    error,
+                });
+            };
+
             // Image processing runs on the blocking thread pool.
             let result = tokio::task::spawn_blocking(move || {
                 image_processing::process_image_from_bytes(&bytes)
@@ -2715,14 +2772,8 @@ impl App {
 
             let processed = match result {
                 Ok(Ok(r)) => r,
-                Ok(Err(e)) => {
-                    let _ = tx.send(BgEvent::SendFailed(format!("image processing failed: {e}")));
-                    return;
-                }
-                Err(e) => {
-                    let _ = tx.send(BgEvent::SendFailed(format!("image task panicked: {e}")));
-                    return;
-                }
+                Ok(Err(e)) => return fail(format!("image processing failed: {e}")),
+                Err(e) => return fail(format!("image task panicked: {e}")),
             };
             let (image_bytes, width, height, thumbhash, mime) = (
                 processed.bytes,
@@ -2731,26 +2782,28 @@ impl App {
                 processed.thumbhash,
                 processed.mime,
             );
+            log.log(&format!(
+                "send_image: processed id={id} {width}x{height} {mime} {}B",
+                image_bytes.len()
+            ));
 
             // Encrypt blob (fast, CPU-only).
             let encrypted = match moat_core::blob_encrypt(&image_bytes) {
                 Ok(r) => r,
-                Err(e) => {
-                    let _ =
-                        tx.send(BgEvent::SendFailed(format!("blob encrypt failed: {e}")));
-                    return;
-                }
+                Err(e) => return fail(format!("blob encrypt failed: {e}")),
             };
             let ciphertext_size = encrypted.blob.len() as u64;
 
             // Upload blob to PDS.
+            let started = Instant::now();
             let cid = match client.upload_blob(&encrypted.blob).await {
                 Ok(cid) => cid,
-                Err(e) => {
-                    let _ = tx.send(BgEvent::SendFailed(format!("blob upload failed: {e}")));
-                    return;
-                }
+                Err(e) => return fail(format!("blob upload failed: {e}")),
             };
+            log.log(&format!(
+                "send_image: uploaded id={id} cid={cid} in {}ms",
+                started.elapsed().as_millis()
+            ));
 
             let _ = tx.send(BgEvent::ImageUploaded {
                 blob: UploadedBlob {
@@ -2765,8 +2818,96 @@ impl App {
                 conv_id,
             });
         });
+    }
 
+    /// Retry a failed image send from the source bytes kept in the outbox.
+    pub fn retry_send(&mut self, conv_id: &str, message_id: &[u8]) -> Result<()> {
+        let stored = self
+            .keys
+            .load_messages(conv_id)?
+            .messages
+            .into_iter()
+            .find(|m| m.message_id.as_deref() == Some(message_id))
+            .ok_or_else(|| AppError::Other("no such message".to_string()))?;
+        if stored.send_failed.is_none() {
+            return Err(AppError::Other("message has not failed to send".to_string()));
+        }
+        let bytes = self
+            .outbox
+            .get(message_id)
+            .ok_or_else(|| AppError::Other("this message cannot be retried".to_string()))?;
+        self.debug_log
+            .log(&format!("send_image: retry id={}", short_hex(message_id)));
+
+        self.keys.update_message_by_id(conv_id, message_id, |m| {
+            m.content = IMAGE_SENDING.to_string();
+            m.send_failed = None;
+        })?;
+        if let Some(dm) = self
+            .messages
+            .iter_mut()
+            .find(|m| m.message_id.as_deref() == Some(message_id))
+        {
+            dm.content = IMAGE_SENDING.to_string();
+            dm.send_failed = None;
+            dm.image_loading = true;
+        }
+        self.spawn_image_upload(conv_id.to_string(), message_id.to_vec(), bytes);
         Ok(())
+    }
+
+    /// The selected message, if `retry_send` can act on it.
+    pub fn selected_retryable(&self) -> Option<&DisplayMessage> {
+        let offset = self.selected_message?;
+        let idx = self.messages.len().checked_sub(1 + offset)?;
+        let msg = &self.messages[idx];
+        let id = msg.message_id.as_deref()?;
+        (msg.send_failed.is_some() && self.outbox.contains(id)).then_some(msg)
+    }
+
+    /// Mark an unsent row failed in storage and on screen.
+    fn mark_send_failed(&mut self, conv_id: &str, message_id: &[u8], reason: &str) {
+        let mut content = None;
+        let found = self.keys.update_message_by_id(conv_id, message_id, |m| {
+            if m.rkey == "pending" {
+                m.mark_send_failed(reason);
+            }
+            content = Some((m.content.clone(), m.send_failed.clone()));
+        });
+        if let Err(e) = found {
+            self.debug_log.log(&format!("send: failed to mark row failed: {e}"));
+        }
+        let Some((content, send_failed)) = content else { return };
+        if let Some(dm) = self
+            .messages
+            .iter_mut()
+            .find(|m| m.message_id.as_deref() == Some(message_id))
+        {
+            dm.content = content;
+            dm.send_failed = send_failed;
+            dm.image_loading = false;
+        }
+    }
+
+    /// Mark every unsent row failed. Called once when a long-running
+    /// front end starts: send tasks do not survive the process, so any row
+    /// still unsent now has nothing working on it.
+    pub fn fail_orphaned_sends(&mut self) {
+        let Ok(groups) = self.keys.list_groups() else { return };
+        for conv_id in groups {
+            match self.keys.fail_unsent_messages(&conv_id, "interrupted before it was sent") {
+                Ok(ids) if !ids.is_empty() => self.debug_log.log(&format!(
+                    "startup: marked {} unsent message(s) failed in conv {}",
+                    ids.len(),
+                    short_hex_str(&conv_id)
+                )),
+                Ok(_) => {}
+                Err(e) => self.debug_log.log(&format!(
+                    "startup: failed to sweep unsent messages in conv {}: {e}",
+                    short_hex_str(&conv_id)
+                )),
+            }
+        }
     }
 
     /// TUI entry point: read the file at `path` then call [`send_image_bytes_nonblocking`].
@@ -2788,33 +2929,34 @@ impl App {
         let UploadedBlob { cid, key, ciphertext_hash, ciphertext_size, content_hash } = blob;
         let ImageMeta { width, height, thumbhash, mime } = image;
 
+        let fail = |app: &mut Self, error: String| {
+            let _ = app.bg_tx.send(BgEvent::SendFailed {
+                conv_id: conv_id.clone(),
+                message_id: Some(pending_message_id.clone()),
+                error,
+            });
+        };
+
         let Some(client) = self.client.as_ref() else {
-            self.set_error("image uploaded but client is gone".to_string());
-            return;
+            return fail(self, "image uploaded but client is gone".to_string());
         };
 
         let uri = format!("at://{}/{}", client.did(), cid);
 
         let key_arr: [u8; 32] = match key.try_into() {
             Ok(k) => k,
-            Err(_) => {
-                self.set_error("image blob key has wrong length".to_string());
-                return;
-            }
+            Err(_) => return fail(self, "image blob key has wrong length".to_string()),
         };
 
         let external = match ExternalBlob::new(
-            uri,
+            uri.clone(),
             key_arr.to_vec(),
             ciphertext_hash.clone(),
             ciphertext_size,
             content_hash.clone(),
         ) {
             Ok(e) => e,
-            Err(e) => {
-                self.set_error(format!("failed to build ExternalBlob for image: {e}"));
-                return;
-            }
+            Err(e) => return fail(self, format!("failed to build ExternalBlob for image: {e}")),
         };
 
         let payload = MessagePayload::Image(MediaMessage {
@@ -2827,18 +2969,12 @@ impl App {
 
         let group_id = match hex::decode(&conv_id) {
             Ok(id) => id,
-            Err(e) => {
-                self.set_error(format!("invalid conv_id in ImageUploaded: {e}"));
-                return;
-            }
+            Err(e) => return fail(self, format!("invalid conv_id in ImageUploaded: {e}")),
         };
 
         let key_bundle = match self.keys.load_identity_key() {
             Ok(k) => k,
-            Err(e) => {
-                self.set_error(format!("failed to load identity key for image: {e}"));
-                return;
-            }
+            Err(e) => return fail(self, format!("failed to load identity key for image: {e}")),
         };
 
         let current_epoch = self.mls.get_group_epoch(&group_id).ok().flatten().unwrap_or(1);
@@ -2854,11 +2990,12 @@ impl App {
 
         let encrypted = match self.mls.encrypt_event(&group_id, &key_bundle, &event) {
             Ok(e) => e,
-            Err(e) => {
-                self.set_error(format!("MLS encrypt failed for image: {e}"));
-                return;
-            }
+            Err(e) => return fail(self, format!("MLS encrypt failed for image: {e}")),
         };
+        self.debug_log.log(&format!(
+            "send_image: encrypted id={} epoch={current_epoch}",
+            short_hex(&pending_message_id)
+        ));
 
         if let Err(e) = self.save_mls_state() {
             self.debug_log
@@ -2869,41 +3006,34 @@ impl App {
                 .log(&format!("image_uploaded: failed to store group state: {e}"));
         }
 
-        // Decode ThumbHash for placeholder rendering and update the pending message.
+        // Record the final display string and full blob metadata so the
+        // /image endpoint can fetch and decrypt later. Written whether or
+        // not the conversation is on screen.
         let display_content = format!("[image {mime} {width}×{height}]");
+        let stored = self.keys.update_message_by_id(&conv_id, &pending_message_id, |m| {
+            m.content = display_content.clone();
+            m.blob_uri = Some(uri);
+            m.blob_key = Some(key_arr.to_vec());
+            m.blob_ciphertext_hash = Some(ciphertext_hash);
+            m.blob_ciphertext_size = Some(ciphertext_size);
+            m.blob_content_hash = Some(content_hash);
+            m.blob_mime = Some(mime.clone());
+            m.blob_width = Some(width);
+            m.blob_height = Some(height);
+            m.blob_thumbhash = Some(thumbhash.clone());
+        });
+        if let Err(e) = stored {
+            self.debug_log
+                .log(&format!("image_uploaded: failed to store blob metadata: {e}"));
+        }
         if let Some(msg) = self
             .messages
             .iter_mut()
             .rev()
             .find(|m| m.message_id.as_ref() == Some(&pending_message_id))
         {
-            msg.content = display_content.clone();
+            msg.content = display_content;
             msg.image_loading = false;
-            // Update the locally stored entry with the final display string and
-            // full blob metadata so the /image endpoint can fetch and decrypt later.
-            let blob_uri_str = format!("at://{}/{}", client.did(), cid);
-            let _ = self.keys.append_message(
-                &conv_id,
-                crate::keystore::StoredMessage {
-                    rkey: "pending".to_string(),
-                    content: display_content,
-                    timestamp: msg.timestamp,
-                    is_own: true,
-                    message_id: Some(pending_message_id.clone()),
-                    sender_did: msg.sender_did.clone(),
-                    sender_device: msg.sender_device.clone(),
-                    blob_uri: Some(blob_uri_str),
-                    blob_key: Some(key_arr.to_vec()),
-                    blob_ciphertext_hash: Some(ciphertext_hash),
-                    blob_ciphertext_size: Some(ciphertext_size),
-                    blob_content_hash: Some(content_hash),
-                    blob_mime: Some(mime.clone()),
-                    blob_width: Some(width),
-                    blob_height: Some(height),
-                    blob_thumbhash: Some(thumbhash.clone()),
-                    reactions: Vec::new(),
-                },
-            );
             if let Some(thumb_img) = image_processing::decode_thumbhash(&thumbhash) {
                 msg.image_proto = Some(ImageProto(self.picker.new_resize_protocol(thumb_img)));
             }
@@ -2923,7 +3053,11 @@ impl App {
                     let _ = tx.send(BgEvent::SendPublished { uri, conv_id, tag, ciphertext, message_id: msg_id });
                 }
                 Err(e) => {
-                    let _ = tx.send(BgEvent::SendFailed(format!("{e}")));
+                    let _ = tx.send(BgEvent::SendFailed {
+                        conv_id,
+                        message_id: Some(pending_message_id),
+                        error: format!("publish failed: {e}"),
+                    });
                 }
             }
         });
@@ -3121,6 +3255,7 @@ impl App {
                     sender_device: sender_device.clone(),
                     blob_uri: None, blob_key: None, blob_ciphertext_hash: None, blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None, blob_width: None, blob_height: None, blob_thumbhash: None,
                     reactions: Vec::new(),
+                    send_failed: None,
                 };
                 match self.keys.append_message(conv_id, stored_msg) {
                     Ok(false) => {
@@ -3149,6 +3284,7 @@ impl App {
                         image_proto: None,
                         image_loading: false,
                         rkey: rkey.to_string(),
+                        send_failed: None,
                     };
                     let pos = self
                         .messages
@@ -3605,6 +3741,7 @@ impl App {
                             blob_height,
                             blob_thumbhash,
                             reactions: Vec::new(),
+                            send_failed: None,
                         };
                         match self.keys.append_message(&conv_id, stored_msg) {
                             Err(e) => {
@@ -3636,6 +3773,7 @@ impl App {
                                 image_proto: None,
                                 image_loading: false,
                                 rkey: event_record.rkey.clone(),
+                                send_failed: None,
                             };
                             let pos = self
                                 .messages
@@ -4674,6 +4812,7 @@ impl App {
             image_proto: None,
             image_loading: false,
             rkey: String::new(),
+            send_failed: None,
         });
 
         Ok(())
@@ -4866,6 +5005,7 @@ impl App {
                 image_proto: None,
                 image_loading: false,
                 rkey: stored.rkey.clone(),
+                send_failed: stored.send_failed.clone(),
             });
         }
 
@@ -4932,6 +5072,13 @@ impl App {
                 // Open reaction picker for selected message
                 if self.selected_message.is_some() && !self.messages.is_empty() {
                     self.reaction_picker = Some(0);
+                }
+            }
+            KeyCode::Char('s') => {
+                if let (Some(msg), Some(idx)) = (self.selected_retryable(), self.active_conversation) {
+                    let message_id = msg.message_id.clone().unwrap_or_default();
+                    let conv_id = self.conversations[idx].id.clone();
+                    self.retry_send(&conv_id, &message_id)?;
                 }
             }
             KeyCode::Esc => {
@@ -5041,7 +5188,7 @@ impl App {
                 rand::thread_rng().fill_bytes(&mut id);
                 id
             };
-            let optimistic_content = format!("{preview_text} [long text — uploading…]");
+            let optimistic_content = format!("{preview_text} {LONG_TEXT_UPLOADING}");
             self.messages.push(DisplayMessage {
                 from: "You".to_string(),
                 content: optimistic_content.clone(),
@@ -5054,6 +5201,7 @@ impl App {
                 image_proto: None,
                 image_loading: false,
                 rkey: "pending".to_string(),
+                send_failed: None,
             });
 
             let stored_msg = crate::keystore::StoredMessage {
@@ -5066,6 +5214,7 @@ impl App {
                 sender_device: self.keys.get_or_create_device_name().ok(),
                 blob_uri: None, blob_key: None, blob_ciphertext_hash: None, blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None, blob_width: None, blob_height: None, blob_thumbhash: None,
                     reactions: Vec::new(),
+                send_failed: None,
             };
             if let Err(e) = self.keys.append_message(&conv_id, stored_msg) {
                 self.debug_log
@@ -5092,11 +5241,16 @@ impl App {
                                 content_hash: encrypted.content_hash,
                             },
                             preview_text,
+                            pending_message_id,
                             conv_id: conv_id_clone,
                         });
                     }
                     Err(e) => {
-                        let _ = tx.send(BgEvent::SendFailed(format!("blob upload failed: {e}")));
+                        let _ = tx.send(BgEvent::SendFailed {
+                            conv_id: conv_id_clone,
+                            message_id: Some(pending_message_id),
+                            error: format!("blob upload failed: {e}"),
+                        });
                     }
                 }
             });
@@ -5137,6 +5291,7 @@ impl App {
             image_proto: None,
             image_loading: false,
             rkey: "pending".to_string(),
+            send_failed: None,
         });
 
         // Store locally with placeholder rkey (will be real once publish completes)
@@ -5150,6 +5305,7 @@ impl App {
             sender_device: self.keys.get_or_create_device_name().ok(),
             blob_uri: None, blob_key: None, blob_ciphertext_hash: None, blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None, blob_width: None, blob_height: None, blob_thumbhash: None,
                     reactions: Vec::new(),
+            send_failed: None,
         };
         if let Err(e) = self.keys.append_message(&conv_id, stored_msg) {
             self.debug_log
@@ -5180,7 +5336,11 @@ impl App {
                     });
                 }
                 Err(e) => {
-                    let _ = tx.send(BgEvent::SendFailed(format!("{e}")));
+                    let _ = tx.send(BgEvent::SendFailed {
+                        conv_id: conv_id_clone,
+                        message_id: msg_id,
+                        error: format!("publish failed: {e}"),
+                    });
                 }
             }
         });

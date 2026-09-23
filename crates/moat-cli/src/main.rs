@@ -7,6 +7,7 @@ mod http_server;
 mod image_processing;
 mod keystore;
 mod message_helpers;
+mod outbox;
 mod sync;
 mod ui;
 
@@ -214,6 +215,7 @@ async fn run_app(
     picker: ratatui_image::picker::Picker,
 ) -> anyhow::Result<()> {
     let mut app = App::new(storage_dir, pds_url, drawbridge_url, picker)?;
+    app.fail_orphaned_sends();
 
     loop {
         terminal.draw(|f| ui::draw(f, &mut app))?;

@@ -170,6 +170,31 @@ pub struct StoredMessage {
     /// it. Unpersisted, they would be lost the moment history moved.
     #[serde(default)]
     pub reactions: Vec<StoredReaction>,
+    /// Why an unsent (rkey "pending") own message failed to send. `None`
+    /// while the send is in flight and once it is published.
+    #[serde(default)]
+    pub send_failed: Option<String>,
+}
+
+/// Placeholder content of an image row whose send is in flight.
+pub const IMAGE_SENDING: &str = "[image — processing…]";
+/// Placeholder content of an image row whose send failed.
+pub const IMAGE_SEND_FAILED: &str = "[image — couldn't send]";
+/// Suffix of a long-text row whose blob upload is in flight.
+pub const LONG_TEXT_UPLOADING: &str = "[long text — uploading…]";
+const LONG_TEXT_SEND_FAILED: &str = "[long text — couldn't send]";
+
+impl StoredMessage {
+    /// Record a send failure, swapping an in-flight placeholder for one
+    /// that no longer implies work is happening.
+    pub fn mark_send_failed(&mut self, reason: &str) {
+        self.send_failed = Some(reason.to_string());
+        if self.content == IMAGE_SENDING {
+            self.content = IMAGE_SEND_FAILED.to_string();
+        } else if self.content.ends_with(LONG_TEXT_UPLOADING) {
+            self.content = self.content.replace(LONG_TEXT_UPLOADING, LONG_TEXT_SEND_FAILED);
+        }
+    }
 }
 
 /// One emoji reaction as persisted beside its message.
@@ -594,6 +619,45 @@ impl KeyStore {
         Ok(())
     }
 
+    /// Apply `f` to the message carrying `message_id`, returning whether
+    /// one was found.
+    pub fn update_message_by_id(
+        &self,
+        conv_id: &str,
+        message_id: &[u8],
+        f: impl FnOnce(&mut StoredMessage),
+    ) -> Result<bool> {
+        let mut messages = self.load_messages(conv_id)?;
+        let Some(msg) = messages
+            .messages
+            .iter_mut()
+            .find(|m| m.message_id.as_deref() == Some(message_id))
+        else {
+            return Ok(false);
+        };
+        f(msg);
+        self.store_messages(conv_id, &messages)?;
+        Ok(true)
+    }
+
+    /// Mark every own unsent row not already failed as failed; returns
+    /// their message ids. Send tasks live in memory only, so at startup
+    /// every such row has nothing left working on it.
+    pub fn fail_unsent_messages(&self, conv_id: &str, reason: &str) -> Result<Vec<Vec<u8>>> {
+        let mut messages = self.load_messages(conv_id)?;
+        let mut failed = Vec::new();
+        for m in messages.messages.iter_mut() {
+            if m.is_own && m.rkey == "pending" && m.send_failed.is_none() {
+                m.mark_send_failed(reason);
+                failed.extend(m.message_id.clone());
+            }
+        }
+        if !failed.is_empty() {
+            self.store_messages(conv_id, &messages)?;
+        }
+        Ok(failed)
+    }
+
     /// Store credentials (handle and app password)
     pub fn store_credentials(&self, handle: &str, password: &str) -> Result<()> {
         let data = format!("{}\n{}", handle, password);
@@ -922,6 +986,7 @@ mod tests {
             blob_height: None,
             blob_thumbhash: None,
             reactions: Vec::new(),
+            send_failed: None,
         }
     }
 
@@ -1159,6 +1224,41 @@ mod tests {
         assert!(!store
             .toggle_reaction("conv", &[9u8; 16], "👍", "did:plc:bob")
             .unwrap());
+    }
+
+    /// Send tasks live in memory, so a restart strands every unsent row.
+    /// The startup sweep must fail exactly those — never a published
+    /// message, and never one already failed (its reason is kept).
+    #[test]
+    fn the_startup_sweep_fails_only_rows_still_in_flight() {
+        let dir = tempdir().unwrap();
+        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+        let mut earlier = pending_msg(&[2u8; 16], IMAGE_SEND_FAILED);
+        earlier.send_failed = Some("publish failed".to_string());
+        store
+            .append_messages(
+                "conv",
+                vec![
+                    real_msg("3kaaa", "published"),
+                    pending_msg(&[1u8; 16], IMAGE_SENDING),
+                    earlier,
+                    pending_msg(&[3u8; 16], &format!("preview {LONG_TEXT_UPLOADING}")),
+                ],
+            )
+            .unwrap();
+
+        let failed = store.fail_unsent_messages("conv", "interrupted").unwrap();
+        assert_eq!(failed, vec![vec![1u8; 16], vec![3u8; 16]]);
+
+        let stored = store.load_messages("conv").unwrap().messages;
+        let by_id = |b: u8| stored.iter().find(|m| m.message_id == Some(vec![b; 16])).unwrap();
+        assert!(stored.iter().find(|m| m.rkey == "3kaaa").unwrap().send_failed.is_none());
+        assert_eq!(by_id(1).content, IMAGE_SEND_FAILED, "no longer claims to be processing");
+        assert_eq!(by_id(1).send_failed.as_deref(), Some("interrupted"));
+        assert_eq!(by_id(2).send_failed.as_deref(), Some("publish failed"));
+        assert_eq!(by_id(3).content, "preview [long text — couldn't send]");
+
+        assert!(store.fail_unsent_messages("conv", "interrupted").unwrap().is_empty());
     }
 
     fn real_msg(rkey: &str, content: &str) -> StoredMessage {

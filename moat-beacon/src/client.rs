@@ -58,6 +58,12 @@ pub struct Message {
     /// predates the field still deserializes.
     #[serde(default)]
     pub reactions: Vec<ReactionInfo>,
+    /// `sending`, `sent` or `failed`. Only the Rust CLI reports it.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// Why a `failed` message did not send.
+    #[serde(default)]
+    pub send_error: Option<String>,
 }
 
 /// One emoji reaction on a message, as either runtime reports it.
@@ -395,6 +401,25 @@ impl MoatCliClient {
         if !status.is_success() {
             let body: Value = resp.json().await.unwrap_or_default();
             anyhow::bail!("send_reaction failed ({status}): {body}");
+        }
+        Ok(())
+    }
+
+    /// `POST /conversations/:group_id/messages/:message_id/retry`
+    pub async fn retry_send(&self, group_id: &str, message_id: &str) -> Result<()> {
+        let resp = self
+            .http
+            .post(format!(
+                "{}/conversations/{group_id}/messages/{message_id}/retry",
+                self.base_url
+            ))
+            .send()
+            .await
+            .context("POST /retry")?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body: Value = resp.json().await.unwrap_or_default();
+            anyhow::bail!("retry_send failed ({status}): {body}");
         }
         Ok(())
     }

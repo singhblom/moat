@@ -75,6 +75,8 @@ pub fn stored_from_sync_message(s: &SyncMessage) -> StoredMessage {
                 sender_did: r.sender_did.clone(),
             })
             .collect(),
+        // Unsent rows are never synced.
+        send_failed: None,
     }
 }
 
@@ -106,6 +108,8 @@ mod tests {
                 StoredReaction { emoji: "👍".into(), sender_did: "did:plc:bob".into() },
                 StoredReaction { emoji: "🎉".into(), sender_did: "did:plc:carol".into() },
             ],
+            // Local to unsent rows, which are never synced.
+            send_failed: None,
         }
     }
 

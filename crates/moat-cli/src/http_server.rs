@@ -113,6 +113,10 @@ struct MessageDto {
     /// they survive history sync — a receiving device cannot rebuild them
     /// from the PDS, so a drop here would be silent and permanent.
     reactions: Vec<ReactionDto>,
+    /// `sending`, `sent` or `failed`, as the Dart runtime names them.
+    status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    send_error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -287,6 +291,12 @@ async fn get_messages(
                         sender_did: r.sender_did.clone(),
                     })
                     .collect(),
+                status: match (&m.send_failed, m.rkey.as_str()) {
+                    (Some(_), _) => "failed",
+                    (None, "pending") => "sending",
+                    (None, _) => "sent",
+                },
+                send_error: m.send_failed.clone(),
             }
         })
         .collect();
@@ -349,6 +359,19 @@ async fn post_reaction(
     app.api_send_reaction(&message_id, &body.emoji)
         .await
         .map_err(app_err)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn post_retry(
+    State(state): State<Arc<ServerState>>,
+    Path((group_id, message_id)): Path<(String, String)>,
+) -> HandlerResult<Json<Value>> {
+    let mut app = state.app.lock().await;
+    app.api_set_active_conversation(Some(&group_id))
+        .map_err(app_err)?;
+    let message_id = hex::decode(&message_id)
+        .map_err(|e| app_err(AppError::Other(format!("invalid message_id: {e}"))))?;
+    app.retry_send(&group_id, &message_id).map_err(app_err)?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -585,6 +608,7 @@ pub async fn run_http(
     // halfblocks picker doesn't query the terminal, safe for headless use
     let picker = ratatui_image::picker::Picker::halfblocks();
     let mut app = App::new(storage_dir, pds_url, drawbridge_url, picker)?;
+    app.fail_orphaned_sends();
 
     let (broadcast_tx, _) = tokio::sync::broadcast::channel::<String>(256);
     app.event_broadcast = Some(broadcast_tx.clone());
@@ -621,6 +645,10 @@ pub async fn run_http(
         .route(
             "/conversations/:group_id/messages/:message_id/reactions",
             post(post_reaction),
+        )
+        .route(
+            "/conversations/:group_id/messages/:message_id/retry",
+            post(post_retry),
         )
         .route("/watch", get(get_watch))
         .route("/watch", post(post_watch))

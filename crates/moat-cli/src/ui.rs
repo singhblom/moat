@@ -412,6 +412,9 @@ fn compute_msg_text_rows(
     if !msg.reactions.is_empty() {
         rows += 1;
     }
+    if msg.send_failed.is_some() {
+        rows += 1;
+    }
     if is_selected_with_picker {
         rows += 1;
     }
@@ -504,6 +507,18 @@ fn build_msg_lines(
         lines.push(Line::from(vec![
             Span::styled(" ", indicator_style),
             Span::styled(reaction_line, reaction_style),
+        ]));
+    }
+
+    if let Some(reason) = &msg.send_failed {
+        let failed_style = if is_selected {
+            Style::default().fg(Color::Red).bg(Color::Rgb(40, 40, 60))
+        } else {
+            Style::default().fg(Color::Red)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(" ", indicator_style),
+            Span::styled(format!(" ! not sent: {reason}"), failed_style),
         ]));
     }
 
@@ -688,15 +703,19 @@ fn chat_hints(app: &App) -> Vec<Hint> {
     if app.show_message_info {
         return vec![hint("i", "close"), hint("esc", "close")];
     }
-    vec![
-        hint("↑↓", "scroll"),
+    let mut hints = vec![hint("↑↓", "scroll")];
+    if app.selected_retryable().is_some() {
+        hints.push(hint("s", "resend"));
+    }
+    hints.extend([
         mnem("react"),
         mnem("info"),
         hint("⏎", "compose"),
         hint("esc", "back"),
         hint("tab", "screens"),
         mnem("quit"),
-    ]
+    ]);
+    hints
 }
 
 /// Columns a hint occupies, including the gap before it.

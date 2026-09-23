@@ -94,7 +94,8 @@ Located in `lexicons/social/moat/`:
 ├── mls.bin           # MoatSession's FileStorage (MLS state)
 ├── debug.log
 ├── data/
-│   └── blobs/        # BlobCache — keyed by hex(content_hash), one file per blob
+│   ├── blobs/        # BlobCache — keyed by hex(content_hash), one file per blob
+│   └── outbox/       # Source bytes of unpublished image sends, keyed by hex(message_id); kept for retry
 └── keys/
     ├── credentials.json
     ├── identity.key
