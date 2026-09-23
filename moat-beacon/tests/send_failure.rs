@@ -9,9 +9,12 @@
 //!   - long text: the blob upload fails outright
 //!   - short text: the publish lands but its response is lost, so the
 //!     retry republishes a message the recipient already has
+//!
+//! Each runs with Rust CLI participants and, except long text (which the
+//! Dart runtime does not send), with Dart server participants.
 
 use moat_beacon::client::{Message, MoatCliClient};
-use moat_beacon::world::TestWorld;
+use moat_beacon::world::{ParticipantKind, TestWorld};
 use serde_json::json;
 use std::time::{Duration, Instant};
 
@@ -40,9 +43,12 @@ fn has_status(status: &'static str) -> impl Fn(&Message) -> bool {
     move |m| m.status.as_deref() == Some(status)
 }
 
-/// Alice and Bob in a conversation both of them hold.
-async fn setup() -> (TestWorld, String) {
-    let world = TestWorld::new(&["alice", "bob"], ".postern.test")
+const RUST: ParticipantKind = ParticipantKind::RustCli;
+const DART: ParticipantKind = ParticipantKind::DartServer;
+
+/// Alice and Bob, both of `kind`, in a conversation both of them hold.
+async fn setup(kind: ParticipantKind) -> (TestWorld, String) {
+    let world = TestWorld::new_with_kinds(&["alice", "bob"], &[kind.clone(), kind], ".postern.test")
         .await
         .expect("world setup");
     let (alice, bob) = (world.client("alice"), world.client("bob"));
@@ -107,8 +113,8 @@ async fn retry_and_deliver(
 }
 
 /// Send `text` with the PDS unreachable, then retry it to delivery.
-async fn text_failure_then_retry(text: &str, stage: &str) {
-    let (world, group_id) = setup().await;
+async fn text_failure_then_retry(kind: ParticipantKind, text: &str, stage: &str) {
+    let (world, group_id) = setup(kind).await;
     let alice = world.client("alice");
     let prefix: String = text.chars().take(20).collect();
     let select = |m: &Message| m.content.starts_with(prefix.as_str());
@@ -126,9 +132,8 @@ async fn text_failure_then_retry(text: &str, stage: &str) {
     retry_and_deliver(&world, &group_id, failed.message_id.as_deref().unwrap(), select).await;
 }
 
-#[tokio::test]
-async fn a_failed_image_upload_is_marked_failed_and_can_be_retried() {
-    let (world, group_id) = setup().await;
+async fn failed_image_upload(kind: ParticipantKind) {
+    let (world, group_id) = setup(kind).await;
     let alice = world.client("alice");
 
     world.toxiproxy.disable_proxy(&world.pds_proxy.name).await.unwrap();
@@ -152,9 +157,8 @@ async fn a_failed_image_upload_is_marked_failed_and_can_be_retried() {
     assert!(bytes.starts_with(PNG_MAGIC), "Bob's image decrypts to the PNG");
 }
 
-#[tokio::test]
-async fn a_restart_mid_upload_leaves_a_retryable_failure() {
-    let (mut world, group_id) = setup().await;
+async fn restart_mid_upload(kind: ParticipantKind) {
+    let (mut world, group_id) = setup(kind).await;
     let proxy = world.pds_proxy.name.clone();
 
     // Hold every PDS connection open without passing data, so the upload
@@ -180,20 +184,8 @@ async fn a_restart_mid_upload_leaves_a_retryable_failure() {
     retry_and_deliver(&world, &group_id, failed.message_id.as_deref().unwrap(), is_image).await;
 }
 
-#[tokio::test]
-async fn a_failed_text_publish_can_be_retried() {
-    text_failure_then_retry("short text that could not be published", "publish").await;
-}
-
-#[tokio::test]
-async fn a_failed_long_text_upload_can_be_retried() {
-    let text = format!("long text that could not be uploaded {}", "x".repeat(2_000));
-    text_failure_then_retry(&text, "upload").await;
-}
-
-#[tokio::test]
-async fn a_retry_after_a_lost_response_reaches_bob_once() {
-    let (world, group_id) = setup().await;
+async fn lost_response(kind: ParticipantKind) {
+    let (world, group_id) = setup(kind).await;
     let alice = world.client("alice");
     let proxy = world.pds_proxy.name.clone();
     let text = "published, but alice never heard back";
@@ -218,4 +210,52 @@ async fn a_retry_after_a_lost_response_reaches_bob_once() {
     let _ = world.client("bob").poll().await;
     let msgs = world.client("bob").get_messages(&group_id).await.unwrap();
     assert_eq!(msgs.iter().filter(|m| select(m)).count(), 1, "Bob shows it once: {msgs:?}");
+}
+
+const SHORT_TEXT: &str = "short text that could not be published";
+
+#[tokio::test]
+async fn a_failed_image_upload_is_marked_failed_and_can_be_retried() {
+    failed_image_upload(RUST).await;
+}
+
+#[tokio::test]
+async fn a_failed_image_upload_is_marked_failed_and_can_be_retried_dart() {
+    failed_image_upload(DART).await;
+}
+
+#[tokio::test]
+async fn a_restart_mid_upload_leaves_a_retryable_failure() {
+    restart_mid_upload(RUST).await;
+}
+
+#[tokio::test]
+async fn a_restart_mid_upload_leaves_a_retryable_failure_dart() {
+    restart_mid_upload(DART).await;
+}
+
+#[tokio::test]
+async fn a_failed_text_publish_can_be_retried() {
+    text_failure_then_retry(RUST, SHORT_TEXT, "publish").await;
+}
+
+#[tokio::test]
+async fn a_failed_text_publish_can_be_retried_dart() {
+    text_failure_then_retry(DART, SHORT_TEXT, "publish").await;
+}
+
+#[tokio::test]
+async fn a_failed_long_text_upload_can_be_retried() {
+    let text = format!("long text that could not be uploaded {}", "x".repeat(2_000));
+    text_failure_then_retry(RUST, &text, "upload").await;
+}
+
+#[tokio::test]
+async fn a_retry_after_a_lost_response_reaches_bob_once() {
+    lost_response(RUST).await;
+}
+
+#[tokio::test]
+async fn a_retry_after_a_lost_response_reaches_bob_once_dart() {
+    lost_response(DART).await;
 }

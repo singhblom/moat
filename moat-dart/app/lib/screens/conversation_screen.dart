@@ -332,7 +332,8 @@ class _ConversationScreenState extends State<ConversationScreen> {
           senderDid: showSender ? message.senderDid : null,
           onLongPress: () => _selectMessage(message),
           onRetry: message.status == MessageStatus.failed
-              ? () => provider.retryMessage(message.localId ?? message.id)
+              ? () => provider.retryMessage(message.localId ?? message.id,
+                  blobService: context.read<BlobService>())
               : null,
           onReaction: (emoji) => provider.sendReaction(message, emoji),
           imageFuture: imageFuture,

@@ -233,7 +233,7 @@ All binary fields in JSON payloads (byte arrays and fixed-length byte sequences)
 When `event.kind` starts with `message.`, the payload is a structured JSON object describing the user-visible content plus any off-chain pointer. Each payload carries:
 
 - `group_id`, `epoch`, and transcript-integrity fields (same as other events),
-- `message_id` (16 random bytes, stable anchor for reactions and pointer retargets),
+- `message_id` (16 random bytes, stable anchor for reactions and pointer retargets). A sender retrying a failed send republishes under the same `message_id`, and the earlier attempt may also have landed, so receivers keep the first record with a given `message_id` and drop later ones,
 - Variants describing the user-visible content:
   - `message.short_text` (512 B bucket): `text`
   - `message.medium_text` (1 KB bucket): `text`

@@ -18,6 +18,7 @@ export 'services/secure_storage.dart';
 export 'services/document_backend.dart';
 export 'services/conversation_storage.dart';
 export 'services/message_storage.dart';
+export 'services/outbox_storage.dart';
 export 'services/debug_log.dart';
 
 // ATProto

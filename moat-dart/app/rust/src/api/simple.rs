@@ -542,7 +542,13 @@ impl EventDto {
     fn into_core(self) -> Event {
         match self.kind {
             EventKindDto::Message => {
-                Event::message_from_bytes(self.group_id, self.epoch, &self.payload)
+                let mut event =
+                    Event::message_from_bytes(self.group_id, self.epoch, &self.payload);
+                // A retried send republishes under the id its first attempt used.
+                if self.message_id.is_some() {
+                    event.message_id = self.message_id;
+                }
+                event
             }
             EventKindDto::Commit => Event::commit(self.group_id, self.epoch, self.payload),
             EventKindDto::Welcome => Event::welcome(self.group_id, self.epoch, self.payload),
@@ -2779,6 +2785,21 @@ mod tests {
             assert_eq!(restored.group_id, vec![1, 2, 3]);
             assert_eq!(restored.epoch, 42);
         }
+    }
+
+    /// A retry must republish under the id its first attempt used, and a
+    /// first send without one still gets a fresh id.
+    #[test]
+    fn a_message_event_keeps_the_id_it_is_given() {
+        let dto = |message_id| EventDto {
+            kind: EventKindDto::Message,
+            group_id: vec![1, 2, 3],
+            epoch: 1,
+            payload: b"test".to_vec(),
+            message_id,
+        };
+        assert_eq!(dto(Some(vec![7u8; 16])).into_core().message_id, Some(vec![7u8; 16]));
+        assert_eq!(dto(None).into_core().message_id.map(|id| id.len()), Some(16));
     }
 
     #[test]

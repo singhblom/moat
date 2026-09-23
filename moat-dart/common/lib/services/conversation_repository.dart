@@ -1,9 +1,11 @@
+import 'dart:math';
 import 'dart:typed_data';
 import '../models/message.dart';
 import '../utils/value_listenable.dart';
 import 'blob_service.dart';
 import 'debug_log.dart';
 import 'message_storage.dart';
+import 'outbox_storage.dart';
 import 'send_queue.dart';
 
 /// Owns a conversation's message state, for the app and the headless server.
@@ -18,6 +20,10 @@ class ConversationRepository {
 
   List<Message> _persisted = [];
   List<Message> _optimistic = [];
+
+  /// The source of each unpublished send, by localId. Also persisted, so a
+  /// send interrupted by a restart comes back as a retryable failure.
+  final Map<String, OutboxEntry> _outbox = {};
   bool _loaded = false;
   bool _isLoading = false;
   String? _error;
@@ -63,7 +69,8 @@ class ConversationRepository {
   bool get isSending => sendQueue?.isProcessing ?? false;
   bool get hasQueuedMessages => sendQueue?.hasQueued ?? false;
 
-  /// Loads persisted messages, dropping stale sending/failed ones.
+  /// Loads persisted messages, dropping stale sending/failed ones, and
+  /// restores unpublished sends from the outbox.
   Future<void> loadMessages() async {
     _isLoading = true;
     _error = null;
@@ -83,6 +90,7 @@ class ConversationRepository {
       _loaded = true;
       _mergeIntoLoaded(_arrivedWhileLoading);
       _arrivedWhileLoading.clear();
+      await _restoreOutbox();
     } catch (e) {
       _error = e.toString();
     }
@@ -126,63 +134,36 @@ class ConversationRepository {
 
   /// Sends through the queue with an optimistic copy. Returns its localId.
   String sendMessage(String text) {
-    final localId = 'local_${DateTime.now().millisecondsSinceEpoch}';
-
-    _optimistic.add(Message(
-      id: localId,
-      localId: localId,
-      groupId: groupId,
-      senderDid: '',
-      content: text,
+    final entry = OutboxEntry(
+      messageId: _newMessageId(),
+      localId: 'local_${DateTime.now().microsecondsSinceEpoch}',
       timestamp: DateTime.now(),
-      isOwn: true,
-      status: MessageStatus.sending,
-    ));
-    _notify();
-
-    sendQueue?.enqueue(PendingMessage(localId: localId, text: text));
-    return localId;
+      text: text,
+    );
+    _addPending(entry);
+    _dispatch(entry);
+    return entry.localId;
   }
 
   /// Sends an image with an optimistic copy. Returns its localId.
   String sendImage(Uint8List imageBytes, BlobService blobService) {
-    final localId = 'local_img_${DateTime.now().millisecondsSinceEpoch}';
-
-    _optimistic.add(Message(
-      id: localId,
-      localId: localId,
-      groupId: groupId,
-      senderDid: '',
-      content: '[image]',
+    final entry = OutboxEntry(
+      messageId: _newMessageId(),
+      localId: 'local_img_${DateTime.now().microsecondsSinceEpoch}',
       timestamp: DateTime.now(),
-      isOwn: true,
-      status: MessageStatus.sending,
-    ));
-    _notify();
-
-    sendQueue?.sendImageDirect(imageBytes, blobService).then((sent) {
-      _onSendSuccess(localId, sent);
-    }).catchError((_) {
-      _onSendFailed(localId);
-    });
-
-    return localId;
+      image: imageBytes,
+    );
+    _addPending(entry);
+    _dispatch(entry, blobService: blobService);
+    return entry.localId;
   }
 
-  /// Sends and waits, without an optimistic copy (headless server).
-  Future<Message> sendMessageSync(String text) async {
-    final message = await _requireSendQueue().sendDirect(text);
-    await _store([message]);
-    return message;
-  }
-
-  /// Sends an image and waits, without an optimistic copy (headless server).
-  Future<Message> sendImageSync(
-      Uint8List imageBytes, BlobService blobService) async {
-    final message =
-        await _requireSendQueue().sendImageDirect(imageBytes, blobService);
-    await _store([message]);
-    return message;
+  /// The pending send with [localId], if it is still unpublished.
+  Message? pendingMessage(String localId) {
+    for (final m in _optimistic) {
+      if (m.localId == localId) return m;
+    }
+    return null;
   }
 
   /// Sends a reaction, toggling it locally first.
@@ -206,21 +187,30 @@ class ConversationRepository {
     }
   }
 
-  /// Retries a failed send.
-  void retryMessage(String localId) {
-    final index = _optimistic
-        .indexWhere((m) => m.localId == localId || m.id == localId);
-    if (index >= 0) {
-      _optimistic[index] =
-          _optimistic[index].copyWith(status: MessageStatus.sending);
-      _notify();
-    }
-    sendQueue?.retry(localId);
+  /// Retries a failed send by localId or message id hex. An image needs
+  /// [blobService] to upload with. Returns whether a send was restarted.
+  bool retryMessage(String id, {BlobService? blobService}) {
+    final entry = _outbox[id] ??
+        _outbox.values.where((e) => e.messageIdHex == id).firstOrNull;
+    if (entry == null || entry.sendError == null) return false;
+    if (entry.image != null && blobService == null) return false;
+    moatLog('ConversationRepository: retry ${entry.messageIdHex.substring(0, 8)}');
+
+    final retried = entry.withError(null);
+    _outbox[entry.localId] = retried;
+    _enqueueWrite(() => _storage.outbox.put(groupIdHex, retried));
+    _replacePending(entry.localId, (m) => m.withSendState(MessageStatus.sending));
+    _dispatch(retried, blobService: blobService);
+    return true;
   }
 
   /// Cancels a failed send.
   void cancelMessage(String localId) {
     sendQueue?.cancel(localId);
+    final entry = _outbox.remove(localId);
+    if (entry != null) {
+      _enqueueWrite(() => _storage.outbox.delete(groupIdHex, entry.messageIdHex));
+    }
     _optimistic.removeWhere((m) => m.localId == localId || m.id == localId);
     _notify();
   }
@@ -229,8 +219,13 @@ class ConversationRepository {
   Future<void> clearMessages() async {
     _persisted = [];
     _optimistic = [];
+    final entries = _outbox.values.toList();
+    _outbox.clear();
     _notify();
     await _storage.deleteMessages(groupIdHex);
+    for (final e in entries) {
+      await _storage.outbox.delete(groupIdHex, e.messageIdHex);
+    }
   }
 
   void dispose() {
@@ -239,29 +234,105 @@ class ConversationRepository {
 
   void _onSendSuccess(String localId, Message confirmed) {
     _optimistic.removeWhere((m) => m.localId == localId || m.id == localId);
+    final entry = _outbox.remove(localId);
+    if (entry != null) {
+      _enqueueWrite(() => _storage.outbox.delete(groupIdHex, entry.messageIdHex));
+    }
     _store([confirmed]);
     _notify();
   }
 
-  void _onSendFailed(String localId) {
-    final index = _optimistic
-        .indexWhere((m) => m.localId == localId || m.id == localId);
-    if (index >= 0) {
-      _optimistic[index] =
-          _optimistic[index].copyWith(status: MessageStatus.failed);
+  void _onSendFailed(String localId, String error) {
+    final entry = _outbox[localId];
+    if (entry != null) {
+      final failed = entry.withError(error);
+      _outbox[localId] = failed;
+      _enqueueWrite(() => _storage.outbox.put(groupIdHex, failed));
     }
+    _replacePending(localId, (m) => m.withSendState(MessageStatus.failed, error));
+  }
+
+  static const _interrupted = 'interrupted before it was sent';
+
+  static Uint8List _newMessageId() {
+    final random = Random.secure();
+    return Uint8List.fromList(List.generate(16, (_) => random.nextInt(256)));
+  }
+
+  /// Record a new send: its optimistic row, and its source in the outbox.
+  void _addPending(OutboxEntry entry) {
+    _outbox[entry.localId] = entry;
+    _optimistic.add(_pendingRow(entry, MessageStatus.sending));
+    _notify();
+    _enqueueWrite(() => _storage.outbox.put(groupIdHex, entry));
+  }
+
+  void _dispatch(OutboxEntry entry, {BlobService? blobService}) {
+    final queue = sendQueue;
+    if (queue == null) {
+      _onSendFailed(entry.localId, 'not logged in');
+      return;
+    }
+    if (entry.image != null) {
+      queue.sendImage(
+        localId: entry.localId,
+        messageId: entry.messageId,
+        imageBytes: entry.image!,
+        blobService: blobService!,
+      );
+    } else {
+      queue.enqueue(PendingMessage(
+        localId: entry.localId,
+        text: entry.text!,
+        messageId: entry.messageId,
+      ));
+    }
+  }
+
+  Message _pendingRow(OutboxEntry entry, MessageStatus status) => Message(
+        id: entry.localId,
+        localId: entry.localId,
+        groupId: groupId,
+        senderDid: '',
+        content: entry.text ?? '[image]',
+        timestamp: entry.timestamp,
+        isOwn: true,
+        status: status,
+        messageId: entry.messageId,
+        sendError: entry.sendError,
+      );
+
+  void _replacePending(String localId, Message Function(Message) update) {
+    final index = _optimistic.indexWhere((m) => m.localId == localId);
+    if (index >= 0) _optimistic[index] = update(_optimistic[index]);
     _notify();
   }
 
-  void _notify() => _changes.value = _changes.value + 1;
-
-  SendQueue _requireSendQueue() {
-    final queue = sendQueue;
-    if (queue == null) {
-      throw StateError('ConversationRepository $groupIdHex has no send queue');
+  /// Bring back sends left in the outbox by an earlier run. Sends are
+  /// in-memory work, so one this run does not know of has nothing working
+  /// on it: it comes back failed and retryable. One whose message was
+  /// published after all is dropped.
+  Future<void> _restoreOutbox() async {
+    final published = _persisted.map((m) => m.messageIdHex).nonNulls.toSet();
+    for (var entry in await _storage.outbox.load(groupIdHex)) {
+      if (_outbox.containsKey(entry.localId)) continue;
+      if (published.contains(entry.messageIdHex)) {
+        await _storage.outbox.delete(groupIdHex, entry.messageIdHex);
+        continue;
+      }
+      final interrupted = entry.sendError == null;
+      if (interrupted) entry = entry.withError(_interrupted);
+      // Recorded before any await, so an overlapping load skips it.
+      _outbox[entry.localId] = entry;
+      _optimistic.add(_pendingRow(entry, MessageStatus.failed));
+      if (interrupted) {
+        moatLog('ConversationRepository: ${entry.messageIdHex.substring(0, 8)} $_interrupted');
+        await _storage.outbox.put(groupIdHex, entry);
+      }
     }
-    return queue;
   }
+
+  void _notify() => _changes.value = _changes.value + 1;
 
   /// Stores new messages: in memory and saved when loaded, appended otherwise.
   Future<void> _store(List<Message> incoming) async {
@@ -284,12 +355,16 @@ class ConversationRepository {
   void _mergeIntoLoaded(List<Message> incoming) {
     if (incoming.isEmpty) return;
 
+    final held = _persisted.map((m) => m.messageIdHex).nonNulls.toSet();
     for (final msg in incoming) {
       final existingIdx = _persisted.indexWhere((m) => m.id == msg.id);
       if (existingIdx >= 0) {
         _persisted[existingIdx] = msg;
+      } else if (MessageStorage.isRepublished(msg, held)) {
+        continue;
       } else {
         _persisted.add(msg);
+        if (msg.messageIdHex != null) held.add(msg.messageIdHex!);
       }
 
       if (msg.messageId != null) {

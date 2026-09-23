@@ -235,6 +235,8 @@ Handler buildRouter({
             'reactions': m.reactions
                 .map((r) => {'emoji': r.emoji, 'sender_did': r.senderDid})
                 .toList(),
+            'status': m.status.name,
+            if (m.sendError != null) 'send_error': m.sendError,
           }).toList();
     } else if (messageStorage != null) {
       // Conversation not yet registered locally (e.g. synced history before
@@ -291,13 +293,13 @@ Handler buildRouter({
             headers: _jsonHeaders);
       }
 
+      // Returns once the send is under way, as moat-cli does; the
+      // outcome shows as the message's `status`.
       final repo = ConversationManager.instance.getRepository(conv);
-      final message = await repo.sendMessageSync(text);
-
-      moatLog('Server: Message sent: ${message.id}');
+      final localId = repo.sendMessage(text);
 
       return Response.ok(
-        jsonEncode({'message_id': message.messageIdHex ?? 'unknown'}),
+        jsonEncode({'message_id': repo.pendingMessage(localId)?.messageIdHex}),
         headers: _jsonHeaders,
       );
     } catch (e) {
@@ -331,12 +333,10 @@ Handler buildRouter({
       }
 
       final repo = ConversationManager.instance.getRepository(conv);
-      final message = await repo.sendImageSync(imageBytes, blobService);
-
-      moatLog('Server: Image sent: ${message.id}');
+      final localId = repo.sendImage(imageBytes, blobService);
 
       return Response.ok(
-        jsonEncode(message.toJson()),
+        jsonEncode({'message_id': repo.pendingMessage(localId)?.messageIdHex}),
         headers: _jsonHeaders,
       );
     } catch (e) {
@@ -384,6 +384,25 @@ Handler buildRouter({
       return Response(500,
           body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
     }
+  });
+
+  // POST /conversations/:group_id/messages/:message_id/retry
+  router.post('/conversations/<groupId>/messages/<messageId>/retry',
+      (Request request, String groupId, String messageId) async {
+    final conv = convsService.findByGroupId(_hexToBytes(groupId));
+    if (conv == null) {
+      return Response.notFound(
+          jsonEncode({'error': 'conversation not found'}),
+          headers: _jsonHeaders);
+    }
+    final repo = ConversationManager.instance.getRepository(conv);
+    await repo.loadMessages();
+    if (!repo.retryMessage(messageId, blobService: blobService)) {
+      return Response(400,
+          body: jsonEncode({'error': 'this message cannot be retried'}),
+          headers: _jsonHeaders);
+    }
+    return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
   });
 
   // POST /watch — add a handle to watch list

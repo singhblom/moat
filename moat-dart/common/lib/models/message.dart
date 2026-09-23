@@ -172,6 +172,9 @@ class Message {
   /// Attachment for non-text messages (image, etc.). Null for plain text.
   final Attachment? attachment;
 
+  /// Why a [MessageStatus.failed] send failed.
+  final String? sendError;
+
   Message({
     required this.id,
     required this.groupId,
@@ -185,6 +188,7 @@ class Message {
     this.messageId,
     this.reactions = const [],
     this.attachment,
+    this.sendError,
   });
 
   /// The rkey portion of the message ID (for ordering).
@@ -213,6 +217,7 @@ class Message {
         'messageId': messageId != null ? base64Encode(messageId!) : null,
         'reactions': reactions.map((r) => r.toJson()).toList(),
         'attachment': attachment?.toJson(),
+        if (sendError != null) 'sendError': sendError,
       };
 
   /// Create a copy with updated fields
@@ -243,6 +248,24 @@ class Message {
         messageId: messageId ?? this.messageId,
         reactions: reactions ?? this.reactions,
         attachment: attachment ?? this.attachment,
+        sendError: this.sendError,
+      );
+
+  /// A copy in [status], carrying [error] (cleared when null).
+  Message withSendState(MessageStatus status, [String? error]) => Message(
+        id: id,
+        groupId: groupId,
+        senderDid: senderDid,
+        senderDeviceId: senderDeviceId,
+        content: content,
+        timestamp: timestamp,
+        isOwn: isOwn,
+        status: status,
+        localId: localId,
+        messageId: messageId,
+        reactions: reactions,
+        attachment: attachment,
+        sendError: error,
       );
 
   factory Message.fromJson(Map<String, dynamic> json) => Message(
@@ -265,6 +288,7 @@ class Message {
         attachment: json['attachment'] != null
             ? Attachment.fromJson(json['attachment'] as Map<String, dynamic>)
             : null,
+        sendError: json['sendError'] as String?,
       );
 
   static MessageStatus _parseStatus(String? status) {
