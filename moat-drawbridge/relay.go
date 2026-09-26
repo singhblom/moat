@@ -784,12 +784,12 @@ func (r *Relay) servePairWS(w http.ResponseWriter, req *http.Request) {
 	conn.SetWriteDeadline(time.Time{})
 
 	// Determine transfer direction for byte tracking.
-	sess.mu.Lock()
+	sess.pairLock.Lock()
 	direction := 0 // A→B
 	if sess.B == pc {
 		direction = 1 // B→A
 	}
-	sess.mu.Unlock()
+	sess.pairLock.Unlock()
 
 	token := attach.Token
 	onByteCap := func() {

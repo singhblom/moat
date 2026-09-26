@@ -363,10 +363,10 @@ func TestPairing_TTLExpiry(t *testing.T) {
 	alice.readMsgAs("pair_pending")
 
 	// Wind back CreatedAt to make the session appear expired.
-	env.relay.pairs.mu.Lock()
+	env.relay.pairs.pairLock.Lock()
 	sess := env.relay.pairs.sessions[token]
 	sess.CreatedAt = time.Now().Add(-(pairSessionTTL + time.Second))
-	env.relay.pairs.mu.Unlock()
+	env.relay.pairs.pairLock.Unlock()
 
 	env.relay.pairs.cleanupExpired()
 
@@ -378,9 +378,9 @@ func TestPairing_TTLExpiry(t *testing.T) {
 	}
 
 	// Session should be gone.
-	env.relay.pairs.mu.Lock()
+	env.relay.pairs.pairLock.Lock()
 	_, exists := env.relay.pairs.sessions[token]
-	env.relay.pairs.mu.Unlock()
+	env.relay.pairs.pairLock.Unlock()
 	if exists {
 		t.Fatal("session still in registry after TTL expiry")
 	}
