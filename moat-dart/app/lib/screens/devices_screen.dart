@@ -169,7 +169,11 @@ class _DevicesScreenState extends State<DevicesScreen> {
                         color: Theme.of(context).colorScheme.primary,
                       ),
                       title: Text(d.name),
-                      subtitle: d.isSelf ? const Text('This device') : null,
+                      subtitle: Text(
+                        d.isSelf
+                            ? '${common.shortDeviceId(d.deviceIdHex)} · This device'
+                            : common.shortDeviceId(d.deviceIdHex),
+                      ),
                       // Pressing this is the approval; the recipient joins
                       // without a prompt.
                       trailing: d.isSelf
