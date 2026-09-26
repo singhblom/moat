@@ -293,14 +293,11 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let w = inner_width as usize;
 
     // Extract immutable values before any mutable borrow of app.messages.
-    let selected_msg_index = app
-        .selected_message
-        .map(|offset| app.messages.len().saturating_sub(1).saturating_sub(offset));
+    let selected_msg_index = app.selected_message;
     let reaction_picker = app.reaction_picker;
-    let message_scroll = app.message_scroll;
 
     // Pre-compute per-message heights (immutable pass).
-    let heights: Vec<u16> = app
+    let heights: Vec<u32> = app
         .messages
         .iter()
         .enumerate()
@@ -308,19 +305,25 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             let is_sel_with_picker =
                 selected_msg_index == Some(i) && reaction_picker.is_some();
             let text_rows = compute_msg_text_rows(msg, w, is_sel_with_picker);
-            text_rows + if msg.image_proto.is_some() { IMAGE_RENDER_ROWS } else { 0 }
+            (text_rows + if msg.image_proto.is_some() { IMAGE_RENDER_ROWS } else { 0 }) as u32
         })
         .collect();
 
-    let total_rows: u16 = heights.iter().sum();
-    let scroll_to_bottom = total_rows.saturating_sub(visible_height);
-    let scroll_y = scroll_to_bottom.saturating_sub(message_scroll as u16);
+    let scroll_y = scroll_top_for(
+        &heights,
+        visible_height as u32,
+        selected_msg_index,
+        app.message_scroll_top,
+    );
+    let max_top = heights.iter().sum::<u32>().saturating_sub(visible_height as u32);
+    app.message_scroll_top = (scroll_y < max_top).then_some(scroll_y);
+    app.visible_messages = fully_visible(&heights, scroll_y, visible_height as u32);
 
     // Render block border first (consumes `block`).
     frame.render_widget(block, area);
 
     // Render each message in its own sub-Rect.
-    let mut cumulative_y: u16 = 0;
+    let mut cumulative_y: u32 = 0;
     for (msg_idx, &h) in heights.iter().enumerate().take(app.messages.len()) {
         let msg_top = cumulative_y;
         cumulative_y += h;
@@ -331,7 +334,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         }
 
         let vh = visible_height as i32;
-        let view_top = msg_top as i32 - scroll_y as i32;
+        let view_top = (msg_top as i64 - scroll_y as i64) as i32;
 
         // Stop once we're past the bottom of the viewport.
         if view_top >= vh {
@@ -382,6 +385,37 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             }
         }
     }
+}
+
+/// Viewport top edge in rows, moved as little as possible from `prev_top`
+/// (`None` = bottom) to bring `selected` on screen, top first if it is taller.
+fn scroll_top_for(heights: &[u32], visible: u32, selected: Option<usize>, prev_top: Option<u32>) -> u32 {
+    let max_top = heights.iter().sum::<u32>().saturating_sub(visible);
+    let mut top = prev_top.unwrap_or(max_top).min(max_top);
+    if let Some(sel) = selected.filter(|&i| i < heights.len()) {
+        let msg_top: u32 = heights[..sel].iter().sum();
+        let msg_bottom = msg_top + heights[sel];
+        if msg_bottom > top + visible {
+            top = msg_bottom.saturating_sub(visible);
+        }
+        if msg_top < top {
+            top = msg_top;
+        }
+    }
+    top.min(max_top)
+}
+
+/// First and last message wholly inside the viewport starting at row `top`.
+fn fully_visible(heights: &[u32], top: u32, visible: u32) -> Option<(usize, usize)> {
+    let mut range = None;
+    let mut y = 0;
+    for (i, &h) in heights.iter().enumerate() {
+        if y >= top && y + h <= top + visible {
+            range = Some(range.map_or((i, i), |(first, _)| (first, i)));
+        }
+        y += h;
+    }
+    range
 }
 
 /// Count how many terminal rows the text portion of a message occupies.
@@ -1254,9 +1288,7 @@ fn draw_sync_approve_popup(frame: &mut Frame, app: &App) {
 
 fn draw_message_info_popup(frame: &mut Frame, app: &App) {
     // Get the selected message (from bottom offset)
-    let msg_index = if let Some(offset) = app.selected_message {
-        app.messages.len().saturating_sub(1).saturating_sub(offset)
-    } else {
+    let Some(msg_index) = app.selected_message else {
         return;
     };
 
@@ -1359,6 +1391,7 @@ fn draw_device_alert(frame: &mut Frame, alert: &DeviceAlert) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::{KeyCode, KeyEvent};
     use ratatui::{backend::TestBackend, Terminal};
 
     fn tally(messages: u64, conversations: u64) -> SyncTally {
@@ -1628,5 +1661,106 @@ mod tests {
     fn an_unnamed_peer_still_reads_as_a_sentence() {
         let text = sync_complete_text(&SyncTally::default(), None);
         assert_eq!(text, "Nothing new — that device didn't have more than you.");
+    }
+
+    fn chat_app(dir: &std::path::Path, contents: impl IntoIterator<Item = String>) -> App {
+        let mut app = test_app(dir);
+        app.conversations.push(crate::app::Conversation {
+            id: "00".repeat(16),
+            name: Some("scroll".to_string()),
+            participant_dids: vec![],
+            participant_handles: vec![],
+            current_epoch: 0,
+            unread: 0,
+            is_member: true,
+        });
+        app.active_conversation = Some(0);
+        app.view = View::Session(Screen::Chat);
+        app.chat_mode = ChatMode::Browse;
+        app.messages = contents
+            .into_iter()
+            .enumerate()
+            .map(|(i, content)| DisplayMessage {
+                from: "Peer".to_string(),
+                content,
+                timestamp: chrono::Utc::now(),
+                is_own: false,
+                sender_did: None,
+                sender_device: None,
+                message_id: Some(vec![i as u8, (i >> 8) as u8]),
+                reactions: vec![],
+                image_proto: None,
+                image_loading: false,
+                rkey: format!("{i:05}"),
+                send_failed: None,
+            })
+            .collect();
+        app
+    }
+
+    /// The T6 defect: with wrapped messages, scrolling stopped short of
+    /// the oldest ones because the limit was counted in messages.
+    #[tokio::test]
+    async fn scrolling_up_reaches_the_first_of_many_wrapped_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let n = 150;
+        let mut app = chat_app(
+            dir.path(),
+            (0..n).map(|i| format!("m{i:03} that is long enough to wrap onto a second row")),
+        );
+        render(&mut app, 50, 20);
+        for _ in 0..n {
+            app.handle_key(KeyEvent::from(KeyCode::Up)).await.unwrap();
+            render(&mut app, 50, 20);
+        }
+        let screen = render(&mut app, 50, 20).join("\n");
+        assert!(screen.contains("m000"), "{screen}");
+        assert_eq!(app.selected_message, Some(0));
+    }
+
+    #[test]
+    fn browsing_starts_at_the_lowest_message_on_screen() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = chat_app(dir.path(), (0..40).map(|i| format!("m{i:03}")));
+        app.chat_mode = ChatMode::Compose;
+        app.message_scroll_top = Some(0);
+        render(&mut app, 50, 12);
+        let (_, bottom) = app.visible_messages.expect("some message is on screen");
+
+        app.enter_browse();
+
+        assert_eq!(app.selected_message, Some(bottom));
+        assert!(bottom < 39, "the view was scrolled up, not at the newest message");
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn the_selection_stays_on_screen_and_up_reaches_the_top(
+            heights in proptest::collection::vec(1u32..=20, 1..80),
+            visible in 1u32..=40,
+            ups in proptest::collection::vec(proptest::bool::ANY, 0..200),
+        ) {
+            let last = heights.len() - 1;
+            let mut sel = last;
+            let mut prev = None;
+            let step = |sel: usize, prev: &mut Option<u32>| {
+                let top = scroll_top_for(&heights, visible, Some(sel), *prev);
+                let max_top = heights.iter().sum::<u32>().saturating_sub(visible);
+                *prev = (top < max_top).then_some(top);
+                top
+            };
+            for up in ups {
+                sel = if up { sel.saturating_sub(1) } else { (sel + 1).min(last) };
+                let top = step(sel, &mut prev);
+                let msg_top: u32 = heights[..sel].iter().sum();
+                let msg_bottom = msg_top + heights[sel];
+                proptest::prop_assert!(msg_top < top + visible && msg_bottom > top);
+            }
+            for _ in 0..=last {
+                sel = sel.saturating_sub(1);
+                step(sel, &mut prev);
+            }
+            proptest::prop_assert_eq!(step(0, &mut prev), 0);
+        }
     }
 }

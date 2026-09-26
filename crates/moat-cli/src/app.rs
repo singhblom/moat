@@ -629,8 +629,12 @@ pub struct App {
 
     // Messages for active conversation
     pub messages: Vec<DisplayMessage>,
-    pub message_scroll: usize,
-    pub selected_message: Option<usize>, // For message info feature
+    /// Viewport top edge in rows from the first message; `None` follows the bottom.
+    pub message_scroll_top: Option<u32>,
+    /// Index into `messages` of the browse selection.
+    pub selected_message: Option<usize>,
+    /// First and last fully visible message at the last render.
+    pub visible_messages: Option<(usize, usize)>,
     pub show_message_info: bool,         // Toggle message info popup
     pub reaction_picker: Option<usize>,  // Emoji picker index (Some = popup open)
 
@@ -873,8 +877,9 @@ impl App {
             conversations: Vec::new(),
             active_conversation: None,
             messages: Vec::new(),
-            message_scroll: 0,
+            message_scroll_top: None,
             selected_message: None,
+            visible_messages: None,
             show_message_info: false,
             reaction_picker: None,
             device_alerts: Vec::new(),
@@ -1073,20 +1078,20 @@ impl App {
         match group_id_hex {
             None => {
                 self.active_conversation = None;
-                self.messages.clear();
+                self.clear_messages();
                 Ok(())
             }
             Some(id) => {
                 match self.conversations.iter().position(|c| c.id == id) {
                     Some(idx) => {
                         self.active_conversation = Some(idx);
-                        self.load_messages()
+                        self.open_messages()
                     }
                     None => {
                         // Conv not in local MLS state yet (e.g. synced history before joining).
                         // Load from keystore directly so get_messages still works.
                         self.active_conversation = None;
-                        self.messages.clear();
+                        self.clear_messages();
                         let local = self.keys.load_messages(id).unwrap_or_default();
                         for stored in &local.messages {
                             let from = if stored.is_own {
@@ -1313,7 +1318,7 @@ impl App {
                 } else {
                     Some(self.conversations.len() - 1)
                 };
-                self.messages.clear();
+                self.clear_messages();
             }
         }
         Ok(())
@@ -1609,11 +1614,12 @@ impl App {
 
     /// Selects where the view already is, so `r`/`i` act on a message
     /// from the first keypress rather than after a scroll.
-    fn enter_browse(&mut self) {
+    pub(crate) fn enter_browse(&mut self) {
         self.hint_page = 0;
         self.chat_mode = ChatMode::Browse;
-        if !self.messages.is_empty() {
-            self.selected_message = Some(self.message_scroll.min(self.messages.len() - 1));
+        if let Some(last) = self.messages.len().checked_sub(1) {
+            let at = self.visible_messages.map_or(last, |(_, bottom)| bottom);
+            self.selected_message = Some(at.min(last));
         }
     }
 
@@ -1981,8 +1987,7 @@ impl App {
                     }) {
                         dm.rkey = rkey.clone();
                     }
-                    // Re-sort display messages by rkey
-                    self.messages.sort_by(|a, b| a.rkey.cmp(&b.rkey));
+                    self.sort_messages();
                 }
                 if let Some(id) = &message_id {
                     self.outbox.remove(id);
@@ -2886,9 +2891,7 @@ impl App {
 
     /// The selected message, if `retry_send` can act on it.
     pub fn selected_retryable(&self) -> Option<&DisplayMessage> {
-        let offset = self.selected_message?;
-        let idx = self.messages.len().checked_sub(1 + offset)?;
-        let msg = &self.messages[idx];
+        let msg = self.messages.get(self.selected_message?)?;
         let id = msg.message_id.as_deref()?;
         (msg.send_failed.is_some() && self.outbox.contains(id)).then_some(msg)
     }
@@ -3314,10 +3317,7 @@ impl App {
                         rkey: rkey.to_string(),
                         send_failed: None,
                     };
-                    let pos = self
-                        .messages
-                        .partition_point(|m| m.rkey <= dm.rkey);
-                    self.messages.insert(pos, dm);
+                    self.insert_message_ordered(dm);
                 } else if let Some(idx) = conv_idx {
                     if let Some(conv) = self.conversations.get_mut(idx) {
                         conv.unread += 1;
@@ -3803,10 +3803,7 @@ impl App {
                                 rkey: event_record.rkey.clone(),
                                 send_failed: None,
                             };
-                            let pos = self
-                                .messages
-                                .partition_point(|m| m.rkey <= dm.rkey);
-                            self.messages.insert(pos, dm);
+                            self.insert_message_ordered(dm);
                         } else if let Some(idx) = conv_idx {
                             if let Some(conv) = self.conversations.get_mut(idx) {
                                 conv.unread += 1;
@@ -4424,8 +4421,7 @@ impl App {
                     if let Some(conv) = self.conversations.get(idx) {
                         self.resolve_conversation_handle(conv);
                     }
-                    self.load_messages()?;
-                    self.message_scroll = 0;
+                    self.open_messages()?;
                     self.show_screen(Screen::Chat);
                 }
             }
@@ -4690,7 +4686,7 @@ impl App {
         {
             // Switch to existing conversation instead of creating a duplicate
             self.active_conversation = Some(existing_idx);
-            self.load_messages()?;
+            self.open_messages()?;
             self.overlay = Overlay::None;
             self.show_screen(Screen::Chat);
             self.new_conv_handle.clear();
@@ -4824,7 +4820,7 @@ impl App {
         self.clear_status();
 
         // Load placeholder message for the new conversation
-        self.messages.clear();
+        self.clear_messages();
         self.messages.push(DisplayMessage {
             from: "System".to_string(),
             content: format!(
@@ -4993,11 +4989,60 @@ impl App {
         Ok(())
     }
 
-    /// Load messages from local storage.
+    /// Empty the message list and reset the view onto it.
+    fn clear_messages(&mut self) {
+        self.messages.clear();
+        self.selected_message = None;
+        self.message_scroll_top = None;
+        self.visible_messages = None;
+    }
+
+    /// Insert in rkey order, keeping the selection on the same message.
+    fn insert_message_ordered(&mut self, dm: DisplayMessage) {
+        let pos = self.messages.partition_point(|m| m.rkey <= dm.rkey);
+        self.messages.insert(pos, dm);
+        if let Some(sel) = self.selected_message.as_mut() {
+            if *sel >= pos {
+                *sel += 1;
+            }
+        }
+    }
+
+    /// Sort by rkey, keeping the selection on the same message.
+    fn sort_messages(&mut self) {
+        let selected = self.selected_identity();
+        self.messages.sort_by(|a, b| a.rkey.cmp(&b.rkey));
+        self.reselect(selected);
+    }
+
+    fn selected_identity(&self) -> Option<(Option<Vec<u8>>, String)> {
+        let msg = self.messages.get(self.selected_message?)?;
+        Some((msg.message_id.clone(), msg.rkey.clone()))
+    }
+
+    /// Point the selection back at the message `selected_identity` named.
+    fn reselect(&mut self, identity: Option<(Option<Vec<u8>>, String)>) {
+        self.selected_message = identity.and_then(|(id, rkey)| {
+            self.messages.iter().position(|m| match &id {
+                Some(id) => m.message_id.as_ref() == Some(id),
+                None => m.rkey == rkey,
+            })
+        });
+    }
+
+    /// Open the active conversation with the view at its newest message.
+    fn open_messages(&mut self) -> Result<()> {
+        self.clear_messages();
+        self.load_messages()
+    }
+
+    /// Reload messages from local storage, keeping the selection.
     fn load_messages(&mut self) -> Result<()> {
+        let selected = self.selected_identity();
         self.messages.clear();
 
         let Some(idx) = self.active_conversation else {
+            self.selected_message = None;
             return Ok(());
         };
 
@@ -5036,6 +5081,7 @@ impl App {
                 send_failed: stored.send_failed.clone(),
             });
         }
+        self.reselect(selected);
 
         // Clear unread count
         if let Some(conv) = self.conversations.get_mut(idx) {
@@ -5075,20 +5121,17 @@ impl App {
             KeyCode::Enter => {
                 self.enter_compose();
             }
+            // The render pass scrolls to keep the selection visible.
             KeyCode::Up | KeyCode::Char('k') => {
-                // Scroll up (increase offset from bottom)
-                let max_scroll = self.messages.len().saturating_sub(1);
-                if self.message_scroll < max_scroll {
-                    self.message_scroll += 1;
+                if let Some(last) = self.messages.len().checked_sub(1) {
+                    self.selected_message =
+                        Some(self.selected_message.map_or(last, |i| i.saturating_sub(1)));
                 }
-                // Update selected message index (from bottom)
-                self.selected_message = Some(self.message_scroll);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                // Scroll down (decrease offset from bottom)
-                self.message_scroll = self.message_scroll.saturating_sub(1);
-                // Update selected message index (from bottom)
-                self.selected_message = Some(self.message_scroll);
+                if let Some(last) = self.messages.len().checked_sub(1) {
+                    self.selected_message = Some(self.selected_message.map_or(last, |i| (i + 1).min(last)));
+                }
             }
             KeyCode::Char('i') => {
                 // Toggle message info popup for selected message
@@ -5354,11 +5397,9 @@ impl App {
 
     /// Send an emoji reaction to the currently selected message
     async fn send_reaction(&mut self, emoji: &str) -> Result<()> {
-        // Find the selected message (selected_message is offset from bottom)
-        let msg_index = {
-            let offset = self.selected_message.unwrap_or(0);
-            self.messages.len().saturating_sub(1).saturating_sub(offset)
-        };
+        let msg_index = self
+            .selected_message
+            .unwrap_or_else(|| self.messages.len().saturating_sub(1));
         let target_message_id = match self
             .messages
             .get(msg_index)
@@ -7025,6 +7066,65 @@ impl App {
 mod tests {
     use super::*;
     use moat_atproto::EventRecord;
+
+    fn display(rkey: &str, id: u8) -> DisplayMessage {
+        DisplayMessage {
+            from: "Peer".to_string(),
+            content: rkey.to_string(),
+            timestamp: chrono::Utc::now(),
+            is_own: false,
+            sender_did: None,
+            sender_device: None,
+            message_id: Some(vec![id]),
+            reactions: vec![],
+            image_proto: None,
+            image_loading: false,
+            rkey: rkey.to_string(),
+            send_failed: None,
+        }
+    }
+
+    fn app_with_messages(dir: &std::path::Path, rkeys: &[&str]) -> App {
+        let mut app = App::new(
+            Some(dir.to_path_buf()),
+            None,
+            None,
+            ratatui_image::picker::Picker::halfblocks(),
+        )
+        .expect("app in a temp dir");
+        app.messages = rkeys.iter().enumerate().map(|(i, r)| display(r, i as u8)).collect();
+        app
+    }
+
+    fn selected_rkey(app: &App) -> Option<&str> {
+        app.selected_message.map(|i| app.messages[i].rkey.as_str())
+    }
+
+    /// A reaction goes to the selected message, so an arrival must not
+    /// move the selection onto a different one.
+    #[test]
+    fn an_arrival_before_the_selection_leaves_it_on_the_same_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = app_with_messages(dir.path(), &["b", "d", "f"]);
+        app.selected_message = Some(1);
+
+        app.insert_message_ordered(display("a", 10));
+        app.insert_message_ordered(display("e", 11));
+        app.insert_message_ordered(display("g", 12));
+
+        assert_eq!(selected_rkey(&app), Some("d"));
+    }
+
+    #[test]
+    fn a_resort_leaves_the_selection_on_the_same_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = app_with_messages(dir.path(), &["b", "pending", "c"]);
+        app.selected_message = Some(2);
+
+        app.sort_messages();
+
+        assert_eq!(selected_rkey(&app), Some("c"));
+    }
 
     /// Nothing else expires a status, so one that outstayed its welcome
     /// would mask the key hints for the rest of the session.
