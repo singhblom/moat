@@ -13,13 +13,19 @@
 //! emitted (`moat-core/tests/pairing_simulation.rs` checks that much at the
 //! unit level).
 //!
+//! The runtime mix is a parameter (see [`run_with`]); the `_dr` and `_rd`
+//! cells are thin wrappers over it. `_dr` is the only coverage of
+//! `PairingService.dart`'s post-Done history sync as the *receiving* side
+//! against a non-empty conversation, `_rd` the only coverage of it as the
+//! *serving* side.
+
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
 use crate::scenarios::three_device_pairing::pair_devices;
 use crate::scenarios::Action;
-use crate::world::TestWorld;
+use crate::world::{ParticipantKind, TestWorld};
 
 pub(crate) fn run_boxed(
     _actions: Vec<Action>,
@@ -71,19 +77,33 @@ async fn wait_for_history(
 }
 
 pub async fn run(verbose: bool) {
+    run_with(ParticipantKind::RustCli, ParticipantKind::RustCli, "rr", verbose).await
+}
+
+/// The scenario body. `existing` is D1, which holds the history and serves
+/// it; `new` is D2 and D3, which pair in and receive it.
+pub async fn run_with(
+    existing: ParticipantKind,
+    new: ParticipantKind,
+    cell: &str,
+    verbose: bool,
+) {
     macro_rules! vlog {
         ($($t:tt)*) => { if verbose { eprintln!($($t)*); } }
     }
 
-    vlog!("=== Scenario: three-device-pairing-history-sync ===");
+    vlog!("=== Scenario: three-device-pairing-history-sync ({cell}) ===");
 
     // Live pairing rendezvous needs a real Drawbridge relay — see the note
     // in `two_device_pairing.rs`'s prologue. Alice and Bob get separate
     // relays, matching real-world per-user relay discovery.
-    let mut world =
-        TestWorld::new_with_drawbridge(&[("alice", "alice"), ("bob", "bob")], ".postern.test")
-            .await
-            .expect("world setup");
+    let mut world = TestWorld::new_with_kinds_and_drawbridge(
+        &[("alice", "alice"), ("bob", "bob")],
+        &[existing, ParticipantKind::RustCli],
+        ".postern.test",
+    )
+    .await
+    .expect("world setup");
     let d1 = world.client("alice").clone();
     let bob = world.client("bob").clone();
 
@@ -118,7 +138,7 @@ pub async fn run(verbose: bool) {
 
     // ── D2 pairs in and must sync that history ─────────────────────────────────
     let d2 = world
-        .spawn_nth_device("alice-d2", crate::world::ParticipantKind::RustCli)
+        .spawn_nth_device("alice-d2", new.clone())
         .await
         .expect("spawn d2");
     d2.login("alice.postern.test", "any-password").await.expect("d2 login");
@@ -129,7 +149,7 @@ pub async fn run(verbose: bool) {
 
     // ── D3 pairs into the now-existing ring and must also sync that history ────
     let d3 = world
-        .spawn_nth_device("alice-d3", crate::world::ParticipantKind::RustCli)
+        .spawn_nth_device("alice-d3", new)
         .await
         .expect("spawn d3");
     d3.login("alice.postern.test", "any-password").await.expect("d3 login");
@@ -138,7 +158,7 @@ pub async fn run(verbose: bool) {
     pair_devices(&d1, &d3, verbose).await;
     wait_for_history(&d3, &group_id, &test_messages, "d3", verbose).await;
 
-    vlog!("[check] three-device pairing history sync... ok");
+    vlog!("[check] three-device pairing history sync ({cell})... ok");
     if verbose {
         eprintln!("\n=== PASSED ===");
     }

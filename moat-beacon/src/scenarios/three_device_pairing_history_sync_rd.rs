@@ -1,5 +1,5 @@
-//! Three-device pairing history-sync scenario — new devices run the Dart
-//! headless server, existing device (D1) runs the Rust CLI.
+//! Three-device pairing history-sync scenario — existing device (D1) runs the
+//! Dart headless server and serves the history; new devices run the Rust CLI.
 //!
 //! Same story as [`super::three_device_pairing_history_sync`]: D1 already
 //! has conversation history with Bob predating D2/D3, and both must sync it
@@ -21,9 +21,9 @@ pub(crate) fn run_boxed(
 
 pub async fn run(verbose: bool) {
     super::three_device_pairing_history_sync::run_with(
-        ParticipantKind::RustCli,
         ParticipantKind::DartServer,
-        "dr",
+        ParticipantKind::RustCli,
+        "rd",
         verbose,
     )
     .await

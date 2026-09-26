@@ -44,6 +44,9 @@ pub struct DrawbridgeManager {
     /// Write half of the active pair WebSocket, if one is open.
     pair_writer: Option<PairWsWriter>,
 
+    /// Session token the open pair WebSocket attached with.
+    pair_token: Option<Vec<u8>>,
+
     /// Abort handle for the pair_read_loop task.  Aborting it drops the read
     /// half of the pair WS, so the TCP connection is fully closed and Drawbridge
     /// detects the peer disconnect (sends `pair_closed` on the main WS).
@@ -76,6 +79,10 @@ pub struct CachedDrawbridgeConfig {
 /// Not persisted — refetched on login.
 pub type DrawbridgeConfigCache = HashMap<String, CachedDrawbridgeConfig>;
 
+/// How long a closing pair WS waits for its end to be confirmed: our own
+/// close for the peer's reply, a relay `pair_closed` for the socket to end.
+pub const PAIR_CLOSE_GRACE: Duration = Duration::from_secs(5);
+
 /// Backoff schedule for reconnection attempts.
 fn backoff_duration(attempt: u32) -> Duration {
     match attempt {
@@ -95,6 +102,7 @@ impl DrawbridgeManager {
             bg_tx,
             reconnect_attempt: 0,
             pair_writer: None,
+            pair_token: None,
             pair_read_task: None,
         }
     }
@@ -389,6 +397,7 @@ impl DrawbridgeManager {
         self.pair_read_task = Some(task.abort_handle());
 
         self.pair_writer = Some(writer);
+        self.pair_token = Some(token.to_vec());
         let _ = self.bg_tx.send(BgEvent::PairConnected);
         Ok(())
     }
@@ -412,6 +421,30 @@ impl DrawbridgeManager {
             handle.abort();
         }
         self.pair_writer = None;
+        self.pair_token = None;
+    }
+
+    /// Close the pair WS with a close handshake, after everything already
+    /// written. The read loop is left to see the peer's reply, so frames
+    /// the peer sent before closing are still delivered; it is aborted if
+    /// no reply comes.
+    pub async fn close_pair(&mut self) {
+        self.pair_token = None;
+        if let Some(mut writer) = self.pair_writer.take() {
+            let _ = writer.close().await;
+        }
+        if let Some(handle) = self.pair_read_task.take() {
+            tokio::spawn(async move {
+                tokio::time::sleep(PAIR_CLOSE_GRACE).await;
+                handle.abort();
+            });
+        }
+    }
+
+    /// Whether the pair WS for `token` is open; `None` matches any.
+    pub fn has_pair_socket(&self, token: Option<&[u8]>) -> bool {
+        self.pair_writer.is_some()
+            && token.map_or(true, |t| self.pair_token.as_deref() == Some(t))
     }
 
     /// Get the number of active connections (for status bar).
@@ -540,7 +573,11 @@ async fn own_read_loop(
                                 .get("token")
                                 .and_then(|v| v.as_str())
                                 .and_then(base64_decode);
-                            let _ = bg_tx.send(BgEvent::PairClosed { session_token, reason });
+                            let _ = bg_tx.send(BgEvent::PairClosed {
+                                session_token,
+                                reason,
+                                via_relay: true,
+                            });
                         }
                         "error" => {
                             let err = msg
@@ -597,6 +634,7 @@ async fn pair_read_loop(
                 let _ = bg_tx.send(BgEvent::PairClosed {
                     session_token: Some(session_token),
                     reason: "connection closed".to_string(),
+                    via_relay: false,
                 });
                 return;
             }
@@ -604,6 +642,7 @@ async fn pair_read_loop(
                 let _ = bg_tx.send(BgEvent::PairClosed {
                     session_token: Some(session_token),
                     reason: format!("read error: {e}"),
+                    via_relay: false,
                 });
                 return;
             }

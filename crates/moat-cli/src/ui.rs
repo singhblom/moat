@@ -1139,12 +1139,18 @@ fn short_id(hex_id: &str) -> String {
 /// `syncCompleteText` in moat-dart is the Flutter app's.
 fn sync_complete_text(tally: &SyncTally, device_name: Option<&str>) -> String {
     let device = device_name.unwrap_or("that device");
-    if tally.is_empty() {
-        return format!("Nothing new — {device} didn't have more than you.");
-    }
-    let messages = plural(tally.messages, "message", "messages");
+    let received = plural(tally.messages, "message", "messages");
     let convs = plural(tally.conversations, "conversation", "conversations");
-    format!("Received {messages} across {convs} from {device}.")
+    let sent = plural(tally.sent_messages, "message", "messages");
+    let sent_convs = plural(tally.sent_conversations, "conversation", "conversations");
+    match (tally.messages > 0, tally.sent_messages > 0) {
+        (false, false) => format!("Nothing new — {device} didn't have more than you."),
+        (false, true) => format!("Sent {sent} across {sent_convs} to {device}."),
+        (true, false) => format!("Received {received} across {convs} from {device}."),
+        (true, true) => {
+            format!("Received {received} across {convs} from {device}, and sent {sent}.")
+        }
+    }
 }
 
 /// `"1 message"` / `"412 messages"`.
@@ -1356,7 +1362,7 @@ mod tests {
     use ratatui::{backend::TestBackend, Terminal};
 
     fn tally(messages: u64, conversations: u64) -> SyncTally {
-        SyncTally { messages, conversations }
+        SyncTally { messages, conversations, ..SyncTally::default() }
     }
 
     fn test_app(dir: &std::path::Path) -> App {
@@ -1598,6 +1604,22 @@ mod tests {
     fn singular_counts_read_as_singular() {
         let text = sync_complete_text(&tally(1, 1), Some("Laptop"));
         assert_eq!(text, "Received 1 message across 1 conversation from Laptop.");
+    }
+
+    /// The donor's view: it received nothing, and must not read as though
+    /// the transfer came to nothing.
+    #[test]
+    fn a_donor_reports_what_it_sent() {
+        let t = SyncTally { sent_messages: 424, sent_conversations: 1, ..SyncTally::default() };
+        let text = sync_complete_text(&t, Some("bob3"));
+        assert_eq!(text, "Sent 424 messages across 1 conversation to bob3.");
+    }
+
+    #[test]
+    fn a_two_way_transfer_reports_both_directions() {
+        let t = SyncTally { sent_messages: 1, sent_conversations: 1, ..tally(3, 1) };
+        let text = sync_complete_text(&t, Some("Laptop"));
+        assert_eq!(text, "Received 3 messages across 1 conversation from Laptop, and sent 1 message.");
     }
 
     /// Every completed transfer carries a credential, so this is the

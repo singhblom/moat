@@ -478,6 +478,15 @@ pub(crate) enum BgEvent {
         /// `None` only if the relay omitted it.
         session_token: Option<Vec<u8>>,
         reason: String,
+        /// `true` for the relay's `pair_closed` notice on the main WS,
+        /// `false` for the pair socket itself ending.
+        via_relay: bool,
+    },
+    /// A relay `pair_closed` whose pair socket had not ended after
+    /// [`PAIR_CLOSE_GRACE`](crate::drawbridge::PAIR_CLOSE_GRACE).
+    PairCloseOverdue {
+        session_token: Option<Vec<u8>>,
+        reason: String,
     },
     /// Open and attach to the `/pair` WebSocket.
     DrawbridgeConnectPair {
@@ -489,6 +498,8 @@ pub(crate) enum BgEvent {
     DrawbridgeSendPairBinary {
         data: Vec<u8>,
     },
+    /// Close the pair WS once the sends queued ahead of this have gone out.
+    DrawbridgeClosePair,
     /// New device: send `pair_offer{token}` on the main WS to start a live
     /// pairing session (device onboarding, not reconnect sync).
     DrawbridgeSendPairOffer {
@@ -543,6 +554,7 @@ impl BgEvent {
             | BgEvent::DrawbridgeWatchTags { .. }
             | BgEvent::DrawbridgeConnectPair { .. }
             | BgEvent::DrawbridgeSendPairBinary { .. }
+            | BgEvent::DrawbridgeClosePair
             | BgEvent::DrawbridgeSendPairOffer { .. }
             | BgEvent::DrawbridgeSendPairJoin { .. }
             | BgEvent::PollForNewDevicesNow
@@ -568,6 +580,7 @@ impl BgEvent {
             | BgEvent::PairPending
             | BgEvent::PairReady { .. }
             | BgEvent::PairClosed { .. }
+            | BgEvent::PairCloseOverdue { .. }
             | BgEvent::PairFrameReceived { .. }
             | BgEvent::PairConnected => false,
         }
@@ -2143,6 +2156,7 @@ impl App {
             // ── Drawbridge pairing (async side handled by handle_bg_event_async) ──
             BgEvent::DrawbridgeConnectPair { .. }
             | BgEvent::DrawbridgeSendPairBinary { .. }
+            | BgEvent::DrawbridgeClosePair
             | BgEvent::DrawbridgeSendPairOffer { .. }
             | BgEvent::DrawbridgeSendPairJoin { .. }
             | BgEvent::PollForNewDevicesNow
@@ -2166,42 +2180,32 @@ impl App {
                 });
             }
 
-            BgEvent::PairClosed { session_token, reason } => {
-                // A completed round's teardown notice routinely lands after
-                // the next round has started. The reconnect-sync path has no
-                // `PairingSession`, so fall back to `pending_pair_token`.
-                let live_session_token: Option<Vec<u8>> = match self.pairing_session.as_ref() {
-                    Some(s) => Some(s.rendezvous_token().to_vec()),
-                    None => self.pending_pair_token.clone(),
-                };
-                if let (Some(closed), Some(live)) =
-                    (session_token.as_ref(), live_session_token.as_ref())
-                {
-                    if closed != live {
-                        self.debug_log.log(&format!(
-                            "sync: ignoring pair_closed ({reason}) for a superseded session"
-                        ));
-                        return;
-                    }
-                }
-
-                self.debug_log.log(&format!("sync: pair WS closed: {reason}"));
-                self.drawbridge.clear_pair();
-                self.sync_session = None;
-                self.pending_pair_token = None;
-                self.pairing_sync_keys = None;
-                // A transfer cut short must say so. `fail` is a no-op once
-                // the session completed, which is the ordinary case: the
-                // relay closes the channel right after a successful sync.
-                if let Some(session) = self.sync_request.as_mut() {
-                    session.fail(moat_core::SyncFailure::ChannelClosed {
-                        detail: reason.clone(),
+            BgEvent::PairClosed { session_token, reason, via_relay } => {
+                // Once the pair socket is open, its own end is the signal:
+                // it arrives behind every frame the peer sent, where the
+                // relay's notice on the main WS can overtake them. The
+                // notice still arms a deadline, so a socket that died
+                // without its end reaching us cannot hold the session open.
+                if via_relay && self.drawbridge.has_pair_socket(session_token.as_deref()) {
+                    self.debug_log.log(&format!(
+                        "sync: pair_closed ({reason}) from relay; awaiting pair socket end"
+                    ));
+                    let bg_tx = self.bg_tx.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(crate::drawbridge::PAIR_CLOSE_GRACE).await;
+                        let _ = bg_tx.send(BgEvent::PairCloseOverdue { session_token, reason });
                     });
+                    return;
                 }
-                // Peer walked away / relay TTL: cancel so `ui_state()`
-                // reports why rather than stalling. No-op if terminal.
-                if let Some(session) = self.pairing_session.as_mut() {
-                    let _ = session.cancel();
+                self.on_pair_closed(session_token, reason);
+            }
+
+            BgEvent::PairCloseOverdue { session_token, reason } => {
+                if self.drawbridge.has_pair_socket(session_token.as_deref()) {
+                    self.debug_log.log(&format!(
+                        "sync: pair socket outlived the relay's pair_closed ({reason}); closing it"
+                    ));
+                    self.on_pair_closed(session_token, reason);
                 }
             }
 
@@ -2505,6 +2509,9 @@ impl App {
                 if let Err(e) = self.drawbridge.send_pair_binary(data).await {
                     self.debug_log.log(&format!("sync: send_pair_binary failed: {e}"));
                 }
+            }
+            BgEvent::DrawbridgeClosePair => {
+                self.drawbridge.close_pair().await;
             }
             BgEvent::DrawbridgeSendPairOffer { token } => {
                 if let Err(e) = self.drawbridge.send_pair_offer(&token).await {
@@ -6088,16 +6095,57 @@ impl App {
                 .map(crate::sync::SyncSession::tally)
                 .unwrap_or_default();
             self.debug_log.log(&format!(
-                "sync: session complete — {} message(s) across {} conversation(s); closing pair WS",
-                tally.messages, tally.conversations
+                "sync: session complete — received {} message(s) across {} conversation(s), \
+                 sent {} across {}; closing pair WS",
+                tally.messages, tally.conversations, tally.sent_messages, tally.sent_conversations
             ));
             self.sync_session = None;
             self.pending_pair_token = None;
-            self.drawbridge.clear_pair();
+            // Queued behind the final sends, which a direct close would drop.
+            let _ = self.bg_tx.send(BgEvent::DrawbridgeClosePair);
             let peer_name = self.sync_peer_name.take();
             if let Some(session) = self.sync_request.as_mut() {
                 session.on_complete(tally, peer_name);
             }
+        }
+    }
+
+    /// The pair channel ended: drop its session, and fail whatever was
+    /// still running on it.
+    fn on_pair_closed(&mut self, session_token: Option<Vec<u8>>, reason: String) {
+        // A completed round's teardown notice routinely lands after
+        // the next round has started. The reconnect-sync path has no
+        // `PairingSession`, so fall back to `pending_pair_token`.
+        let live_session_token: Option<Vec<u8>> = match self.pairing_session.as_ref() {
+            Some(s) => Some(s.rendezvous_token().to_vec()),
+            None => self.pending_pair_token.clone(),
+        };
+        if let (Some(closed), Some(live)) =
+            (session_token.as_ref(), live_session_token.as_ref())
+        {
+            if closed != live {
+                self.debug_log.log(&format!(
+                    "sync: ignoring pair_closed ({reason}) for a superseded session"
+                ));
+                return;
+            }
+        }
+
+        self.debug_log.log(&format!("sync: pair WS closed: {reason}"));
+        self.drawbridge.clear_pair();
+        self.sync_session = None;
+        self.pending_pair_token = None;
+        self.pairing_sync_keys = None;
+        // A transfer cut short must say so. `fail` is a no-op once
+        // the session completed, which is the ordinary case: the
+        // relay closes the channel right after a successful sync.
+        if let Some(session) = self.sync_request.as_mut() {
+            session.fail(moat_core::SyncFailure::ChannelClosed { detail: reason });
+        }
+        // Peer walked away / relay TTL: cancel so `ui_state()`
+        // reports why rather than stalling. No-op if terminal.
+        if let Some(session) = self.pairing_session.as_mut() {
+            let _ = session.cancel();
         }
     }
 
@@ -6248,7 +6296,7 @@ impl App {
             // this pairing and `pairing_session` itself is deliberately
             // never cleared (see its field doc).
             self.pairing_is_new_device = None;
-            self.drawbridge.clear_pair();
+            let _ = self.bg_tx.send(BgEvent::DrawbridgeClosePair);
         }
     }
 

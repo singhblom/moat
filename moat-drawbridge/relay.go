@@ -245,7 +245,7 @@ func (r *Relay) unregister(c *Client) {
 	// that pair_closed notifications can still be queued to c.send (they'll
 	// be drained by the write pump before it exits).
 	r.pairs.onMainWSDisconnect(c)
-	close(c.send)
+	c.closeSend()
 }
 
 func (r *Relay) handleWatchTags(c *Client, msg *WatchTagsMsg) {
@@ -778,7 +778,7 @@ func (r *Relay) servePairWS(w http.ResponseWriter, req *http.Request) {
 	pairedData, _ := json.Marshal(PairedMsg{Type: "paired"})
 	conn.SetWriteDeadline(time.Now().Add(writeWait))
 	if err := conn.WriteMessage(websocket.TextMessage, pairedData); err != nil {
-		r.pairs.terminateSession(attach.Token, "write_error")
+		r.pairs.terminateSession(attach.Token, "write_error", false)
 		return
 	}
 	conn.SetWriteDeadline(time.Time{})
@@ -794,14 +794,15 @@ func (r *Relay) servePairWS(w http.ResponseWriter, req *http.Request) {
 	token := attach.Token
 	onByteCap := func() {
 		r.pairs.metricByteCaps.Add(1)
-		r.pairs.terminateSession(token, "byte_cap")
+		r.pairs.terminateSession(token, "byte_cap", false)
 	}
 
 	go runPairWritePump(pc)
-	runPairForwarder(pc, peer.send, sess, r.pairs, direction, onByteCap)
+	runPairForwarder(pc, peer, sess, r.pairs, direction, onByteCap)
 	// Forwarder exited — the connection dropped or was terminated. Clean up any
-	// remaining session state (no-op if already terminated by the peer side).
-	r.pairs.terminateSession(token, "peer_gone")
+	// remaining session state (no-op if already terminated by the peer side),
+	// delivering what the peer is still owed.
+	r.pairs.terminateSession(token, "peer_gone", true)
 }
 
 func (r *Relay) metricsHandler(w http.ResponseWriter, req *http.Request) {

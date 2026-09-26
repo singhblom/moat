@@ -405,7 +405,9 @@ Each client uses two sockets simultaneously during a sync:
 4. Each client opens a new WebSocket to `pair_url` (`wss://<relay>/pair`).
 5. First frame on the pair WS (JSON): `pair_attach{token}`. No DID challenge — the token is the auth.
 6. Once both sides have attached, relay sends `paired` on both pair WSes. From then on, only opaque binary frames flow; the relay forwards them verbatim.
-7. Either side closing its pair WS ends the session. The relay sends `pair_closed{token, reason}` on the main WS to the surviving peer.
+7. Either side closing its pair WS ends the session. The relay first writes every frame it has already accepted for the surviving peer, then closes that peer's pair WS with a normal close, and sends `pair_closed{token, reason}` on the main WS. Error terminations (`byte_cap`, `ttl_expired`, `write_error`) close both sockets at once.
+
+A client closing its pair WS after its last send MUST do so behind those sends, with a close handshake: the last frame before a close is often the one that confirms a transfer. Once its pair WS is open, a client treats the pair WS's own end as the close signal, not `pair_closed` — the main-WS notice travels on a different connection and can overtake frames still on the pair WS.
 
 `pair_ready.pair_url` is derived per recipient from the address that recipient used to reach the relay, not from a single relay-wide value: two devices on the same relay may legitimately reach it at different addresses (an Android emulator via `10.0.2.2` while a desktop client uses `127.0.0.1`).
 
@@ -729,11 +731,27 @@ Inventories are downgraded `complete` → `range`, largest first, until the
 total fits, so the fewest conversations lose precision and both sides make
 the same deterministic choice from the same data.
 
-Two devices whose inventories already agree exchange nothing and finish on
-the `Hello`.
+Transfer is pulled: a side sends `BatchReq` per conversation it is
+missing history for, the peer answers page by page, and ends each
+conversation with `Done`. Once every `Done` a side is waiting for has
+arrived, it sends `Fin` — once per session — confirming that everything
+owed to it was delivered. A side expecting nothing sends `Fin` straight
+after the `Hello`.
+
+A session is complete when a side has both sent and received `Fin`. The
+peer's `Fin` follows the last `Done` it was waiting for, so it also
+confirms this side's sends arrived; history the peer never asked for does
+not hold the session open. Whichever side completes closes the pair WS,
+behind its final sends. A channel that ends before `Fin` has been received
+is a `channel_closed` failure on that side, however much was transferred —
+without the peer's `Fin` there is no evidence its last frames arrived.
+
+Two devices whose inventories already agree exchange nothing but `Fin`.
 
 A finished session reports what it took: how many messages arrived, across
-how many conversations, and which device served them. This is not
+how many conversations, and which device served them. It also reports what
+it served, confirmed by the peer's `Fin`, so the donor's report says what
+it delivered rather than reading as "nothing new". This is not
 decoration. With one donor per gesture, "nothing new — that device didn't
 have more than you" is the outcome that tells the user to go and approve on
 a *different* sibling, and without counts it is indistinguishable from a

@@ -28,13 +28,18 @@ String responderFailureText(ffi.SyncFailureDto reason) {
 
 String syncCompleteText(ffi.SyncTallyDto tally, String? deviceName) {
   final device = deviceName ?? 'that device';
-  if (tally.messages == BigInt.zero) {
-    return 'Nothing new — $device didn\'t have more than you.';
-  }
-  final messages = _plural(tally.messages, 'message', 'messages');
-  final conversations =
-      _plural(tally.conversations, 'conversation', 'conversations');
-  return 'Received $messages across $conversations from $device.';
+  final received = _plural(tally.messages, 'message', 'messages');
+  final convs = _plural(tally.conversations, 'conversation', 'conversations');
+  final sent = _plural(tally.sentMessages, 'message', 'messages');
+  final sentConvs =
+      _plural(tally.sentConversations, 'conversation', 'conversations');
+  return switch ((tally.messages > BigInt.zero, tally.sentMessages > BigInt.zero)) {
+    (false, false) => 'Nothing new — $device didn\'t have more than you.',
+    (false, true) => 'Sent $sent across $sentConvs to $device.',
+    (true, false) => 'Received $received across $convs from $device.',
+    (true, true) =>
+      'Received $received across $convs from $device, and sent $sent.',
+  };
 }
 
 String _plural(BigInt n, String one, String many) =>

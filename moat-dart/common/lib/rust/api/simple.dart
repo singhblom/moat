@@ -1577,21 +1577,29 @@ sealed class SyncRequestUiStateDto with _$SyncRequestUiStateDto {
   }) = SyncRequestUiStateDto_Failed;
 }
 
-/// What a finished sync took from its peer. See `moat_core::SyncTally`.
+/// What a finished sync moved in each direction. See `moat_core::SyncTally`.
 class SyncTallyDto {
   final BigInt messages;
   final BigInt conversations;
+  final BigInt sentMessages;
+  final BigInt sentConversations;
 
   const SyncTallyDto({
     required this.messages,
     required this.conversations,
+    required this.sentMessages,
+    required this.sentConversations,
   });
 
   static Future<SyncTallyDto> default_() =>
       RustLib.instance.api.crateApiSimpleSyncTallyDtoDefault();
 
   @override
-  int get hashCode => messages.hashCode ^ conversations.hashCode;
+  int get hashCode =>
+      messages.hashCode ^
+      conversations.hashCode ^
+      sentMessages.hashCode ^
+      sentConversations.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1599,7 +1607,9 @@ class SyncTallyDto {
       other is SyncTallyDto &&
           runtimeType == other.runtimeType &&
           messages == other.messages &&
-          conversations == other.conversations;
+          conversations == other.conversations &&
+          sentMessages == other.sentMessages &&
+          sentConversations == other.sentConversations;
 }
 
 class ThumbHashResult {

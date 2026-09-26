@@ -1973,22 +1973,34 @@ pub struct SyncFrameDto {
     pub sender_device_name: Option<String>,
 }
 
-/// What a finished sync took from its peer. See `moat_core::SyncTally`.
+/// What a finished sync moved in each direction. See `moat_core::SyncTally`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SyncTallyDto {
     pub messages: u64,
     pub conversations: u64,
+    pub sent_messages: u64,
+    pub sent_conversations: u64,
 }
 
 impl From<moat_core::SyncTally> for SyncTallyDto {
     fn from(t: moat_core::SyncTally) -> Self {
-        Self { messages: t.messages, conversations: t.conversations }
+        Self {
+            messages: t.messages,
+            conversations: t.conversations,
+            sent_messages: t.sent_messages,
+            sent_conversations: t.sent_conversations,
+        }
     }
 }
 
 impl From<SyncTallyDto> for moat_core::SyncTally {
     fn from(t: SyncTallyDto) -> Self {
-        Self { messages: t.messages, conversations: t.conversations }
+        Self {
+            messages: t.messages,
+            conversations: t.conversations,
+            sent_messages: t.sent_messages,
+            sent_conversations: t.sent_conversations,
+        }
     }
 }
 

@@ -198,13 +198,11 @@ fn two_identical_devices_complete_without_transferring_anything() {
     ).unwrap();
 
     assert!(
-        outs.is_empty(),
-        "completion is a state, not an output — nothing to send or store"
+        matches!(outs.as_slice(), [SyncOutput::Send(SyncMsg::Fin)]),
+        "with no delta in either direction the only thing to say is Fin"
     );
-    assert!(
-        s.is_done(),
-        "a session with no delta in either direction is finished on the spot"
-    );
+    let _ = s.on_message(SyncMsg::Fin).unwrap();
+    assert!(s.is_done(), "the peer's Fin finishes a session with no delta");
 }
 
 #[test]
@@ -441,7 +439,6 @@ fn a_session_counts_the_messages_and_conversations_it_received() {
     let tally = s.tally();
     assert_eq!(tally.messages, 3);
     assert_eq!(tally.conversations, 2);
-    assert!(!tally.is_empty());
 }
 
 /// Two devices that already agree exchange nothing, and the report has to
@@ -459,9 +456,10 @@ fn a_session_that_moves_nothing_reports_an_empty_tally() {
             ring_epoch: 0,
         })
         .unwrap();
+    let _ = s.on_message(SyncMsg::Fin).unwrap();
 
-    assert!(s.is_done(), "identical inventories finish on the Hello");
-    assert!(s.tally().is_empty());
+    assert!(s.is_done(), "identical inventories finish on one exchange of Fins");
+    assert_eq!(s.tally().messages, 0);
     assert_eq!(s.tally().conversations, 0);
 }
 

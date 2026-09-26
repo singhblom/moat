@@ -46,6 +46,8 @@ Map<String, dynamic> _syncRequestUiStateJson(SyncRequestUiStateDto state) {
       'tally': {
         'messages': tally.messages.toInt(),
         'conversations': tally.conversations.toInt(),
+        'sent_messages': tally.sentMessages.toInt(),
+        'sent_conversations': tally.sentConversations.toInt(),
       },
       'device_name': deviceName,
     },

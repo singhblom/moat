@@ -4606,11 +4606,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   SyncTallyDto dco_decode_sync_tally_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
     return SyncTallyDto(
       messages: dco_decode_u_64(arr[0]),
       conversations: dco_decode_u_64(arr[1]),
+      sentMessages: dco_decode_u_64(arr[2]),
+      sentConversations: dco_decode_u_64(arr[3]),
     );
   }
 
@@ -5777,8 +5779,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_messages = sse_decode_u_64(deserializer);
     var var_conversations = sse_decode_u_64(deserializer);
+    var var_sentMessages = sse_decode_u_64(deserializer);
+    var var_sentConversations = sse_decode_u_64(deserializer);
     return SyncTallyDto(
-        messages: var_messages, conversations: var_conversations);
+        messages: var_messages,
+        conversations: var_conversations,
+        sentMessages: var_sentMessages,
+        sentConversations: var_sentConversations);
   }
 
   @protected
@@ -6827,6 +6834,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_u_64(self.messages, serializer);
     sse_encode_u_64(self.conversations, serializer);
+    sse_encode_u_64(self.sentMessages, serializer);
+    sse_encode_u_64(self.sentConversations, serializer);
   }
 
   @protected

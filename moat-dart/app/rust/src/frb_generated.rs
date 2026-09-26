@@ -6141,9 +6141,13 @@ impl SseDecode for crate::api::simple::SyncTallyDto {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_messages = <u64>::sse_decode(deserializer);
         let mut var_conversations = <u64>::sse_decode(deserializer);
+        let mut var_sentMessages = <u64>::sse_decode(deserializer);
+        let mut var_sentConversations = <u64>::sse_decode(deserializer);
         return crate::api::simple::SyncTallyDto {
             messages: var_messages,
             conversations: var_conversations,
+            sent_messages: var_sentMessages,
+            sent_conversations: var_sentConversations,
         };
     }
 }
@@ -7676,6 +7680,8 @@ impl flutter_rust_bridge::IntoDart for crate::api::simple::SyncTallyDto {
         [
             self.messages.into_into_dart().into_dart(),
             self.conversations.into_into_dart().into_dart(),
+            self.sent_messages.into_into_dart().into_dart(),
+            self.sent_conversations.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -8660,6 +8666,8 @@ impl SseEncode for crate::api::simple::SyncTallyDto {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <u64>::sse_encode(self.messages, serializer);
         <u64>::sse_encode(self.conversations, serializer);
+        <u64>::sse_encode(self.sent_messages, serializer);
+        <u64>::sse_encode(self.sent_conversations, serializer);
     }
 }
 

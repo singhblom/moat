@@ -21,7 +21,7 @@ fn token(b: u8) -> [u8; 16] {
 }
 
 fn tally(messages: u64, conversations: u64) -> SyncTally {
-    SyncTally { messages, conversations }
+    SyncTally { messages, conversations, ..SyncTally::default() }
 }
 
 // ── Wire codec ────────────────────────────────────────────────────────────────
@@ -92,7 +92,7 @@ fn a_session_that_transferred_nothing_says_so() {
     session.on_channel_up().expect("channel up");
     session.on_complete(SyncTally::default(), Some("Laptop".to_string()));
     match session.ui_state() {
-        SyncRequestUiState::Complete { tally, .. } => assert!(tally.is_empty()),
+        SyncRequestUiState::Complete { tally, .. } => assert_eq!(tally, SyncTally::default()),
         other => panic!("expected Complete, got {other:?}"),
     }
 }

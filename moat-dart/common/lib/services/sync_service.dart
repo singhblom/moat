@@ -109,10 +109,14 @@ class SyncService {
     });
   }
 
+  /// Queued like frames, so a close never overtakes the frames the peer
+  /// sent before it — the last of which is usually its `Fin`.
   void _handlePairClosed(String reason) {
     moatLog('SyncService: pair closed: $reason');
-    onSessionAborted?.call(reason);
-    unawaited(_reset());
+    _enqueue(() async {
+      onSessionAborted?.call(reason);
+      await _reset();
+    });
   }
 
   // ── Session lifecycle ─────────────────────────────────────────────────────
@@ -239,8 +243,9 @@ class SyncService {
     // them: closing the channel mid-list would strand whatever followed.
     if (_session?.isDone() ?? false) {
       final tally = _session!.tally();
-      moatLog('SyncService: session complete — ${tally.messages} message(s) '
-          'across ${tally.conversations} conversation(s); closing pair WS');
+      moatLog('SyncService: session complete — received ${tally.messages} '
+          'message(s) across ${tally.conversations} conversation(s), sent '
+          '${tally.sentMessages} across ${tally.sentConversations}; closing pair WS');
       onSessionComplete?.call(tally, _peerDeviceName);
       await _reset();
       await _drawbridge.clearPair();

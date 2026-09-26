@@ -16,6 +16,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
+use crate::scenarios::sync_request_history::await_sync_completion;
 use crate::scenarios::three_device_pairing::pair_devices;
 use crate::scenarios::Action;
 use crate::world::{ParticipantKind, TestWorld};
@@ -169,6 +170,14 @@ pub async fn run_with(
         );
         tokio::time::sleep(POLL_INTERVAL).await;
     }
+
+    // The receiver closes the channel once it holds everything; the offerer
+    // must read that as a confirmed delivery, not a dropped connection.
+    let offerer = await_sync_completion(&d1, "d1").await;
+    assert!(
+        offerer.sent_messages > 0,
+        "the offerer must report what it delivered; got {offerer:?}"
+    );
 
     vlog!("[check] sync offer history ({cell})... ok");
     if verbose {

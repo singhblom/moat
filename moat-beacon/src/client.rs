@@ -95,6 +95,8 @@ pub struct ImageAttachmentInfo {
 pub struct SyncCompletion {
     pub messages: u64,
     pub conversations: u64,
+    pub sent_messages: u64,
+    pub sent_conversations: u64,
     pub device_name: Option<String>,
 }
 
@@ -552,15 +554,17 @@ impl MoatCliClient {
             return Ok(None);
         }
         let tally = request.get("tally");
+        let count = |key: &str| {
+            tally
+                .and_then(|t| t.get(key))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0)
+        };
         Ok(Some(SyncCompletion {
-            messages: tally
-                .and_then(|t| t.get("messages"))
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0),
-            conversations: tally
-                .and_then(|t| t.get("conversations"))
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0),
+            messages: count("messages"),
+            conversations: count("conversations"),
+            sent_messages: count("sent_messages"),
+            sent_conversations: count("sent_conversations"),
             device_name: request
                 .get("device_name")
                 .and_then(serde_json::Value::as_str)

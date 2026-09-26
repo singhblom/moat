@@ -18,7 +18,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
-use crate::client::MoatCliClient;
+use crate::client::{MoatCliClient, SyncCompletion};
 use crate::scenarios::three_device_pairing::pair_devices;
 use crate::scenarios::Action;
 use crate::world::{ParticipantKind, TestWorld};
@@ -122,6 +122,26 @@ async fn wait_for_membership(
         assert!(
             std::time::Instant::now() < deadline,
             "{label} was never fanned into the conversation within {TIMEOUT:?}; \
+             this must fail the test, not hang it"
+        );
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+/// Poll until `client`'s sync request reports completion, failing the test
+/// on a reported failure or once [`TIMEOUT`] passes.
+pub(crate) async fn await_sync_completion(client: &MoatCliClient, name: &str) -> SyncCompletion {
+    let deadline = std::time::Instant::now() + TIMEOUT;
+    loop {
+        let _ = client.poll().await;
+        if let Some(c) = client.sync_completion().await.expect("sync completion") {
+            return c;
+        }
+        let state = client.sync_request_status().await.expect("sync status");
+        assert!(!state.is_failed(), "{name}'s sync failed: {state:?}");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{name}'s sync never reported completion within {TIMEOUT:?}; \
              this must fail the test, not hang it"
         );
         tokio::time::sleep(POLL_INTERVAL).await;
@@ -438,19 +458,7 @@ pub async fn run_with_idle(
     // identical without this, and with one donor per gesture that is the
     // difference between "you're done" and "go and ask a different
     // device". So the counts are asserted, not just the messages.
-    let deadline = std::time::Instant::now() + TIMEOUT;
-    let completion = loop {
-        let _ = d2.poll().await;
-        if let Some(c) = d2.sync_completion().await.expect("d2 sync completion") {
-            break c;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "d2's sync never reported completion within {TIMEOUT:?}; \
-             this must fail the test, not hang it"
-        );
-        tokio::time::sleep(POLL_INTERVAL).await;
-    };
+    let completion = await_sync_completion(&d2, "d2").await;
     vlog!("[sync] d2's completion report: {completion:?}");
     assert_eq!(
         completion.messages, expected_total as u64,
@@ -475,6 +483,19 @@ pub async fn run_with_idle(
     assert!(
         !name.is_empty(),
         "the report must name the device the history came from; got {completion:?}"
+    );
+
+    // ── The donor's report ───────────────────────────────────────────────────
+    //
+    // The requester closes the channel once it holds everything. The donor
+    // must read that close as the end of a delivered transfer, confirmed by
+    // the requester's Fin — not as a connection failure.
+    let donor = await_sync_completion(&d1, "d1").await;
+    vlog!("[sync] d1's completion report: {donor:?}");
+    assert_eq!(
+        (donor.sent_messages, donor.sent_conversations),
+        (expected_total as u64, 1),
+        "the donor must report what it delivered; got {donor:?}"
     );
 
     vlog!("[check] sync request history ({cell})... ok");

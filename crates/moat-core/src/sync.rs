@@ -235,6 +235,9 @@ pub enum SyncMsg {
         #[serde_as(as = "Base64")]
         group_id: Vec<u8>,
     },
+    /// Every `Done` this side was waiting for has arrived: the peer's
+    /// sends are confirmed delivered. Sent once per session.
+    Fin,
 }
 
 /// Encode a [`SyncMsg`] to raw JSON bytes.
@@ -268,7 +271,7 @@ pub enum SyncOutput {
     },
 }
 
-/// What a finished session took from its peer.
+/// What a finished session moved in each direction.
 ///
 /// With one donor per gesture, "nothing new — that device didn't have
 /// more than you" is the outcome that tells the user to try a *different*
@@ -276,7 +279,8 @@ pub enum SyncOutput {
 /// transferred nothing look identical, so the counts are not decoration:
 /// they are the difference between a legible result and a mysterious one.
 ///
-/// Counts what the peer *delivered*, not what storage accepted as new.
+/// `messages`/`conversations` count what the peer *delivered*, not what
+/// storage accepted as new.
 /// The inventory diff means the donor already sent only the complement,
 /// so the two agree except where a `range` inventory forced it to serve
 /// across a span it could not see holes in.
@@ -284,13 +288,9 @@ pub enum SyncOutput {
 pub struct SyncTally {
     pub messages: u64,
     pub conversations: u64,
-}
-
-impl SyncTally {
-    /// `true` when the peer had nothing this side was missing.
-    pub fn is_empty(&self) -> bool {
-        self.messages == 0
-    }
+    /// What this side served to the peer, confirmed by the peer's `Fin`.
+    pub sent_messages: u64,
+    pub sent_conversations: u64,
 }
 
 /// Session phase. Internal — exposed only via [`SyncSession::is_done`].
@@ -302,7 +302,7 @@ enum Phase {
     WaitingHello,
     /// Hello exchanged; in progress (sending/receiving BatchReqs/Batches).
     Active,
-    /// All Done messages sent and received.
+    /// All `Done`s sent and received, and `Fin` sent and received.
     Done,
 }
 
@@ -315,8 +315,6 @@ struct ConvPlan {
     our_messages: Vec<SyncMessage>,
     /// Whether we expect to receive a batch from the peer.
     expecting_batch: bool,
-    /// Whether we've sent `Done` for this conversation.
-    sent_done: bool,
     /// Whether we've received `Done` for this conversation.
     received_done: bool,
 }
@@ -335,6 +333,10 @@ pub struct SyncSession {
     /// runtimes report the same number from the same events.
     received_messages: u64,
     received_convs: HashSet<String>,
+    sent_messages: u64,
+    sent_convs: HashSet<String>,
+    sent_fin: bool,
+    received_fin: bool,
 }
 
 impl Default for SyncSession {
@@ -354,6 +356,10 @@ impl SyncSession {
             plans: Vec::new(),
             received_messages: 0,
             received_convs: HashSet::new(),
+            sent_messages: 0,
+            sent_convs: HashSet::new(),
+            sent_fin: false,
+            received_fin: false,
         }
     }
 
@@ -375,7 +381,6 @@ impl SyncSession {
             conv_id,
             our_messages,
             expecting_batch,
-            sent_done: false,
             received_done: false,
         });
     }
@@ -410,6 +415,11 @@ impl SyncSession {
                 self.handle_batch(group_id, messages, next_cursor)
             }
             SyncMsg::Done { group_id } => Ok(self.handle_done(group_id)),
+            SyncMsg::Fin => {
+                self.received_fin = true;
+                self.check_complete();
+                Ok(Vec::new())
+            }
         }
     }
 
@@ -424,6 +434,8 @@ impl SyncSession {
         SyncTally {
             messages: self.received_messages,
             conversations: self.received_convs.len() as u64,
+            sent_messages: self.sent_messages,
+            sent_conversations: self.sent_convs.len() as u64,
         }
     }
 
@@ -508,7 +520,6 @@ impl SyncSession {
                 conv_id,
                 our_messages: Vec::new(),
                 expecting_batch: true,
-                sent_done: false,
                 received_done: false,
             });
             outputs.push(SyncOutput::Send(SyncMsg::BatchReq {
@@ -519,16 +530,10 @@ impl SyncSession {
             }));
         }
 
-        // Two devices that already agree have nothing to say to each other,
-        // and the Hello exchange is where that becomes knowable.
-        //
-        // Guarded on having *some* plan: `check_complete` folds over the
-        // plan list, so an empty one is vacuously "all done". A session
-        // that knows about no conversations has nothing to offer, which is
-        // not the same as the exchange being finished.
-        if !self.plans.is_empty() {
-            self.check_complete();
-        }
+        // A side expecting nothing confirms that at once, so two devices
+        // that already agree finish on one exchange of `Fin`s.
+        self.maybe_send_fin(&mut outputs);
+        self.check_complete();
         outputs
     }
 
@@ -556,6 +561,11 @@ impl SyncSession {
             .cloned()
             .collect();
 
+        if !slice.is_empty() {
+            self.sent_messages += slice.len() as u64;
+            self.sent_convs.insert(plan.conv_id.clone());
+        }
+
         let next_idx = cursor_idx + slice.len();
         let is_last = next_idx >= plan.our_messages.len();
         let next_cursor = if is_last { None } else { Some(next_idx.to_string()) };
@@ -567,7 +577,6 @@ impl SyncSession {
         })];
 
         if is_last {
-            plan.sent_done = true;
             outputs.push(SyncOutput::Send(SyncMsg::Done {
                 group_id: plan.group_id.clone(),
             }));
@@ -620,20 +629,30 @@ impl SyncSession {
         if let Some(plan) = self.plans.iter_mut().find(|p| p.group_id == group_id) {
             plan.received_done = true;
         }
+        let mut outputs = Vec::new();
+        self.maybe_send_fin(&mut outputs);
         self.check_complete();
-        Vec::new()
+        outputs
     }
 
-    /// Move to `Done` when every plan has been satisfied in both
-    /// directions. Emits nothing: callers observe completion through
-    /// [`is_done`](Self::is_done) *after* applying the outputs, so a
-    /// channel can never be closed with sends still pending.
+    /// Send `Fin` once every `Done` we are waiting for has arrived.
+    fn maybe_send_fin(&mut self, outputs: &mut Vec<SyncOutput>) {
+        if self.phase != Phase::Active || self.sent_fin {
+            return;
+        }
+        if self.plans.iter().all(|p| !p.expecting_batch || p.received_done) {
+            self.sent_fin = true;
+            outputs.push(SyncOutput::Send(SyncMsg::Fin));
+        }
+    }
+
+    /// Move to `Done` once both sides have confirmed receipt with `Fin`.
+    /// The peer's `Fin` follows our last `Done`, so it also means our sends
+    /// arrived. Emits nothing: callers observe completion through
+    /// [`is_done`](Self::is_done) *after* applying the outputs, and must
+    /// close the channel behind them, never ahead.
     fn check_complete(&mut self) {
-        let all_done = self.plans.iter().all(|p| {
-            (p.our_messages.is_empty() || p.sent_done)
-                && (!p.expecting_batch || p.received_done)
-        });
-        if all_done && self.phase == Phase::Active {
+        if self.phase == Phase::Active && self.sent_fin && self.received_fin {
             self.phase = Phase::Done;
         }
     }
@@ -762,7 +781,7 @@ mod tests {
         assert!(outs.iter().any(|o| matches!(o, SyncOutput::Store { .. })));
 
         let outs = s.on_message(SyncMsg::Done { group_id: g1.clone() }).unwrap();
-        // Not done yet — g2 still pending.
+        // Not done yet — g2 still pending, so no Fin either.
         assert!(outs.is_empty());
         assert!(!s.is_done());
 
@@ -773,9 +792,12 @@ mod tests {
                 next_cursor: None,
             }).unwrap();
         let outs = s.on_message(SyncMsg::Done { group_id: g2.clone() }).unwrap();
-        // Completion is a state, not an output: the caller applies whatever
-        // came back and *then* asks, so it can never close the channel with
-        // sends still pending.
+        // Everything arrived: confirm it. Not done until the peer confirms
+        // the other direction.
+        assert!(matches!(outs.as_slice(), [SyncOutput::Send(SyncMsg::Fin)]));
+        assert!(!s.is_done());
+
+        let outs = s.on_message(SyncMsg::Fin).unwrap();
         assert!(outs.is_empty());
         assert!(s.is_done());
     }
@@ -797,8 +819,10 @@ mod tests {
 
         // Peer's Hello (they have nothing).
         let outs = s.on_message(SyncMsg::Hello { convs: vec![empty_state(&g)], ring_epoch: 0 }).unwrap();
-        // We do NOT send BatchReq (peer has nothing).
+        // We do NOT send BatchReq (peer has nothing), and expecting nothing
+        // we confirm that straight away.
         assert!(!outs.iter().any(|o| matches!(o, SyncOutput::Send(SyncMsg::BatchReq { .. }))));
+        assert!(outs.iter().any(|o| matches!(o, SyncOutput::Send(SyncMsg::Fin))));
 
         // Peer requests our batch.
         let outs = s.on_message(SyncMsg::BatchReq {
@@ -823,16 +847,66 @@ mod tests {
             .count();
         assert_eq!(batch_count, 1);
         assert_eq!(done_count, 1);
-        // We've sent our Done but haven't received peer's Done yet — not complete.
+        // Everything is sent, but nothing says it arrived — not complete.
         assert!(!s.is_done());
 
-        // Peer's Done — even though `expecting_batch=false`, the protocol still
-        // tears down via the peer's terminating Done.
-        let outs = s.on_message(SyncMsg::Done { group_id: g.clone() }).unwrap();
+        // The peer's Fin confirms delivery.
+        let outs = s.on_message(SyncMsg::Fin).unwrap();
         // Completion is a state, not an output: the caller applies whatever
         // came back and *then* asks, so it can never close the channel with
         // sends still pending.
         assert!(outs.is_empty());
+        assert!(s.is_done());
+        let tally = s.tally();
+        assert_eq!((tally.sent_messages, tally.sent_conversations), (2, 1));
+        assert_eq!(tally.messages, 0, "nothing was received");
+    }
+
+    /// History the peer never asked for does not hold the session open:
+    /// its Fin says it has everything it wanted.
+    #[test]
+    fn peer_fin_completes_without_unrequested_sends() {
+        let g = vec![7u8; 32];
+        let mut s = SyncSession::new();
+        s.add_conv_plan(g.clone(), hex::encode(&g), vec![empty_msg("r1", "x")], false);
+        let _ = s.on_paired(vec![], 0);
+        let _ = s.on_message(SyncMsg::Hello { convs: vec![empty_state(&g)], ring_epoch: 0 }).unwrap();
+        let _ = s.on_message(SyncMsg::Fin).unwrap();
+        assert!(s.is_done());
+        assert_eq!(s.tally().sent_messages, 0);
+    }
+
+    /// Two-way: each side both serves and receives. Neither finishes until
+    /// both directions are confirmed.
+    #[test]
+    fn two_way_session_needs_both_fins() {
+        let g = vec![8u8; 32];
+        let mut s = SyncSession::new();
+        s.add_conv_plan(g.clone(), hex::encode(&g), vec![empty_msg("a1", "x")], true);
+        let _ = s.on_paired(vec![], 0);
+        let peer = ConvState {
+            group_id: g.clone(),
+            inventory: ConvInventory::Complete { rkeys: vec!["b1".to_string()] },
+        };
+        let outs = s.on_message(SyncMsg::Hello { convs: vec![peer], ring_epoch: 0 }).unwrap();
+        assert!(!outs.iter().any(|o| matches!(o, SyncOutput::Send(SyncMsg::Fin))));
+
+        let _ = s.on_message(SyncMsg::BatchReq {
+                group_id: g.clone(),
+                from_rkey: None,
+                to_rkey: None,
+                cursor: None,
+            }).unwrap();
+        let _ = s.on_message(SyncMsg::Fin).unwrap();
+        assert!(!s.is_done(), "we have not received their batch");
+
+        let _ = s.on_message(SyncMsg::Batch {
+                group_id: g.clone(),
+                messages: vec![empty_msg("b1", "y")],
+                next_cursor: None,
+            }).unwrap();
+        let outs = s.on_message(SyncMsg::Done { group_id: g.clone() }).unwrap();
+        assert!(matches!(outs.as_slice(), [SyncOutput::Send(SyncMsg::Fin)]));
         assert!(s.is_done());
     }
 

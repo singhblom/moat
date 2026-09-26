@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:web_socket_channel/status.dart' as ws_status;
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../rust/api/simple.dart' as ffi;
 import 'debug_log.dart';
@@ -419,12 +420,25 @@ class DrawbridgeService {
     await _disconnectPair();
   }
 
+  /// Close with a close handshake, after everything already added to the
+  /// sink. The subscription is silenced first so our own close does not
+  /// report back through [onPairClosed].
   Future<void> _disconnectPair() async {
     _pairAttached = false;
-    await _pairSubscription?.cancel();
+    final subscription = _pairSubscription;
+    final channel = _pairChannel;
     _pairSubscription = null;
-    await _pairChannel?.sink.close();
     _pairChannel = null;
+    subscription?.onDone(null);
+    subscription?.onError((Object _) {});
+    try {
+      await channel?.sink
+          .close(ws_status.normalClosure)
+          .timeout(const Duration(seconds: 5));
+    } catch (e) {
+      moatLog('DrawbridgeService: pair WS close: $e');
+    }
+    await subscription?.cancel();
   }
 
   // -- Tag watching ----------------------------------------------------------

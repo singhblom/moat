@@ -394,27 +394,39 @@ class PairingService {
   }
 
   void _handlePairFrame(Uint8List data) {
-    _frameQueue = _frameQueue.then((_) => _handleFrameReceived(data)).catchError((Object e) {
-      moatLog('PairingService: frame processing error: $e');
+    _enqueue(() => _handleFrameReceived(data));
+  }
+
+  /// Queued behind frames, so a close never overtakes the frames the peer
+  /// sent before it — the last of which is usually its `Fin`.
+  void _handlePairClosed(String reason) {
+    moatLog('PairingService: pair WS closed: $reason');
+    final gen = _generation;
+    _enqueue(() async {
+      // The transport this close belonged to has already been released.
+      if (_generation != gen) return;
+      // The pair WS dropped before `SyncOutput.complete`, the only other
+      // place that hands the callbacks back to `SyncService`/`DeviceRingService`.
+      // Without this we'd hold all four slots forever, silently swallowing
+      // every later reconnect-sync frame.
+      final session = _session;
+      if (session == null) return;
+      // Cancel a still-in-flight session so `state` reports why instead of
+      // leaving it stuck forever in whatever phase it was in — a no-op
+      // (ignored) if it had already reached a terminal state.
+      try {
+        session.cancel();
+      } catch (_) {}
+      await _releaseTransport();
+      _syncState();
     });
   }
 
-  void _handlePairClosed(String reason) {
-    moatLog('PairingService: pair WS closed: $reason');
-    // The pair WS dropped before `SyncOutput.complete`, the only other
-    // place that hands the callbacks back to `SyncService`/`DeviceRingService`.
-    // Without this we'd hold all four slots forever, silently swallowing
-    // every later reconnect-sync frame.
-    final session = _session;
-    if (session == null) return;
-    // Cancel a still-in-flight session so `state` reports why instead of
-    // leaving it stuck forever in whatever phase it was in — a no-op
-    // (ignored) if it had already reached a terminal state.
-    try {
-      session.cancel();
-    } catch (_) {}
-    unawaited(_releaseTransport());
-    _syncState();
+  /// Run pair-channel work one item at a time, in arrival order.
+  void _enqueue(Future<void> Function() work) {
+    _frameQueue = _frameQueue.then((_) => work()).catchError((Object e) {
+      moatLog('PairingService: frame processing error: $e');
+    });
   }
 
   // ── Enroll / Admit / Done ────────────────────────────────────────────────

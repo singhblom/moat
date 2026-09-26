@@ -5,9 +5,13 @@ import 'package:moat_dart_common/moat_dart_common.dart';
 /// supplies the words. The Rust half is tested in
 /// `crates/moat-cli/src/ui.rs`, and these cases mirror it one for one —
 /// the two runtimes should not disagree about what a finished sync says.
-SyncTallyDto tally(int messages, int conversations) => SyncTallyDto(
+SyncTallyDto tally(int messages, int conversations,
+        {int sentMessages = 0, int sentConversations = 0}) =>
+    SyncTallyDto(
       messages: BigInt.from(messages),
       conversations: BigInt.from(conversations),
+      sentMessages: BigInt.from(sentMessages),
+      sentConversations: BigInt.from(sentConversations),
     );
 
 void main() {
@@ -30,6 +34,22 @@ void main() {
       expect(
         syncCompleteText(tally(1, 1), 'Laptop'),
         'Received 1 message across 1 conversation from Laptop.',
+      );
+    });
+
+    test('a donor reports what it sent', () {
+      expect(
+        syncCompleteText(
+            tally(0, 0, sentMessages: 424, sentConversations: 1), 'bob3'),
+        'Sent 424 messages across 1 conversation to bob3.',
+      );
+    });
+
+    test('a two-way transfer reports both directions', () {
+      expect(
+        syncCompleteText(
+            tally(3, 1, sentMessages: 1, sentConversations: 1), 'Laptop'),
+        'Received 3 messages across 1 conversation from Laptop, and sent 1 message.',
       );
     });
 

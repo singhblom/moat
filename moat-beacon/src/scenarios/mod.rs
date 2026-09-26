@@ -45,6 +45,7 @@ pub mod sync_request_history_rd;
 pub mod three_device_pairing;
 pub mod three_device_pairing_history_sync;
 pub mod three_device_pairing_history_sync_dr;
+pub mod three_device_pairing_history_sync_rd;
 pub mod three_party_chat;
 pub mod three_party_push;
 pub mod three_party_restart;
@@ -868,6 +869,13 @@ pub static SCENARIOS: &[Scenario] = &[
         name: "three-device-pairing-history-sync-dr",
         description: "Same as three-device-pairing-history-sync, but D2/D3 (new devices) run Dart, D1 stays Rust",
         run_fn: three_device_pairing_history_sync_dr::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "three-device-pairing-history-sync-rd",
+        description: "Same as three-device-pairing-history-sync, but D1 (the history donor) runs Dart, D2/D3 stay Rust",
+        run_fn: three_device_pairing_history_sync_rd::run_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
