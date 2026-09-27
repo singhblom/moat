@@ -77,16 +77,19 @@ impl PairingPayload {
     /// Decode from the raw wire form. Rejects a bad version byte or a
     /// length other than [`PAIRING_PAYLOAD_LEN`].
     pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let Some(&version) = bytes.first() else {
+            return Err(Error::PairingProtocol("pairing code is empty".to_string()));
+        };
+        if version != PAIRING_PAYLOAD_VERSION {
+            return Err(Error::PairingProtocol(format!(
+                "pairing code is version {version:#04x}, this build speaks \
+                 {PAIRING_PAYLOAD_VERSION:#04x} — update Moat on both devices"
+            )));
+        }
         if bytes.len() != PAIRING_PAYLOAD_LEN {
             return Err(Error::PairingProtocol(format!(
                 "pairing payload must be {PAIRING_PAYLOAD_LEN} bytes, got {}",
                 bytes.len()
-            )));
-        }
-        if bytes[0] != PAIRING_PAYLOAD_VERSION {
-            return Err(Error::PairingProtocol(format!(
-                "unsupported pairing payload version {:#04x}, expected {:#04x}",
-                bytes[0], PAIRING_PAYLOAD_VERSION
             )));
         }
 
