@@ -42,5 +42,18 @@ String syncCompleteText(ffi.SyncTallyDto tally, String? deviceName) {
   };
 }
 
+/// A running transfer, naming each direction that is moving something —
+/// the Dart half of `sync_progress_text` in moat-cli's `ui.rs`.
+String syncProgressText(ffi.SyncProgressDto p) {
+  if (p is! ffi.SyncProgressDto_Transferring) return 'Preparing history sync…';
+  final parts = <String>[
+    if (p.receiveTotal > BigInt.zero) '${p.received} of ${p.receiveTotal} received',
+    if (p.sendTotal > BigInt.zero) '${p.sent} of ${p.sendTotal} sent',
+  ];
+  return parts.isEmpty
+      ? 'Syncing history…'
+      : 'Syncing history: ${parts.join(', ')}';
+}
+
 String _plural(BigInt n, String one, String many) =>
     '$n ${n == BigInt.one ? one : many}';
