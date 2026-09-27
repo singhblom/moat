@@ -17,12 +17,7 @@ class PairedSyncSetup {
 }
 
 /// Build a fresh `SyncSessionHandle` and call `onPaired` for it, from
-/// local keystore/digest state. Shared by [SyncService] (established-
-/// devices reconnect-sync, ring-MLS wire encryption) and [PairingService]
-/// (pairing-driven onboarding sync, pairing-AEAD wire encryption) — only
-/// the wire encryption differs between the two callers, which is handled
-/// by whatever encrypts/decrypts the `SyncOutputDto.send` bytes and feeds
-/// `onMessage`, not by this shared setup step.
+/// local keystore/digest state.
 ///
 /// Dart mirror of `App::build_paired_sync_session` in
 /// `crates/moat-cli/src/app.rs`.
@@ -95,10 +90,8 @@ Future<void> registerSyncedConversation(
   ));
 }
 
-/// Convert and persist a `SyncOutput.store` batch. Shared by [SyncService]
-/// and [PairingService] — the `store` arm's logic doesn't depend on which
-/// wire encryption produced the batch. Returns the number of messages
-/// stored.
+/// Convert and persist a `SyncOutput.store` batch. Returns the number of
+/// messages stored.
 Future<int> storeSyncOutputMessages(
   MessageStorage messageStorage,
   String convId,

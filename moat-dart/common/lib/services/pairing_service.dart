@@ -5,12 +5,10 @@ import 'dart:typed_data';
 import '../rust/api/simple.dart' as ffi;
 import '../utils/value_listenable.dart';
 import 'auth_service.dart';
-import 'conversations_service.dart';
 import 'debug_log.dart';
 import 'device_ring_service.dart';
 import 'drawbridge_service.dart';
-import 'message_storage.dart';
-import 'paired_sync_builder.dart';
+import 'sync_channel.dart';
 import 'sync_service.dart';
 
 /// URI scheme prefix for the QR form of a pairing code — matches
@@ -20,14 +18,13 @@ import 'sync_service.dart';
 const _pairingUriScheme = 'moat-pair:';
 
 /// Owns a [ffi.PairingSessionHandle] and drives the full live-pairing
-/// exchange (Enroll/Admit/Done) plus the post-Done history-sync handoff,
-/// entirely under the pairing AEAD.
+/// exchange (Enroll/Admit), then hands the history transfer that
+/// follows to [SyncService], still under the pairing AEAD.
 ///
 /// Dart-side analogue of the pairing interpreter in
 /// `crates/moat-cli/src/app.rs` (`start_pairing_enroll`,
 /// `handle_pairing_frame`, `approve_pending_pairing`,
-/// `interpret_pairing_commands`, `start_pairing_sync_session`,
-/// `process_pairing_sync_outputs`, `process_pairing_sync_frame`).
+/// `interpret_pairing_commands`, `start_pairing_sync_session`).
 ///
 /// [state] is the single source of truth for pairing progress — screens
 /// render off it rather than caching the code, prompt or a done flag
@@ -46,15 +43,12 @@ class PairingService {
   final DrawbridgeService _drawbridge;
   final DeviceRingService _ring;
   final SyncService _sync;
-  final ConversationsService _convService;
-  final MessageStorage _messageStorage;
 
   ffi.PairingSessionHandle? _session;
 
   /// `true` for the new (joining) device, `false` for the existing
   /// (approving) device. Tells [_handlePairConnected] whether to call
-  /// `startEnroll`, and picks the right directional AEAD key once in the
-  /// post-Done sync phase.
+  /// `startEnroll`.
   bool? _isNewDevice;
 
   final SimpleValueNotifier<ffi.PairingUiStateDto> _state =
@@ -66,14 +60,6 @@ class PairingService {
   /// `PairingSession::ui_state`'s retention of a terminal outcome).
   ValueListenable<ffi.PairingUiStateDto> get state => _state;
 
-  final SimpleValueNotifier<bool> _historyReady = SimpleValueNotifier(false);
-
-  /// Fires `true` once the post-pairing history sync has completed and
-  /// the ring tick has processed any pending `UserConvWelcome`s. UI
-  /// screens should wait for this before navigating away, so the user
-  /// lands on a populated conversations list.
-  ValueListenable<bool> get historyReady => _historyReady;
-
   /// Refresh [state] from the live session — call after every operation
   /// that may have changed it (construction, `startEnroll`/`onFrameReceived`/
   /// `approve`/`reject`/`cancel`, success or failure alike).
@@ -81,15 +67,9 @@ class PairingService {
     _state.value = _session?.uiState() ?? const ffi.PairingUiStateDto.idle();
   }
 
-  // ── Post-Done pairing-AEAD sync phase state ──────────────────────────────
-  // Set by `_startPairingSyncSession`; cleared on `SyncOutput.complete`,
-  // on abort, or at the start of a new pairing — a second/third pairing
-  // must not inherit a prior pairing's still-set sync keys.
-  Uint8List? _pairingSyncKeyNewToOld;
-  Uint8List? _pairingSyncKeyOldToNew;
-  BigInt _pairingSyncSendCounter = BigInt.zero;
-  BigInt _pairingSyncRecvCounter = BigInt.zero;
-  ffi.SyncSessionHandle? _pairingSyncSession;
+  /// The post-Done history transfer [SyncService] is running for us, if
+  /// any. While set, pair-channel frames and the close are forwarded to it.
+  PairingSyncChannel? _transfer;
 
   /// Serializes pair-WS frame processing. Unlike `moat-cli`'s single
   /// event-loop actor (which handles one `BgEvent` at a time by
@@ -100,8 +80,8 @@ class PairingService {
   /// have their processing interleaved: the second frame's `_handleFrameReceived`
   /// can run its guard checks *before* the first frame's slower awaits
   /// (persisting ring state, populating tags) have caught the session up to
-  /// `isDone()`/`_pairingSyncKeyNewToOld`, misrouting it into the
-  /// PairingMsg decoder and aborting the session.
+  /// `isDone()`/[_transfer], misrouting it into the PairingMsg decoder and
+  /// aborting the session.
   Future<void> _frameQueue = Future.value();
 
   /// Bumped by [_supersedePreviousPairing] and [_releaseTransport]. Async
@@ -117,14 +97,10 @@ class PairingService {
     required DrawbridgeService drawbridge,
     required DeviceRingService ring,
     required SyncService sync,
-    required ConversationsService conversationsService,
-    required MessageStorage messageStorage,
   })  : _auth = auth,
         _drawbridge = drawbridge,
         _ring = ring,
-        _sync = sync,
-        _convService = conversationsService,
-        _messageStorage = messageStorage;
+        _sync = sync;
 
   /// The ring this session ended up in, once known.
   Uint8List? get ringId => _session?.ringId();
@@ -188,7 +164,16 @@ class PairingService {
   /// Throws on any failure — precondition guard or the `approve()` call
   /// itself — so `POST /pair/approve` gets a real signal. UI callers can
   /// ignore it: `state` already reflects the outcome either way.
-  Future<void> approvePending() async {
+  ///
+  /// Runs in the frame queue: the new device's sync `Hello` can arrive
+  /// while this is still publishing, and must wait for the handoff.
+  Future<void> approvePending() {
+    final approved = _frameQueue.then((_) => _approvePending());
+    _frameQueue = approved.catchError((Object _) {});
+    return approved;
+  }
+
+  Future<void> _approvePending() async {
     final gen = _generation;
     final session = _session;
     if (session == null) {
@@ -343,25 +328,18 @@ class PairingService {
     _sync.reclaimPairCallbacks();
   }
 
-  /// A previous pairing's pair WS / sync state (if any) is now
-  /// superseded — a device only ever drives one pairing exchange at a
-  /// time, and leaving the old pairing-sync keys set would route this new
-  /// pairing's incoming frames through the *old* AEAD channel's dispatch,
-  /// misinterpreting them (see `_handleFrameReceived`'s dispatch note).
-  /// Unlike [_releaseTransport], this also drops `_session` itself —
-  /// starting a *new* pairing always supersedes whatever came before,
-  /// regardless of how it ended.
+  /// Supersede whatever pairing came before, however it ended: a device
+  /// drives one pairing at a time, and a leftover transfer would misread
+  /// the new pairing's frames. Unlike [_releaseTransport], this also drops
+  /// `_session` itself.
   void _supersedePreviousPairing() {
     _generation++;
     _drawbridge.clearPair();
     _drawbridge.clearPendingPairRendezvous();
-    _pairingSyncSession = null;
-    _pairingSyncKeyNewToOld = null;
-    _pairingSyncKeyOldToNew = null;
+    _dropTransfer();
     _frameQueue = Future.value();
     _session = null;
     _isNewDevice = null;
-    _historyReady.value = false;
     _syncState();
   }
 
@@ -371,9 +349,7 @@ class PairingService {
   /// `Failed { reason }`) is what `state` reports.
   Future<void> _releaseTransport() async {
     _generation++;
-    _pairingSyncSession = null;
-    _pairingSyncKeyNewToOld = null;
-    _pairingSyncKeyOldToNew = null;
+    _dropTransfer();
     _frameQueue = Future.value();
     await _drawbridge.clearPair();
     _drawbridge.clearPendingPairRendezvous();
@@ -405,10 +381,13 @@ class PairingService {
     _enqueue(() async {
       // The transport this close belonged to has already been released.
       if (_generation != gen) return;
-      // The pair WS dropped before `SyncOutput.complete`, the only other
-      // place that hands the callbacks back to `SyncService`/`DeviceRingService`.
-      // Without this we'd hold all four slots forever, silently swallowing
-      // every later reconnect-sync frame.
+      final transfer = _transfer;
+      if (transfer != null) {
+        _sync.receiveClose(transfer, reason);
+        return;
+      }
+      // Hand the callbacks back, or every later sync's frames would be
+      // swallowed here.
       final session = _session;
       if (session == null) return;
       // Cancel a still-in-flight session so `state` reports why instead of
@@ -429,7 +408,7 @@ class PairingService {
     });
   }
 
-  // ── Enroll / Admit / Done ────────────────────────────────────────────────
+  // ── Enroll / Admit ───────────────────────────────────────────────────────
 
   Future<void> _startEnrollFrame() async {
     final gen = _generation;
@@ -478,13 +457,11 @@ class PairingService {
   }
 
   Future<void> _handleFrameReceived(Uint8List data) async {
-    // Three possible occupants of the pair channel: still mid
-    // Enroll/Admit/Done (`_session`, not yet done), past Done and running
-    // history sync under the *same* pairing AEAD (`_pairingSyncKeyNewToOld`
-    // set), or — not applicable here, since PairingService only owns
-    // these callbacks while a pairing is actually in flight.
-    if (_pairingSyncKeyNewToOld != null) {
-      await _processPairingSyncFrame(data);
+    // Past Done, the channel carries the history transfer. Forwarded from
+    // inside the queue, so it reaches `SyncService` in arrival order.
+    final transfer = _transfer;
+    if (transfer != null) {
+      _sync.receiveFrame(transfer, data);
       return;
     }
     final gen = _generation;
@@ -518,14 +495,9 @@ class PairingService {
   }
 
   /// Mirrors `interpret_pairing_commands` in `crates/moat-cli/src/app.rs`.
-  /// `startSync` is deferred to the end of the batch rather than acted on
-  /// where it appears: it sends a sync `Hello` at the *next* pairing-AEAD
-  /// counter, so any `sendFrame` later in the same batch (e.g. the new
-  /// device's `Done`) must reach the wire first, or the peer sees frames
-  /// out of counter order. `surfaceApprovalPrompt` is a no-op, same as
-  /// moat-cli: `state`'s `AwaitingApproval` already carries deviceName/did.
+  /// `surfaceApprovalPrompt` is a no-op, same as moat-cli: `state`'s
+  /// `AwaitingApproval` already carries deviceName/did.
   Future<void> _interpretCommands(List<ffi.PairingCommandDto> cmds, int gen) async {
-    var startSync = false;
     for (final cmd in cmds) {
       if (_generation != gen) return;
       await cmd.when(
@@ -562,187 +534,58 @@ class PairingService {
             _ring.upsertSiblingStealth(s.deviceId, s.stealthPubkey);
           }
         },
-        startSync: () async {
-          startSync = true;
-        },
+        startSync: () async => _startPairingSyncSession(),
       );
     }
     if (_generation == gen) {
       _syncState();
     }
-    if (startSync && _generation == gen) {
-      await _startPairingSyncSession(gen);
-    } else if (_generation == gen &&
-        _state.value is ffi.PairingUiStateDto_Done) {
-      _historyReady.value = true;
-    }
   }
 
-  // ── Post-Done history sync, under the pairing AEAD ──────────────────────
+  // ── Post-Done history transfer, under the pairing AEAD ──────────────────
   //
-  // Deliberately does not reuse `SyncService`'s ring-MLS transport: per
-  // qr-pairing.md §3.2 the pairing AEAD keeps running for the whole
-  // session rather than re-keying to ring MLS (the new device in
-  // particular has no ring-MLS traffic history to fall back on for this
-  // exchange).
+  // Per qr-pairing.md §3.2 the pairing AEAD keeps running for the whole
+  // session rather than re-keying to ring MLS: the new device has no
+  // ring-MLS traffic history to fall back on for this exchange.
 
-  Future<void> _startPairingSyncSession(int gen) async {
+  void _startPairingSyncSession() {
+    // `startSync` only follows a done session, which has both.
     final session = _session;
-    final moatSession = _auth.moatSession;
-    if (session == null || moatSession == null) {
-      _historyReady.value = true;
-      return;
-    }
+    final ringId = session?.ringId();
+    final handle = session?.transferChannel();
+    if (ringId == null || handle == null) return;
 
-    final keyNewToOld = session.channelKeyNewToOld();
-    final keyOldToNew = session.channelKeyOldToNew();
-    final sendCounter = session.nextSendCounter();
-    final recvCounter = session.nextRecvCounter();
-
-    final ringId = session.ringId();
-    if (ringId == null) {
-      _historyReady.value = true;
-      return;
-    }
-    final ringEpoch = (await moatSession.getGroupEpoch(groupId: ringId)) ?? BigInt.zero;
-    if (_generation != gen) return;
-
-    final setup = await buildPairedSyncSession(
-      session: moatSession,
-      convService: _convService,
-      messageStorage: _messageStorage,
-      ringEpoch: ringEpoch,
+    final channel = PairingSyncChannel(handle);
+    _transfer = channel;
+    _sync.runTransfer(
+      channel,
+      ringId: ringId,
+      onComplete: () async {
+        if (_transfer != channel) return;
+        moatLog('PairingService: pairing-sync complete — closing pair WS');
+        _transfer = null;
+        await _releaseTransport();
+        // Fan-out Welcomes may already be waiting for the new device.
+        await _ring.tick();
+      },
+      onAbort: (reason) async {
+        if (_transfer != channel) return;
+        moatLog('PairingService: pairing-sync aborted: $reason');
+        _transfer = null;
+        _session?.transferFailed(reason: reason);
+        await _releaseTransport();
+        _syncState();
+      },
     );
-    if (_generation != gen) return;
-
-    // Only committed to shared state once we know this generation is
-    // still current — an abort/supersede mid-setup must not leave these
-    // keys set for a session that's no longer the live one.
-    _pairingSyncKeyNewToOld = keyNewToOld;
-    _pairingSyncKeyOldToNew = keyOldToNew;
-    _pairingSyncSendCounter = sendCounter;
-    _pairingSyncRecvCounter = recvCounter;
-    _pairingSyncSession = setup.session;
-    await _processPairingSyncOutputs(setup.outputs, gen);
-  }
-
-  Future<void> _processPairingSyncOutputs(List<ffi.SyncOutputDto> outputs, int gen) async {
-    final did = _auth.did;
-    for (final output in outputs) {
-      if (_generation != gen) return;
-      await output.when(
-        send: (bytes) async {
-          final key = _isNewDevice == true ? _pairingSyncKeyNewToOld : _pairingSyncKeyOldToNew;
-          if (key == null) return;
-          final counter = _pairingSyncSendCounter;
-          try {
-            final ciphertext = await ffi.pairingSealFrame(
-              key: key,
-              counter: counter,
-              plaintext: bytes,
-            );
-            if (_generation != gen) return;
-            _pairingSyncSendCounter = counter + BigInt.one;
-            _drawbridge.sendPairBinary(ciphertext);
-          } catch (e) {
-            moatLog('PairingService: pairing_seal_frame failed: $e');
-          }
-        },
-        store: (convId, messages) async {
-          if (did == null) return;
-          await registerSyncedConversation(_convService, convId, messages, did);
-          final count =
-              await storeSyncOutputMessages(_messageStorage, convId, messages, did);
-          moatLog('PairingService: pairing-sync stored $count message(s) for $convId');
-        },
-      );
-    }
-
-    // As in `SyncService`: tear down only once every output in the batch
-    // has been applied, never as one of them.
-    final isDone = await _pairingSyncSession?.isDone() ?? false;
-    // ignore: avoid_print
-    print('[moat] PairingService: pairing-sync isDone=$isDone gen=$gen/_generation=$_generation');
-    if (gen == _generation && isDone) {
-      // ignore: avoid_print
-      print('[moat] PairingService: pairing-sync complete — closing pair WS, will tick');
-      moatLog('PairingService: pairing-sync complete — closing pair WS');
-      _pairingSyncSession = null;
-      _pairingSyncKeyNewToOld = null;
-      _pairingSyncKeyOldToNew = null;
-      await _releaseTransport();
-      await _ring.tick();
-      // ignore: avoid_print
-      print('[moat] PairingService: post-sync tick done, historyReady=true');
-      _historyReady.value = true;
-    }
-  }
-
-  /// Open and dispatch an incoming binary frame under the pairing AEAD.
-  ///
-  /// The recv counter is the AEAD nonce for every frame after this one —
-  /// once a frame has genuinely been consumed off the wire, there is no
-  /// safe way to "skip" it: the peer's next frame was sealed expecting the
-  /// counter to advance, so a frame we can't process is fatal to the rest
-  /// of the session, not just to itself. Every early return below that
-  /// happens *before* the counter would advance is a safe drop (the peer's
-  /// send counter and ours are still in lockstep); every failure *after*
-  /// [ffi.pairingOpenFrame] succeeds is unrecoverable and aborts the
-  /// transport instead of returning silently — the pairing itself already
-  /// reached `Done` at this point (this is the post-Done sync phase), so
-  /// unlike the other catch blocks here there's no session state left to
-  /// preserve, only the sync/transport state to tear down.
-  Future<void> _processPairingSyncFrame(Uint8List data) async {
-    final gen = _generation;
-    final key = _isNewDevice == true ? _pairingSyncKeyOldToNew : _pairingSyncKeyNewToOld;
-    final did = _auth.did;
-    final syncSession = _pairingSyncSession;
-    final moatSession = _auth.moatSession;
-    if (key == null || did == null || syncSession == null || moatSession == null) {
-      return;
-    }
-
-    Uint8List plaintext;
-    try {
-      plaintext = await ffi.pairingOpenFrame(
-        key: key,
-        counter: _pairingSyncRecvCounter,
-        ciphertext: data,
-      );
-    } catch (e) {
-      moatLog('PairingService: pairing-sync failed to open frame: $e — aborting '
-          '(the recv counter cannot safely skip a frame that failed to open)');
-      await _releaseTransport();
-      return;
-    }
-    if (_generation != gen) return;
-    _pairingSyncRecvCounter += BigInt.one;
-
-    List<ffi.SyncOutputDto> outputs;
-    try {
-      outputs = await syncSession.onMessage(msgBytes: plaintext);
-    } catch (e) {
-      // The new device's advisory `PairingMsg::Done` (a channel-teardown
-      // courtesy, not load-bearing for either side's own completion) can
-      // still be in flight when the peer locally transitions to sync mode:
-      // both sides do so as soon as *their own* processing finishes,
-      // independent of what the other side has sent or received yet. A
-      // `Done` that arrives after that transition opens fine under the
-      // pairing AEAD (same channel, next counter) but isn't a SyncMsg —
-      // recognize and ignore it rather than logging a spurious decode error.
-      if (ffi.pairingFrameIsDone(plaintext: plaintext)) {
-        moatLog('PairingService: pairing-sync received the pairing session\'s Done courtesy');
-        return;
-      }
-      moatLog('PairingService: pairing-sync onMessage failed: $e — aborting');
-      await _releaseTransport();
-      return;
-    }
-    if (_generation != gen) return;
-    await _processPairingSyncOutputs(outputs, gen);
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
+
+  void _dropTransfer() {
+    final transfer = _transfer;
+    _transfer = null;
+    if (transfer != null) _sync.cancelTransfer(transfer);
+  }
 
   ffi.CredentialDto _ownCredential(ffi.MoatSessionHandle moatSession) {
     return ffi.CredentialDto(

@@ -5404,6 +5404,401 @@ abstract class SyncOutputDto_Store extends SyncOutputDto {
 }
 
 /// @nodoc
+mixin _$SyncProgressDto {
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() starting,
+    required TResult Function(BigInt received, BigInt receiveTotal, BigInt sent,
+            BigInt sendTotal, double fraction)
+        transferring,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? starting,
+    TResult? Function(BigInt received, BigInt receiveTotal, BigInt sent,
+            BigInt sendTotal, double fraction)?
+        transferring,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? starting,
+    TResult Function(BigInt received, BigInt receiveTotal, BigInt sent,
+            BigInt sendTotal, double fraction)?
+        transferring,
+    required TResult orElse(),
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(SyncProgressDto_Starting value) starting,
+    required TResult Function(SyncProgressDto_Transferring value) transferring,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(SyncProgressDto_Starting value)? starting,
+    TResult? Function(SyncProgressDto_Transferring value)? transferring,
+  }) =>
+      throw _privateConstructorUsedError;
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(SyncProgressDto_Starting value)? starting,
+    TResult Function(SyncProgressDto_Transferring value)? transferring,
+    required TResult orElse(),
+  }) =>
+      throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class $SyncProgressDtoCopyWith<$Res> {
+  factory $SyncProgressDtoCopyWith(
+          SyncProgressDto value, $Res Function(SyncProgressDto) then) =
+      _$SyncProgressDtoCopyWithImpl<$Res, SyncProgressDto>;
+}
+
+/// @nodoc
+class _$SyncProgressDtoCopyWithImpl<$Res, $Val extends SyncProgressDto>
+    implements $SyncProgressDtoCopyWith<$Res> {
+  _$SyncProgressDtoCopyWithImpl(this._value, this._then);
+
+  // ignore: unused_field
+  final $Val _value;
+  // ignore: unused_field
+  final $Res Function($Val) _then;
+
+  /// Create a copy of SyncProgressDto
+  /// with the given fields replaced by the non-null parameter values.
+}
+
+/// @nodoc
+abstract class _$$SyncProgressDto_StartingImplCopyWith<$Res> {
+  factory _$$SyncProgressDto_StartingImplCopyWith(
+          _$SyncProgressDto_StartingImpl value,
+          $Res Function(_$SyncProgressDto_StartingImpl) then) =
+      __$$SyncProgressDto_StartingImplCopyWithImpl<$Res>;
+}
+
+/// @nodoc
+class __$$SyncProgressDto_StartingImplCopyWithImpl<$Res>
+    extends _$SyncProgressDtoCopyWithImpl<$Res, _$SyncProgressDto_StartingImpl>
+    implements _$$SyncProgressDto_StartingImplCopyWith<$Res> {
+  __$$SyncProgressDto_StartingImplCopyWithImpl(
+      _$SyncProgressDto_StartingImpl _value,
+      $Res Function(_$SyncProgressDto_StartingImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of SyncProgressDto
+  /// with the given fields replaced by the non-null parameter values.
+}
+
+/// @nodoc
+
+class _$SyncProgressDto_StartingImpl extends SyncProgressDto_Starting {
+  const _$SyncProgressDto_StartingImpl() : super._();
+
+  @override
+  String toString() {
+    return 'SyncProgressDto.starting()';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$SyncProgressDto_StartingImpl);
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() starting,
+    required TResult Function(BigInt received, BigInt receiveTotal, BigInt sent,
+            BigInt sendTotal, double fraction)
+        transferring,
+  }) {
+    return starting();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? starting,
+    TResult? Function(BigInt received, BigInt receiveTotal, BigInt sent,
+            BigInt sendTotal, double fraction)?
+        transferring,
+  }) {
+    return starting?.call();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? starting,
+    TResult Function(BigInt received, BigInt receiveTotal, BigInt sent,
+            BigInt sendTotal, double fraction)?
+        transferring,
+    required TResult orElse(),
+  }) {
+    if (starting != null) {
+      return starting();
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(SyncProgressDto_Starting value) starting,
+    required TResult Function(SyncProgressDto_Transferring value) transferring,
+  }) {
+    return starting(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(SyncProgressDto_Starting value)? starting,
+    TResult? Function(SyncProgressDto_Transferring value)? transferring,
+  }) {
+    return starting?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(SyncProgressDto_Starting value)? starting,
+    TResult Function(SyncProgressDto_Transferring value)? transferring,
+    required TResult orElse(),
+  }) {
+    if (starting != null) {
+      return starting(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class SyncProgressDto_Starting extends SyncProgressDto {
+  const factory SyncProgressDto_Starting() = _$SyncProgressDto_StartingImpl;
+  const SyncProgressDto_Starting._() : super._();
+}
+
+/// @nodoc
+abstract class _$$SyncProgressDto_TransferringImplCopyWith<$Res> {
+  factory _$$SyncProgressDto_TransferringImplCopyWith(
+          _$SyncProgressDto_TransferringImpl value,
+          $Res Function(_$SyncProgressDto_TransferringImpl) then) =
+      __$$SyncProgressDto_TransferringImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call(
+      {BigInt received,
+      BigInt receiveTotal,
+      BigInt sent,
+      BigInt sendTotal,
+      double fraction});
+}
+
+/// @nodoc
+class __$$SyncProgressDto_TransferringImplCopyWithImpl<$Res>
+    extends _$SyncProgressDtoCopyWithImpl<$Res,
+        _$SyncProgressDto_TransferringImpl>
+    implements _$$SyncProgressDto_TransferringImplCopyWith<$Res> {
+  __$$SyncProgressDto_TransferringImplCopyWithImpl(
+      _$SyncProgressDto_TransferringImpl _value,
+      $Res Function(_$SyncProgressDto_TransferringImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of SyncProgressDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? received = null,
+    Object? receiveTotal = null,
+    Object? sent = null,
+    Object? sendTotal = null,
+    Object? fraction = null,
+  }) {
+    return _then(_$SyncProgressDto_TransferringImpl(
+      received: null == received
+          ? _value.received
+          : received // ignore: cast_nullable_to_non_nullable
+              as BigInt,
+      receiveTotal: null == receiveTotal
+          ? _value.receiveTotal
+          : receiveTotal // ignore: cast_nullable_to_non_nullable
+              as BigInt,
+      sent: null == sent
+          ? _value.sent
+          : sent // ignore: cast_nullable_to_non_nullable
+              as BigInt,
+      sendTotal: null == sendTotal
+          ? _value.sendTotal
+          : sendTotal // ignore: cast_nullable_to_non_nullable
+              as BigInt,
+      fraction: null == fraction
+          ? _value.fraction
+          : fraction // ignore: cast_nullable_to_non_nullable
+              as double,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$SyncProgressDto_TransferringImpl extends SyncProgressDto_Transferring {
+  const _$SyncProgressDto_TransferringImpl(
+      {required this.received,
+      required this.receiveTotal,
+      required this.sent,
+      required this.sendTotal,
+      required this.fraction})
+      : super._();
+
+  @override
+  final BigInt received;
+  @override
+  final BigInt receiveTotal;
+  @override
+  final BigInt sent;
+  @override
+  final BigInt sendTotal;
+  @override
+  final double fraction;
+
+  @override
+  String toString() {
+    return 'SyncProgressDto.transferring(received: $received, receiveTotal: $receiveTotal, sent: $sent, sendTotal: $sendTotal, fraction: $fraction)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$SyncProgressDto_TransferringImpl &&
+            (identical(other.received, received) ||
+                other.received == received) &&
+            (identical(other.receiveTotal, receiveTotal) ||
+                other.receiveTotal == receiveTotal) &&
+            (identical(other.sent, sent) || other.sent == sent) &&
+            (identical(other.sendTotal, sendTotal) ||
+                other.sendTotal == sendTotal) &&
+            (identical(other.fraction, fraction) ||
+                other.fraction == fraction));
+  }
+
+  @override
+  int get hashCode => Object.hash(
+      runtimeType, received, receiveTotal, sent, sendTotal, fraction);
+
+  /// Create a copy of SyncProgressDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$SyncProgressDto_TransferringImplCopyWith<
+          _$SyncProgressDto_TransferringImpl>
+      get copyWith => __$$SyncProgressDto_TransferringImplCopyWithImpl<
+          _$SyncProgressDto_TransferringImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() starting,
+    required TResult Function(BigInt received, BigInt receiveTotal, BigInt sent,
+            BigInt sendTotal, double fraction)
+        transferring,
+  }) {
+    return transferring(received, receiveTotal, sent, sendTotal, fraction);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? starting,
+    TResult? Function(BigInt received, BigInt receiveTotal, BigInt sent,
+            BigInt sendTotal, double fraction)?
+        transferring,
+  }) {
+    return transferring?.call(
+        received, receiveTotal, sent, sendTotal, fraction);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? starting,
+    TResult Function(BigInt received, BigInt receiveTotal, BigInt sent,
+            BigInt sendTotal, double fraction)?
+        transferring,
+    required TResult orElse(),
+  }) {
+    if (transferring != null) {
+      return transferring(received, receiveTotal, sent, sendTotal, fraction);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(SyncProgressDto_Starting value) starting,
+    required TResult Function(SyncProgressDto_Transferring value) transferring,
+  }) {
+    return transferring(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(SyncProgressDto_Starting value)? starting,
+    TResult? Function(SyncProgressDto_Transferring value)? transferring,
+  }) {
+    return transferring?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(SyncProgressDto_Starting value)? starting,
+    TResult Function(SyncProgressDto_Transferring value)? transferring,
+    required TResult orElse(),
+  }) {
+    if (transferring != null) {
+      return transferring(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class SyncProgressDto_Transferring extends SyncProgressDto {
+  const factory SyncProgressDto_Transferring(
+      {required final BigInt received,
+      required final BigInt receiveTotal,
+      required final BigInt sent,
+      required final BigInt sendTotal,
+      required final double fraction}) = _$SyncProgressDto_TransferringImpl;
+  const SyncProgressDto_Transferring._() : super._();
+
+  BigInt get received;
+  BigInt get receiveTotal;
+  BigInt get sent;
+  BigInt get sendTotal;
+  double get fraction;
+
+  /// Create a copy of SyncProgressDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$SyncProgressDto_TransferringImplCopyWith<
+          _$SyncProgressDto_TransferringImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
 mixin _$SyncRequestUiStateDto {
   @optionalTypeArgs
   TResult when<TResult extends Object?>({

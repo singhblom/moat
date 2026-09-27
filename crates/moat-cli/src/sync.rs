@@ -7,11 +7,29 @@
 //! `crate::keystore` and therefore can't live in moat-core.
 
 pub use moat_core::sync::{
-    decode_sync_msg, encode_sync_msg, ConvState, SyncMessage, SyncOutput, SyncReaction,
+    decode_sync_msg, encode_sync_msg, ConvState, SyncMessage, SyncMsg, SyncOutput, SyncReaction,
     SyncSession,
 };
 
 use crate::keystore::{StoredMessage, StoredReaction};
+
+/// How a transfer's frames are sealed and opened on the pair WS.
+pub enum SyncChannel {
+    /// Ring MLS, between established devices.
+    Ring { ring_id: Vec<u8>, key_bundle: Vec<u8> },
+    /// The pairing AEAD the pairing exchange ran on, so the new device
+    /// needs no ring-MLS history for its first transfer.
+    Pairing(moat_core::PairingFrameChannel),
+}
+
+/// The history transfer running on the pair WS.
+pub struct SyncTransfer {
+    pub session: SyncSession,
+    pub channel: SyncChannel,
+    /// The peer, as MLS named it on the frames it sent — from the leaf
+    /// credential, not the payload. Ring channel only.
+    pub peer_name: Option<String>,
+}
 
 /// Convert a moat-cli `StoredMessage` into a wire-form `SyncMessage`.
 pub fn sync_message_from_stored(m: &StoredMessage) -> SyncMessage {

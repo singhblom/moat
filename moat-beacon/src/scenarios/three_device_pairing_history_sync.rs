@@ -76,6 +76,21 @@ async fn wait_for_history(
     }
 }
 
+/// Bounded wait for `client`'s transfer to finish. History landing is not
+/// enough: a transfer that never exchanges `Fin` holds the channel until
+/// the relay's TTL, minutes after the last message arrived.
+async fn wait_for_transfer_end(client: &crate::client::MoatCliClient, label: &str) {
+    const TIMEOUT: Duration = Duration::from_secs(20);
+    let deadline = std::time::Instant::now() + TIMEOUT;
+    while client.sync_status().await.unwrap_or(true) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{label}'s history transfer did not finish within {TIMEOUT:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+}
+
 pub async fn run(verbose: bool) {
     run_with(ParticipantKind::RustCli, ParticipantKind::RustCli, "rr", verbose).await
 }
@@ -146,6 +161,8 @@ pub async fn run_with(
     vlog!("[pair] d1 <- d2...");
     pair_devices(&d1, &d2, verbose).await;
     wait_for_history(&d2, &group_id, &test_messages, "d2", verbose).await;
+    wait_for_transfer_end(&d2, "d2").await;
+    wait_for_transfer_end(&d1, "d1").await;
 
     // ── D3 pairs into the now-existing ring and must also sync that history ────
     let d3 = world
@@ -157,6 +174,8 @@ pub async fn run_with(
     vlog!("[pair] d1 <- d3...");
     pair_devices(&d1, &d3, verbose).await;
     wait_for_history(&d3, &group_id, &test_messages, "d3", verbose).await;
+    wait_for_transfer_end(&d3, "d3").await;
+    wait_for_transfer_end(&d1, "d1").await;
 
     vlog!("[check] three-device pairing history sync ({cell})... ok");
     if verbose {

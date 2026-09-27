@@ -426,6 +426,7 @@ fn a_session_counts_the_messages_and_conversations_it_received() {
             group_id: a.clone(),
             messages: vec![msg("r1"), msg("r2")],
             next_cursor: None,
+            total: 2,
         })
         .unwrap();
     let _ = s
@@ -433,6 +434,7 @@ fn a_session_counts_the_messages_and_conversations_it_received() {
             group_id: b.clone(),
             messages: vec![msg("r9")],
             next_cursor: None,
+            total: 1,
         })
         .unwrap();
 

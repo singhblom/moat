@@ -25,6 +25,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle;
 
   CrossPlatformFinalizerArg
+      get rust_arc_decrement_strong_count_PairingFrameChannelHandlePtr => wire
+          .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingFrameChannelHandle;
+
+  CrossPlatformFinalizerArg
       get rust_arc_decrement_strong_count_PairingSessionHandlePtr => wire
           .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingSessionHandle;
 
@@ -43,6 +47,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   MoatSessionHandle
       dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          dynamic raw);
+
+  @protected
+  PairingFrameChannelHandle
+      dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingFrameChannelHandle(
           dynamic raw);
 
   @protected
@@ -71,6 +80,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           dynamic raw);
 
   @protected
+  PairingFrameChannelHandle
+      dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingFrameChannelHandle(
+          dynamic raw);
+
+  @protected
   PairingSessionHandle
       dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingSessionHandle(
           dynamic raw);
@@ -93,6 +107,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   MoatSessionHandle
       dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          dynamic raw);
+
+  @protected
+  PairingFrameChannelHandle
+      dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingFrameChannelHandle(
           dynamic raw);
 
   @protected
@@ -123,6 +142,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   bool dco_decode_bool(dynamic raw);
+
+  @protected
+  PairingFrameChannelHandle
+      dco_decode_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingFrameChannelHandle(
+          dynamic raw);
 
   @protected
   CredentialDto dco_decode_box_autoadd_credential_dto(dynamic raw);
@@ -195,6 +219,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   EventKindDto dco_decode_event_kind_dto(dynamic raw);
 
   @protected
+  double dco_decode_f_64(dynamic raw);
+
+  @protected
   GroupKindDto dco_decode_group_kind_dto(dynamic raw);
 
   @protected
@@ -265,6 +292,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   String? dco_decode_opt_String(dynamic raw);
+
+  @protected
+  PairingFrameChannelHandle?
+      dco_decode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingFrameChannelHandle(
+          dynamic raw);
 
   @protected
   CredentialDto? dco_decode_opt_box_autoadd_credential_dto(dynamic raw);
@@ -343,6 +375,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   SyncOutputDto dco_decode_sync_output_dto(dynamic raw);
 
   @protected
+  SyncProgressDto dco_decode_sync_progress_dto(dynamic raw);
+
+  @protected
   SyncReactionDto dco_decode_sync_reaction_dto(dynamic raw);
 
   @protected
@@ -381,6 +416,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           SseDeserializer deserializer);
 
   @protected
+  PairingFrameChannelHandle
+      sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingFrameChannelHandle(
+          SseDeserializer deserializer);
+
+  @protected
   PairingSessionHandle
       sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingSessionHandle(
           SseDeserializer deserializer);
@@ -406,6 +446,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           SseDeserializer deserializer);
 
   @protected
+  PairingFrameChannelHandle
+      sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingFrameChannelHandle(
+          SseDeserializer deserializer);
+
+  @protected
   PairingSessionHandle
       sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingSessionHandle(
           SseDeserializer deserializer);
@@ -428,6 +473,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   MoatSessionHandle
       sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          SseDeserializer deserializer);
+
+  @protected
+  PairingFrameChannelHandle
+      sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingFrameChannelHandle(
           SseDeserializer deserializer);
 
   @protected
@@ -459,6 +509,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   bool sse_decode_bool(SseDeserializer deserializer);
+
+  @protected
+  PairingFrameChannelHandle
+      sse_decode_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingFrameChannelHandle(
+          SseDeserializer deserializer);
 
   @protected
   CredentialDto sse_decode_box_autoadd_credential_dto(
@@ -538,6 +593,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   EventKindDto sse_decode_event_kind_dto(SseDeserializer deserializer);
+
+  @protected
+  double sse_decode_f_64(SseDeserializer deserializer);
 
   @protected
   GroupKindDto sse_decode_group_kind_dto(SseDeserializer deserializer);
@@ -623,6 +681,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
+
+  @protected
+  PairingFrameChannelHandle?
+      sse_decode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingFrameChannelHandle(
+          SseDeserializer deserializer);
 
   @protected
   CredentialDto? sse_decode_opt_box_autoadd_credential_dto(
@@ -712,6 +775,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   SyncOutputDto sse_decode_sync_output_dto(SseDeserializer deserializer);
 
   @protected
+  SyncProgressDto sse_decode_sync_progress_dto(SseDeserializer deserializer);
+
+  @protected
   SyncReactionDto sse_decode_sync_reaction_dto(SseDeserializer deserializer);
 
   @protected
@@ -752,6 +818,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
+      sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingFrameChannelHandle(
+          PairingFrameChannelHandle self, SseSerializer serializer);
+
+  @protected
+  void
       sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingSessionHandle(
           PairingSessionHandle self, SseSerializer serializer);
 
@@ -777,6 +848,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
+      sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingFrameChannelHandle(
+          PairingFrameChannelHandle self, SseSerializer serializer);
+
+  @protected
+  void
       sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingSessionHandle(
           PairingSessionHandle self, SseSerializer serializer);
 
@@ -799,6 +875,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
       sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
           MoatSessionHandle self, SseSerializer serializer);
+
+  @protected
+  void
+      sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingFrameChannelHandle(
+          PairingFrameChannelHandle self, SseSerializer serializer);
 
   @protected
   void
@@ -829,6 +910,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_bool(bool self, SseSerializer serializer);
+
+  @protected
+  void
+      sse_encode_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingFrameChannelHandle(
+          PairingFrameChannelHandle self, SseSerializer serializer);
 
   @protected
   void sse_encode_box_autoadd_credential_dto(
@@ -913,6 +999,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_event_kind_dto(EventKindDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_f_64(double self, SseSerializer serializer);
 
   @protected
   void sse_encode_group_kind_dto(GroupKindDto self, SseSerializer serializer);
@@ -1001,6 +1090,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
+
+  @protected
+  void
+      sse_encode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingFrameChannelHandle(
+          PairingFrameChannelHandle? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_box_autoadd_credential_dto(
@@ -1097,6 +1191,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_sync_output_dto(SyncOutputDto self, SseSerializer serializer);
 
   @protected
+  void sse_encode_sync_progress_dto(
+      SyncProgressDto self, SseSerializer serializer);
+
+  @protected
   void sse_encode_sync_reaction_dto(
       SyncReactionDto self, SseSerializer serializer);
 
@@ -1149,6 +1247,18 @@ class RustLibWire implements BaseWire {
           int ptr) =>
       wasmModule
           .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+              ptr);
+
+  void rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingFrameChannelHandle(
+          int ptr) =>
+      wasmModule
+          .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingFrameChannelHandle(
+              ptr);
+
+  void rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingFrameChannelHandle(
+          int ptr) =>
+      wasmModule
+          .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingFrameChannelHandle(
               ptr);
 
   void rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingSessionHandle(
@@ -1212,6 +1322,14 @@ extension type RustLibWasmModule._(JSObject _) implements JSObject {
 
   external void
       rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMoatSessionHandle(
+          int ptr);
+
+  external void
+      rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingFrameChannelHandle(
+          int ptr);
+
+  external void
+      rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPairingFrameChannelHandle(
           int ptr);
 
   external void

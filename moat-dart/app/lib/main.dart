@@ -20,10 +20,13 @@ import 'screens/login_screen.dart';
 import 'screens/conversations_screen.dart';
 import 'screens/approve_pairing_screen.dart';
 import 'screens/approve_sync_request_screen.dart';
+import 'screens/show_pairing_code_screen.dart';
 import 'services/flutter_storage_backend.dart';
 import 'services/flutter_storage_factory.dart';
 import 'services/debug_log.dart';
 import 'services/push_service.dart';
+import 'services/sync_manager.dart';
+import 'widgets/sync_progress_view.dart';
 import 'firebase_options.dart';
 
 /// Lets the `PairingService.state` listener below push a screen from
@@ -295,6 +298,8 @@ class MoatApp extends StatelessWidget {
             navigatorKey: rootNavigatorKey,
             title: 'Moat',
             debugShowCheckedModeBanner: false,
+            builder: (context, child) =>
+                SyncProgressFrame(child: child ?? const SizedBox.shrink()),
             themeMode: themeMode,
             theme: ThemeData(
               colorScheme: ColorScheme.fromSeed(
@@ -401,11 +406,13 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       PairingManager.instance.init(bundle: bundle);
       DeviceRingManager.instance.init(bundle.ring);
       SyncRequestManager.instance.init(bundle: bundle);
+      SyncManager.instance.init(bundle.sync);
 
       // `init()` just built a fresh service (and `state` notifier), so
       // listeners can't accumulate across login cycles. Listening globally
       // rather than per-screen is deliberate: an `Enroll` can arrive while
       // the user is anywhere in the app.
+      var wasPaired = false;
       PairingManager.instance.service!.state.addListener(() {
         final uiState = PairingManager.instance.service?.state.value;
         if (uiState is PairingUiStateDto_AwaitingApproval) {
@@ -413,6 +420,39 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
             MaterialPageRoute(builder: (_) => const ApprovePairingScreen()),
           );
         }
+        // The history transfer after a pairing failed, usually long after
+        // the pairing screens were dismissed.
+        final navContext = rootNavigatorKey.currentContext;
+        if (uiState is PairingUiStateDto_Failed &&
+            wasPaired &&
+            !ShowPairingCodeScreen.isOpen &&
+            navContext != null) {
+          showDialog<void>(
+            context: navContext,
+            builder: (context) => AlertDialog(
+              title: const Text('Pairing failed'),
+              content: Text(uiState.reason),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
+          );
+        }
+        wasPaired = uiState is PairingUiStateDto_Done;
+      });
+
+      // A finished transfer can bring whole conversations with it.
+      final syncProgress = bundle.sync.progress;
+      var wasSyncing = false;
+      syncProgress.addListener(() {
+        final syncing = syncProgress.value != null;
+        if (wasSyncing && !syncing) {
+          context.read<ConversationsProvider>().refresh();
+        }
+        wasSyncing = syncing;
       });
 
       // Same reasoning as the pairing listener above: a sibling's request
@@ -442,6 +482,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       ConversationManager.instance.clear();
       PairingManager.instance.clear();
       SyncRequestManager.instance.clear();
+      SyncManager.instance.clear();
       DeviceRingManager.instance.clear();
       DrawbridgeService.instance.reset();
       debugPrint('PollingService stopped, Drawbridge reset');

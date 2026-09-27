@@ -46,7 +46,6 @@ class ConversationManager {
     _ringTickTimer?.cancel();
     _ringTickTimer = null;
     if (ringService == null || syncService == null) return;
-    ringService.isSyncActive = () => syncService.isActive;
     _ringTickTimer = Timer.periodic(ringTickInterval, (_) {
       ringService.tick().catchError((e) {
         moatLog('ConversationManager: ring tick failed: $e');

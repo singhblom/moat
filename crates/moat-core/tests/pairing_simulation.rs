@@ -1,5 +1,5 @@
 //! In-process two/three-device pairing simulation: drives a live pairing
-//! session (Enroll → Admit → Done) between real `MoatSession`s, plus a
+//! session (Enroll → Admit) between real `MoatSession`s, plus a
 //! three-device variant.
 
 use moat_core::{
@@ -42,11 +42,12 @@ impl SimDevice {
     }
 }
 
-/// Drive one full Enroll → Admit → Done exchange between a new device and
+/// Drive one full Enroll → Admit exchange between a new device and
 /// an existing device (which may already hold a ring, for the "pair D3
 /// after D2" variant). Asserts along the way that the approval prompt
 /// fires, the pending Enroll is held, the ring gets persisted, the history
-/// sync handoff is requested on both sides, and both sessions reach `Done`.
+/// sync handoff is requested on both sides, both sessions reach `Done`,
+/// and the pairing AEAD carries on each way for the history transfer.
 /// `known_siblings` is the approving device's host-cached roster of other
 /// ring members (empty for a first pairing), threaded into `approve()`.
 /// Returns the ring id both sessions converged on, plus the roster the
@@ -65,6 +66,7 @@ fn run_pairing_session(
 
     let mut new_session = PairingSession::new_device(&PairingPayload { secret, token });
     let mut existing_session = PairingSession::existing_device(&secret, &token);
+    assert!(new_session.transfer_channel().is_none(), "no transfer before the exchange is done");
 
     let conv_kps: Vec<OfferedKp> = Vec::new();
 
@@ -171,6 +173,13 @@ fn run_pairing_session(
 
     assert!(new_session.is_done(), "new device session must reach Done");
     assert!(existing_session.is_done(), "existing device session must reach Done");
+
+    let mut new_channel = new_session.transfer_channel().expect("a done session hands on its channel");
+    let mut existing_channel =
+        existing_session.transfer_channel().expect("a done session hands on its channel");
+    assert_eq!(existing_channel.open(&new_channel.seal(b"n2o")).unwrap(), b"n2o");
+    assert_eq!(new_channel.open(&existing_channel.seal(b"o2n")).unwrap(), b"o2n");
+    assert!(new_session.transfer_channel().is_none(), "the channel is handed on once");
 
     let ring_id = existing_session
         .ring_id()

@@ -10,11 +10,17 @@ import '../widgets/common_listenable.dart';
 /// raw text as a manual-entry fallback), then waits for the existing
 /// device to enter it and approve.
 ///
-/// Renders off [PairingService.state] rather than polling. Shows a
-/// sync spinner once `state` reaches `Done`, and pops when
-/// `historyReady` fires; on `Failed`, shows the reason and waits.
+/// Renders off [PairingService.state] rather than polling. On `Done`,
+/// says so and waits to be dismissed, like the TUI — the history that
+/// follows shows in the app-wide progress strip. On `Failed`, shows the
+/// reason and waits.
 class ShowPairingCodeScreen extends StatefulWidget {
   const ShowPairingCodeScreen({super.key});
+
+  /// Whether this screen is up, so a failure it will show itself is not
+  /// also reported app-wide.
+  static bool get isOpen => _openCount > 0;
+  static int _openCount = 0;
 
   @override
   State<ShowPairingCodeScreen> createState() => _ShowPairingCodeScreenState();
@@ -27,9 +33,7 @@ class _ShowPairingCodeScreenState extends State<ShowPairingCodeScreen> {
   @override
   void initState() {
     super.initState();
-    final service = PairingManager.instance.service;
-    service?.state.addListener(_onStateChange);
-    service?.historyReady.addListener(_onHistoryReady);
+    ShowPairingCodeScreen._openCount++;
     _start();
   }
 
@@ -56,24 +60,6 @@ class _ShowPairingCodeScreenState extends State<ShowPairingCodeScreen> {
     if (mounted) setState(() => _starting = false);
   }
 
-  void _onStateChange() {
-    if (!mounted) return;
-    final uiState = PairingManager.instance.service?.state.value;
-    if (uiState is common.PairingUiStateDto_Done) {
-      // The pairing protocol is done, but the history sync runs after this.
-      // Trigger a rebuild to show the syncing spinner; the actual pop
-      // happens in _onHistoryReady once sync + ring tick are complete.
-      setState(() {});
-    }
-  }
-
-  void _onHistoryReady() {
-    if (!mounted) return;
-    if (PairingManager.instance.service?.historyReady.value == true) {
-      Navigator.of(context).pop(true);
-    }
-  }
-
   /// Abort a still-in-flight pairing when the user backs out — previously
   /// impossible, so a discarded QR left an attempt running invisibly.
   void _cancelIfInFlight() {
@@ -88,9 +74,7 @@ class _ShowPairingCodeScreenState extends State<ShowPairingCodeScreen> {
 
   @override
   void dispose() {
-    final service = PairingManager.instance.service;
-    service?.state.removeListener(_onStateChange);
-    service?.historyReady.removeListener(_onHistoryReady);
+    ShowPairingCodeScreen._openCount--;
     super.dispose();
   }
 
@@ -128,22 +112,31 @@ class _ShowPairingCodeScreenState extends State<ShowPairingCodeScreen> {
     if (uiState is common.PairingUiStateDto_Failed) {
       return _FailedView(
         reason: uiState.reason,
-        onDismiss: () => Navigator.of(context).pop(false),
+        onDismiss: () => Navigator.of(context).pop(),
       );
     }
     if (uiState is common.PairingUiStateDto_Done) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const CircularProgressIndicator(),
-            const SizedBox(height: 16),
-            Text(
-              'Syncing history…',
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-          ],
-        ),
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.check_circle_outline,
+            size: 48,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'Paired!',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 24),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Continue'),
+          ),
+        ],
       );
     }
     if (uiState is! common.PairingUiStateDto_ShowingCode) {

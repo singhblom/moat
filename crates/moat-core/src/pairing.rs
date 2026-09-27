@@ -277,6 +277,59 @@ pub fn open_frame(
         .map_err(|_| Error::PairingCrypto("failed to open pairing frame".to_string()))
 }
 
+/// One device's end of the pairing AEAD: its send and receive keys, each
+/// with the counter that serves as its nonce. Counters only ever advance,
+/// so no nonce is reused under a key. Not `Clone`: a copy would repeat
+/// them.
+pub struct PairingFrameChannel {
+    send_key: [u8; PAIRING_FRAME_KEY_LEN],
+    recv_key: [u8; PAIRING_FRAME_KEY_LEN],
+    send_counter: u64,
+    recv_counter: u64,
+}
+
+impl std::fmt::Debug for PairingFrameChannel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PairingFrameChannel")
+            .field("send_counter", &self.send_counter)
+            .field("recv_counter", &self.recv_counter)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Which end of the pairing channel a device holds.
+#[derive(Debug, Clone, Copy)]
+enum PairingRole {
+    NewDevice,
+    ExistingDevice,
+}
+
+impl PairingFrameChannel {
+    fn new(keys: &PairingChannelKeys, role: PairingRole) -> Self {
+        let (send_key, recv_key) = match role {
+            PairingRole::NewDevice => (keys.k_new_to_old, keys.k_old_to_new),
+            PairingRole::ExistingDevice => (keys.k_old_to_new, keys.k_new_to_old),
+        };
+        Self { send_key, recv_key, send_counter: 0, recv_counter: 0 }
+    }
+
+    /// Seal `plaintext` as the next frame we send.
+    pub fn seal(&mut self, plaintext: &[u8]) -> Vec<u8> {
+        let ciphertext = seal_frame(&self.send_key, self.send_counter, plaintext);
+        self.send_counter += 1;
+        ciphertext
+    }
+
+    /// Open the next frame from the peer. The counter advances only on
+    /// success; a frame that fails to open leaves the channel unusable,
+    /// since the peer sealed its next frame expecting it to advance.
+    pub fn open(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>> {
+        let plaintext = open_frame(&self.recv_key, self.recv_counter, ciphertext)?;
+        self.recv_counter += 1;
+        Ok(plaintext)
+    }
+}
+
 // ─── Session messages ────────────────────────────────────────────────────────
 
 /// Sent by the new device once the pair channel is up.
@@ -333,7 +386,7 @@ pub struct Admit {
     pub roster: Vec<SiblingInfo>,
 }
 
-/// The three message types exchanged over the pairing AEAD channel.
+/// The two message types exchanged over the pairing AEAD channel.
 /// JSON-encoded, then sealed whole by [`seal_frame`] — matching the
 /// `SyncMsg` convention already used for the sync wire format.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -341,16 +394,6 @@ pub struct Admit {
 pub enum PairingMsg {
     Enroll(Enroll),
     Admit(Admit),
-    /// Sent by each side once *its own* Enroll/Admit handling is complete
-    /// (new device: after processing `Admit`; existing device: after
-    /// sending it) — a channel-teardown courtesy so the peer knows it can
-    /// close its end of the pair socket. Deliberately scoped to the pairing
-    /// exchange only: `PairingSession::is_done()` reflects local Enroll/Admit
-    /// completion and does not wait to receive this frame, and history sync
-    /// (`SyncSession`, handed the channel via `PairingCommand::StartSync`)
-    /// is a separate, independently-completing concern that this message
-    /// does not gate or report on.
-    Done,
 }
 
 /// Encode a [`PairingMsg`] to raw JSON bytes (pre-AEAD).
@@ -405,7 +448,9 @@ pub enum PairingCommand {
     RosterReceived { roster: Vec<SiblingInfo> },
     /// Both sides, once Enroll/Admit has completed: hand the open channel
     /// to `SyncSession` for history sync. The pairing AEAD keeps running
-    /// underneath for the whole session rather than re-keying to ring MLS.
+    /// underneath for the whole session rather than re-keying to ring MLS,
+    /// through [`PairingSession::transfer_channel`]. Always the last
+    /// command of its batch.
     StartSync,
 }
 
@@ -520,8 +565,7 @@ pub enum PairingUiState {
     /// decision.
     AwaitingApproval { device_name: String, did: String },
     /// Enroll/Admit exchange complete. Says nothing about history sync —
-    /// that stays observable via the existing `/sync/status`, matching
-    /// `PairingMsg::Done`'s settled meaning.
+    /// that stays observable via the existing `/sync/status`.
     Done {
         #[serde_as(as = "Base64")]
         ring_id: Vec<u8>,
@@ -541,14 +585,10 @@ pub enum PairingUiState {
 #[derive(Debug)]
 pub struct PairingSession {
     phase: Phase,
-    /// The two directional channel keys derived at construction.
-    keys: PairingChannelKeys,
-    /// Monotonic counter for frames *we* send. Never reused — see
-    /// [`seal_frame`].
-    send_counter: u64,
-    /// Highest counter successfully opened from the peer. Used to detect
-    /// replay/reflection: an incoming frame must strictly increase this.
-    recv_counter: u64,
+    /// This device's end of the pairing AEAD, keyed for its role at
+    /// construction. Moves to the history transfer once the session is
+    /// done — see [`transfer_channel`](Self::transfer_channel).
+    channel: Option<PairingFrameChannel>,
     /// Existing-device only: the parsed `Enroll`, once received, held until
     /// the host calls [`PairingSession::approve`].
     pending_enroll: Option<Enroll>,
@@ -578,9 +618,10 @@ impl PairingSession {
     pub fn new_device(payload: &PairingPayload) -> Self {
         Self {
             phase: Phase::NewDevice(NewDevicePhase::Idle),
-            keys: derive_pairing_keys(&payload.secret, &payload.token),
-            send_counter: 0,
-            recv_counter: 0,
+            channel: Some(PairingFrameChannel::new(
+                &derive_pairing_keys(&payload.secret, &payload.token),
+                PairingRole::NewDevice,
+            )),
             pending_enroll: None,
             ring_id: None,
             displayed_code: Some(DisplayedCode {
@@ -599,9 +640,10 @@ impl PairingSession {
     ) -> Self {
         Self {
             phase: Phase::ExistingDevice(ExistingDevicePhase::AwaitingEnroll),
-            keys: derive_pairing_keys(secret, token),
-            send_counter: 0,
-            recv_counter: 0,
+            channel: Some(PairingFrameChannel::new(
+                &derive_pairing_keys(secret, token),
+                PairingRole::ExistingDevice,
+            )),
             pending_enroll: None,
             ring_id: None,
             displayed_code: None,
@@ -629,6 +671,14 @@ impl PairingSession {
         if !self.is_terminal() {
             self.phase = Phase::Failed { reason };
         }
+    }
+
+    /// This session's end of the pairing AEAD. Every caller runs before
+    /// `Done`, and the channel leaves only once done.
+    fn channel(&mut self) -> &mut PairingFrameChannel {
+        self.channel
+            .as_mut()
+            .expect("the channel is handed on only once the session is done")
     }
 
     /// Render this session's current state for UI presentation — see
@@ -707,43 +757,6 @@ impl PairingSession {
         Ok(())
     }
 
-    /// Seal `plaintext` under this session's own send-direction key at the
-    /// next unused counter, advancing `send_counter`. New device sends
-    /// under `k_new_to_old`; existing device sends under `k_old_to_new`.
-    /// Callers must guard against `Phase::Failed` themselves (every public
-    /// entry point that reaches this does) — a `Failed` session has no
-    /// send direction left to pick.
-    fn seal_and_advance(&mut self, plaintext: &[u8]) -> Vec<u8> {
-        let key = match self.phase {
-            Phase::NewDevice(_) => &self.keys.k_new_to_old,
-            Phase::ExistingDevice(_) => &self.keys.k_old_to_new,
-            Phase::Failed { .. } => {
-                unreachable!("seal_and_advance callers must guard against a Failed session")
-            }
-        };
-        let ciphertext = seal_frame(key, self.send_counter, plaintext);
-        self.send_counter += 1;
-        ciphertext
-    }
-
-    /// Open `ciphertext` under the peer's send-direction key at the next
-    /// expected counter, advancing `recv_counter` only on success — a
-    /// failed open (wrong key, replay, tamper) must not desynchronize the
-    /// counter from what a legitimate retried frame would need. See
-    /// [`seal_and_advance`](Self::seal_and_advance) on the `Failed` guard.
-    fn open_and_advance(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>> {
-        let key = match self.phase {
-            Phase::NewDevice(_) => &self.keys.k_old_to_new,
-            Phase::ExistingDevice(_) => &self.keys.k_new_to_old,
-            Phase::Failed { .. } => {
-                unreachable!("open_and_advance callers must guard against a Failed session")
-            }
-        };
-        let plaintext = open_frame(key, self.recv_counter, ciphertext)?;
-        self.recv_counter += 1;
-        Ok(plaintext)
-    }
-
     /// New device: build and seal the `Enroll` frame once the pair channel
     /// reaches `paired`. `mls` mints the fresh ring KeyPackage (via
     /// `replenish_key_package`-style key reuse — see the signing-key
@@ -786,7 +799,7 @@ impl PairingSession {
             ring_kp,
             conv_kps,
         });
-        let ciphertext = self.seal_and_advance(&encode_pairing_msg(&enroll));
+        let ciphertext = self.channel().seal(&encode_pairing_msg(&enroll));
 
         self.phase = Phase::NewDevice(NewDevicePhase::AwaitingAdmit);
 
@@ -849,7 +862,7 @@ impl PairingSession {
                     .to_string(),
             ));
         }
-        let plaintext = self.open_and_advance(ciphertext)?;
+        let plaintext = self.channel().open(ciphertext)?;
         let msg = decode_pairing_msg(&plaintext)?;
         let phase = self.phase.clone();
 
@@ -904,18 +917,13 @@ impl PairingSession {
 
                 self.ring_id = Some(group_id.clone());
                 self.phase = Phase::NewDevice(NewDevicePhase::Done);
-                let done = self.seal_and_advance(&encode_pairing_msg(&PairingMsg::Done));
 
                 Ok(vec![
                     PairingCommand::PersistRing { ring_id: group_id },
                     PairingCommand::RosterReceived { roster: admit.roster },
                     PairingCommand::StartSync,
-                    PairingCommand::SendFrame { ciphertext: done },
                 ])
             }
-            // Teardown courtesy only — `is_done()` never waits on this, and
-            // it carries no state of its own to apply.
-            (_, PairingMsg::Done) => Ok(vec![]),
             (phase, msg) => Err(Error::PairingProtocol(format!(
                 "unexpected {msg:?} received in phase {phase:?}"
             ))),
@@ -941,32 +949,24 @@ impl PairingSession {
         &self.rendezvous_token
     }
 
-    /// The two directional AEAD keys this session derived at construction.
-    /// Exposed so the host can keep sealing/opening frames under the
-    /// pairing AEAD after `is_done()` — qr-pairing.md §3.2's "keep the
-    /// pairing AEAD for the whole session" decision means the history sync
-    /// handed off via `PairingCommand::StartSync` does not re-key to ring
-    /// MLS, unlike the established-devices reconnect-sync path (§3.6),
-    /// which is a real ring member on both ends and has no such channel to
-    /// continue.
-    pub fn channel_keys(&self) -> &PairingChannelKeys {
-        &self.keys
+    /// Hand the pairing AEAD on to the history transfer, which keeps it
+    /// rather than re-keying to ring MLS. `None` before the session is
+    /// done, and on every call after the first, so the counters continue
+    /// in exactly one place.
+    pub fn transfer_channel(&mut self) -> Option<PairingFrameChannel> {
+        if !self.is_done() {
+            return None;
+        }
+        self.channel.take()
     }
 
-    /// The next unused counter for frames *we* send, continuing this
-    /// session's own sequence. A host driving traffic after `is_done()`
-    /// must start here — reusing a counter already used during
-    /// Enroll/Admit/Done would violate the AEAD's nonce-uniqueness
-    /// requirement (see [`seal_frame`]).
-    pub fn next_send_counter(&self) -> u64 {
-        self.send_counter
-    }
-
-    /// The next unused counter for frames *we* expect to receive,
-    /// continuing this session's own sequence. See
-    /// [`next_send_counter`](Self::next_send_counter).
-    pub fn next_recv_counter(&self) -> u64 {
-        self.recv_counter
+    /// The history transfer this session handed on ended early. The ring
+    /// was joined, but the new device is left without its history, so the
+    /// pairing reports as failed. No-op unless the session is done.
+    pub fn transfer_failed(&mut self, reason: &str) {
+        if self.is_done() {
+            self.phase = Phase::Failed { reason: format!("history transfer failed: {reason}") };
+        }
     }
 
     /// Existing device only: called once the user taps Approve on the named
@@ -1062,7 +1062,7 @@ impl PairingSession {
             welcome: welcome_result.welcome,
             roster,
         });
-        let ciphertext = self.seal_and_advance(&encode_pairing_msg(&admit));
+        let ciphertext = self.channel().seal(&encode_pairing_msg(&admit));
 
         self.ring_id = Some(ring_id);
         self.phase = Phase::ExistingDevice(ExistingDevicePhase::Done);
@@ -1083,9 +1083,8 @@ impl PairingSession {
 
     /// `true` once this session has reached its terminal `Done` phase: the
     /// new device has processed `Admit`, or the existing device has sent
-    /// it. This is a local, immediate fact — it does not wait to send or
-    /// receive [`PairingMsg::Done`], and it says nothing about whether
-    /// history sync has finished. Matches `PairStatus::done` in
+    /// it. This is a local, immediate fact, and it says nothing about
+    /// whether history sync has finished. Matches `PairStatus::done` in
     /// moat-beacon's client ("joined the ring" / "admitted the peer").
     pub fn is_done(&self) -> bool {
         matches!(

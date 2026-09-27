@@ -247,7 +247,17 @@ class _SyncStatusTile extends StatelessWidget {
     );
 
     return ListTile(
-      leading: Icon(icon, color: color),
+      // Moving, so a request still waiting for a sibling doesn't read as a
+      // gesture that did nothing.
+      leading: state is common.SyncRequestUiStateDto_AwaitingPeer
+          ? const SizedBox.square(
+              dimension: 24,
+              child: Padding(
+                padding: EdgeInsets.all(2),
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          : Icon(icon, color: color),
       title: Text(text, style: TextStyle(color: color)),
     );
   }

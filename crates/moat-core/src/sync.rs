@@ -4,9 +4,11 @@
 //! produces [`SyncOutput`] values describing what the caller should do (send
 //! a frame, store messages, mark the session done). No I/O or async here.
 //!
-//! Wire format: each [`SyncMsg`] is JSON-encoded, padded to the nearest
-//! bucket size, then encrypted via the ring MLS group (`encrypt_event` with
-//! `EventKind::SyncApp`) and sent as a raw binary frame on the pair WS.
+//! Wire format: each [`SyncMsg`] is JSON-encoded and sent as a raw binary
+//! frame on the pair WS, sealed by whichever channel carries the transfer:
+//! the ring MLS group between established devices (`encrypt_event` with
+//! `EventKind::SyncApp`, padded to a bucket size), or the pairing AEAD
+//! ([`crate::PairingFrameChannel`]) for the transfer that follows a pairing.
 //!
 //! The wire type [`SyncMessage`] is the canonical message representation
 //! transferred during sync. Hosts (moat-cli, moat-dart) adapt it to/from
@@ -205,7 +207,7 @@ pub struct SyncMessage {
 }
 
 /// The sync protocol message, serialised to JSON and transmitted as a
-/// ring-MLS-encrypted binary frame on the pair WebSocket.
+/// sealed binary frame on the pair WebSocket (see the module docs).
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -229,6 +231,9 @@ pub enum SyncMsg {
         group_id: Vec<u8>,
         messages: Vec<SyncMessage>,
         next_cursor: Option<String>,
+        /// How many messages the sender will serve for this conversation
+        /// in all, so the receiver can show progress.
+        total: u64,
     },
     /// Every message this side holds for `group_id` has been sent.
     Done {
@@ -258,7 +263,8 @@ pub fn decode_sync_msg(bytes: &[u8]) -> std::result::Result<SyncMsg, String> {
 /// Action produced by [`SyncSession`] for the host to interpret.
 #[derive(Debug)]
 pub enum SyncOutput {
-    /// JSON-encode, encrypt via ring MLS, and send as a binary pair-WS frame.
+    /// JSON-encode, seal under the transfer's channel, and send as a binary
+    /// pair-WS frame.
     Send(SyncMsg),
     /// Persist these messages for the conversation `conv_id` (hex group ID).
     ///
@@ -293,6 +299,36 @@ pub struct SyncTally {
     pub sent_conversations: u64,
 }
 
+/// How far a running session has got, for a progress indicator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncProgress {
+    /// The totals are not known yet: the `Hello`s are still being
+    /// exchanged, or a conversation's first page has yet to arrive with
+    /// the donor's count.
+    Starting,
+    /// Both totals are exact from here on.
+    Transferring {
+        received: u64,
+        receive_total: u64,
+        sent: u64,
+        send_total: u64,
+    },
+}
+
+impl SyncProgress {
+    /// The share of both directions done, or `None` while starting.
+    pub fn fraction(&self) -> Option<f64> {
+        let Self::Transferring { received, receive_total, sent, send_total } = *self else {
+            return None;
+        };
+        let total = receive_total + send_total;
+        if total == 0 {
+            return Some(1.0);
+        }
+        Some(((received + sent) as f64 / total as f64).min(1.0))
+    }
+}
+
 /// Session phase. Internal — exposed only via [`SyncSession::is_done`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Phase {
@@ -317,6 +353,11 @@ struct ConvPlan {
     expecting_batch: bool,
     /// Whether we've received `Done` for this conversation.
     received_done: bool,
+    /// What the peer said it will send us here, from its first `Batch`.
+    incoming_total: Option<u64>,
+    /// Our span, when our `Hello` could only give that rather than the
+    /// full list.
+    sent_span: Option<(String, String)>,
 }
 
 /// History sync session state machine.
@@ -382,12 +423,21 @@ impl SyncSession {
             our_messages,
             expecting_batch,
             received_done: false,
+            incoming_total: None,
+            sent_span: None,
         });
     }
 
     /// Called when the pair WS reaches the `paired` state. Returns the Hello
     /// frame to send.
     pub fn on_paired(&mut self, our_convs: Vec<ConvState>, ring_epoch: u64) -> Vec<SyncOutput> {
+        for conv in &our_convs {
+            if let ConvInventory::Range { oldest, newest, .. } = &conv.inventory {
+                if let Some(plan) = self.plans.iter_mut().find(|p| p.group_id == conv.group_id) {
+                    plan.sent_span = Some((oldest.clone(), newest.clone()));
+                }
+            }
+        }
         self.phase = Phase::WaitingHello;
         vec![SyncOutput::Send(SyncMsg::Hello { convs: our_convs, ring_epoch })]
     }
@@ -411,8 +461,8 @@ impl SyncSession {
             SyncMsg::BatchReq { group_id, from_rkey, to_rkey, cursor } => {
                 Ok(self.handle_batch_req(group_id, from_rkey, to_rkey, cursor))
             }
-            SyncMsg::Batch { group_id, messages, next_cursor } => {
-                self.handle_batch(group_id, messages, next_cursor)
+            SyncMsg::Batch { group_id, messages, next_cursor, total } => {
+                self.handle_batch(group_id, messages, next_cursor, total)
             }
             SyncMsg::Done { group_id } => Ok(self.handle_done(group_id)),
             SyncMsg::Fin => {
@@ -439,6 +489,31 @@ impl SyncSession {
         }
     }
 
+    /// Transfer progress in both directions, for the UI.
+    ///
+    /// The send total is settled by the `Hello` exchange, which leaves
+    /// each plan holding exactly what the peer will ask for. The receive
+    /// total needs the donor's count from each conversation's first page.
+    pub fn progress(&self) -> SyncProgress {
+        if matches!(self.phase, Phase::SendingHello | Phase::WaitingHello) {
+            return SyncProgress::Starting;
+        }
+        let receive_total = self
+            .plans
+            .iter()
+            .filter(|p| p.expecting_batch)
+            .try_fold(0u64, |sum, p| p.incoming_total.map(|t| sum + t));
+        let Some(receive_total) = receive_total else {
+            return SyncProgress::Starting;
+        };
+        SyncProgress::Transferring {
+            received: self.received_messages,
+            receive_total,
+            sent: self.sent_messages,
+            send_total: self.plans.iter().map(|p| p.our_messages.len() as u64).sum(),
+        }
+    }
+
     // ── Internal handlers ─────────────────────────────────────────────────────
 
     fn handle_hello(&mut self, peer_convs: Vec<ConvState>) -> Vec<SyncOutput> {
@@ -457,6 +532,17 @@ impl SyncSession {
                         plan.our_messages.iter().map(|m| m.rkey.as_str()).collect();
                     let missing_here = peer_set.iter().any(|r| !ours.contains(r));
                     plan.our_messages.retain(|m| !peer_set.contains(m.rkey.as_str()));
+                    // Given only our span, the peer asks just when it
+                    // reaches beyond its own, so anything else stays unsent.
+                    if let Some((oldest, newest)) = &plan.sent_span {
+                        let beyond = match (rkeys.iter().min(), rkeys.iter().max()) {
+                            (Some(lo), Some(hi)) => oldest < lo || newest > hi,
+                            _ => true,
+                        };
+                        if !beyond {
+                            plan.our_messages.clear();
+                        }
+                    }
                     missing_here
                 }
                 // The peer's list did not fit, so all we know is its span.
@@ -521,6 +607,8 @@ impl SyncSession {
                 our_messages: Vec::new(),
                 expecting_batch: true,
                 received_done: false,
+                incoming_total: None,
+                sent_span: None,
             });
             outputs.push(SyncOutput::Send(SyncMsg::BatchReq {
                 group_id: peer_state.group_id.clone(),
@@ -574,6 +662,7 @@ impl SyncSession {
             group_id: plan.group_id.clone(),
             messages: slice,
             next_cursor: next_cursor.clone(),
+            total: plan.our_messages.len() as u64,
         })];
 
         if is_last {
@@ -590,6 +679,7 @@ impl SyncSession {
         group_id: Vec<u8>,
         messages: Vec<SyncMessage>,
         next_cursor: Option<String>,
+        total: u64,
     ) -> Result<Vec<SyncOutput>> {
         let plan = match self.plans.iter_mut().find(|p| p.group_id == group_id) {
             Some(p) => p,
@@ -603,6 +693,7 @@ impl SyncSession {
             }
         };
 
+        plan.incoming_total = Some(total);
         if !messages.is_empty() {
             self.received_messages += messages.len() as u64;
             self.received_convs.insert(plan.conv_id.clone());
@@ -628,6 +719,8 @@ impl SyncSession {
     fn handle_done(&mut self, group_id: Vec<u8>) -> Vec<SyncOutput> {
         if let Some(plan) = self.plans.iter_mut().find(|p| p.group_id == group_id) {
             plan.received_done = true;
+            // A peer with no plan here answers with a bare `Done`.
+            plan.incoming_total.get_or_insert(0);
         }
         let mut outputs = Vec::new();
         self.maybe_send_fin(&mut outputs);
@@ -719,10 +812,11 @@ mod tests {
             group_id: vec![1, 2, 3],
             messages: vec![empty_msg("rk1", "hi")],
             next_cursor: None,
+            total: 1,
         };
         let decoded = decode_sync_msg(&encode_sync_msg(&msg)).unwrap();
         match decoded {
-            SyncMsg::Batch { group_id, messages, next_cursor } => {
+            SyncMsg::Batch { group_id, messages, next_cursor, .. } => {
                 assert_eq!(group_id, vec![1, 2, 3]);
                 assert_eq!(messages.len(), 1);
                 assert_eq!(messages[0].content, "hi");
@@ -777,6 +871,7 @@ mod tests {
                 group_id: g1.clone(),
                 messages: vec![empty_msg("r1", "hi")],
                 next_cursor: None,
+                total: 1,
             }).unwrap();
         assert!(outs.iter().any(|o| matches!(o, SyncOutput::Store { .. })));
 
@@ -790,6 +885,7 @@ mod tests {
                 group_id: g2.clone(),
                 messages: vec![empty_msg("r2", "hey")],
                 next_cursor: None,
+                total: 1,
             }).unwrap();
         let outs = s.on_message(SyncMsg::Done { group_id: g2.clone() }).unwrap();
         // Everything arrived: confirm it. Not done until the peer confirms
@@ -904,10 +1000,161 @@ mod tests {
                 group_id: g.clone(),
                 messages: vec![empty_msg("b1", "y")],
                 next_cursor: None,
+                total: 1,
             }).unwrap();
         let outs = s.on_message(SyncMsg::Done { group_id: g.clone() }).unwrap();
         assert!(matches!(outs.as_slice(), [SyncOutput::Send(SyncMsg::Fin)]));
         assert!(s.is_done());
+    }
+
+    fn sends(outs: Vec<SyncOutput>) -> Vec<SyncMsg> {
+        outs.into_iter()
+            .filter_map(|o| match o {
+                SyncOutput::Send(m) => Some(m),
+                SyncOutput::Store { .. } => None,
+            })
+            .collect()
+    }
+
+    /// Pair `a` and `b` and deliver every frame until neither has anything
+    /// left to send, calling `after_each` with both sessions after every
+    /// round.
+    fn pump(
+        a: &mut SyncSession,
+        a_convs: Vec<ConvState>,
+        b: &mut SyncSession,
+        b_convs: Vec<ConvState>,
+        mut after_each: impl FnMut(&SyncSession, &SyncSession),
+    ) {
+        let mut to_b = sends(a.on_paired(a_convs, 0));
+        let mut to_a = sends(b.on_paired(b_convs, 0));
+        after_each(a, b);
+        while !(to_a.is_empty() && to_b.is_empty()) {
+            for m in std::mem::take(&mut to_a) {
+                to_b.extend(sends(a.on_message(m).unwrap()));
+            }
+            for m in std::mem::take(&mut to_b) {
+                to_a.extend(sends(b.on_message(m).unwrap()));
+            }
+            after_each(a, b);
+        }
+    }
+
+    /// Progress stays `Starting` until both totals are known, and from
+    /// then on the totals never move.
+    #[test]
+    fn progress_totals_are_exact_from_the_first_report() {
+        let g = vec![6u8; 32];
+        let conv = hex::encode(&g);
+        let rkeys: Vec<String> = (0..75).map(|i| format!("r{i:03}")).collect();
+        let mut donor = SyncSession::new();
+        donor.add_conv_plan(
+            g.clone(),
+            conv.clone(),
+            rkeys.iter().map(|r| empty_msg(r, "x")).collect(),
+            false,
+        );
+        let mut joiner = SyncSession::new();
+        joiner.add_conv_plan(g.clone(), conv, Vec::new(), true);
+
+        let mut seen = Vec::new();
+        pump(
+            &mut donor,
+            vec![ConvState { group_id: g.clone(), inventory: ConvInventory::of(rkeys) }],
+            &mut joiner,
+            vec![empty_state(&g)],
+            |d, j| seen.push((d.progress(), j.progress())),
+        );
+        assert_eq!(seen[0], (SyncProgress::Starting, SyncProgress::Starting));
+        for (d, j) in &seen {
+            if let SyncProgress::Transferring { receive_total, send_total, .. } = *j {
+                assert_eq!((receive_total, send_total), (75, 0));
+            }
+            if let SyncProgress::Transferring { receive_total, send_total, .. } = *d {
+                assert_eq!((receive_total, send_total), (0, 75));
+            }
+        }
+        assert!(seen.iter().any(|(_, j)| j.fraction().is_some_and(|f| f > 0.0 && f < 1.0)));
+        assert!(donor.is_done() && joiner.is_done());
+        assert_eq!(joiner.progress().fraction(), Some(1.0));
+        assert_eq!(donor.progress().fraction(), Some(1.0));
+    }
+
+    /// A conversation the peer answers with a bare `Done`, having no plan
+    /// for it, still counts as a known total.
+    #[test]
+    fn bare_done_settles_the_receive_total() {
+        let g = vec![7u8; 32];
+        let mut s = SyncSession::new();
+        s.add_conv_plan(g.clone(), hex::encode(&g), Vec::new(), true);
+        let _ = s.on_paired(vec![empty_state(&g)], 0);
+        let _ = s
+            .on_message(SyncMsg::Hello {
+                convs: vec![ConvState {
+                    group_id: g.clone(),
+                    inventory: ConvInventory::of(vec!["r1".to_string()]),
+                }],
+                ring_epoch: 0,
+            })
+            .unwrap();
+        assert_eq!(s.progress(), SyncProgress::Starting);
+        let _ = s.on_message(SyncMsg::Done { group_id: g }).unwrap();
+        assert_eq!(
+            s.progress(),
+            SyncProgress::Transferring { received: 0, receive_total: 0, sent: 0, send_total: 0 }
+        );
+    }
+
+    /// A side that could only declare its span is asked for nothing when
+    /// that span sits inside the peer's, so what it holds there is not
+    /// counted as owed, and both sides still finish on exact totals.
+    #[test]
+    fn a_span_inside_the_peers_is_never_counted_as_owed() {
+        let g = vec![8u8; 32];
+        let conv = hex::encode(&g);
+        let mut ranged = SyncSession::new();
+        ranged.add_conv_plan(
+            g.clone(),
+            conv.clone(),
+            vec![empty_msg("r2", "x"), empty_msg("r4", "x")],
+            false,
+        );
+        let mut complete = SyncSession::new();
+        complete.add_conv_plan(
+            g.clone(),
+            conv,
+            ["r1", "r3", "r5"].iter().map(|r| empty_msg(r, "x")).collect(),
+            false,
+        );
+
+        pump(
+            &mut ranged,
+            vec![ConvState {
+                group_id: g.clone(),
+                inventory: ConvInventory::Range {
+                    oldest: "r2".to_string(),
+                    newest: "r4".to_string(),
+                    count: 2,
+                },
+            }],
+            &mut complete,
+            vec![ConvState {
+                group_id: g.clone(),
+                inventory: ConvInventory::of(vec!["r1".into(), "r3".into(), "r5".into()]),
+            }],
+            |_, _| {},
+        );
+        assert!(ranged.is_done() && complete.is_done());
+        // `complete` cannot see r3 is missing inside the span it was given,
+        // so it serves only what lies outside it.
+        assert_eq!(
+            ranged.progress(),
+            SyncProgress::Transferring { received: 2, receive_total: 2, sent: 0, send_total: 0 }
+        );
+        assert_eq!(
+            complete.progress(),
+            SyncProgress::Transferring { received: 0, receive_total: 0, sent: 2, send_total: 2 }
+        );
     }
 
     /// Donor that paginates across multiple BatchReq cursors.

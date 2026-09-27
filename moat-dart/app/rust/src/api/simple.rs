@@ -1452,6 +1452,36 @@ impl SyncSessionHandle {
     pub fn tally(&self) -> SyncTallyDto {
         self.inner.lock().unwrap().tally().into()
     }
+
+    /// How far the transfer has got, for a progress indicator.
+    #[frb(sync)]
+    pub fn progress(&self) -> SyncProgressDto {
+        self.inner.lock().unwrap().progress().into()
+    }
+}
+
+/// Mirrors `moat_core::SyncProgress`, with its `fraction()` computed.
+pub enum SyncProgressDto {
+    Starting,
+    Transferring {
+        received: u64,
+        receive_total: u64,
+        sent: u64,
+        send_total: u64,
+        fraction: f64,
+    },
+}
+
+impl From<moat_core::SyncProgress> for SyncProgressDto {
+    fn from(p: moat_core::SyncProgress) -> Self {
+        let fraction = p.fraction().unwrap_or(0.0);
+        match p {
+            moat_core::SyncProgress::Starting => Self::Starting,
+            moat_core::SyncProgress::Transferring { received, receive_total, sent, send_total } => {
+                Self::Transferring { received, receive_total, sent, send_total, fraction }
+            }
+        }
+    }
 }
 
 pub struct SyncMessageDto {
@@ -2375,67 +2405,40 @@ impl PairingSessionHandle {
         self.inner.lock().unwrap().cancel().map_err(|e| e.to_string())
     }
 
-    /// The new-device→existing-device directional AEAD key, for
-    /// continuing the pairing-AEAD stream past `is_done()` (the history
-    /// sync handoff) — see `next_send_counter`/`next_recv_counter`.
+    /// The pairing AEAD, for the history transfer that follows; `None`
+    /// until the session is done, and after the first call.
     #[frb(sync)]
-    pub fn channel_key_new_to_old(&self) -> Vec<u8> {
-        self.inner.lock().unwrap().channel_keys().k_new_to_old.to_vec()
+    pub fn transfer_channel(&self) -> Option<PairingFrameChannelHandle> {
+        let channel = self.inner.lock().unwrap().transfer_channel()?;
+        Some(PairingFrameChannelHandle { inner: Mutex::new(channel) })
     }
 
-    /// The existing-device→new-device directional AEAD key.
+    /// The history transfer this session handed on ended early, so the
+    /// pairing reports as failed. No-op unless the session is done.
     #[frb(sync)]
-    pub fn channel_key_old_to_new(&self) -> Vec<u8> {
-        self.inner.lock().unwrap().channel_keys().k_old_to_new.to_vec()
-    }
-
-    /// Next unused counter for frames *we* send, continuing this session's
-    /// own sequence — never reuse a value already used during Enroll/Admit/Done.
-    #[frb(sync)]
-    pub fn next_send_counter(&self) -> u64 {
-        self.inner.lock().unwrap().next_send_counter()
-    }
-
-    /// Next unused counter for frames *we* expect to receive.
-    #[frb(sync)]
-    pub fn next_recv_counter(&self) -> u64 {
-        self.inner.lock().unwrap().next_recv_counter()
+    pub fn transfer_failed(&self, reason: String) {
+        self.inner.lock().unwrap().transfer_failed(&reason);
     }
 }
 
-/// Seal a frame with AES-128-GCM under the pairing channel's directional
-/// key (`key` must be 16 bytes — one of `channel_key_new_to_old`/
-/// `channel_key_old_to_new`). Used to run the pairing-AEAD history-sync
-/// phase after `is_done()`, continuing the counter sequence — never reuse
-/// a counter value under the same key.
-pub fn pairing_seal_frame(key: Vec<u8>, counter: u64, plaintext: Vec<u8>) -> Result<Vec<u8>, String> {
-    let key: [u8; moat_core::PAIRING_FRAME_KEY_LEN] = key
-        .try_into()
-        .map_err(|_| "key must be 16 bytes".to_string())?;
-    Ok(moat_core::seal_frame(&key, counter, &plaintext))
+/// Opaque handle to a `PairingFrameChannel`: one device's end of the
+/// pairing AEAD, counters included.
+pub struct PairingFrameChannelHandle {
+    inner: Mutex<moat_core::PairingFrameChannel>,
 }
 
-/// Open a frame sealed by [`pairing_seal_frame`].
-pub fn pairing_open_frame(key: Vec<u8>, counter: u64, ciphertext: Vec<u8>) -> Result<Vec<u8>, String> {
-    let key: [u8; moat_core::PAIRING_FRAME_KEY_LEN] = key
-        .try_into()
-        .map_err(|_| "key must be 16 bytes".to_string())?;
-    moat_core::open_frame(&key, counter, &ciphertext).map_err(|e| e.to_string())
-}
+impl PairingFrameChannelHandle {
+    /// Seal `plaintext` as the next frame we send.
+    #[frb(sync)]
+    pub fn seal(&self, plaintext: Vec<u8>) -> Vec<u8> {
+        self.inner.lock().unwrap().seal(&plaintext)
+    }
 
-/// `true` if `plaintext` (already opened under the pairing AEAD) decodes
-/// as the pairing session's advisory `Done` courtesy rather than a
-/// `SyncMsg`. Used by the post-Done pairing-sync phase to recognize and
-/// ignore a `Done` that arrives after the local side has already
-/// transitioned to sync-frame dispatch — see the note on
-/// `PairingCommandDto.startSync` for why this can happen even in a
-/// well-behaved exchange.
-#[frb(sync)]
-pub fn pairing_frame_is_done(plaintext: Vec<u8>) -> bool {
-    matches!(
-        moat_core::decode_pairing_msg(&plaintext),
-        Ok(moat_core::PairingMsg::Done)
-    )
+    /// Open the next frame from the peer. An error ends the channel.
+    #[frb(sync)]
+    pub fn open(&self, ciphertext: Vec<u8>) -> Result<Vec<u8>, String> {
+        self.inner.lock().unwrap().open(&ciphertext).map_err(|e| e.to_string())
+    }
 }
 
 /// How many fresh KeyPackages a new device should seed the approver's pool
@@ -3367,7 +3370,7 @@ mod pairing_ffi_tests {
         assert!(pairing_payload_from_text("IIIII-LLLLL-OOOOO-UUUUU".to_string()).is_err());
     }
 
-    /// Full Enroll → Admit → Done exchange over the FFI surface — the Dart
+    /// Full Enroll → Admit exchange over the FFI surface — the Dart
     /// mirror of `moat-core/tests/pairing_simulation.rs`'s
     /// `two_device_pairing_converges`.
     #[test]

@@ -3,7 +3,7 @@
 use crate::app::{
     App, ChatMode, DeviceAlert, DisplayMessage, LoginField, Overlay, Screen, View, QUICK_EMOJIS,
 };
-use moat_core::{PairingUiState, SyncFailure, SyncRequestUiState, SyncTally};
+use moat_core::{PairingUiState, SyncFailure, SyncProgress, SyncRequestUiState, SyncTally};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -41,11 +41,18 @@ fn color_pulse(
 /// carrying the keys for whatever has the keyboard.
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
+    // A transfer gets its own row above the footer, on every screen: both
+    // devices keep working while it runs, and either may be the one looked at.
+    let progress = app.sync_progress();
     let outer = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(u16::from(progress.is_some())),
+            Constraint::Length(1),
+        ])
         .split(area);
-    let (content, footer_area) = (outer[0], outer[1]);
+    let (content, progress_area, footer_area) = (outer[0], outer[1], outer[2]);
 
     match app.view {
         View::Login => draw_login(frame, app, content),
@@ -94,7 +101,23 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_error_popup(frame, error);
     }
 
+    if let Some(p) = progress {
+        draw_sync_progress_row(frame, &p, progress_area);
+    }
     draw_footer(frame, app, footer_area);
+}
+
+fn draw_sync_progress_row(frame: &mut Frame, progress: &SyncProgress, area: Rect) {
+    let label = format!(" {} ", sync_progress_text(progress));
+    let bar_width = area.width.saturating_sub(label.chars().count() as u16 + 1).min(40);
+    let line = Line::from(vec![
+        Span::styled(label, Style::default().fg(Color::Green)),
+        Span::styled(
+            progress_bar(progress.fraction(), bar_width),
+            Style::default().fg(Color::Green),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
@@ -689,6 +712,9 @@ fn hints(app: &App) -> Vec<Hint> {
         Overlay::NewConversation | Overlay::WatchHandle | Overlay::PairEnterCode => {
             vec![hint("⏎", "confirm"), hint("esc", "cancel")]
         }
+        Overlay::PairShowCode | Overlay::PairApprove if app.pairing_is_terminal() => {
+            vec![hint("any key", "close")]
+        }
         Overlay::PairShowCode => vec![hint("esc", "cancel pairing")],
         Overlay::PairApprove => vec![hint("y", "approve"), hint("n", "reject")],
         Overlay::SyncApprove => vec![hint("y", "send history"), hint("n", "refuse")],
@@ -1113,6 +1139,14 @@ fn draw_status_screen(frame: &mut Frame, app: &App, area: Rect) {
         Span::raw("  "),
         Span::styled(label, sync_style),
     ]));
+    // Moving, so a request still waiting for a sibling doesn't read as a
+    // gesture that did nothing.
+    if app.sync_request_ui_state() == SyncRequestUiState::AwaitingPeer {
+        lines.push(Line::from(Span::styled(
+            format!("  {}", progress_bar(None, inner.width.saturating_sub(4).min(40))),
+            Style::default().fg(Color::Yellow),
+        )));
+    }
 
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
@@ -1183,6 +1217,53 @@ fn sync_complete_text(tally: &SyncTally, device_name: Option<&str>) -> String {
         (true, false) => format!("Received {received} across {convs} from {device}."),
         (true, true) => {
             format!("Received {received} across {convs} from {device}, and sent {sent}.")
+        }
+    }
+}
+
+/// `"Syncing history: 412 of 1021 received"`, naming each
+/// direction that is actually moving something.
+fn sync_progress_text(p: &SyncProgress) -> String {
+    let SyncProgress::Transferring { received, receive_total, sent, send_total } = *p else {
+        return "Preparing history sync…".to_string();
+    };
+    let mut parts = Vec::new();
+    if receive_total > 0 {
+        parts.push(format!("{received} of {receive_total} received"));
+    }
+    if send_total > 0 {
+        parts.push(format!("{sent} of {send_total} sent"));
+    }
+    if parts.is_empty() {
+        "Syncing history…".to_string()
+    } else {
+        format!("Syncing history: {}", parts.join(", "))
+    }
+}
+
+/// A bar `width` cells wide; with no ratio, a block sweeping back and forth.
+fn progress_bar(ratio: Option<f64>, width: u16) -> String {
+    let width = width as usize;
+    if width == 0 {
+        return String::new();
+    }
+    match ratio {
+        Some(r) => {
+            let filled = ((r * width as f64).round() as usize).min(width);
+            format!("{}{}", "█".repeat(filled), "░".repeat(width - filled))
+        }
+        None => {
+            const SEGMENT: usize = 4;
+            let seg = SEGMENT.min(width);
+            let span = width - seg;
+            let step = (START_TIME.elapsed().as_millis() / 60) as usize;
+            let pos = if span == 0 {
+                0
+            } else {
+                let cycle = step % (2 * span);
+                if cycle <= span { cycle } else { 2 * span - cycle }
+            };
+            format!("{}{}{}", "░".repeat(pos), "█".repeat(seg), "░".repeat(width - seg - pos))
         }
     }
 }
@@ -1398,6 +1479,23 @@ mod tests {
         SyncTally { messages, conversations, ..SyncTally::default() }
     }
 
+    #[test]
+    fn sync_progress_names_each_moving_direction() {
+        let p = |received, receive_total, sent, send_total| SyncProgress::Transferring {
+            received,
+            receive_total,
+            sent,
+            send_total,
+        };
+        assert_eq!(sync_progress_text(&SyncProgress::Starting), "Preparing history sync…");
+        assert_eq!(sync_progress_text(&p(0, 0, 0, 0)), "Syncing history…");
+        assert_eq!(
+            sync_progress_text(&p(412, 1021, 3, 10)),
+            "Syncing history: 412 of 1021 received, 3 of 10 sent"
+        );
+        assert_eq!(sync_progress_text(&p(0, 0, 3, 10)), "Syncing history: 3 of 10 sent");
+    }
+
     fn test_app(dir: &std::path::Path) -> App {
         App::new(
             Some(dir.to_path_buf()),
@@ -1567,11 +1665,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut app = test_app(dir.path());
         app.view = View::Session(Screen::Conversations);
-        app.overlay = Overlay::PairApprove;
+        app.overlay = Overlay::SyncApprove;
 
         let footer = footer_of(&render(&mut app, 80, 24));
-        assert!(footer.contains("approve"), "{footer:?}");
-        assert!(footer.contains("reject"), "{footer:?}");
+        assert!(footer.contains("send history"), "{footer:?}");
+        assert!(footer.contains("refuse"), "{footer:?}");
         assert!(!footer.contains("watch"), "{footer:?}");
     }
 

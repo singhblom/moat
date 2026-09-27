@@ -697,20 +697,14 @@ pub struct App {
     /// When was the last ring tick run?
     last_ring_tick: Option<Instant>,
 
-    /// Active history sync session (Some while a pair WS session is in progress).
-    sync_session: Option<crate::sync::SyncSession>,
+    /// The history transfer running on the pair WS, whichever gesture
+    /// opened it.
+    sync_transfer: Option<crate::sync::SyncTransfer>,
 
     /// Ex-members this poll cycle actually asked for events, as
     /// `(conv_id, did)`. Cleared from `pending_ex_members` once the
     /// results have been processed — see the note where it is populated.
     swept_ex_members: Vec<(String, String)>,
-
-    /// The device on the other end of the current sync, as MLS named it
-    /// on the frames it sent. Read from the leaf credential rather than
-    /// the payload, so it is the device the history actually came from —
-    /// which is what makes "nothing new" actionable: the user learns
-    /// *which* sibling had no more than they did.
-    sync_peer_name: Option<String>,
 
     /// Pairing token for the in-flight pair WS session.
     pending_pair_token: Option<Vec<u8>>,
@@ -745,21 +739,6 @@ pub struct App {
     /// not-yet-registered `pair_offer` (relay: "token not found or
     /// expired") would leave the session stuck forever with no retry.
     pending_pair_rendezvous_token: Option<Vec<u8>>,
-    /// Present while a `PairingCommand::StartSync`-triggered history sync is
-    /// running: the pairing channel's AEAD keys, captured from
-    /// `PairingSession::channel_keys` at handoff. Distinguishes "still
-    /// sealing/opening under the pairing AEAD" from the established-devices
-    /// reconnect-sync path (`sync_session` alone, ring-MLS-encrypted) — see
-    /// `interpret_pairing_commands`'s `StartSync` arm and the `PairFrameReceived`
-    /// dispatch in `handle_bg_event`.
-    pairing_sync_keys: Option<moat_core::PairingChannelKeys>,
-    /// Next unused counter for pairing-AEAD sync frames *we* send,
-    /// continuing `PairingSession::next_send_counter`'s sequence — must
-    /// never restart at 0 (nonce reuse under the same key).
-    pairing_sync_send_counter: u64,
-    /// Next unused counter for pairing-AEAD sync frames *we* expect to
-    /// receive, continuing `PairingSession::next_recv_counter`'s sequence.
-    pairing_sync_recv_counter: u64,
 
     // ── User-initiated sync between established devices ─────────────────────
     /// The in-flight sync request, in either role: one we published
@@ -904,18 +883,14 @@ impl App {
             poll_interval_override: None,
             ring_driver,
             last_ring_tick: None,
-            sync_session: None,
+            sync_transfer: None,
             swept_ex_members: Vec::new(),
-            sync_peer_name: None,
             pending_pair_token: None,
             cached_sibling_stealth: Vec::new(),
             pairing_session: None,
             pairing_is_new_device: None,
             sync_request: None,
             pending_pair_rendezvous_token: None,
-            pairing_sync_keys: None,
-            pairing_sync_send_counter: 0,
-            pairing_sync_recv_counter: 0,
         })
     }
 
@@ -1413,18 +1388,9 @@ impl App {
         let payload = PairingPayload { token, secret };
         let code = payload.to_text();
 
-        // A previous pairing's pair WS / sync state (if any) is now
-        // superseded — a device only ever drives one pairing exchange at a
-        // time, and leaving the old `pairing_sync_keys` set would route
-        // this new pairing's incoming frames through the *old* AEAD
-        // channel's dispatch, misinterpreting them (see the dispatch note
-        // on `PairFrameReceived`).
-        self.drawbridge.clear_pair();
-        self.sync_session = None;
-        self.pairing_sync_keys = None;
+        self.reset_pair_channel(&token);
         self.pairing_session = Some(PairingSession::new_device(&payload));
         self.pairing_is_new_device = Some(true);
-        self.pending_pair_rendezvous_token = Some(token.to_vec());
 
         let _ = self
             .bg_tx
@@ -1446,15 +1412,10 @@ impl App {
         }
         let payload = PairingPayload::from_text(code).map_err(AppError::Mls)?;
 
-        // See the matching note in `api_pair_new`: supersede any previous
-        // pairing's pair WS / sync state before starting this one.
-        self.drawbridge.clear_pair();
-        self.sync_session = None;
-        self.pairing_sync_keys = None;
+        self.reset_pair_channel(&payload.token);
         self.pairing_session =
             Some(PairingSession::existing_device(&payload.secret, &payload.token));
         self.pairing_is_new_device = Some(false);
-        self.pending_pair_rendezvous_token = Some(payload.token.to_vec());
 
         let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairJoin {
             token: payload.token.to_vec(),
@@ -2242,15 +2203,9 @@ impl App {
             }
 
             BgEvent::PairFrameReceived { data } => {
-                // Three possible occupants of the pair channel: still mid
-                // Enroll/Admit/Done (PairingSession), past Done and running
-                // history sync under the *same* pairing AEAD (pairing_sync_keys
-                // — qr-pairing.md §3.2), or the established-devices
-                // reconnect-sync path (ring-MLS `sync_session` alone, no
-                // PairingSession involved at all).
-                if self.pairing_sync_keys.is_some() {
-                    self.process_pairing_sync_frame(data);
-                } else if self.pairing_session.as_ref().map(|s| !s.is_done()).unwrap_or(false) {
+                // A pairing still mid Enroll/Admit takes its own frames;
+                // once done, the channel carries the transfer it handed off.
+                if self.pairing_session.as_ref().is_some_and(|s| !s.is_done()) {
                     self.handle_pairing_frame(data);
                 } else {
                     self.process_sync_frame(data);
@@ -2498,7 +2453,7 @@ impl App {
                     }
                     Err(e) => {
                         self.debug_log.log(&format!("sync: pair WS connect failed: {e}"));
-                        self.sync_session = None;
+                        self.sync_transfer = None;
                         self.pending_pair_token = None;
                         // Transport failure the session never saw — cancel
                         // explicitly so `ui_state()` reports `Failed`.
@@ -5900,29 +5855,52 @@ impl App {
 
     // ── History sync ───────────────────────────────────────────────────────────
 
-    /// Build and start a `SyncSession` once the pair WS reports `PairConnected`.
+    /// Start a transfer between established devices once the pair WS
+    /// reports `PairConnected`.
     fn start_sync_session(&mut self) {
-        let ring_id = match self.ring_driver.ring_id().map(<[u8]>::to_vec) {
-            Some(id) => id,
-            None => return,
+        let ring_id = self.ring_driver.ring_id().map(<[u8]>::to_vec);
+        let key_bundle = self.keys.load_identity_key().ok();
+        let (Some(ring_id), Some(key_bundle)) = (ring_id, key_bundle) else {
+            self.debug_log.log("sync: cannot start — ring or key bundle not ready");
+            self.drawbridge.clear_pair();
+            self.pending_pair_token = None;
+            if let Some(req) = self.sync_request.as_mut() {
+                req.fail(moat_core::SyncFailure::ChannelClosed {
+                    detail: "not ready to sync".to_string(),
+                });
+            }
+            return;
         };
-        let key_bundle = match self.keys.load_identity_key() {
-            Ok(k) => k,
-            Err(_) => return,
-        };
-        let ring_epoch = self.mls.get_group_epoch(&ring_id).ok().flatten().unwrap_or(0);
+        let channel = crate::sync::SyncChannel::Ring { ring_id: ring_id.clone(), key_bundle };
+        self.start_sync_transfer(channel, &ring_id);
+    }
 
+    /// Start a transfer under the *pairing* AEAD — the
+    /// `PairingCommand::StartSync` handoff from a `PairingSession` that just
+    /// finished Enroll/Admit. Per qr-pairing.md §3.2 this continues the
+    /// pairing channel rather than re-keying to ring MLS: the new device has
+    /// no ring-MLS traffic history to fall back on for this exchange.
+    fn start_pairing_sync_session(&mut self) {
+        // `StartSync` only follows a done session, which has both.
+        let Some(session) = self.pairing_session.as_mut() else { return };
+        let (Some(ring_id), Some(channel)) =
+            (session.ring_id().map(<[u8]>::to_vec), session.transfer_channel())
+        else {
+            return;
+        };
+        self.start_sync_transfer(crate::sync::SyncChannel::Pairing(channel), &ring_id);
+    }
+
+    fn start_sync_transfer(&mut self, channel: crate::sync::SyncChannel, ring_id: &[u8]) {
+        let ring_epoch = self.mls.get_group_epoch(ring_id).ok().flatten().unwrap_or(0);
         let (session, outputs) = self.build_paired_sync_session(ring_epoch);
-        self.sync_session = Some(session);
-        self.process_sync_outputs(outputs, &ring_id, &key_bundle);
+        self.sync_transfer =
+            Some(crate::sync::SyncTransfer { session, channel, peer_name: None });
+        self.process_sync_outputs(outputs);
     }
 
     /// Build a fresh `SyncSession` and its initial `on_paired` outputs, from
-    /// local keystore/digest state. Shared by `start_sync_session`
-    /// (established-devices reconnect-sync, ring-MLS wire encryption) and
-    /// `start_pairing_sync_session` (pairing-driven onboarding sync,
-    /// pairing-AEAD wire encryption per qr-pairing.md §3.2) — only the wire
-    /// encryption differs between the two.
+    /// local keystore/digest state.
     fn build_paired_sync_session(
         &self,
         ring_epoch: u64,
@@ -5981,33 +5959,6 @@ impl App {
         let outputs = session.on_paired(our_convs, ring_epoch);
         (session, outputs)
     }
-
-    /// Build and start a `SyncSession` under the *pairing* AEAD channel —
-    /// the `PairingCommand::StartSync` handoff, driven by a `PairingSession`
-    /// that just finished Enroll/Admit/Done. Per qr-pairing.md §3.2 this
-    /// keeps using the pairing AEAD (continuing its counter sequence via
-    /// `channel_keys`/`next_send_counter`/`next_recv_counter`) rather than
-    /// re-keying to ring MLS like `start_sync_session` does — the new
-    /// device in particular has no ring-MLS traffic history to fall back
-    /// on for this exchange, and mixing the two wire formats on one pair
-    /// WS is exactly the bug this split avoids.
-    fn start_pairing_sync_session(&mut self) {
-        let Some(pairing) = self.pairing_session.as_ref() else { return };
-        self.pairing_sync_keys = Some(pairing.channel_keys().clone());
-        self.pairing_sync_send_counter = pairing.next_send_counter();
-        self.pairing_sync_recv_counter = pairing.next_recv_counter();
-
-        let ring_id = match self.ring_driver.ring_id().map(<[u8]>::to_vec) {
-            Some(id) => id,
-            None => return,
-        };
-        let ring_epoch = self.mls.get_group_epoch(&ring_id).ok().flatten().unwrap_or(0);
-
-        let (session, outputs) = self.build_paired_sync_session(ring_epoch);
-        self.sync_session = Some(session);
-        self.process_pairing_sync_outputs(outputs);
-    }
-
 
     /// Surface a conversation whose history arrived by sync before we were
     /// a member of it.
@@ -6080,23 +6031,14 @@ impl App {
     }
 
     /// Process `SyncOutput` actions from the state machine.
-    fn process_sync_outputs(
-        &mut self,
-        outputs: Vec<crate::sync::SyncOutput>,
-        ring_id: &[u8],
-        key_bundle: &[u8],
-    ) {
-        use crate::sync::SyncOutput;
+    fn process_sync_outputs(&mut self, outputs: Vec<crate::sync::SyncOutput>) {
+        use crate::sync::{SyncChannel, SyncOutput};
 
         for output in outputs {
             match output {
                 SyncOutput::Send(msg) => {
-                    let payload = crate::sync::encode_sync_msg(&msg);
-                    let epoch = self.mls.get_group_epoch(ring_id).ok().flatten().unwrap_or(0);
-                    let event = Event::sync_app(ring_id.to_vec(), epoch, payload);
-                    if let Ok(enc) = self.mls.encrypt_event(ring_id, key_bundle, &event) {
-                        let _ = self.save_mls_state();
-                        let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairBinary { data: enc.ciphertext });
+                    if let Some(data) = self.seal_sync_msg(&msg) {
+                        let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairBinary { data });
                     }
                 }
                 SyncOutput::Store { conv_id, messages } => {
@@ -6129,30 +6071,127 @@ impl App {
         // Teardown happens after every output has been applied, never as
         // one of them: closing the channel mid-list would strand whatever
         // followed.
-        if self.sync_session.as_ref().is_some_and(|s| s.is_done()) {
-            let tally = self
-                .sync_session
-                .as_ref()
-                .map(crate::sync::SyncSession::tally)
-                .unwrap_or_default();
-            self.debug_log.log(&format!(
-                "sync: session complete — received {} message(s) across {} conversation(s), \
-                 sent {} across {}; closing pair WS",
-                tally.messages, tally.conversations, tally.sent_messages, tally.sent_conversations
-            ));
-            self.sync_session = None;
+        if !self.sync_transfer.as_ref().is_some_and(|t| t.session.is_done()) {
+            return;
+        }
+        let Some(transfer) = self.sync_transfer.take() else { return };
+        let tally = transfer.session.tally();
+        self.debug_log.log(&format!(
+            "sync: session complete — received {} message(s) across {} conversation(s), \
+             sent {} across {}; closing pair WS",
+            tally.messages, tally.conversations, tally.sent_messages, tally.sent_conversations
+        ));
+        // Queued behind the final sends, which a direct close would drop.
+        let _ = self.bg_tx.send(BgEvent::DrawbridgeClosePair);
+        if let SyncChannel::Ring { .. } = transfer.channel {
             self.pending_pair_token = None;
-            // Queued behind the final sends, which a direct close would drop.
-            let _ = self.bg_tx.send(BgEvent::DrawbridgeClosePair);
-            let peer_name = self.sync_peer_name.take();
             if let Some(session) = self.sync_request.as_mut() {
-                session.on_complete(tally, peer_name);
+                session.on_complete(tally, transfer.peer_name);
+            }
+        }
+    }
+
+    /// Seal an outgoing sync message under the running transfer's channel.
+    fn seal_sync_msg(&mut self, msg: &crate::sync::SyncMsg) -> Option<Vec<u8>> {
+        let payload = crate::sync::encode_sync_msg(msg);
+        let transfer = self.sync_transfer.as_mut()?;
+        match &mut transfer.channel {
+            crate::sync::SyncChannel::Ring { ring_id, key_bundle } => {
+                let epoch = self.mls.get_group_epoch(ring_id).ok().flatten().unwrap_or(0);
+                let event = Event::sync_app(ring_id.clone(), epoch, payload);
+                let sealed = self.mls.encrypt_event(ring_id, key_bundle, &event).ok();
+                let _ = self.save_mls_state();
+                sealed.map(|e| e.ciphertext)
+            }
+            crate::sync::SyncChannel::Pairing(channel) => Some(channel.seal(&payload)),
+        }
+    }
+
+    /// Open a pair WS frame under the running transfer's channel: `Ok(None)`
+    /// for a frame to skip, `Err` when the channel cannot continue past it.
+    fn open_sync_frame(&mut self, data: &[u8]) -> std::result::Result<Option<Vec<u8>>, String> {
+        use moat_core::EventKind;
+
+        let Some(transfer) = self.sync_transfer.as_mut() else {
+            self.debug_log.log("sync: frame received but no active session");
+            return Ok(None);
+        };
+        match &mut transfer.channel {
+            crate::sync::SyncChannel::Ring { ring_id, .. } => {
+                let outcome = match self.mls.decrypt_event(ring_id, data) {
+                    Ok(o) => o,
+                    Err(e) => {
+                        self.debug_log.log(&format!("sync: decrypt_event failed: {e}"));
+                        return Ok(None);
+                    }
+                };
+                let decrypted = outcome.into_result();
+                // A pair channel has exactly one peer, so the latest
+                // frame's sender is the peer; every frame carries one.
+                if let Some(sender) = decrypted.sender.as_ref() {
+                    transfer.peer_name = Some(sender.device_name.clone());
+                }
+                let _ = self.save_mls_state();
+                if !matches!(decrypted.event.kind, EventKind::SyncApp) {
+                    self.debug_log.log("sync: unexpected event kind on pair WS");
+                    return Ok(None);
+                }
+                Ok(Some(decrypted.event.payload))
+            }
+            // A frame that fails to open ends the channel: its counter is
+            // the nonce, and the peer sealed the next one expecting it to
+            // advance.
+            crate::sync::SyncChannel::Pairing(channel) => {
+                channel.open(data).map(Some).map_err(|e| e.to_string())
+            }
+        }
+    }
+
+    /// End the running transfer early and close its channel.
+    fn abort_sync_transfer(&mut self, detail: String) {
+        self.debug_log.log(&format!("sync: {detail}"));
+        let Some(transfer) = self.sync_transfer.take() else { return };
+        self.drawbridge.clear_pair();
+        self.report_transfer_failure(transfer.channel, detail);
+    }
+
+    /// Tell whichever gesture opened a transfer that it ended early.
+    fn report_transfer_failure(&mut self, channel: crate::sync::SyncChannel, detail: String) {
+        match channel {
+            crate::sync::SyncChannel::Ring { .. } => {
+                if let Some(req) = self.sync_request.as_mut() {
+                    req.fail(moat_core::SyncFailure::ChannelClosed { detail });
+                }
+            }
+            crate::sync::SyncChannel::Pairing(_) => {
+                if let Some(session) = self.pairing_session.as_mut() {
+                    session.transfer_failed(&detail);
+                }
+                // The "Paired!" popup is usually dismissed by now.
+                if self.overlay == Overlay::None {
+                    self.overlay = if self.pairing_is_new_device == Some(false) {
+                        Overlay::PairApprove
+                    } else {
+                        Overlay::PairShowCode
+                    };
+                }
             }
         }
     }
 
     /// The pair channel ended: drop its session, and fail whatever was
     /// still running on it.
+    /// Supersede whatever held the pair channel before a new rendezvous
+    /// on `token`: a device drives one pair session at a time, and a
+    /// leftover transfer would misread the next session's frames.
+    fn reset_pair_channel(&mut self, token: &[u8]) {
+        self.drawbridge.clear_pair();
+        self.sync_transfer = None;
+        self.pairing_session = None;
+        self.pairing_is_new_device = None;
+        self.pending_pair_rendezvous_token = Some(token.to_vec());
+    }
+
     fn on_pair_closed(&mut self, session_token: Option<Vec<u8>>, reason: String) {
         // A completed round's teardown notice routinely lands after
         // the next round has started. The reconnect-sync path has no
@@ -6174,12 +6213,15 @@ impl App {
 
         self.debug_log.log(&format!("sync: pair WS closed: {reason}"));
         self.drawbridge.clear_pair();
-        self.sync_session = None;
         self.pending_pair_token = None;
-        self.pairing_sync_keys = None;
-        // A transfer cut short must say so. `fail` is a no-op once
-        // the session completed, which is the ordinary case: the
-        // relay closes the channel right after a successful sync.
+        // A transfer cut short must say so.
+        if let Some(transfer) = self.sync_transfer.take() {
+            self.report_transfer_failure(transfer.channel, reason);
+            return;
+        }
+        // `fail` is a no-op once the request completed, which is the
+        // ordinary case: the relay closes the channel right after a
+        // successful sync.
         if let Some(session) = self.sync_request.as_mut() {
             session.fail(moat_core::SyncFailure::ChannelClosed { detail: reason });
         }
@@ -6190,228 +6232,36 @@ impl App {
         }
     }
 
-    /// Decrypt and dispatch an incoming binary frame from the pair WS.
+    /// Open and dispatch an incoming binary frame from the pair WS.
     fn process_sync_frame(&mut self, data: Vec<u8>) {
-        use moat_core::EventKind;
-
-        let ring_id = match self.ring_driver.ring_id().map(<[u8]>::to_vec) {
-            Some(id) => id,
-            None => return,
-        };
-        let key_bundle = match self.keys.load_identity_key() {
-            Ok(k) => k,
-            Err(_) => return,
-        };
         // A precondition, not a value: the `Store` arm needs our DID to
         // decide which synced messages are our own, so a frame arriving
         // while logged out has nowhere to go.
         if self.client.is_none() {
             return;
         }
-
-        let outcome = match self.mls.decrypt_event(&ring_id, &data) {
-            Ok(o) => o,
+        let payload = match self.open_sync_frame(&data) {
+            Ok(Some(p)) => p,
+            Ok(None) => return,
             Err(e) => {
-                self.debug_log.log(&format!("sync: decrypt_event failed: {e}"));
+                self.abort_sync_transfer(format!("frame failed to open: {e}"));
                 return;
             }
         };
-        let _ = self.save_mls_state();
-
-        let decrypted = outcome.into_result();
-        if !matches!(decrypted.event.kind, EventKind::SyncApp) {
-            self.debug_log.log("sync: unexpected event kind on pair WS");
-            return;
-        }
-
-        // Whoever is on the other end, named by MLS rather than by
-        // anything the payload claims. Every frame carries it; keeping the
-        // latest is enough, since a pair channel has exactly one peer.
-        if let Some(sender) = decrypted.sender.as_ref() {
-            self.sync_peer_name = Some(sender.device_name.clone());
-        }
-
-        let msg = match crate::sync::decode_sync_msg(&decrypted.event.payload) {
+        let msg = match crate::sync::decode_sync_msg(&payload) {
             Ok(m) => m,
             Err(e) => {
                 self.debug_log.log(&format!("sync: decode_sync_msg failed: {e}"));
                 return;
             }
         };
-
-        let outputs = match self.sync_session.as_mut() {
-            Some(session) => session.on_message(msg),
-            None => {
-                self.debug_log.log("sync: frame received but no active session");
-                return;
-            }
-        };
-
-        let ring_id_clone = ring_id.clone();
-        let outputs = match outputs {
-            Ok(o) => o,
-            Err(e) => {
-                // A message the session can't account for means the peer
-                // believes it delivered something we did not take. Abort
-                // loudly rather than continue a sync that is now wrong.
-                self.debug_log.log(&format!("sync: protocol error: {e}"));
-                self.sync_session = None;
-                self.drawbridge.clear_pair();
-                if let Some(req) = self.sync_request.as_mut() {
-                    req.fail(moat_core::SyncFailure::ChannelClosed {
-                        detail: e.to_string(),
-                    });
-                }
-                return;
-            }
-        };
-        self.process_sync_outputs(outputs, &ring_id_clone, &key_bundle);
-    }
-
-    /// Process `SyncOutput` actions under the pairing AEAD — the
-    /// `process_sync_outputs` counterpart for the pairing-driven handoff
-    /// (see `start_pairing_sync_session`). `Store`/`Complete` handling is
-    /// identical; only `Send` differs (seal via pairing AEAD instead of
-    /// ring-MLS `encrypt_event`).
-    fn process_pairing_sync_outputs(&mut self, outputs: Vec<crate::sync::SyncOutput>) {
-        use crate::sync::SyncOutput;
-
-        for output in outputs {
-            match output {
-                SyncOutput::Send(msg) => {
-                    let Some(keys) = self.pairing_sync_keys.clone() else { continue };
-                    let send_key = match self.pairing_is_new_device {
-                        Some(true) => &keys.k_new_to_old,
-                        Some(false) => &keys.k_old_to_new,
-                        None => continue,
-                    };
-                    let plaintext = crate::sync::encode_sync_msg(&msg);
-                    let ciphertext = moat_core::seal_frame(
-                        send_key,
-                        self.pairing_sync_send_counter,
-                        &plaintext,
-                    );
-                    self.pairing_sync_send_counter += 1;
-                    let _ = self
-                        .bg_tx
-                        .send(BgEvent::DrawbridgeSendPairBinary { data: ciphertext });
-                }
-                SyncOutput::Store { conv_id, messages } => {
-                    self.register_synced_conversation(&conv_id, &messages);
-                    let my_did = self.client.as_ref().map(|c| c.did().to_string());
-                    // One write for the batch; per-message append is quadratic.
-                    let stored: Vec<_> = messages
-                        .iter()
-                        .map(|sync_msg| {
-                            let mut stored = crate::sync::stored_from_sync_message(sync_msg);
-                            if let (Some(ref did), Some(ref sender)) = (&my_did, &stored.sender_did) {
-                                stored.is_own = sender == did;
-                            }
-                            stored
-                        })
-                        .collect();
-                    let _ = self.keys.append_messages(&conv_id, stored);
-                    self.debug_log
-                        .log(&format!("pairing-sync: stored batch for conv {conv_id}"));
-                    let active_id = self.active_conversation
-                        .and_then(|i| self.conversations.get(i))
-                        .map(|c| c.id.clone());
-                    if active_id.as_deref() == Some(&conv_id) {
-                        let _ = self.load_messages();
-                    }
-                }
-            }
-        }
-
-        // As in `process_sync_outputs`: tear down only once every output in
-        // the batch has been applied, never as one of them.
-        if self.sync_session.as_ref().is_some_and(|s| s.is_done()) {
-            self.debug_log
-                .log("pairing-sync: session complete — closing pair WS");
-            self.sync_session = None;
-            self.pairing_sync_keys = None;
-            // Clear the role flag now — otherwise a later, unrelated
-            // `PairConnected` (an established-devices reconnect-sync
-            // session) would still route through the pairing-role match
-            // arms instead of `start_sync_session`, since the flag outlives
-            // this pairing and `pairing_session` itself is deliberately
-            // never cleared (see its field doc).
-            self.pairing_is_new_device = None;
-            let _ = self.bg_tx.send(BgEvent::DrawbridgeClosePair);
-        }
-    }
-
-    /// Open and dispatch an incoming binary frame under the pairing AEAD —
-    /// the `process_sync_frame` counterpart for the pairing-driven handoff.
-    fn process_pairing_sync_frame(&mut self, data: Vec<u8>) {
-        let Some(keys) = self.pairing_sync_keys.clone() else { return };
-        let recv_key = match self.pairing_is_new_device {
-            Some(true) => &keys.k_old_to_new,
-            Some(false) => &keys.k_new_to_old,
-            None => return,
-        };
-        // A precondition, not a value: the `Store` arm needs our DID to
-        // decide which synced messages are our own, so a frame arriving
-        // while logged out has nowhere to go.
-        if self.client.is_none() {
-            return;
-        }
-
-        let plaintext = match moat_core::open_frame(recv_key, self.pairing_sync_recv_counter, &data)
-        {
-            Ok(p) => p,
-            Err(e) => {
-                self.debug_log
-                    .log(&format!("pairing-sync: failed to open frame: {e}"));
-                return;
-            }
-        };
-        self.pairing_sync_recv_counter += 1;
-
-        let msg = match crate::sync::decode_sync_msg(&plaintext) {
-            Ok(m) => m,
-            Err(e) => {
-                // The new device's advisory `PairingMsg::Done` (a channel-
-                // teardown courtesy, not load-bearing for either side's own
-                // completion — see its doc in moat-core) can still be in
-                // flight when the peer locally transitions to sync mode:
-                // both sides do so as soon as *their own* processing
-                // finishes, independent of what the other side has sent or
-                // received yet. A `Done` that arrives after that transition
-                // opens fine under the pairing AEAD (same channel, next
-                // counter) but isn't a `SyncMsg` — recognize and ignore it
-                // rather than logging a spurious decode error.
-                if matches!(
-                    moat_core::decode_pairing_msg(&plaintext),
-                    Ok(moat_core::PairingMsg::Done)
-                ) {
-                    self.debug_log
-                        .log("pairing-sync: received the pairing session's Done courtesy");
-                } else {
-                    self.debug_log.log(&format!("pairing-sync: decode_sync_msg failed: {e}"));
-                }
-                return;
-            }
-        };
-
-        let outputs = match self.sync_session.as_mut() {
-            Some(session) => session.on_message(msg),
-            None => {
-                self.debug_log
-                    .log("pairing-sync: frame received but no active session");
-                return;
-            }
-        };
-
-        match outputs {
-            Ok(o) => self.process_pairing_sync_outputs(o),
-            Err(e) => {
-                self.debug_log
-                    .log(&format!("pairing-sync: protocol error: {e}"));
-                self.sync_session = None;
-                self.pairing_sync_keys = None;
-                self.drawbridge.clear_pair();
-            }
+        let Some(transfer) = self.sync_transfer.as_mut() else { return };
+        match transfer.session.on_message(msg) {
+            Ok(outputs) => self.process_sync_outputs(outputs),
+            // A message the session can't account for means the peer
+            // believes it delivered something we did not take. Abort
+            // loudly rather than continue a sync that is now wrong.
+            Err(e) => self.abort_sync_transfer(format!("protocol error: {e}")),
         }
     }
 
@@ -6424,9 +6274,15 @@ impl App {
     pub fn sync_status(&mut self) -> serde_json::Value {
         self.expire_sync_request_if_due();
         serde_json::json!({
-            "active": self.sync_session.is_some(),
+            "active": self.sync_transfer.is_some(),
             "request": self.sync_request_ui_state(),
         })
+    }
+
+    /// Progress of the history transfer on the pair channel, whichever
+    /// gesture opened it; `None` when nothing is transferring.
+    pub fn sync_progress(&self) -> Option<moat_core::SyncProgress> {
+        self.sync_transfer.as_ref().map(|t| t.session.progress())
     }
 
     // ── User-initiated sync between established devices ─────────────────────
@@ -6500,16 +6356,7 @@ impl App {
             .map_err(AppError::Mls)?;
         let _ = self.save_mls_state();
 
-        // Whatever occupied the pair channel before is superseded — a
-        // device drives one pair session at a time (see `api_pair_new`).
-        self.drawbridge.clear_pair();
-        self.sync_session = None;
-        self.pairing_sync_keys = None;
-        self.pairing_session = None;
-        // `None` routes `PairConnected` to `start_sync_session` — the
-        // ring-MLS-encrypted path, not the pairing AEAD.
-        self.pairing_is_new_device = None;
-        self.pending_pair_rendezvous_token = Some(token.to_vec());
+        self.reset_pair_channel(&token);
         self.sync_request = Some(SyncRequestSession::request(
             token,
             chrono::Utc::now().timestamp_millis(),
@@ -6566,12 +6413,7 @@ impl App {
             .map_err(AppError::Mls)?;
         let _ = self.save_mls_state();
 
-        self.drawbridge.clear_pair();
-        self.sync_session = None;
-        self.pairing_sync_keys = None;
-        self.pairing_session = None;
-        self.pairing_is_new_device = None;
-        self.pending_pair_rendezvous_token = Some(token.to_vec());
+        self.reset_pair_channel(&token);
         self.sync_request = Some(SyncRequestSession::offer(
             token,
             chrono::Utc::now().timestamp_millis(),
@@ -6599,12 +6441,7 @@ impl App {
             .ok_or_else(|| AppError::Other("no sync request to accept".to_string()))?;
         let token = session.accept().map_err(AppError::Mls)?;
 
-        self.drawbridge.clear_pair();
-        self.sync_session = None;
-        self.pairing_sync_keys = None;
-        self.pairing_session = None;
-        self.pairing_is_new_device = None;
-        self.pending_pair_rendezvous_token = Some(token.to_vec());
+        self.reset_pair_channel(&token);
 
         let _ = self
             .bg_tx
@@ -6684,14 +6521,7 @@ impl App {
 
         self.debug_log
             .log(&format!("sync: accepting {device_name}'s offer of history"));
-        self.drawbridge.clear_pair();
-        self.sync_session = None;
-        self.pairing_sync_keys = None;
-        self.pairing_session = None;
-        // `None` routes `PairConnected` to `start_sync_session` — the
-        // ring-MLS path, not the pairing AEAD.
-        self.pairing_is_new_device = None;
-        self.pending_pair_rendezvous_token = Some(token.to_vec());
+        self.reset_pair_channel(&token);
         self.sync_request = Some(SyncRequestSession::accept_offer(token, now_ms));
 
         let _ = self
@@ -6959,16 +6789,7 @@ impl App {
     /// `pairing_session` on `StartSync`: `ui_state()`/`GET /pair/status`
     /// must keep reporting the real terminal outcome after completion, not
     /// just at the instant it happens.
-    ///
-    /// `StartSync` is deferred to the end of the batch rather than acted on
-    /// where it appears in `cmds`: it immediately sends a sync `Hello` at
-    /// the *next* pairing-AEAD counter, so any `SendFrame` later in the
-    /// same batch (e.g. the new device's `Done`, which follows `StartSync`
-    /// in `PairingSession::on_frame_received`'s Admit arm) must reach the
-    /// wire first — otherwise the peer receives frames out of counter
-    /// order and rejects the earlier one as undecryptable.
     fn interpret_pairing_commands(&mut self, cmds: Vec<PairingCommand>) {
-        let mut start_sync = false;
         for cmd in cmds {
             match cmd {
                 PairingCommand::SendFrame { ciphertext } => {
@@ -7041,13 +6862,8 @@ impl App {
                         }
                     }
                 }
-                PairingCommand::StartSync => {
-                    start_sync = true;
-                }
+                PairingCommand::StartSync => self.start_pairing_sync_session(),
             }
-        }
-        if start_sync {
-            self.start_pairing_sync_session();
         }
         self.sync_pairing_overlay();
     }

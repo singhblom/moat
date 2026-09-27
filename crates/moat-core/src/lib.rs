@@ -82,7 +82,7 @@ pub use crate::tag::{
 };
 pub use crate::sync::{
     decode_sync_msg, encode_sync_msg, fit_hello_inventories, ConvInventory, ConvState,
-    SyncMessage, SyncMsg, SyncOutput, SyncReaction, SyncSession, SyncTally,
+    SyncMessage, SyncMsg, SyncOutput, SyncProgress, SyncReaction, SyncSession, SyncTally,
     HELLO_INVENTORY_BUDGET_BYTES,
 };
 pub use crate::sync_request::{
@@ -92,7 +92,7 @@ pub use crate::sync_request::{
 pub use crate::pairing::{
     crockford_decode, crockford_encode, decode_pairing_msg, derive_pairing_keys,
     encode_pairing_msg, open_frame, seal_frame, summarize_pairing_commands, Admit, Enroll,
-    PairingChannelKeys, PairingCommand, PairingMsg, PairingPayload, PairingSession, PairingUiState,
+    PairingChannelKeys, PairingCommand, PairingFrameChannel, PairingMsg, PairingPayload, PairingSession, PairingUiState,
     SiblingInfo, CROCKFORD_ALPHABET, PAIRING_FRAME_KEY_LEN, PAIRING_FRAME_NONCE_LEN,
     PAIRING_HKDF_INFO_N2O, PAIRING_HKDF_INFO_O2N, PAIRING_PAYLOAD_LEN, PAIRING_PAYLOAD_VERSION,
     PAIRING_SECRET_LEN, PAIRING_TOKEN_LEN, PAIRING_URI_SCHEME,

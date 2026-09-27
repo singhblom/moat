@@ -2,7 +2,7 @@
 /// `moat_dart_common` has no Flutter dependency (it's shared with the
 /// headless server), so services expose change notifications through these
 /// instead. Same shape as Flutter's, so the app can adapt one cheaply —
-/// see `CommonValueListenableBuilder`.
+/// see `asFlutter` in the app's `common_listenable.dart`.
 abstract class ValueListenable<T> {
   T get value;
   void addListener(void Function() listener);

@@ -10,7 +10,7 @@ part 'simple.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `credential_from_dto`, `from_core`, `into_core`, `payload_from_core`, `payload_to_core`, `push_media_label`, `push_plaintext_preview`, `sibling_info_to_core`, `to_core_sibling_stealth`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `MoatError`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `try_from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `try_from`
 
 /// Generate a stealth keypair. Returns (private_key, public_key) each 32 bytes.
 StealthKeypair generateStealthKeypair() =>
@@ -190,36 +190,6 @@ Future<List<ConvStateDto>> fitHelloInventories(
         {required List<ConvStateDto> convs}) =>
     RustLib.instance.api.crateApiSimpleFitHelloInventories(convs: convs);
 
-/// Seal a frame with AES-128-GCM under the pairing channel's directional
-/// key (`key` must be 16 bytes — one of `channel_key_new_to_old`/
-/// `channel_key_old_to_new`). Used to run the pairing-AEAD history-sync
-/// phase after `is_done()`, continuing the counter sequence — never reuse
-/// a counter value under the same key.
-Future<Uint8List> pairingSealFrame(
-        {required List<int> key,
-        required BigInt counter,
-        required List<int> plaintext}) =>
-    RustLib.instance.api.crateApiSimplePairingSealFrame(
-        key: key, counter: counter, plaintext: plaintext);
-
-/// Open a frame sealed by [`pairing_seal_frame`].
-Future<Uint8List> pairingOpenFrame(
-        {required List<int> key,
-        required BigInt counter,
-        required List<int> ciphertext}) =>
-    RustLib.instance.api.crateApiSimplePairingOpenFrame(
-        key: key, counter: counter, ciphertext: ciphertext);
-
-/// `true` if `plaintext` (already opened under the pairing AEAD) decodes
-/// as the pairing session's advisory `Done` courtesy rather than a
-/// `SyncMsg`. Used by the post-Done pairing-sync phase to recognize and
-/// ignore a `Done` that arrives after the local side has already
-/// transitioned to sync-frame dispatch — see the note on
-/// `PairingCommandDto.startSync` for why this can happen even in a
-/// well-behaved exchange.
-bool pairingFrameIsDone({required List<int> plaintext}) =>
-    RustLib.instance.api.crateApiSimplePairingFrameIsDone(plaintext: plaintext);
-
 /// How many fresh KeyPackages a new device should seed the approver's pool
 /// with via `Enroll.conv_kps` — `moat_core::device_ring::KP_POOL_TARGET`,
 /// exposed so hosts building that batch (e.g. `PairingService.dart`) don't
@@ -354,6 +324,15 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
       required List<int> keyBundle});
 }
 
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<PairingFrameChannelHandle>>
+abstract class PairingFrameChannelHandle implements RustOpaqueInterface {
+  /// Open the next frame from the peer. An error ends the channel.
+  Uint8List open({required List<int> ciphertext});
+
+  /// Seal `plaintext` as the next frame we send.
+  Uint8List seal({required List<int> plaintext});
+}
+
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<PairingSessionHandle>>
 abstract class PairingSessionHandle implements RustOpaqueInterface {
   /// Existing device only: called once the user taps Approve. Creates
@@ -372,14 +351,6 @@ abstract class PairingSessionHandle implements RustOpaqueInterface {
   /// session's state, if it has already reached a terminal state.
   void cancel();
 
-  /// The new-device→existing-device directional AEAD key, for
-  /// continuing the pairing-AEAD stream past `is_done()` (the history
-  /// sync handoff) — see `next_send_counter`/`next_recv_counter`.
-  Uint8List channelKeyNewToOld();
-
-  /// The existing-device→new-device directional AEAD key.
-  Uint8List channelKeyOldToNew();
-
   /// Construct a session for the existing (approving) device.
   static PairingSessionHandle existingDevice(
           {required List<int> secret, required List<int> token}) =>
@@ -394,13 +365,6 @@ abstract class PairingSessionHandle implements RustOpaqueInterface {
           {required List<int> secret, required List<int> token}) =>
       RustLib.instance.api.crateApiSimplePairingSessionHandleNewDevice(
           secret: secret, token: token);
-
-  /// Next unused counter for frames *we* expect to receive.
-  BigInt nextRecvCounter();
-
-  /// Next unused counter for frames *we* send, continuing this session's
-  /// own sequence — never reuse a value already used during Enroll/Admit/Done.
-  BigInt nextSendCounter();
 
   /// Feed a sealed frame received over the pair channel. Dispatches on
   /// role + phase; a decryption or ordering-violation error aborts the
@@ -431,6 +395,14 @@ abstract class PairingSessionHandle implements RustOpaqueInterface {
       required List<int> keyBundle,
       required List<int> stealthScanPubkey,
       required List<OfferedKpDto> convKps});
+
+  /// The pairing AEAD, for the history transfer that follows; `None`
+  /// until the session is done, and after the first call.
+  PairingFrameChannelHandle? transferChannel();
+
+  /// The history transfer this session handed on ended early, so the
+  /// pairing reports as failed. No-op unless the session is done.
+  void transferFailed({required String reason});
 
   /// Render this session's current state for UI presentation — mirrors
   /// `moat_core::PairingSession::ui_state`. The single source of truth
@@ -637,6 +609,9 @@ abstract class SyncSessionHandle implements RustOpaqueInterface {
   /// Called when the pair WS reaches the `paired` state.
   Future<List<SyncOutputDto>> onPaired(
       {required List<ConvStateDto> ourConvs, required BigInt ringEpoch});
+
+  /// How far the transfer has got, for a progress indicator.
+  SyncProgressDto progress();
 
   /// What this side has received. Read at completion, where it becomes
   /// the report the user sees.
@@ -1521,6 +1496,20 @@ sealed class SyncOutputDto with _$SyncOutputDto {
     required String convId,
     required List<SyncMessageDto> messages,
   }) = SyncOutputDto_Store;
+}
+
+@freezed
+sealed class SyncProgressDto with _$SyncProgressDto {
+  const SyncProgressDto._();
+
+  const factory SyncProgressDto.starting() = SyncProgressDto_Starting;
+  const factory SyncProgressDto.transferring({
+    required BigInt received,
+    required BigInt receiveTotal,
+    required BigInt sent,
+    required BigInt sendTotal,
+    required double fraction,
+  }) = SyncProgressDto_Transferring;
 }
 
 /// One emoji reaction, as carried by a synced message.

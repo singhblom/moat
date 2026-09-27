@@ -532,23 +532,20 @@ The channel is **not** re-keyed to ring MLS once the exchange completes: the sam
 
 #### Session protocol
 
-Three messages, JSON-encoded and then sealed whole:
+Two messages, JSON-encoded and then sealed whole:
 
 | Message | Direction | Contents |
 |---|---|---|
 | `Enroll` | new → existing | `credential`, `stealth_scan_pubkey`, `ring_kp` (fresh KeyPackage for the ring Add), `conv_kps` (seeded pool for conversation fan-out) |
 | `Admit` | existing → new | `ring_id`, `welcome`, `roster` |
-| `Done` | either | Teardown courtesy only |
 
 The exchange:
 
 1. Both devices attach to the pair WS (see [Pairing Mode](#pairing-mode-multi-device-history-sync)). The new device sends `Enroll`.
 2. The existing device checks the DID in `Enroll.credential` against its own — a mismatch is a hard abort — and surfaces an approval prompt naming the device.
 3. On approval it creates the ring (first pairing) or adds the joiner to the existing one, seeds the newcomer's KP pool from `conv_kps`, publishes the ring Add commit to the PDS, and sends `Admit`.
-4. The new device processes the Welcome, then verifies that every member credential in the resulting ring carries its own DID — the only anchor available, since `Admit` carries no DID field. It persists ring membership and replies `Done`.
-5. Both sides hand the open channel to history sync.
-
-`Done` marks the end of the Enroll/Admit exchange only. It says nothing about history sync, which completes independently and is observable separately.
+4. The new device processes the Welcome, then verifies that every member credential in the resulting ring carries its own DID — the only anchor available, since `Admit` carries no DID field. It persists ring membership.
+5. Both sides hand the open channel to history sync, which completes on its own `Fin` exchange.
 
 **Approval is always explicit.** No host auto-approves an incoming `Enroll` — not the TUI, not the headless HTTP servers used in testing. A session rests in its awaiting-approval state until a decision is made, and `reject` is a first-class outcome rather than a timeout.
 
@@ -733,7 +730,9 @@ the same deterministic choice from the same data.
 
 Transfer is pulled: a side sends `BatchReq` per conversation it is
 missing history for, the peer answers page by page, and ends each
-conversation with `Done`. Once every `Done` a side is waiting for has
+conversation with `Done`. Every `Batch` states the `total` the sender will serve
+for that conversation, so the receiver can show progress against a known
+count from the first page on. Once every `Done` a side is waiting for has
 arrived, it sends `Fin` — once per session — confirming that everything
 owed to it was delivered. A side expecting nothing sends `Fin` straight
 after the `Hello`.

@@ -75,8 +75,6 @@ Future<ServiceBundle> createServiceBundle({
     drawbridge: drawbridge,
     ring: ring,
     sync: sync,
-    conversationsService: conversationsService,
-    messageStorage: messageStorage,
   );
 
   final syncRequest = SyncRequestService(

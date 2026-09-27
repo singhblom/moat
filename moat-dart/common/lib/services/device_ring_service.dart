@@ -67,10 +67,6 @@ class DeviceRingService {
   /// for User groups can surface conversations.
   ConversationsService? convsService;
 
-  /// Injected by the owner (e.g. ConversationManager) so the ring tick can
-  /// suppress a new SyncOffer while a sync session is already in progress.
-  bool Function() isSyncActive = () => false;
-
   /// True once a pair WS is in-flight (offer sent or join sent + ready received).
   bool get hasPendingPairToken => _pendingPairToken != null;
 

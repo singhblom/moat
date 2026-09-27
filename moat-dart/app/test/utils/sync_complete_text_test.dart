@@ -60,4 +60,26 @@ void main() {
       );
     });
   });
+
+  group('syncProgressText', () {
+    SyncProgressDto progress(
+            int received, int receiveTotal, int sent, int sendTotal) =>
+        SyncProgressDto.transferring(
+          received: BigInt.from(received),
+          receiveTotal: BigInt.from(receiveTotal),
+          sent: BigInt.from(sent),
+          sendTotal: BigInt.from(sendTotal),
+          fraction: 0,
+        );
+
+    test('mirrors the TUI wording for each direction', () {
+      expect(syncProgressText(const SyncProgressDto.starting()),
+          'Preparing history sync…');
+      expect(syncProgressText(progress(0, 0, 0, 0)), 'Syncing history…');
+      expect(syncProgressText(progress(412, 1021, 3, 10)),
+          'Syncing history: 412 of 1021 received, 3 of 10 sent');
+      expect(syncProgressText(progress(0, 0, 3, 10)),
+          'Syncing history: 3 of 10 sent');
+    });
+  });
 }
