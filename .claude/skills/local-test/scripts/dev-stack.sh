@@ -141,6 +141,15 @@ stop() {
       rm -f "$RUN_DIR/$name.pid"
     fi
   done
+
+  # A lost pidfile used to mean `down` silently did nothing and the services
+  # kept running -- ours ran for a week that way. Match on the exact binaries
+  # this script starts so a stale process is still reachable.
+  for pat in "$RUN_DIR/drawbridge" "$ROOT/target/debug/dev_server $POSTERN_PORT"; do
+    for pid in $(pgrep -f "$pat" 2>/dev/null); do
+      kill "$pid" 2>/dev/null && echo "Stopped orphan ($pid): $pat"
+    done
+  done
 }
 
 case "${1:-up}" in
