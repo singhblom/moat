@@ -167,8 +167,7 @@ pub const KP_SELF_LOW_WATER: usize = 2;
 ///
 /// One [`KpPool`] is kept per `(consumer, owner)` pair — i.e. on a
 /// device's `DeviceRingState`, one [`KpPool`] per *owner* device id we
-/// can claim KPs from.  See `protocol_model_ring_transport.rs` for the
-/// invariants this represents.
+/// can claim KPs from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct KpPool {
     /// KPs received from this owner that have not yet been claimed.  New
