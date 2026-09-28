@@ -1846,12 +1846,12 @@ pub fn ring_msg_encode_sync_request(
     token: Vec<u8>,
     target_device_id: Option<Vec<u8>>,
 ) -> Result<Vec<u8>, String> {
-    let token: [u8; moat_core::SYNC_REQUEST_TOKEN_LEN] = token
+    let token: [u8; moat_core::PAIRING_TOKEN_LEN] = token
         .try_into()
         .map_err(|_| "token must be 16 bytes".to_string())?;
     let target_device_id = match target_device_id {
         Some(id) => Some(
-            <[u8; moat_core::DEVICE_ID_LEN]>::try_from(id.as_slice())
+            <moat_core::DeviceId>::try_from(id.as_slice())
                 .map_err(|_| "device_id must be 16 bytes".to_string())?,
         ),
         None => None,
@@ -1869,10 +1869,10 @@ pub fn ring_msg_encode_sync_offer(
     token: Vec<u8>,
     target_device_id: Vec<u8>,
 ) -> Result<Vec<u8>, String> {
-    let token: [u8; moat_core::SYNC_REQUEST_TOKEN_LEN] = token
+    let token: [u8; moat_core::PAIRING_TOKEN_LEN] = token
         .try_into()
         .map_err(|_| "token must be 16 bytes".to_string())?;
-    let target_device_id = <[u8; moat_core::DEVICE_ID_LEN]>::try_from(
+    let target_device_id = <moat_core::DeviceId>::try_from(
         target_device_id.as_slice(),
     )
     .map_err(|_| "device_id must be 16 bytes".to_string())?;
@@ -2087,24 +2087,11 @@ impl SyncRequestSessionHandle {
     /// same token with the relay via `pair_offer`.
     #[frb(sync)]
     pub fn request(token: Vec<u8>, now_ms: i64) -> Result<SyncRequestSessionHandle, String> {
-        let token: [u8; moat_core::SYNC_REQUEST_TOKEN_LEN] = token
+        let token: [u8; moat_core::PAIRING_TOKEN_LEN] = token
             .try_into()
             .map_err(|_| "token must be 16 bytes".to_string())?;
         Ok(SyncRequestSessionHandle {
             inner: Mutex::new(moat_core::SyncRequestSession::request(token, now_ms)),
-        })
-    }
-
-    /// Offer history to a sibling that does not have it. The offerer's
-    /// user has already approved — that is what produced this call — so
-    /// neither side prompts again.
-    #[frb(sync)]
-    pub fn offer(token: Vec<u8>, now_ms: i64) -> Result<SyncRequestSessionHandle, String> {
-        let token: [u8; moat_core::SYNC_REQUEST_TOKEN_LEN] = token
-            .try_into()
-            .map_err(|_| "token must be 16 bytes".to_string())?;
-        Ok(SyncRequestSessionHandle {
-            inner: Mutex::new(moat_core::SyncRequestSession::offer(token, now_ms)),
         })
     }
 
@@ -2116,7 +2103,7 @@ impl SyncRequestSessionHandle {
         token: Vec<u8>,
         now_ms: i64,
     ) -> Result<SyncRequestSessionHandle, String> {
-        let token: [u8; moat_core::SYNC_REQUEST_TOKEN_LEN] = token
+        let token: [u8; moat_core::PAIRING_TOKEN_LEN] = token
             .try_into()
             .map_err(|_| "token must be 16 bytes".to_string())?;
         Ok(SyncRequestSessionHandle {
@@ -2132,7 +2119,7 @@ impl SyncRequestSessionHandle {
         device_name: String,
         now_ms: i64,
     ) -> Result<SyncRequestSessionHandle, String> {
-        let token: [u8; moat_core::SYNC_REQUEST_TOKEN_LEN] = token
+        let token: [u8; moat_core::PAIRING_TOKEN_LEN] = token
             .try_into()
             .map_err(|_| "token must be 16 bytes".to_string())?;
         Ok(SyncRequestSessionHandle {
@@ -2371,6 +2358,12 @@ impl PairingSessionHandle {
             )
             .map_err(|e| e.to_string())?;
         Ok(cmds.into_iter().map(PairingCommandDto::from).collect())
+    }
+
+    /// Whether this is the new (joining) device's side of the pairing.
+    #[frb(sync)]
+    pub fn is_new_device(&self) -> bool {
+        self.inner.lock().unwrap().is_new_device()
     }
 
     /// `true` once this session has reached its terminal `Done` phase.

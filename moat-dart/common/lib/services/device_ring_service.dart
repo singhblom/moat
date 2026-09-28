@@ -30,7 +30,6 @@ class DeviceRingService {
   ffi.RingDriverHandle? _driver;
   bool _tickInFlight = false;
   Uint8List? _pendingPairToken;
-  int _coordGroupCount = 0;
 
   /// Last tick's sibling stealth addresses, kept so KP-lane calls outside
   /// `tick()` (e.g. [emitKpRequestFor], [encryptUserConvWelcome] in
@@ -100,7 +99,6 @@ class DeviceRingService {
     if (json != null && json.isNotEmpty) {
       try {
         _driver = await ffi.RingDriverHandle.fromStateJson(json: json);
-        _coordGroupCount = _countCoordGroupsFromJson(json);
       } catch (e) {
         moatLog('DeviceRingService: ring state corrupt, starting empty: $e');
         _driver = ffi.RingDriverHandle.newEmpty();
@@ -110,21 +108,12 @@ class DeviceRingService {
     }
   }
 
-  /// Always 0. There is no device-coordination-group concept in the ring
-  /// driver; kept as a stable field for `coordGroupCount()`, surfaced in
-  /// `server/lib/http/server.dart`'s `/ring-status`. Mirrors
-  /// `DeviceRingState::coord_group_count` on the Rust side.
-  static int _countCoordGroupsFromJson(String jsonStr) => 0;
-
   /// Returns the ring group id if the device is enrolled.
   Future<Uint8List?> ringGroupId() async {
     final d = _driver;
     if (d == null) return null;
     return d.ringGroupId();
   }
-
-  /// Always 0 — a stable field on `/ring-status` responses.
-  int coordGroupCount() => _coordGroupCount;
 
   /// Allocate `count` fresh, monotonic KP sequence numbers from this
   /// device's own owner-global counter, persisting the advanced counter
@@ -563,9 +552,6 @@ class DeviceRingService {
     try {
       final jsonStr = await driver.toStateJson();
       await _backend.write(_statePath, jsonStr);
-      // Cache the coord_group count from the state JSON so coordGroupCount()
-      // can be synchronous (avoids re-serialising on every /ring-status call).
-      _coordGroupCount = _countCoordGroupsFromJson(jsonStr);
     } catch (e) {
       moatLog('DeviceRingService: persist failed: $e');
     }

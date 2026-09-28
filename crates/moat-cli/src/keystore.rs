@@ -40,9 +40,7 @@ pub struct GroupMetadata {
         default
     )]
     pub participant_handles: Vec<String>,
-    /// Classification of this group (User/Ring). Defaults to User for
-    /// older persisted records that predate this field.
-    #[serde(default)]
+    /// Classification of this group (User/Ring).
     pub kind: GroupKind,
     /// DIDs that have left this group but whose PDS this device has not
     /// swept since they left.
@@ -62,13 +60,11 @@ pub struct GroupMetadata {
     /// Persisted rather than kept in memory because the whole point is to
     /// survive the offline window, which usually includes a restart. See
     /// `MULTI_DEVICE.md`, "Catch-Up Across Membership Changes".
-    #[serde(default)]
     pub pending_ex_members: Vec<String>,
     /// DID → device_id for all members ever seen in this group.
     /// Populated from MLS credentials on startup and when members join.
     /// Needed to generate candidate tags for departed members whose
     /// MLS leaf credentials have been removed.
-    #[serde(default)]
     pub member_device_ids: std::collections::HashMap<String, Vec<u8>>,
 }
 
@@ -208,17 +204,6 @@ pub struct StoredReaction {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ConversationMessages {
     pub messages: Vec<StoredMessage>,
-}
-
-/// An entry of the old `unprocessed_events.json` retry buffer, migrated once.
-#[derive(Debug, Clone, Deserialize)]
-struct LegacyUnprocessedEvent {
-    rkey: String,
-    author_did: String,
-    tag_hex: String,
-    ciphertext_b64: String,
-    created_at: chrono::DateTime<chrono::Utc>,
-    source_did: String,
 }
 
 pub type Result<T> = std::result::Result<T, KeyStoreError>;
@@ -429,35 +414,6 @@ impl KeyStore {
             return Ok(None);
         }
         Ok(Some(fs::read(&path)?))
-    }
-
-    /// Take the old retry buffer's events and delete its file.
-    pub fn take_legacy_unprocessed_events(&self) -> Result<Vec<moat_core::InboxEvent>> {
-        use base64::Engine;
-        let path = self.base_path.join("unprocessed_events.json");
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-        let data = fs::read(&path)?;
-        let stored: Vec<LegacyUnprocessedEvent> = serde_json::from_slice(&data)?;
-        let events = stored
-            .into_iter()
-            .filter_map(|s| {
-                let tag: [u8; 16] = hex::decode(&s.tag_hex).ok()?.try_into().ok()?;
-                Some(moat_core::InboxEvent {
-                    source_did: s.source_did,
-                    rkey: s.rkey,
-                    author_did: s.author_did,
-                    tag,
-                    ciphertext: base64::engine::general_purpose::STANDARD
-                        .decode(&s.ciphertext_b64)
-                        .ok()?,
-                    created_at_ms: s.created_at.timestamp_millis(),
-                })
-            })
-            .collect();
-        fs::remove_file(&path)?;
-        Ok(events)
     }
 
     /// Load messages for a conversation
@@ -946,35 +902,6 @@ mod tests {
         assert_eq!(reopened.load_parked_events().unwrap().as_deref(), Some(&b"parked"[..]));
     }
 
-    /// The old retry buffer migrates once, whatever fields it carried.
-    #[test]
-    fn legacy_unprocessed_events_are_taken_once() {
-        let dir = tempdir().unwrap();
-        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
-        let legacy = serde_json::json!([{
-            "rkey": "a",
-            "author_did": "did:plc:bob",
-            "tag_hex": "07070707070707070707070707070707",
-            "ciphertext_b64": "AQID",
-            "created_at": "2026-09-13T08:00:00Z",
-            "source_did": "did:plc:bob",
-            "first_seen_ms": 1234,
-            "attempts": 2,
-        }]);
-        fs::write(
-            dir.path().join("unprocessed_events.json"),
-            serde_json::to_vec(&legacy).unwrap(),
-        )
-        .unwrap();
-
-        let taken = store.take_legacy_unprocessed_events().unwrap();
-        assert_eq!(taken.len(), 1);
-        assert_eq!(taken[0].rkey, "a");
-        assert_eq!(taken[0].tag, [7u8; 16]);
-        assert_eq!(taken[0].ciphertext, vec![1, 2, 3]);
-        assert!(store.take_legacy_unprocessed_events().unwrap().is_empty());
-    }
-
     fn pending_msg(message_id: &[u8], content: &str) -> StoredMessage {
         StoredMessage {
             rkey: "pending".to_string(),
@@ -1173,23 +1100,6 @@ mod tests {
         assert_eq!(loaded.participant_dids[0], "did:plc:aaa");
         assert_eq!(loaded.participant_dids[2], "did:plc:ccc");
         assert_eq!(loaded.participant_handles[1], "bob.bsky.social");
-    }
-
-    #[test]
-    fn test_group_metadata_backward_compat() {
-        let dir = tempdir().unwrap();
-        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
-
-        // Simulate old single-value JSON format written directly as the store would
-        let old_json = r#"{"participant_did":"did:plc:old","participant_handle":"old.bsky.social"}"#;
-        fs::write(dir.path().join("group_group-old.meta"), old_json).unwrap();
-
-        let loaded = store.load_group_metadata("group-old").unwrap();
-        assert_eq!(loaded.participant_dids, vec!["did:plc:old".to_string()]);
-        assert_eq!(
-            loaded.participant_handles,
-            vec!["old.bsky.social".to_string()]
-        );
     }
 
     /// Reactions have to survive in *storage*, not only in the display

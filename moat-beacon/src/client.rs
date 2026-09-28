@@ -103,7 +103,6 @@ pub struct SyncCompletion {
 #[derive(Debug, Default, Deserialize)]
 pub struct RingStatus {
     pub ring_group_id: Option<String>,
-    pub coord_group_count: usize,
     /// This device's own MLS view of ring membership (0 if not in a ring).
     /// Lets a scenario assert a bystander sibling actually converged after
     /// another device's pairing, not just that "a ring exists."

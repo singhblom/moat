@@ -143,20 +143,6 @@ impl MlsStorage {
         Ok(())
     }
 
-    /// Number of key package bundles whose private init key we still hold.
-    ///
-    /// OpenMLS deletes the bundle when a Welcome built against it is
-    /// processed, so this is exactly the count of our published key packages
-    /// that a peer could still successfully invite us with. Used to drive
-    /// proactive replenishment — see `DeviceRingState::on_tick`.
-    pub(crate) fn count_key_packages(&self) -> usize {
-        let values = self.values.read().unwrap();
-        values
-            .keys()
-            .filter(|k| k.starts_with(KEY_PACKAGE_LABEL))
-            .count()
-    }
-
     /// Whether a key package bundle with this hash reference is still in the
     /// store, i.e. whether we still hold its private init key.
     pub(crate) fn contains_key_package<H: Serialize>(&self, hash_ref: &H) -> bool {

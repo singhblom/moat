@@ -473,26 +473,6 @@ impl PairingCommand {
     }
 }
 
-/// Render a command list as `name xN, name xM` for a one-line log — mirrors
-/// `summarize_ring_commands`.
-pub fn summarize_pairing_commands(cmds: &[PairingCommand]) -> String {
-    if cmds.is_empty() {
-        return "none".to_string();
-    }
-    let mut counts: Vec<(&'static str, usize)> = Vec::new();
-    for c in cmds {
-        match counts.iter_mut().find(|(k, _)| *k == c.kind()) {
-            Some((_, n)) => *n += 1,
-            None => counts.push((c.kind(), 1)),
-        }
-    }
-    counts
-        .into_iter()
-        .map(|(k, n)| if n == 1 { k.to_string() } else { format!("{k} x{n}") })
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 // ─── PairingSession state machine ────────────────────────────────────────────
 
 /// New-device-side phase.
@@ -658,7 +638,7 @@ impl PairingSession {
     /// either role, or `Failed`). Guards [`fail`](Self::fail),
     /// [`reject`](Self::reject) and [`cancel`](Self::cancel) so a completed
     /// outcome is never overwritten by a later, spurious call.
-    fn is_terminal(&self) -> bool {
+    pub fn is_terminal(&self) -> bool {
         matches!(
             self.phase,
             Phase::NewDevice(NewDevicePhase::Done)
@@ -1047,7 +1027,7 @@ impl PairingSession {
             .expect("AwaitingApproval implies a pending Enroll");
 
         let ring_id: Vec<u8> = match existing_ring_id {
-            None => mls.create_device_ring(credential, key_bundle)?,
+            None => mls.create_group(credential, key_bundle)?,
             Some(ring_id) => ring_id.to_vec(),
         };
         let welcome_result = mls.add_member(&ring_id, key_bundle, &enroll.ring_kp)?;
@@ -1082,6 +1062,11 @@ impl PairingSession {
             PairingCommand::SendFrame { ciphertext },
             PairingCommand::StartSync,
         ])
+    }
+
+    /// Whether this is the new (joining) device's side of the pairing.
+    pub fn is_new_device(&self) -> bool {
+        self.displayed_code.is_some()
     }
 
     /// `true` once this session has reached its terminal `Done` phase: the

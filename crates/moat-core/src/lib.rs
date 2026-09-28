@@ -39,7 +39,6 @@ pub(crate) mod tag;
 
 pub mod api;
 
-use openmls::framing::errors::{MessageDecryptionError, SecretTreeError};
 use openmls::framing::MlsMessageBodyIn;
 use openmls::prelude::tls_codec::{Deserialize, Serialize as TlsSerialize};
 use openmls::prelude::*;
@@ -56,8 +55,8 @@ pub use crate::credential::MoatCredential;
 pub use crate::error::{Error, ErrorCode, Result};
 pub use crate::inbox::{Inbox, InboxEvent, MAX_PARKED_AGE_MS, MAX_PARKED_EVENTS};
 pub use crate::device_ring::{
-    decode_coord_msg, encode_coord_msg, summarize_ring_commands, CoordMsg, DeviceId,
-    DeviceRingState, GroupKind, KeyPackageInput, OfferedKp, OwnEventInput, RingCommand, RingEvent,
+    summarize_ring_commands, CoordMsg, DeviceId,
+    DeviceRingState, GroupKind, KeyPackageInput, OfferedKp, OwnEventInput, RingCommand,
     RingMembership, SiblingStealth, StepEnv, TickInputs, KP_POOL_TARGET,
 };
 pub use crate::event::{
@@ -87,14 +86,13 @@ pub use crate::sync::{
 };
 pub use crate::sync_request::{
     decode_ring_msg, encode_ring_msg, RingMsg, SyncFailure, SyncRequestSession,
-    SyncRequestUiState, DEVICE_ID_LEN, SYNC_REQUEST_TOKEN_LEN, SYNC_REQUEST_TTL_MS,
+    SyncRequestUiState, SYNC_REQUEST_TTL_MS,
 };
 pub use crate::pairing::{
     crockford_decode, crockford_encode, decode_pairing_msg, derive_pairing_keys,
-    encode_pairing_msg, open_frame, seal_frame, summarize_pairing_commands, Admit, Enroll,
+    encode_pairing_msg, open_frame, seal_frame, Admit, Enroll,
     PairingChannelKeys, PairingCommand, PairingFrameChannel, PairingMsg, PairingPayload, PairingSession, PairingUiState,
-    SiblingInfo, CROCKFORD_ALPHABET, PAIRING_FRAME_KEY_LEN, PAIRING_FRAME_NONCE_LEN,
-    PAIRING_HKDF_INFO_N2O, PAIRING_HKDF_INFO_O2N, PAIRING_PAYLOAD_LEN, PAIRING_PAYLOAD_VERSION,
+    SiblingInfo, CROCKFORD_ALPHABET, PAIRING_PAYLOAD_LEN, PAIRING_PAYLOAD_VERSION,
     PAIRING_SECRET_LEN, PAIRING_TOKEN_LEN, PAIRING_URI_SCHEME,
 };
 
@@ -164,7 +162,7 @@ struct LocalCommit {
 const STATE_MAGIC: &[u8; 4] = b"MOAT";
 
 /// Current state format version.
-const STATE_VERSION: u16 = 5;
+const STATE_VERSION: u16 = 4;
 
 /// Size of the state header: 4 (magic) + 2 (version) + 16 (device_id) = 22 bytes.
 const STATE_HEADER_SIZE: usize = 4 + 2 + 16;
@@ -248,11 +246,11 @@ pub enum PendingOperation {
 /// Read-only methods (`export_state`, `get_group_epoch`, `has_pending_changes`,
 /// `device_id`) are safe to call concurrently.
 ///
-/// # State format (v5)
+/// # State format (v4)
 ///
 /// The exported state has the following layout:
 /// - `b"MOAT"` (4 bytes) — magic identifier
-/// - Version (2 bytes, little-endian u16) — currently `5`
+/// - Version (2 bytes, little-endian u16) — currently `4`
 /// - Device ID (16 bytes) — random, generated once per device
 /// - MLS state length (8 bytes, little-endian u64)
 /// - MLS state (variable) — raw storage data
@@ -384,7 +382,7 @@ impl MoatSession {
                     "v{version} state not supported; re-initialize session"
                 )))
             }
-            3..=5 => {}
+            3 | 4 => {}
             _ => {
                 return Err(Error::Deserialization(format!(
                     "unsupported state version: {version}"
@@ -423,17 +421,11 @@ impl MoatSession {
         let (seen_counters, rest) = Self::deserialize_seen_counters_rest(rest)?;
 
         // v4: Parse prior export secrets (absent in v3)
-        let (prior_export_secrets, rest) = if version >= 4 && !rest.is_empty() {
-            let (secrets, remaining) = Self::deserialize_prior_export_secrets_rest(rest)?;
-            (secrets, remaining)
+        let prior_export_secrets = if version >= 4 && !rest.is_empty() {
+            Self::deserialize_prior_export_secrets_rest(rest)?.0
         } else {
-            (HashMap::new(), rest)
+            HashMap::new()
         };
-
-        // A v5 file written before the sync watermark was removed still
-        // carries its table here. Nothing parses past this point, so those
-        // trailing bytes are simply ignored.
-        let _ = rest;
 
         Ok(Self {
             provider,
@@ -497,18 +489,6 @@ impl MoatSession {
     /// session is first created, and persisted through `export_state()`/`from_state()`.
     pub fn device_id(&self) -> &[u8; 16] {
         &self.device_id
-    }
-
-    /// Create a new device ring MLS group with a random 32-byte group ID.
-    ///
-    /// The ring is created with only the caller as its initial member; siblings
-    /// are added later via [`add_device`]. Returns the raw group ID bytes.
-    pub fn create_device_ring(
-        &self,
-        credential: &MoatCredential,
-        key_bundle: &[u8],
-    ) -> Result<Vec<u8>> {
-        self.create_group(credential, key_bundle)
     }
 
     /// Check if there are unsaved changes.
@@ -640,10 +620,6 @@ impl MoatSession {
             return false;
         };
         self.provider.storage().contains_key_package(&hash_ref)
-    }
-
-    pub fn live_key_package_count(&self) -> usize {
-        self.provider.storage().count_key_packages()
     }
 
     pub fn replenish_key_package(
@@ -952,15 +928,11 @@ impl MoatSession {
         let protocol_message = mls_message
             .try_into_protocol_message()
             .map_err(|e| Error::Deserialization(e.to_string()))?;
-        let message_epoch = protocol_message.epoch().as_u64();
 
         // Process the message with structured error classification
         let processed = match group.process_message(&self.provider, protocol_message) {
             Ok(msg) => msg,
-            Err(e) => {
-                let group_epoch = group.epoch().as_u64();
-                return Err(Self::classify_process_error(e, group_id, message_epoch, group_epoch));
-            }
+            Err(e) => return Err(Self::classify_process_error(e, group_id)),
         };
 
         // Extract sender info from the credential
@@ -1047,38 +1019,9 @@ impl MoatSession {
     }
 
     /// Classify a `ProcessMessageError` into a structured moat-core `Error`.
-    fn classify_process_error(
-        e: ProcessMessageError,
-        group_id: &[u8],
-        message_epoch: u64,
-        group_epoch: u64,
-    ) -> Error {
+    fn classify_process_error(e: ProcessMessageError, group_id: &[u8]) -> Error {
         let group_hex: String = group_id.iter().map(|b| format!("{:02x}", b)).collect();
         match &e {
-            // Decryption secrets are never derived from this device's own
-            // sender ratchet, so this is the one failure that identifies the
-            // sender as us.
-            ProcessMessageError::ValidationError(ValidationError::UnableToDecrypt(
-                MessageDecryptionError::SecretTreeError(SecretTreeError::RatchetTypeError),
-            )) => Error::OwnEvent(format!("group {}: published by this device", group_hex)),
-            // OpenMLS accepts application messages from retained past epochs,
-            // so a past-epoch rejection is a commit for an epoch already left,
-            // or a message older than the retained window. A *future* epoch is
-            // not stale: the commit that reaches it may simply not be here yet.
-            ProcessMessageError::ValidationError(ValidationError::WrongEpoch)
-                if message_epoch < group_epoch =>
-            {
-                Error::StaleEpoch(format!(
-                    "group {}: event from epoch {} (group is at {})",
-                    group_hex, message_epoch, group_epoch
-                ))
-            }
-            ProcessMessageError::ValidationError(ValidationError::NoPastEpochData) => {
-                Error::StaleEpoch(format!(
-                    "group {}: event from epoch {} is past the retained window (group is at {})",
-                    group_hex, message_epoch, group_epoch
-                ))
-            }
             ProcessMessageError::GroupStateError(state_err) => match state_err {
                 MlsGroupStateError::PendingCommit => Error::StaleCommit(format!(
                     "group {}: pending local commit conflicts with incoming message",
@@ -2086,113 +2029,6 @@ impl MoatSession {
         };
         self.inbox.write().unwrap().wake(added.iter());
         added
-    }
-
-    /// Scan ahead with a wider window to try matching an unknown tag.
-    ///
-    /// When `populate_candidate_tags` misses because the sender's counter advanced
-    /// beyond the gap limit, this method scans a much larger range (up to `scan_limit`)
-    /// for all devices in the given group. Returns the matching tag metadata if found,
-    /// and updates `tag_metadata` and `seen_counters` accordingly.
-    pub fn try_scan_ahead_tag(
-        &self,
-        group_id: &[u8],
-        target_tag: &[u8; 16],
-        scan_limit: u64,
-    ) -> Result<bool> {
-        let group = self
-            .load_group(group_id)?
-            .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
-        let export_secret = self.derive_tag_export_secret(&group)?;
-        let members = self.get_group_members(group_id)?;
-        let seen = self.seen_counters.read().unwrap();
-
-        // Try current epoch first
-        for (_leaf_idx, cred) in &members {
-            let cred = match cred {
-                Some(c) => c,
-                None => continue,
-            };
-            let device_id = cred.device_id();
-            let key = (group_id.to_vec(), cred.did().to_string(), *device_id);
-            let from_counter = seen.get(&key).map_or(0, |&c| c + 1);
-
-            let tags = tag::generate_candidate_tags(
-                &export_secret,
-                group_id,
-                cred.did(),
-                device_id,
-                from_counter,
-                scan_limit,
-            )?;
-            for (t, counter) in tags {
-                if &t == target_tag {
-                    let mut metadata = self.tag_metadata.write().unwrap();
-                    metadata.insert(
-                        t,
-                        TagMetadata {
-                            group_id: group_id.to_vec(),
-                            sender_did: cred.did().to_string(),
-                            device_id: *device_id,
-                            counter,
-                            current_epoch: true,
-                        },
-                    );
-                    drop(metadata);
-                    drop(seen);
-                    let mut seen_w = self.seen_counters.write().unwrap();
-                    let current = seen_w.entry(key).or_insert(0);
-                    if counter >= *current {
-                        *current = counter;
-                    }
-                    return Ok(true);
-                }
-            }
-        }
-
-        // Try prior epoch secrets
-        let prior_secrets = self.prior_export_secrets.read().unwrap();
-        if let Some(deque) = prior_secrets.get(group_id) {
-            for prior_secret in deque.iter() {
-                for (_leaf_idx, cred) in &members {
-                    let cred = match cred {
-                        Some(c) => c,
-                        None => continue,
-                    };
-                    let device_id = cred.device_id();
-                    let tags = tag::generate_candidate_tags(
-                        prior_secret,
-                        group_id,
-                        cred.did(),
-                        device_id,
-                        0,
-                        scan_limit,
-                    )?;
-                    for (t, counter) in tags {
-                        if &t == target_tag {
-                            let mut metadata = self.tag_metadata.write().unwrap();
-                            metadata.insert(
-                                t,
-                                TagMetadata {
-                                    group_id: group_id.to_vec(),
-                                    sender_did: cred.did().to_string(),
-                                    device_id: *device_id,
-                                    counter,
-                                    current_epoch: false,
-                                },
-                            );
-                            drop(metadata);
-                            drop(seen);
-                            // Don't advance seen_counters for old-epoch matches
-                            // (they use epoch-specific counters, not the current epoch's)
-                            return Ok(true);
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(false)
     }
 
     /// Add a new device (key package) to a group for an existing member's DID.

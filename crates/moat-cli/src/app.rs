@@ -728,10 +728,6 @@ pub struct App {
     /// dispatch site reads it via `pairing_ui_state()` rather than caching
     /// its own copy of the code, the pending prompt, or a done flag.
     pairing_session: Option<PairingSession>,
-    /// Which role `pairing_session` is playing: `Some(true)` for the new
-    /// (joining) device, `Some(false)` for the existing (approving) device.
-    /// Tells the `PairConnected` handler whether to call `start_enroll`.
-    pairing_is_new_device: Option<bool>,
     /// The rendezvous token for an in-flight `pair_offer`/`pair_join` that
     /// hasn't been acknowledged (`pair_ready`) yet. If the main WS drops and
     /// reconnects while this is still set, the reconnect handler resends
@@ -827,12 +823,8 @@ impl App {
         let drawbridge = DrawbridgeManager::new(bg_tx.clone());
 
         let ring_driver = keys.load_ring_state().unwrap_or_default();
-        // Restore parked events, and migrate the old retry buffer once.
         if let Ok(Some(bytes)) = keys.load_parked_events() {
             let _ = mls.import_parked_events(&bytes);
-        }
-        for event in keys.take_legacy_unprocessed_events().unwrap_or_default() {
-            mls.inbox_push(event);
         }
 
         Ok(Self {
@@ -888,7 +880,6 @@ impl App {
             pending_pair_token: None,
             cached_sibling_stealth: Vec::new(),
             pairing_session: None,
-            pairing_is_new_device: None,
             sync_request: None,
             pending_pair_rendezvous_token: None,
         })
@@ -1322,15 +1313,6 @@ impl App {
         self.poll_interval_override = Some(seconds);
     }
 
-    /// HTTP: return the current device ring state for integration tests.
-    ///
-    /// Returns `(ring_group_id_hex, coord_group_count)`.
-    /// Returns `(ring_group_id_hex, coord_group_count, ring_member_count)`.
-    /// `ring_member_count` is this device's own MLS view of ring
-    /// membership — 0 if not in a ring. Exists so a bystander sibling's
-    /// convergence (or lack of it) after another device's pairing is
-    /// observable at all; before this, `RingStatus` could only confirm
-    /// "some ring exists," not who's actually in it.
     /// One linked device, as the Devices screen renders it. Names come
     /// from the ring's own MLS leaf credentials — the authenticated
     /// `device_id -> signature key` map the ring exists to be — so this
@@ -1361,14 +1343,15 @@ impl App {
         devices
     }
 
-    pub fn api_ring_status(&self) -> (Option<String>, usize, usize) {
+    /// HTTP: `(ring_group_id_hex, ring_member_count)`. The member count is
+    /// this device's own MLS view of the ring — 0 if not in a ring.
+    pub fn api_ring_status(&self) -> (Option<String>, usize) {
         let ring_group_id = self.ring_driver.ring_id();
-        let coord_count = self.ring_driver.coord_group_count();
         let member_count = ring_group_id
             .and_then(|id| self.mls.get_group_members(id).ok())
             .map(|m| m.len())
             .unwrap_or(0);
-        (ring_group_id.map(hex::encode), coord_count, member_count)
+        (ring_group_id.map(hex::encode), member_count)
     }
 
     /// HTTP `POST /pair/new` — new device requests a pairing code. Requires
@@ -1390,7 +1373,6 @@ impl App {
 
         self.reset_pair_channel(&token);
         self.pairing_session = Some(PairingSession::new_device(&payload));
-        self.pairing_is_new_device = Some(true);
 
         let _ = self
             .bg_tx
@@ -1415,7 +1397,6 @@ impl App {
         self.reset_pair_channel(&payload.token);
         self.pairing_session =
             Some(PairingSession::existing_device(&payload.secret, &payload.token));
-        self.pairing_is_new_device = Some(false);
 
         let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairJoin {
             token: payload.token.to_vec(),
@@ -2180,7 +2161,7 @@ impl App {
                 // PairingSession (device onboarding — this pairing) or the
                 // established-devices reconnect-sync path (start_sync_session,
                 // pre-existing). At most one is ever active at a time.
-                match self.pairing_is_new_device {
+                match self.active_pairing_role() {
                     Some(true) => {
                         self.debug_log.log("pairing: pair WS paired — sending Enroll");
                         self.start_pairing_enroll();
@@ -2391,7 +2372,7 @@ impl App {
                         // without this the session would otherwise hang
                         // forever with no retry.
                         if let Some(token) = self.pending_pair_rendezvous_token.clone() {
-                            match self.pairing_is_new_device {
+                            match self.active_pairing_role() {
                                 Some(true) => {
                                     let _ = self
                                         .bg_tx
@@ -2460,8 +2441,7 @@ impl App {
                         if let Some(session) = self.pairing_session.as_mut() {
                             let _ = session.cancel();
                         }
-                        self.pairing_is_new_device = None;
-                        self.pending_pair_rendezvous_token = None;
+                            self.pending_pair_rendezvous_token = None;
                     }
                 }
             }
@@ -2479,7 +2459,6 @@ impl App {
                     if let Some(session) = self.pairing_session.as_mut() {
                         let _ = session.cancel();
                     }
-                    self.pairing_is_new_device = None;
                     self.pending_pair_rendezvous_token = None;
                 }
             }
@@ -2489,7 +2468,6 @@ impl App {
                     if let Some(session) = self.pairing_session.as_mut() {
                         let _ = session.cancel();
                     }
-                    self.pairing_is_new_device = None;
                     self.pending_pair_rendezvous_token = None;
                 }
             }
@@ -3627,8 +3605,7 @@ impl App {
     /// Decrypt and handle a single event whose tag matched the tag_map.
     /// Returns `Ok(true)` if a new message was stored, `Ok(false)` if
     /// processed successfully but no message (commit/reaction), or the
-    /// decryption error — [`moat_core::Error::is_permanent`] tells the caller
-    /// whether keeping the event for retry can help.
+    /// decryption error.
     fn process_matched_event(
         &mut self,
         event_record: &moat_atproto::EventRecord,
@@ -4550,7 +4527,7 @@ impl App {
                     .find(|d| !d["is_self"].as_bool().unwrap_or(false))
                     .and_then(|d| d["device_id"].as_str().map(str::to_string))
                     .and_then(|hex_id| hex::decode(&hex_id).ok())
-                    .and_then(|b| <[u8; moat_core::DEVICE_ID_LEN]>::try_from(b.as_slice()).ok());
+                    .and_then(|b| <moat_core::DeviceId>::try_from(b.as_slice()).ok());
                 match target {
                     Some(device_id) => {
                         if let Err(e) = self.api_sync_offer(device_id) {
@@ -5638,46 +5615,10 @@ impl App {
             .map(|kp| KeyPackageInput { key_package: kp.key_package })
             .collect();
 
-        // Classify the pool exactly as `DeviceRingState::tick` will, so the
-        // log answers "did the driver see any siblings at all?" directly.
-        // A ring that never forms because the pool held nothing but our own
-        // packages looks identical, from the outside, to one that fails for
-        // a state-machine reason — and telling those apart from artifacts
-        // alone is what this instrumentation exists for.
-        let (mut kp_mine, mut kp_siblings, mut kp_unreadable, mut kp_foreign) = (0, 0, 0, 0);
-        let mut kp_mine_live = 0;
-        let mut sibling_ids: Vec<String> = Vec::new();
-        for kp in &key_packages {
-            match self.mls.extract_credential_from_key_package(&kp.key_package) {
-                Ok(Some(cred)) => {
-                    if cred.did() != my_did {
-                        kp_foreign += 1;
-                    } else if *cred.device_id() == *self.mls.device_id() {
-                        kp_mine += 1;
-                        // Published *and* still openable by us — the number of
-                        // outstanding invitations to this device that could
-                        // actually succeed. Zero means un-invitable.
-                        if self.mls.holds_init_key(&kp.key_package) {
-                            kp_mine_live += 1;
-                        }
-                    } else {
-                        kp_siblings += 1;
-                        let id = hex::encode(&cred.device_id()[..4]);
-                        if !sibling_ids.contains(&id) {
-                            sibling_ids.push(id);
-                        }
-                    }
-                }
-                _ => kp_unreadable += 1,
-            }
-        }
-
         let stealth_records = client
             .fetch_stealth_addresses(&my_did)
             .await
             .unwrap_or_default();
-        let stealth_pubkeys: Vec<[u8; 32]> =
-            stealth_records.iter().map(|r| r.scan_pubkey).collect();
         // Per-sibling addressing for the same-user KP lane: drop our own device
         let my_device_id = *self.mls.device_id();
         let sibling_stealth: Vec<moat_core::SiblingStealth> = stealth_records
@@ -5705,12 +5646,8 @@ impl App {
         let now_ms = chrono::Utc::now().timestamp_millis();
 
         self.debug_log.log(&format!(
-            "ring: tick in  kp={} (mine={kp_mine} mine_live={kp_mine_live} siblings={kp_siblings} \
-             foreign={kp_foreign} unreadable={kp_unreadable}) sibling_ids=[{}] stealth={} \
-             sibling_stealth={} own_events={} | {}",
+            "ring: tick in  kp={} sibling_stealth={} own_events={} | {}",
             key_packages.len(),
-            sibling_ids.join(","),
-            stealth_pubkeys.len(),
             sibling_stealth.len(),
             own_events.len(),
             self.ring_driver.debug_summary(),
@@ -6169,7 +6106,11 @@ impl App {
                 }
                 // The "Paired!" popup is usually dismissed by now.
                 if self.overlay == Overlay::None {
-                    self.overlay = if self.pairing_is_new_device == Some(false) {
+                    self.overlay = if self
+                        .pairing_session
+                        .as_ref()
+                        .is_some_and(|s| !s.is_new_device())
+                    {
                         Overlay::PairApprove
                     } else {
                         Overlay::PairShowCode
@@ -6179,8 +6120,6 @@ impl App {
         }
     }
 
-    /// The pair channel ended: drop its session, and fail whatever was
-    /// still running on it.
     /// Supersede whatever held the pair channel before a new rendezvous
     /// on `token`: a device drives one pair session at a time, and a
     /// leftover transfer would misread the next session's frames.
@@ -6188,10 +6127,20 @@ impl App {
         self.drawbridge.clear_pair();
         self.sync_transfer = None;
         self.pairing_session = None;
-        self.pairing_is_new_device = None;
         self.pending_pair_rendezvous_token = Some(token.to_vec());
     }
 
+    /// The role of the in-flight pairing, if one is still running:
+    /// `Some(true)` for the new device, `Some(false)` for the existing one.
+    fn active_pairing_role(&self) -> Option<bool> {
+        self.pairing_session
+            .as_ref()
+            .filter(|s| !s.is_terminal())
+            .map(|s| s.is_new_device())
+    }
+
+    /// The pair channel ended: drop its session, and fail whatever was
+    /// still running on it.
     fn on_pair_closed(&mut self, session_token: Option<Vec<u8>>, reason: String) {
         // A completed round's teardown notice routinely lands after
         // the next round has started. The reconnect-sync path has no
@@ -6328,7 +6277,7 @@ impl App {
     /// and whichever the user approves on serves.
     pub fn api_sync_request_from(
         &mut self,
-        target_device_id: Option<[u8; moat_core::DEVICE_ID_LEN]>,
+        target_device_id: Option<moat_core::DeviceId>,
     ) -> Result<()> {
         if self.client.is_none() {
             return Err(AppError::NotLoggedIn);
@@ -6341,7 +6290,7 @@ impl App {
         let key_bundle = self.keys.load_identity_key()?;
 
         use rand::RngCore;
-        let mut token = [0u8; moat_core::SYNC_REQUEST_TOKEN_LEN];
+        let mut token = [0u8; moat_core::PAIRING_TOKEN_LEN];
         rand::thread_rng().fill_bytes(&mut token);
 
         // Seal the request to the ring first: if this fails there is no
@@ -6380,7 +6329,7 @@ impl App {
     /// an untargeted offer would pick its recipient arbitrarily.
     pub fn api_sync_offer(
         &mut self,
-        target_device_id: [u8; moat_core::DEVICE_ID_LEN],
+        target_device_id: moat_core::DeviceId,
     ) -> Result<()> {
         if self.client.is_none() {
             return Err(AppError::NotLoggedIn);
@@ -6396,7 +6345,7 @@ impl App {
         let key_bundle = self.keys.load_identity_key()?;
 
         use rand::RngCore;
-        let mut token = [0u8; moat_core::SYNC_REQUEST_TOKEN_LEN];
+        let mut token = [0u8; moat_core::PAIRING_TOKEN_LEN];
         rand::thread_rng().fill_bytes(&mut token);
 
         // Seal to the ring first: there is no point registering a
@@ -6414,7 +6363,7 @@ impl App {
         let _ = self.save_mls_state();
 
         self.reset_pair_channel(&token);
-        self.sync_request = Some(SyncRequestSession::offer(
+        self.sync_request = Some(SyncRequestSession::request(
             token,
             chrono::Utc::now().timestamp_millis(),
         ));
@@ -6705,7 +6654,7 @@ impl App {
 
         match result {
             Ok(cmds) => {
-                // approve() just performed create_device_ring/add_member —
+                // approve() just performed create_group/add_member —
                 // the heaviest MLS mutations in this flow. Persist
                 // immediately rather than relying on PollForNewDevicesNow
                 // (enqueued below) to happen to save — it returns early

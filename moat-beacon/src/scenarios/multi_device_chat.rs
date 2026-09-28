@@ -94,8 +94,7 @@ pub async fn run(
         let s2 = d2.ring_status().await.expect("d2 ring_status post-pairing");
         assert!(
             s1.ring_group_id.is_some(),
-            "d1 must have a ring after pairing (coord_count={})",
-            s1.coord_group_count
+            "d1 must have a ring after pairing"
         );
         assert_eq!(
             s1.ring_group_id, s2.ring_group_id,

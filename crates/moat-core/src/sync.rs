@@ -196,13 +196,9 @@ pub struct SyncMessage {
     pub blob_height: Option<u32>,
     /// The image's blurry placeholder, shown while the blob downloads.
     /// Stored beside the other blob metadata, so it travels with it.
-    #[serde(default)]
     #[serde_as(as = "Option<Base64>")]
     pub blob_thumbhash: Option<Vec<u8>>,
-    /// Emoji reactions on this message. `default` so a peer that predates
-    /// the field still decodes; an empty list and an absent one mean the
-    /// same thing.
-    #[serde(default)]
+    /// Emoji reactions on this message.
     pub reactions: Vec<SyncReaction>,
 }
 

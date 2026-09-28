@@ -78,9 +78,8 @@ fn test_concurrent_commits_detected() {
             assert!(
                 code == ErrorCode::StaleCommit
                     || code == ErrorCode::StateDiverged
-                    || code == ErrorCode::StaleEpoch
                     || code == ErrorCode::Decryption,
-                "expected StaleCommit, StateDiverged, StaleEpoch, or Decryption error, got {:?}: {}",
+                "expected StaleCommit, StateDiverged, or Decryption error, got {:?}: {}",
                 code,
                 e.message()
             );
@@ -104,9 +103,8 @@ fn test_concurrent_commits_detected() {
             assert!(
                 code == ErrorCode::StaleCommit
                     || code == ErrorCode::StateDiverged
-                    || code == ErrorCode::StaleEpoch
                     || code == ErrorCode::Decryption,
-                "expected StaleCommit, StateDiverged, StaleEpoch, or Decryption error, got {:?}: {}",
+                "expected StaleCommit, StateDiverged, or Decryption error, got {:?}: {}",
                 code,
                 e.message()
             );
@@ -170,9 +168,8 @@ fn test_structured_error_classification() {
     assert!(
         code == ErrorCode::StaleCommit
             || code == ErrorCode::StateDiverged
-            || code == ErrorCode::StaleEpoch
             || code == ErrorCode::Decryption,
-        "error should be classified as StaleCommit, StateDiverged, StaleEpoch, or Decryption, got {:?}",
+        "error should be classified as StaleCommit, StateDiverged, or Decryption, got {:?}",
         code
     );
     // The error message should contain useful context

@@ -29,15 +29,10 @@
 use serde::{Deserialize, Serialize};
 use serde_with::{base64::Base64, serde_as};
 
+use crate::device_ring::DeviceId;
+use crate::pairing::PAIRING_TOKEN_LEN;
 use crate::sync::SyncTally;
 use crate::{Error, Result};
-
-/// Length of the Drawbridge rendezvous token carried in a sync request.
-/// Matches `PAIRING_TOKEN_LEN` — it is the same relay mechanism.
-pub const SYNC_REQUEST_TOKEN_LEN: usize = 16;
-
-/// Length of an MLS device id, as carried in a leaf credential.
-pub const DEVICE_ID_LEN: usize = 16;
 
 /// How long a published request stays valid, matching the relay's own
 /// token TTL. A prompt that outlived the token would offer the user a
@@ -67,10 +62,10 @@ pub enum RingMsg {
     /// business.
     SyncRequest {
         #[serde_as(as = "Base64")]
-        token: [u8; SYNC_REQUEST_TOKEN_LEN],
+        token: [u8; PAIRING_TOKEN_LEN],
         #[serde(default)]
         #[serde_as(as = "Option<Base64>")]
-        target_device_id: Option<[u8; DEVICE_ID_LEN]>,
+        target_device_id: Option<DeviceId>,
     },
 
     /// "I have history you don't — I am opening a channel; join me."
@@ -87,9 +82,9 @@ pub enum RingMsg {
     /// read everything it is about to send.
     SyncOffer {
         #[serde_as(as = "Base64")]
-        token: [u8; SYNC_REQUEST_TOKEN_LEN],
+        token: [u8; PAIRING_TOKEN_LEN],
         #[serde_as(as = "Base64")]
-        target_device_id: [u8; DEVICE_ID_LEN],
+        target_device_id: DeviceId,
     },
 }
 
@@ -183,7 +178,7 @@ enum Phase {
 pub struct SyncRequestSession {
     phase: Phase,
     role: Role,
-    token: [u8; SYNC_REQUEST_TOKEN_LEN],
+    token: [u8; PAIRING_TOKEN_LEN],
     /// When the request was published or received, for TTL comparison.
     started_at_ms: i64,
 }
@@ -192,23 +187,7 @@ impl SyncRequestSession {
     /// Start a request of our own. The caller publishes
     /// [`RingMsg::SyncRequest`] with this token on the ring and registers
     /// the same token with the relay via `pair_offer`.
-    pub fn request(token: [u8; SYNC_REQUEST_TOKEN_LEN], now_ms: i64) -> Self {
-        Self {
-            phase: Phase::AwaitingPeer,
-            role: Role::Requester,
-            token,
-            started_at_ms: now_ms,
-        }
-    }
-
-    /// Offer history to a sibling that does not have it.
-    ///
-    /// The offerer's user has already approved — that is what produced
-    /// this call — so there is no approval phase on this side, and none
-    /// on the other. Waiting semantics match [`request`](Self::request):
-    /// this device published a rendezvous and is waiting for the target
-    /// to join it, so an unanswered offer reads as "nobody answered".
-    pub fn offer(token: [u8; SYNC_REQUEST_TOKEN_LEN], now_ms: i64) -> Self {
+    pub fn request(token: [u8; PAIRING_TOKEN_LEN], now_ms: i64) -> Self {
         Self {
             phase: Phase::AwaitingPeer,
             role: Role::Requester,
@@ -224,7 +203,7 @@ impl SyncRequestSession {
     /// ring member that can read everything it is about to send. A second
     /// prompt here would ask the user to approve receiving their own
     /// messages.
-    pub fn accept_offer(token: [u8; SYNC_REQUEST_TOKEN_LEN], now_ms: i64) -> Self {
+    pub fn accept_offer(token: [u8; PAIRING_TOKEN_LEN], now_ms: i64) -> Self {
         Self {
             phase: Phase::AwaitingPeer,
             role: Role::Responder,
@@ -236,7 +215,7 @@ impl SyncRequestSession {
     /// A sibling's request arrived on the ring. `device_name` must come
     /// from the sender's MLS leaf credential, not from the payload.
     pub fn received(
-        token: [u8; SYNC_REQUEST_TOKEN_LEN],
+        token: [u8; PAIRING_TOKEN_LEN],
         device_name: String,
         now_ms: i64,
     ) -> Self {
@@ -249,7 +228,7 @@ impl SyncRequestSession {
     }
 
     /// The rendezvous token this session is bound to.
-    pub fn token(&self) -> &[u8; SYNC_REQUEST_TOKEN_LEN] {
+    pub fn token(&self) -> &[u8; PAIRING_TOKEN_LEN] {
         &self.token
     }
 
@@ -282,7 +261,7 @@ impl SyncRequestSession {
     ///
     /// Refused unless a decision is actually outstanding: approving twice
     /// would dial a rendezvous that already has its two attaches.
-    pub fn accept(&mut self) -> Result<[u8; SYNC_REQUEST_TOKEN_LEN]> {
+    pub fn accept(&mut self) -> Result<[u8; PAIRING_TOKEN_LEN]> {
         match self.phase {
             Phase::AwaitingApproval { .. } => {
                 self.phase = Phase::AwaitingPeer;

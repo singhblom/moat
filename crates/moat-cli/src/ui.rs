@@ -1082,7 +1082,7 @@ fn draw_status_screen(frame: &mut Frame, app: &App, area: Rect) {
 
     lines.push(Line::from(""));
     let devices = app.api_ring_devices();
-    let (ring_id, _coord_groups, _members) = app.api_ring_status();
+    let (ring_id, _members) = app.api_ring_status();
     lines.push(match ring_id {
         Some(id) => section(&format!("Devices ({} · ring {})", devices.len(), short_id(&id))),
         None => section("Devices"),

@@ -557,7 +557,6 @@ Handler buildRouter({
     return Response.ok(
       jsonEncode({
         'ring_group_id': ringIdHex,
-        'coord_group_count': ringService.coordGroupCount(),
         'ring_member_count': ringMemberCount,
         'devices': ringDevices,
       }),

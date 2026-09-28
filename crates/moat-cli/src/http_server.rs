@@ -440,10 +440,9 @@ async fn post_ring_tick(State(state): State<Arc<ServerState>>) -> Json<Value> {
 
 async fn get_ring_status(State(state): State<Arc<ServerState>>) -> Json<Value> {
     let app = state.app.lock().await;
-    let (ring_group_id, coord_group_count, ring_member_count) = app.api_ring_status();
+    let (ring_group_id, ring_member_count) = app.api_ring_status();
     Json(json!({
         "ring_group_id": ring_group_id,
-        "coord_group_count": coord_group_count,
         "ring_member_count": ring_member_count,
         "devices": app.api_ring_devices(),
     }))
@@ -509,10 +508,10 @@ struct DeviceIdRequest {
     device_id: String,
 }
 
-fn parse_device_id(hex_id: &str) -> HandlerResult<[u8; moat_core::DEVICE_ID_LEN]> {
+fn parse_device_id(hex_id: &str) -> HandlerResult<moat_core::DeviceId> {
     let bytes = hex::decode(hex_id)
         .map_err(|e| app_err(AppError::Other(format!("invalid device_id: {e}"))))?;
-    <[u8; moat_core::DEVICE_ID_LEN]>::try_from(bytes.as_slice())
+    <moat_core::DeviceId>::try_from(bytes.as_slice())
         .map_err(|_| app_err(AppError::Other("device_id must be 16 bytes".to_string())))
 }
 

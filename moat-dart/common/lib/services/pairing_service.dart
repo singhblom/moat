@@ -46,11 +46,6 @@ class PairingService {
 
   ffi.PairingSessionHandle? _session;
 
-  /// `true` for the new (joining) device, `false` for the existing
-  /// (approving) device. Tells [_handlePairConnected] whether to call
-  /// `startEnroll`.
-  bool? _isNewDevice;
-
   final SimpleValueNotifier<ffi.PairingUiStateDto> _state =
       SimpleValueNotifier(const ffi.PairingUiStateDto.idle());
 
@@ -117,7 +112,6 @@ class PairingService {
 
     final session = ffi.PairingSessionHandle.newDevice(secret: secret, token: token);
     _session = session;
-    _isNewDevice = true;
     _syncState();
 
     _claimPairCallbacks();
@@ -148,7 +142,6 @@ class PairingService {
     final secret = Uint8List.fromList(payload.secret);
 
     _session = ffi.PairingSessionHandle.existingDevice(secret: secret, token: token);
-    _isNewDevice = false;
     _syncState();
 
     _claimPairCallbacks();
@@ -227,7 +220,7 @@ class PairingService {
     }
     if (_generation != gen) return;
 
-    // approve() just performed create_device_ring/add_member — the
+    // approve() just performed create_group/add_member — the
     // heaviest MLS mutations in this flow. Persist immediately rather
     // than relying on some later, unrelated step to happen to save.
     await _auth.saveMlsState();
@@ -339,7 +332,6 @@ class PairingService {
     _dropTransfer();
     _frameQueue = Future.value();
     _session = null;
-    _isNewDevice = null;
     _syncState();
   }
 
@@ -362,8 +354,9 @@ class PairingService {
   }
 
   void _handlePairConnected() {
-    moatLog('PairingService: pair WS paired, isNewDevice=$_isNewDevice');
-    if (_isNewDevice == true) {
+    final isNewDevice = _session?.isNewDevice() ?? false;
+    moatLog('PairingService: pair WS paired, isNewDevice=$isNewDevice');
+    if (isNewDevice) {
       unawaited(_startEnrollFrame());
     }
     // Existing device: nothing to send yet, just wait for Enroll.

@@ -233,7 +233,7 @@ pub struct DeviceRingState {
 
 /// Per-step environment: identifying data the state machine needs on every call.
 ///
-/// Re-supplied each `step()` because the host already knows them; threading
+/// Re-supplied each `tick()` because the host already knows them; threading
 /// them through avoids storing redundant copies inside `DeviceRingState`.
 pub struct StepEnv<'a> {
     pub my_did: &'a str,
@@ -244,28 +244,6 @@ pub struct StepEnv<'a> {
     /// used to address `EventKind::SiblingMsg` KP-lane traffic. Excludes
     /// our own device.
     pub sibling_stealth: &'a [SiblingStealth],
-}
-
-/// Events fed into [`DeviceRingState::step`].
-pub enum RingEvent<'a> {
-    /// Periodic catch-up: time advanced; settle any pending work (own-KP
-    /// replenishment, KP-pool top-ups, same-user fan-out trigger).
-    Tick {
-        key_packages: &'a [KeyPackageInput],
-    },
-
-    /// A stealth-decrypted payload from our own PDS event stream. Decoded
-    /// as an `EventKind::SiblingMsg` and dispatched to
-    /// [`DeviceRingState::on_sibling_msg`] if it is one; otherwise ignored.
-    StealthPayloadDecrypted {
-        plaintext: &'a [u8],
-    },
-
-    /// Advance the own-PDS stealth-scan cursor.  Emitted by the host once
-    /// per drained event so an incremental fetch can resume after restart.
-    OwnEventsCursorAdvanced {
-        rkey: String,
-    },
 }
 
 /// Sibling key package fed into [`DeviceRingState::tick`].
@@ -416,13 +394,6 @@ impl DeviceRingState {
         Ok(())
     }
 
-    /// Always 0. This state machine has no device-coordination-group
-    /// concept; kept as a stable accessor for hosts reporting ring status
-    /// (`api_ring_status`, Beacon's `RingStatus` DTO).
-    pub fn coord_group_count(&self) -> usize {
-        0
-    }
-
     /// One-line, human-readable snapshot of ring membership, for host debug
     /// logs.
     ///
@@ -524,30 +495,7 @@ impl DeviceRingState {
         }
     }
 
-    /// Single state-machine step.  Returns the list of side effects to perform.
-    pub fn step(
-        &mut self,
-        mls: &MoatSession,
-        env: &StepEnv<'_>,
-        event: RingEvent<'_>,
-    ) -> Vec<RingCommand> {
-        match event {
-            RingEvent::Tick { key_packages } => self.on_tick(mls, env, key_packages),
-            RingEvent::StealthPayloadDecrypted { plaintext } => {
-                self.on_stealth_payload(mls, env, plaintext)
-            }
-            RingEvent::OwnEventsCursorAdvanced { rkey } => {
-                self.own_events_cursor = Some(rkey);
-                Vec::new()
-            }
-        }
-    }
-
-    /// Convenience entry: fan a [`TickInputs`] bundle out into individual events.
-    ///
-    /// Mirrors the previous `tick()` signature so existing callers don't have
-    /// to change shape.  Internally just calls `step()` in a canonical order:
-    /// per-stealth-event decryptions, then a final `Tick`.
+    /// Process own-PDS stealth events, then settle periodic work.
     pub fn tick(&mut self, mls: &MoatSession, inputs: TickInputs<'_>) -> Vec<RingCommand> {
         let env = StepEnv {
             my_did: inputs.my_did,
@@ -559,13 +507,13 @@ impl DeviceRingState {
         let mut cmds = Vec::new();
         for ev in inputs.own_events {
             if let Some(plaintext) = try_decrypt_stealth(inputs.stealth_privkey, &ev.ciphertext) {
-                cmds.extend(self.step(mls, &env, RingEvent::StealthPayloadDecrypted { plaintext: &plaintext }));
+                cmds.extend(self.on_stealth_payload(mls, &env, &plaintext));
             }
             if !ev.rkey.is_empty() {
                 self.own_events_cursor = Some(ev.rkey.clone());
             }
         }
-        cmds.extend(self.step(mls, &env, RingEvent::Tick { key_packages: inputs.key_packages }));
+        cmds.extend(self.on_tick(mls, &env, inputs.key_packages));
         cmds
     }
 
@@ -940,47 +888,6 @@ impl DeviceRingState {
 
         cmds
     }
-
-    /// Emit `KP_POOL_TARGET` fresh KPs to `recipient` via the stealth lane,
-    /// split across `ceil(KP_POOL_TARGET / KP_BATCH_CAP)` batches. If the
-    /// recipient's stealth record is not yet known the batch is skipped —
-    /// the consumer-driven low-water `KpRequest` retries the fill on later
-    /// ticks.
-    ///
-    /// Has no production caller as of the pairing redesign (only a unit
-    /// test below exercises it directly): the newcomer's initial batch to
-    /// the *approver* rides `Enroll.conv_kps` instead (`pairing.rs`), and
-    /// its batches to *other*, already-established siblings aren't proactively
-    /// pushed — they self-heal reactively via each sibling's own low-water
-    /// `KpRequest` once its pool for the newcomer runs dry. Kept as
-    /// general-purpose pool-seeding infrastructure (and its test as a
-    /// fixture for `same_user_fan_out_deferred_add_unblocks_on_next_batch`),
-    /// not because anything currently calls it live.
-    pub fn ship_initial_kp_batches_to(
-        &mut self,
-        mls: &MoatSession,
-        env: &StepEnv<'_>,
-        recipient: &DeviceId,
-    ) -> Vec<RingCommand> {
-        let mut cmds = Vec::new();
-        let mut remaining = KP_POOL_TARGET;
-        while remaining > 0 {
-            let take = remaining.min(KP_BATCH_CAP);
-            let batch = match self.build_kp_batch(mls, env, take) {
-                Some(b) => b,
-                None => break,
-            };
-            let msg = CoordMsg::KpBatch {
-                recipient_device_id: recipient.to_vec(),
-                kps: batch,
-            };
-            if let Some(cmd) = encrypt_sibling_msg(mls, env, recipient, &msg) {
-                cmds.push(cmd);
-            }
-            remaining -= take;
-        }
-        cmds
-    }
 }
 
 /// Encode `msg`, wrap it in an `EventKind::SiblingMsg` envelope carrying our
@@ -1056,16 +963,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn create_device_ring_produces_distinct_random_ids() {
-        let s = MoatSession::new();
-        let cred = make_credential("did:plc:user", "device", *s.device_id());
-        let (_kp, kb) = s.generate_key_package(&cred).expect("kp");
-        let id1 = s.create_device_ring(&cred, &kb).expect("ring 1");
-        let id2 = s.create_device_ring(&cred, &kb).expect("ring 2");
-        assert_ne!(id1, id2);
-    }
-
     /// Raw MLS-level reproduction of a three-device ring: D2 creates a
     /// 2-party ring and adds D1; then D1 (an existing ring member, NOT the
     /// ring creator) adds D3.  Confirms both that D3's Welcome processes
@@ -1087,7 +984,7 @@ mod tests {
         let (d3_kp, _d3_kb) = d3.generate_key_package(&d3_cred).expect("d3 kp");
 
         // D2 creates the ring and adds D1.
-        let ring_id = d2.create_device_ring(&d2_cred, &d2_kb).expect("create ring");
+        let ring_id = d2.create_group(&d2_cred, &d2_kb).expect("create ring");
         let wr1 = d2.add_device(&ring_id, &d2_kb, &d1_kp).expect("d2 add d1");
         let joined_by_d1 = d1.process_welcome(&wr1.welcome).expect("d1 join");
         assert_eq!(joined_by_d1, ring_id);
@@ -1115,7 +1012,7 @@ mod tests {
         let (_d1_kp, d1_kb) = d1.generate_key_package(&d1_cred).expect("d1 kp");
         let (d2_kp, _d2_kb) = d2.generate_key_package(&d2_cred).expect("d2 kp");
 
-        let ring_id = d1.create_device_ring(&d1_cred, &d1_kb).expect("create ring");
+        let ring_id = d1.create_group(&d1_cred, &d1_kb).expect("create ring");
         let wr = d1.add_device(&ring_id, &d1_kb, &d2_kp).expect("d1 add d2");
         let joined = d2.process_welcome(&wr.welcome).expect("d2 join");
         assert_eq!(joined, ring_id);
@@ -1164,7 +1061,7 @@ mod tests {
         let creator = MoatSession::new();
         let creator_cred = make_credential("did:plc:user", "creator", *creator.device_id());
         let (_kp, kb) = creator.generate_key_package(&creator_cred).expect("kp");
-        let ring_id = creator.create_device_ring(&creator_cred, &kb).expect("create ring");
+        let ring_id = creator.create_group(&creator_cred, &kb).expect("create ring");
 
         let result = outsider_state.record_ring_membership(&outsider, ring_id, 0);
         assert!(
@@ -1386,8 +1283,7 @@ mod tests {
         let mut s = DeviceRingState::new();
         let owner: DeviceId = [9u8; 16];
 
-        // 1. Seed an initial batch (the natural state after
-        //    ship_initial_kp_batches_to runs at ring-join time).
+        // 1. Seed an initial batch.
         s.ingest_kp_batch(&owner, vec![kp(1), kp(2)]);
         assert_eq!(s.kp_pool_size(&owner), 2);
 
@@ -1436,7 +1332,7 @@ mod tests {
         // credential the same way (`app.rs::ring_tick_inner`).
         let cred = make_credential("did:plc:user", "d1", *mls.device_id());
         let (kp, _bundle) = mls.generate_key_package(&cred).expect("kp");
-        assert_eq!(mls.live_key_package_count(), 1);
+        assert!(mls.holds_init_key(&kp));
 
         // Burn our published key's init secret the same way an inviter
         // would: another session builds a group and adds us with it.
@@ -1448,7 +1344,7 @@ mod tests {
             .add_member(&out_group, &out_bundle, &kp)
             .expect("add");
         mls.process_welcome(&wr.welcome).expect("burn our init key");
-        assert_eq!(mls.live_key_package_count(), 0, "pool is now exhausted");
+        assert!(!mls.holds_init_key(&kp), "pool is now exhausted");
 
         let mut state = DeviceRingState::new();
         let env = StepEnv {
@@ -1584,7 +1480,7 @@ mod tests {
     fn establish_ring(creator: &StealthDevice, joiner: &StealthDevice) -> Vec<u8> {
         let ring_id = creator
             .mls
-            .create_device_ring(&creator.cred, &creator.key_bundle)
+            .create_group(&creator.cred, &creator.key_bundle)
             .expect("create ring");
         let joiner_kp = joiner
             .mls
@@ -1603,7 +1499,7 @@ mod tests {
     }
 
     /// Decrypt every stealth-publish command addressed to `dev` and feed the
-    /// plaintexts through `step(StealthPayloadDecrypted)`, returning the
+    /// plaintexts through `on_stealth_payload`, returning the
     /// commands the receiver emits in response.
     fn deliver_stealth(
         cmds: &[RingCommand],
@@ -1615,9 +1511,7 @@ mod tests {
         for cmd in cmds {
             if let RingCommand::PublishStealthEvent { ciphertext, .. } = cmd {
                 if let Some(pt) = try_decrypt_stealth(&dev.stealth_priv, ciphertext) {
-                    out.extend(state.step(&dev.mls, env, RingEvent::StealthPayloadDecrypted {
-                        plaintext: &pt,
-                    }));
+                    out.extend(state.on_stealth_payload(&dev.mls, env, &pt));
                 }
             }
         }
@@ -1766,9 +1660,9 @@ mod tests {
         let owner_env = env_for(&owner, &owner_sib);
         let consumer_env = env_for(&consumer, &consumer_sib);
 
-        // Owner ships an initial batch; consumer ingests it.
-        let batch_cmds = owner_state.ship_initial_kp_batches_to(&owner.mls, &owner_env, &consumer_id);
-        let _ = deliver_stealth(&batch_cmds, &consumer, &mut consumer_state, &consumer_env);
+        // Owner mints a batch; consumer ingests it.
+        let batch = owner_state.build_kp_batch(&owner.mls, &owner_env, 1).expect("batch");
+        consumer_state.ingest_kp_batch(&owner_id, batch);
         assert!(consumer_state.kp_pool_size(&owner_id) > 0);
 
         // Consumer has a user conversation and fans the owner out into it.

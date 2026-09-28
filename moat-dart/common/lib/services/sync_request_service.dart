@@ -202,7 +202,7 @@ class SyncRequestService {
     );
     await _auth.saveMlsState();
 
-    _session = ffi.SyncRequestSessionHandle.offer(
+    _session = ffi.SyncRequestSessionHandle.request(
       token: token,
       nowMs: toPlatformInt64(DateTime.now().millisecondsSinceEpoch),
     );

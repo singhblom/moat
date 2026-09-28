@@ -101,7 +101,6 @@ pub struct SenderInfo {
     /// Matches `Event.sender_device_id` (which is the in-plaintext mirror used
     /// for hash-chain keying); divergence between the two is a transcript
     /// warning.
-    #[serde(default)]
     pub device_id: [u8; 16],
     /// The MLS leaf index of the sender (for internal use)
     #[serde(default)]

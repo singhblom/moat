@@ -319,7 +319,7 @@ fn accepting_an_offer_needs_no_approval_phase() {
 /// does — from the perspective of the device that did the asking.
 #[test]
 fn an_unanswered_offer_reads_as_nobody_answering() {
-    let mut session = SyncRequestSession::offer(token(5), 1_000);
+    let mut session = SyncRequestSession::request(token(5), 1_000);
     assert!(session.expire_if_due(1_000 + SYNC_REQUEST_TTL_MS));
     assert_eq!(
         session.ui_state(),

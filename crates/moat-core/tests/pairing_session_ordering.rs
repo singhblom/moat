@@ -196,7 +196,7 @@ fn new_device_rejects_admit_whose_welcome_lands_it_in_a_foreign_dids_ring() {
         MoatCredential::new("did:plc:mallory", "Mallory's Laptop", *mls_rogue.device_id());
     let (_rogue_kp, kb_rogue) = mls_rogue.generate_key_package(&credential_rogue).unwrap();
     let rogue_ring_id = mls_rogue
-        .create_device_ring(&credential_rogue, &kb_rogue)
+        .create_group(&credential_rogue, &kb_rogue)
         .expect("create rogue ring");
     let welcome_result = mls_rogue
         .add_member(&rogue_ring_id, &kb_rogue, &new_device_kp)

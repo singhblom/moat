@@ -360,6 +360,9 @@ abstract class PairingSessionHandle implements RustOpaqueInterface {
   /// `true` once this session has reached its terminal `Done` phase.
   bool isDone();
 
+  /// Whether this is the new (joining) device's side of the pairing.
+  bool isNewDevice();
+
   /// Construct a session for the new (joining) device.
   static PairingSessionHandle newDevice(
           {required List<int> secret, required List<int> token}) =>
@@ -546,14 +549,6 @@ abstract class SyncRequestSessionHandle implements RustOpaqueInterface {
 
   /// `true` once the session can no longer change state.
   bool isTerminal();
-
-  /// Offer history to a sibling that does not have it. The offerer's
-  /// user has already approved — that is what produced this call — so
-  /// neither side prompts again.
-  static SyncRequestSessionHandle offer(
-          {required List<int> token, required PlatformInt64 nowMs}) =>
-      RustLib.instance.api.crateApiSimpleSyncRequestSessionHandleOffer(
-          token: token, nowMs: nowMs);
 
   /// The pair channel reached `paired`.
   void onChannelUp();

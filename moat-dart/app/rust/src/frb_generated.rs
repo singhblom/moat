@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1918441151;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -977907043;
 
 // Section: executor
 
@@ -1774,6 +1774,54 @@ fn wire__crate__api__simple__PairingSessionHandle_is_done_impl(
         },
     )
 }
+fn wire__crate__api__simple__PairingSessionHandle_is_new_device_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "PairingSessionHandle_is_new_device",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<PairingSessionHandle>,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let mut api_that_guard = None;
+                let decode_indices_ =
+                    flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                        flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                            &api_that, 0, false,
+                        ),
+                    ]);
+                for i in decode_indices_ {
+                    match i {
+                        0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                        _ => unreachable!(),
+                    }
+                }
+                let api_that_guard = api_that_guard.unwrap();
+                let output_ok = Result::<_, ()>::Ok(
+                    crate::api::simple::PairingSessionHandle::is_new_device(&*api_that_guard),
+                )?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__simple__PairingSessionHandle_new_device_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -3316,38 +3364,6 @@ fn wire__crate__api__simple__SyncRequestSessionHandle_is_terminal_impl(
                 let output_ok = Result::<_, ()>::Ok(
                     crate::api::simple::SyncRequestSessionHandle::is_terminal(&*api_that_guard),
                 )?;
-                Ok(output_ok)
-            })())
-        },
-    )
-}
-fn wire__crate__api__simple__SyncRequestSessionHandle_offer_impl(
-    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
-    rust_vec_len_: i32,
-    data_len_: i32,
-) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
-        flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "SyncRequestSessionHandle_offer",
-            port: None,
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
-        },
-        move || {
-            let message = unsafe {
-                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
-                    ptr_,
-                    rust_vec_len_,
-                    data_len_,
-                )
-            };
-            let mut deserializer =
-                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_token = <Vec<u8>>::sse_decode(&mut deserializer);
-            let api_now_ms = <i64>::sse_decode(&mut deserializer);
-            deserializer.end();
-            transform_result_sse::<_, String>((move || {
-                let output_ok =
-                    crate::api::simple::SyncRequestSessionHandle::offer(api_token, api_now_ms)?;
                 Ok(output_ok)
             })())
         },
@@ -6364,46 +6380,46 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        36 => wire__crate__api__simple__PairingSessionHandle_on_frame_received_impl(
+        37 => wire__crate__api__simple__PairingSessionHandle_on_frame_received_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        40 => wire__crate__api__simple__PairingSessionHandle_start_enroll_impl(
+        41 => wire__crate__api__simple__PairingSessionHandle_start_enroll_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        47 => wire__crate__api__simple__RingDriverHandle_emit_kp_request_for_impl(
+        48 => wire__crate__api__simple__RingDriverHandle_emit_kp_request_for_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        48 => wire__crate__api__simple__RingDriverHandle_encrypt_user_conv_welcome_impl(
+        49 => wire__crate__api__simple__RingDriverHandle_encrypt_user_conv_welcome_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        49 => wire__crate__api__simple__RingDriverHandle_from_state_json_impl(
+        50 => wire__crate__api__simple__RingDriverHandle_from_state_json_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        53 => wire__crate__api__simple__RingDriverHandle_record_ring_membership_impl(
+        54 => wire__crate__api__simple__RingDriverHandle_record_ring_membership_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        56 => {
+        57 => {
             wire__crate__api__simple__RingDriverHandle_tick_impl(port, ptr, rust_vec_len, data_len)
         }
-        57 => wire__crate__api__simple__RingDriverHandle_to_state_json_impl(
+        58 => wire__crate__api__simple__RingDriverHandle_to_state_json_impl(
             port,
             ptr,
             rust_vec_len,
@@ -6582,107 +6598,107 @@ fn pde_ffi_dispatcher_sync_impl(
         34 => {
             wire__crate__api__simple__PairingSessionHandle_is_done_impl(ptr, rust_vec_len, data_len)
         }
-        35 => wire__crate__api__simple__PairingSessionHandle_new_device_impl(
+        35 => wire__crate__api__simple__PairingSessionHandle_is_new_device_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        37 => wire__crate__api__simple__PairingSessionHandle_pending_enroll_impl(
+        36 => wire__crate__api__simple__PairingSessionHandle_new_device_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        38 => {
+        38 => wire__crate__api__simple__PairingSessionHandle_pending_enroll_impl(
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        39 => {
             wire__crate__api__simple__PairingSessionHandle_reject_impl(ptr, rust_vec_len, data_len)
         }
-        39 => {
+        40 => {
             wire__crate__api__simple__PairingSessionHandle_ring_id_impl(ptr, rust_vec_len, data_len)
         }
-        41 => wire__crate__api__simple__PairingSessionHandle_transfer_channel_impl(
+        42 => wire__crate__api__simple__PairingSessionHandle_transfer_channel_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        42 => wire__crate__api__simple__PairingSessionHandle_transfer_failed_impl(
+        43 => wire__crate__api__simple__PairingSessionHandle_transfer_failed_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        43 => wire__crate__api__simple__PairingSessionHandle_ui_state_impl(
+        44 => wire__crate__api__simple__PairingSessionHandle_ui_state_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        44 => wire__crate__api__simple__RingDriverHandle_allocate_kp_seqs_impl(
+        45 => wire__crate__api__simple__RingDriverHandle_allocate_kp_seqs_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        45 => wire__crate__api__simple__RingDriverHandle_claim_kp_impl(ptr, rust_vec_len, data_len),
-        46 => wire__crate__api__simple__RingDriverHandle_debug_summary_impl(
+        46 => wire__crate__api__simple__RingDriverHandle_claim_kp_impl(ptr, rust_vec_len, data_len),
+        47 => wire__crate__api__simple__RingDriverHandle_debug_summary_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        50 => wire__crate__api__simple__RingDriverHandle_ingest_kp_batch_impl(
+        51 => wire__crate__api__simple__RingDriverHandle_ingest_kp_batch_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        51 => {
+        52 => {
             wire__crate__api__simple__RingDriverHandle_new_empty_impl(ptr, rust_vec_len, data_len)
         }
-        52 => wire__crate__api__simple__RingDriverHandle_own_events_cursor_impl(
+        53 => wire__crate__api__simple__RingDriverHandle_own_events_cursor_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        54 => wire__crate__api__simple__RingDriverHandle_ring_group_id_impl(
+        55 => wire__crate__api__simple__RingDriverHandle_ring_group_id_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        55 => wire__crate__api__simple__RingDriverHandle_ring_joined_siblings_impl(
+        56 => wire__crate__api__simple__RingDriverHandle_ring_joined_siblings_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        58 => wire__crate__api__simple__SyncRequestSessionHandle_accept_impl(
+        59 => wire__crate__api__simple__SyncRequestSessionHandle_accept_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        59 => wire__crate__api__simple__SyncRequestSessionHandle_accept_offer_impl(
+        60 => wire__crate__api__simple__SyncRequestSessionHandle_accept_offer_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        60 => wire__crate__api__simple__SyncRequestSessionHandle_decline_impl(
+        61 => wire__crate__api__simple__SyncRequestSessionHandle_decline_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        61 => wire__crate__api__simple__SyncRequestSessionHandle_expire_if_due_impl(
+        62 => wire__crate__api__simple__SyncRequestSessionHandle_expire_if_due_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        62 => wire__crate__api__simple__SyncRequestSessionHandle_fail_impl(
+        63 => wire__crate__api__simple__SyncRequestSessionHandle_fail_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        63 => wire__crate__api__simple__SyncRequestSessionHandle_is_expired_impl(
+        64 => wire__crate__api__simple__SyncRequestSessionHandle_is_expired_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        64 => wire__crate__api__simple__SyncRequestSessionHandle_is_terminal_impl(
-            ptr,
-            rust_vec_len,
-            data_len,
-        ),
-        65 => wire__crate__api__simple__SyncRequestSessionHandle_offer_impl(
+        65 => wire__crate__api__simple__SyncRequestSessionHandle_is_terminal_impl(
             ptr,
             rust_vec_len,
             data_len,
