@@ -34,6 +34,20 @@ pub(crate) fn run_boxed(
     Box::pin(run(verbose))
 }
 
+pub(crate) fn run_dr_boxed(
+    _actions: Vec<Action>,
+    verbose: bool,
+) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    Box::pin(run_with(ParticipantKind::RustCli, ParticipantKind::DartServer, "dr", verbose))
+}
+
+pub(crate) fn run_rd_boxed(
+    _actions: Vec<Action>,
+    verbose: bool,
+) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    Box::pin(run_with(ParticipantKind::DartServer, ParticipantKind::RustCli, "rd", verbose))
+}
+
 /// Bounded wait for `client` to have received at least `expected.len()`
 /// messages in `group_id`, polling to drive delivery. A stuck sync must
 /// fail the test, not hang it.

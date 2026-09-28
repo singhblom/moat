@@ -30,6 +30,27 @@ pub(crate) fn run_boxed(
     Box::pin(run(verbose))
 }
 
+pub(crate) fn run_dd_boxed(
+    _actions: Vec<Action>,
+    verbose: bool,
+) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    Box::pin(run_with(ParticipantKind::DartServer, ParticipantKind::DartServer, "dd", verbose))
+}
+
+pub(crate) fn run_dr_boxed(
+    _actions: Vec<Action>,
+    verbose: bool,
+) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    Box::pin(run_with(ParticipantKind::DartServer, ParticipantKind::RustCli, "dr", verbose))
+}
+
+pub(crate) fn run_rd_boxed(
+    _actions: Vec<Action>,
+    verbose: bool,
+) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    Box::pin(run_with(ParticipantKind::RustCli, ParticipantKind::DartServer, "rd", verbose))
+}
+
 pub(crate) fn run_after_idle_boxed(
     _actions: Vec<Action>,
     verbose: bool,

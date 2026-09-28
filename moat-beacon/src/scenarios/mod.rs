@@ -37,27 +37,20 @@ pub mod sender_exceeds_tag_window;
 pub mod staggered_device_pairing;
 pub mod sync_history_before_membership;
 pub mod sync_offer_history;
-pub mod sync_offer_history_dr;
 pub mod sync_request_history;
-pub mod sync_request_history_dd;
-pub mod sync_request_history_dr;
-pub mod sync_request_history_rd;
 pub mod three_device_pairing;
 pub mod three_device_pairing_history_sync;
-pub mod three_device_pairing_history_sync_dr;
-pub mod three_device_pairing_history_sync_rd;
 pub mod three_party_chat;
 pub mod three_party_push;
 pub mod three_party_restart;
+pub mod three_party_smoke;
 pub mod two_device_pairing;
-pub mod two_device_pairing_dd;
-pub mod two_device_pairing_dr;
-pub mod two_device_pairing_rd;
 pub mod two_party_chat;
 pub mod two_party_fanout;
 pub mod two_party_push;
 pub mod two_party_push_restart;
 pub mod two_party_restart;
+pub mod two_party_smoke;
 pub mod watched_before_welcome;
 
 // ── Verbose logging ───────────────────────────────────────────────────────────
@@ -833,21 +826,21 @@ pub static SCENARIOS: &[Scenario] = &[
     Scenario {
         name: "two-device-pairing-dd",
         description: "One user, two devices (Dart + Dart) — live QR/text pairing",
-        run_fn: two_device_pairing_dd::run_boxed,
+        run_fn: two_device_pairing::run_dd_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
         name: "two-device-pairing-rd",
         description: "One user, two devices (new=Rust, existing=Dart) — live QR/text pairing",
-        run_fn: two_device_pairing_rd::run_boxed,
+        run_fn: two_device_pairing::run_rd_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
         name: "two-device-pairing-dr",
         description: "One user, two devices (new=Dart, existing=Rust) — live QR/text pairing",
-        run_fn: two_device_pairing_dr::run_boxed,
+        run_fn: two_device_pairing::run_dr_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
@@ -868,14 +861,14 @@ pub static SCENARIOS: &[Scenario] = &[
     Scenario {
         name: "three-device-pairing-history-sync-dr",
         description: "Same as three-device-pairing-history-sync, but D2/D3 (new devices) run Dart, D1 stays Rust",
-        run_fn: three_device_pairing_history_sync_dr::run_boxed,
+        run_fn: three_device_pairing_history_sync::run_dr_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
         name: "three-device-pairing-history-sync-rd",
         description: "Same as three-device-pairing-history-sync, but D1 (the history donor) runs Dart, D2/D3 stay Rust",
-        run_fn: three_device_pairing_history_sync_rd::run_boxed,
+        run_fn: three_device_pairing_history_sync::run_rd_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
@@ -959,7 +952,7 @@ pub static SCENARIOS: &[Scenario] = &[
     Scenario {
         name: "sync-offer-history-dr",
         description: "Same as sync-offer-history, but the offering device is Dart",
-        run_fn: sync_offer_history_dr::run_boxed,
+        run_fn: sync_offer_history::run_dr_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
@@ -980,21 +973,21 @@ pub static SCENARIOS: &[Scenario] = &[
     Scenario {
         name: "sync-request-history-dd",
         description: "Same as sync-request-history, but both devices Dart",
-        run_fn: sync_request_history_dd::run_boxed,
+        run_fn: sync_request_history::run_dd_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
         name: "sync-request-history-rd",
         description: "Same as sync-request-history, but Dart requester, Rust donor",
-        run_fn: sync_request_history_rd::run_boxed,
+        run_fn: sync_request_history::run_rd_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
         name: "sync-request-history-dr",
         description: "Same as sync-request-history, but Rust requester, Dart donor",
-        run_fn: sync_request_history_dr::run_boxed,
+        run_fn: sync_request_history::run_dr_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },

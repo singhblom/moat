@@ -28,6 +28,13 @@ pub(crate) fn run_boxed(
     Box::pin(run(verbose))
 }
 
+pub(crate) fn run_dr_boxed(
+    _actions: Vec<Action>,
+    verbose: bool,
+) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    Box::pin(run_with(ParticipantKind::DartServer, ParticipantKind::RustCli, "dr", verbose))
+}
+
 const TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_INTERVAL: Duration = Duration::from_millis(300);
 

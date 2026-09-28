@@ -6,21 +6,58 @@
 //! pairing completes — bounded, so a stuck pairing fails the test instead
 //! of hanging it.
 //!
-//! Sets up one user with two `moat-cli` processes under the same
-//! credentials, since pairing presupposes a logged-in new device.
+//! Sets up one user with two devices under the same credentials, since
+//! pairing presupposes a logged-in new device. Each device runs either
+//! runtime; `run_with` takes the mix.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 use crate::scenarios::Action;
-use crate::world::TestWorld;
+use crate::world::{ParticipantKind, TestWorld};
 
 pub(crate) fn run_boxed(
     _actions: Vec<Action>,
     verbose: bool,
 ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
     Box::pin(run(verbose))
+}
+
+pub(crate) fn run_dd_boxed(
+    _actions: Vec<Action>,
+    verbose: bool,
+) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    Box::pin(run_with(
+        ParticipantKind::DartServer,
+        ParticipantKind::DartServer,
+        "dd",
+        verbose,
+    ))
+}
+
+pub(crate) fn run_dr_boxed(
+    _actions: Vec<Action>,
+    verbose: bool,
+) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    Box::pin(run_with(
+        ParticipantKind::DartServer,
+        ParticipantKind::RustCli,
+        "dr",
+        verbose,
+    ))
+}
+
+pub(crate) fn run_rd_boxed(
+    _actions: Vec<Action>,
+    verbose: bool,
+) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    Box::pin(run_with(
+        ParticipantKind::RustCli,
+        ParticipantKind::DartServer,
+        "rd",
+        verbose,
+    ))
 }
 
 /// Bounded wait budget for the pairing convergence loop. A stuck pairing
@@ -30,11 +67,27 @@ const PAIR_STATUS_TIMEOUT: Duration = Duration::from_secs(20);
 const PAIR_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 pub async fn run(verbose: bool) {
+    run_with(
+        ParticipantKind::RustCli,
+        ParticipantKind::RustCli,
+        "rr",
+        verbose,
+    )
+    .await
+}
+
+/// The scenario body; `cell` names the mix as `<new><existing>`.
+pub async fn run_with(
+    new_kind: ParticipantKind,
+    existing_kind: ParticipantKind,
+    cell: &str,
+    verbose: bool,
+) {
     macro_rules! vlog {
         ($($t:tt)*) => { if verbose { eprintln!($($t)*); } }
     }
 
-    vlog!("=== Scenario: two-device-pairing ===");
+    vlog!("=== Scenario: two-device-pairing ({cell}) ===");
 
     // ── Prologue ──────────────────────────────────────────────────────────────
     //
@@ -44,15 +97,19 @@ pub async fn run(verbose: bool) {
     // (`DEFAULT_DRAWBRIDGE_URL`), which is a real deployed instance, not a
     // test double.
     vlog!("[setup] starting TestWorld with one account (alice) + drawbridge...");
-    let mut world = TestWorld::new_with_drawbridge(&[("alice", "alice")], ".postern.test")
-        .await
-        .expect("world setup");
+    let mut world = TestWorld::new_with_kinds_and_drawbridge(
+        &[("alice", "alice")],
+        &[existing_kind],
+        ".postern.test",
+    )
+    .await
+    .expect("world setup");
 
     let existing = world.client("alice").clone();
 
     vlog!("[setup] spawning the new device...");
     let new_device = world
-        .spawn_nth_device("alice-d2", crate::world::ParticipantKind::RustCli)
+        .spawn_nth_device("alice-d2", new_kind)
         .await
         .expect("spawn new device");
 
@@ -100,11 +157,15 @@ pub async fn run(verbose: bool) {
     let deadline = Instant::now() + PAIR_STATUS_TIMEOUT;
     loop {
         let existing_status = existing.pair_status().await.expect("existing pair_status");
-        let new_status = new_device.pair_status().await.expect("new_device pair_status");
+        let new_status = new_device
+            .pair_status()
+            .await
+            .expect("new_device pair_status");
 
         vlog!(
             "[pair] existing.done={} new_device.done={}",
-            existing_status.is_done(), new_status.is_done()
+            existing_status.is_done(),
+            new_status.is_done()
         );
 
         if existing_status.is_done() && new_status.is_done() {
@@ -124,7 +185,10 @@ pub async fn run(verbose: bool) {
 
     // ── Invariants ────────────────────────────────────────────────────────────
     let s_existing = existing.ring_status().await.expect("existing ring_status");
-    let s_new = new_device.ring_status().await.expect("new_device ring_status");
+    let s_new = new_device
+        .ring_status()
+        .await
+        .expect("new_device ring_status");
 
     assert!(
         s_existing.ring_group_id.is_some(),
@@ -158,7 +222,7 @@ pub async fn run(verbose: bool) {
         "new device conversation list should be empty; got {convs_new:?}"
     );
 
-    vlog!("[check] two-device pairing... ok");
+    vlog!("[check] two-device pairing ({cell})... ok");
     if verbose {
         eprintln!("\n=== PASSED ===");
     }

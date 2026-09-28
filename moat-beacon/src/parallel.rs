@@ -17,10 +17,14 @@
 //! ## Why not always parallel?
 //!
 //! Each test case spawns real OS processes (moat-cli × N, Toxiproxy, Drawbridge).
-//! Cargo already runs all test *files* in parallel, so the machine is already
-//! under load during a full suite run.  Running 2+ cases per file simultaneously
-//! on top of that would roughly double the process count and risk saturation.
+//! Too many worlds at once starve each other and flake on startup timeouts.
 //! `BEACON_PARALLEL` lets you opt in when running a single test in isolation.
+//!
+//! ## World slots
+//!
+//! The libtest harness runs a binary's tests on one thread per core.
+//! [`world_slot`] bounds how many of them stand up a `TestWorld` at once;
+//! `BEACON_WORLDS` overrides each binary's default.
 //!
 //! ## Trade-offs vs. `proptest!`
 //!
@@ -31,7 +35,59 @@
 
 use proptest::strategy::{Strategy, ValueTree};
 use proptest::test_runner::TestRunner;
-use std::sync::Arc;
+use std::future::Future;
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
+
+struct Slots {
+    limit: usize,
+    in_use: Mutex<usize>,
+    freed: Condvar,
+}
+
+static SLOTS: OnceLock<Slots> = OnceLock::new();
+
+/// Held while a test runs its world; dropping it frees the slot.
+pub struct WorldSlot(&'static Slots);
+
+impl Drop for WorldSlot {
+    fn drop(&mut self) {
+        let mut in_use = self.0.in_use.lock().unwrap_or_else(|e| e.into_inner());
+        *in_use -= 1;
+        self.0.freed.notify_one();
+    }
+}
+
+/// Block until fewer than the binary's limit of worlds are running.
+/// The limit is `BEACON_WORLDS` if set, else `default_limit`; the first
+/// call in a process fixes it.
+pub fn world_slot(default_limit: usize) -> WorldSlot {
+    let slots = SLOTS.get_or_init(|| Slots {
+        limit: std::env::var("BEACON_WORLDS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&n: &usize| n > 0)
+            .unwrap_or(default_limit),
+        in_use: Mutex::new(0),
+        freed: Condvar::new(),
+    });
+    let mut in_use = slots.in_use.lock().unwrap_or_else(|e| e.into_inner());
+    while *in_use >= slots.limit {
+        in_use = slots.freed.wait(in_use).unwrap_or_else(|e| e.into_inner());
+    }
+    *in_use += 1;
+    WorldSlot(slots)
+}
+
+/// Run one scenario future on a fresh current-thread runtime, inside a
+/// [`world_slot`].
+pub fn run_world<F: Future<Output = ()>>(default_limit: usize, fut: F) {
+    let _slot = world_slot(default_limit);
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime")
+        .block_on(fut);
+}
 
 /// Run `cases` inputs drawn from `strategy` through `test_fn`.
 ///

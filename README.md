@@ -42,11 +42,10 @@ cargo test -p moat-core
 cargo test -p moat-atproto
 cargo test -p moat-cli
 cargo test -p moat-beacon    # Integration tests (spins up real processes)
-cargo test -p moat-beacon --test smoke                 # Smoke test only
-cargo test -p moat-beacon --test proptest_two_party    # Polling delivery (proptest)
-cargo test -p moat-beacon --test proptest_drawbridge   # Push delivery via Drawbridge (proptest)
-cargo test -p moat-beacon --test proptest_restart      # Polling + process restart (proptest)
-cargo test -p moat-beacon --test proptest_push_restart # Push + process restart (proptest)
+cargo test -p moat-beacon --test smoke                 # Deterministic scenarios
+cargo test -p moat-beacon --test proptest              # Generative suites
+cargo test -p moat-beacon --test push                  # Push latency + FCM dispatch
+cargo test -p moat-beacon --test proptest two_party    # Filter by test name
 ```
 
 ## Usage
