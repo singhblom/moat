@@ -897,11 +897,11 @@ When two devices create commits concurrently at the same epoch, only one commit 
 
 ### State Format
 
-Session state uses a versioned binary format (currently version 5):
+Session state uses a versioned binary format (currently version 4):
 
 ```
 [4 bytes: "MOAT" magic]
-[2 bytes: version (LE u16, currently 5)]
+[2 bytes: version (LE u16, currently 4)]
 [16 bytes: device_id]
 [8 bytes: mls_state_length]
 [variable: MLS provider state]
@@ -943,46 +943,7 @@ For each entry:
   [8 bytes: counter (LE u64)]
 ```
 
-Watermark state (v5) — oldest synced rkey per conversation:
-```
-[8 bytes: entry_count]
-For each entry:
-  [4 bytes: group_id_length]
-  [variable: group_id]
-  [2 bytes: rkey_len (LE u16)]
-  [rkey_len bytes: rkey (UTF-8)]
-```
-
-Inbox range state (v5) — local (oldest, newest) rkey range per conversation:
-```
-[8 bytes: entry_count]
-For each entry:
-  [4 bytes: group_id_length]
-  [variable: group_id]
-  [2 bytes: oldest_len (LE u16)]
-  [oldest_len bytes: oldest_rkey (UTF-8)]
-  [2 bytes: newest_len (LE u16)]
-  [newest_len bytes: newest_rkey (UTF-8)]
-```
-
-Versions 1 and 2 are rejected with a `StateVersionMismatch` error. Older v3/v4 states load with empty v5 tables.
-
-### Retired v5 Tables
-
-Two tables that v5 once carried are gone, and a state file written before
-their removal simply ends with bytes nothing parses:
-
-- A per-conversation **sync watermark** — the oldest rkey received from a
-  peer — recorded as each batch landed, so an interrupted transfer would
-  have a durable resume point. Nothing ever read it. The rkey inventory
-  (see [History Sync](#history-sync)) resumes at the same granularity by
-  declaring what the requester now holds, so a retry costs only the
-  remainder either way.
-- A running SHA-256 **digest chain** per conversation, with epoch-boundary
-  anchors for bisecting two devices' histories. The inventory answers the
-  same question exactly and more cheaply, so nothing consumed the digests.
-
-Both were state every device maintained and none read.
+Versions 1 and 2 are rejected with a `StateVersionMismatch` error. v3 states load with no prior export secrets.
 
 ## Local Storage
 
