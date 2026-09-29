@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:moat_dart_common/moat_dart_common.dart' as common;
 
-import '../services/sync_manager.dart';
+import '../services/pair_channel_manager.dart';
 import 'common_listenable.dart';
 
 /// Puts a progress strip under every screen while a transfer runs. Both
@@ -19,8 +19,8 @@ class SyncProgressFrame extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<common.SyncService?>(
-      valueListenable: SyncManager.instance.service,
+    return ValueListenableBuilder<common.PairChannelService?>(
+      valueListenable: PairChannelManager.instance.listenable,
       builder: (context, service, _) =>
           ValueListenableBuilder<common.SyncProgressDto?>(
         valueListenable: service?.progress.asFlutter ?? _idle,

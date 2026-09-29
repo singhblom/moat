@@ -1,10 +1,7 @@
 use flutter_rust_bridge::frb;
 use moat_core::{
     self,
-    sync::{
-        decode_sync_msg, encode_sync_msg, ConvState, SyncMessage,
-        SyncOutput, SyncSession,
-    },
+    sync::SyncMessage,
     ControlKind, EncryptResult, Event, EventKind, GroupKind, KeyPackageInput, MoatCredential,
     MoatSession, ModifierKind, OwnEventInput, ReactionPayload as CoreReactionPayload, RingCommand,
     SenderInfo, StepEnv, TickInputs, WelcomeResult,
@@ -1074,39 +1071,6 @@ impl RingDriverHandle {
             .collect()
     }
 
-    /// Allocate `count` fresh, monotonic KP sequence numbers from this
-    /// device's own owner-global counter — must go through here (not a
-    /// host-local counter) so seqs never collide with ones allocated
-    /// elsewhere for a different purpose (e.g. steady-state KP-lane
-    /// batches). Used by `PairingService.startEnroll` to build
-    /// `Enroll.conv_kps` without a separate FFI surface per caller.
-    #[frb(sync)]
-    pub fn allocate_kp_seqs(&self, count: u64) -> Vec<u64> {
-        self.inner.lock().unwrap().allocate_kp_seqs(count as usize)
-    }
-
-    /// Seed `owner`'s consumer-side pool with a freshly-received batch.
-    /// Mirrors `moat-cli`'s `PairingCommandDto.seedKpPool` handling — the
-    /// existing device calls this with the newcomer's `Enroll.conv_kps` on
-    /// Approve, seeding the newcomer's pool directly instead of a
-    /// KpRequest/KpBatch round trip over the stealth lane.
-    #[frb(sync)]
-    pub fn ingest_kp_batch(
-        &self,
-        owner_device_id: Vec<u8>,
-        kps: Vec<OfferedKpDto>,
-    ) -> Result<(), String> {
-        let owner: [u8; 16] = owner_device_id
-            .try_into()
-            .map_err(|_| "owner_device_id must be 16 bytes".to_string())?;
-        let batch: Vec<moat_core::OfferedKp> = kps
-            .into_iter()
-            .map(|kp| moat_core::OfferedKp { rkey: kp.rkey, seq: kp.seq, key_package: kp.key_package })
-            .collect();
-        self.inner.lock().unwrap().ingest_kp_batch(&owner, batch);
-        Ok(())
-    }
-
     /// Claim one unused key package from the local pool for `owner`, marking
     /// its seq consumed.  `None` means the pool is drained — the host should
     /// emit a `KpRequest` via [`Self::emit_kp_request_for`] and defer the add
@@ -1341,92 +1305,7 @@ impl From<RingCommand> for RingCommandDto {
     }
 }
 
-// --- History sync session ---
-
-/// Opaque handle to a `SyncSession`, thread-safe via Mutex.
-pub struct SyncSessionHandle {
-    inner: Mutex<SyncSession>,
-}
-
-impl SyncSessionHandle {
-    /// Create a new session in the `SendingHello` phase.
-    #[frb(sync)]
-    pub fn new_session() -> SyncSessionHandle {
-        SyncSessionHandle { inner: Mutex::new(SyncSession::new()) }
-    }
-
-    /// Populate the plan for one conversation before calling `on_paired`.
-    pub fn add_conv_plan(
-        &self,
-        group_id: Vec<u8>,
-        conv_id: String,
-        our_messages: Vec<SyncMessageDto>,
-        expecting_batch: bool,
-    ) {
-        let messages: Vec<SyncMessage> = our_messages.into_iter().map(SyncMessage::from).collect();
-        self.inner.lock().unwrap().add_conv_plan(group_id, conv_id, messages, expecting_batch);
-    }
-
-    /// Called when the pair WS reaches the `paired` state. `device_id` is
-    /// this device's, named to the peer in the `Hello`.
-    pub fn on_paired(
-        &self,
-        our_convs: Vec<ConvStateDto>,
-        device_id: Vec<u8>,
-    ) -> Result<Vec<SyncOutputDto>, String> {
-        let device_id: moat_core::DeviceId = device_id
-            .try_into()
-            .map_err(|_| "device_id must be 16 bytes".to_string())?;
-        let convs: Vec<ConvState> = our_convs.into_iter().map(ConvState::from).collect();
-        Ok(self
-            .inner
-            .lock()
-            .unwrap()
-            .on_paired(convs, device_id)
-            .into_iter()
-            .map(SyncOutputDto::from)
-            .collect())
-    }
-
-    /// The device the peer named in its `Hello`, once that has arrived.
-    #[frb(sync)]
-    pub fn peer_device_id(&self) -> Option<Vec<u8>> {
-        self.inner.lock().unwrap().peer_device_id().map(|d| d.to_vec())
-    }
-
-    /// Feed a received and decrypted `SyncMsg` (JSON bytes) into the state machine.
-    pub fn on_message(&self, msg_bytes: Vec<u8>) -> Result<Vec<SyncOutputDto>, String> {
-        let msg = decode_sync_msg(&msg_bytes)?;
-        Ok(self
-            .inner
-            .lock()
-            .unwrap()
-            .on_message(msg)
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .map(SyncOutputDto::from)
-            .collect())
-    }
-
-    /// `true` once the session has reached the `Done` phase.
-    #[frb(sync)]
-    pub fn is_done(&self) -> bool {
-        self.inner.lock().unwrap().is_done()
-    }
-
-    /// What this side has received. Read at completion, where it becomes
-    /// the report the user sees.
-    #[frb(sync)]
-    pub fn tally(&self) -> SyncTallyDto {
-        self.inner.lock().unwrap().tally().into()
-    }
-
-    /// How far the transfer has got, for a progress indicator.
-    #[frb(sync)]
-    pub fn progress(&self) -> SyncProgressDto {
-        self.inner.lock().unwrap().progress().into()
-    }
-}
+// --- Pair channel: pairing, sync requests and history transfer ---
 
 /// Mirrors `moat_core::SyncProgress`, with its `fraction()` computed.
 pub enum SyncProgressDto {
@@ -1459,7 +1338,6 @@ pub struct SyncMessageDto {
     pub sender_device_name: String,
     pub timestamp_ms: i64,
     pub content: String,
-    pub is_own: bool,
     pub blob_uri: Option<String>,
     pub blob_key: Option<Vec<u8>>,
     pub blob_ciphertext_hash: Option<Vec<u8>>,
@@ -1503,7 +1381,6 @@ impl From<SyncMessage> for SyncMessageDto {
             sender_device_name: m.sender_device_name,
             timestamp_ms: m.timestamp_ms,
             content: m.content,
-            is_own: m.is_own,
             blob_uri: m.blob_uri,
             blob_key: m.blob_key,
             blob_ciphertext_hash: m.blob_ciphertext_hash,
@@ -1527,7 +1404,6 @@ impl From<SyncMessageDto> for SyncMessage {
             sender_device_name: m.sender_device_name,
             timestamp_ms: m.timestamp_ms,
             content: m.content,
-            is_own: m.is_own,
             blob_uri: m.blob_uri,
             blob_key: m.blob_key,
             blob_ciphertext_hash: m.blob_ciphertext_hash,
@@ -1542,228 +1418,10 @@ impl From<SyncMessageDto> for SyncMessage {
     }
 }
 
-/// What one side holds for a conversation — mirrors
-/// `moat_core::ConvInventory`. The variants keep "I hold nothing" and "I
-/// am not listing what I hold" distinguishable, since they want opposite
-/// responses from the peer.
-pub enum ConvInventoryDto {
-    /// Every rkey held, enumerated. The peer sends exactly the complement.
-    Complete { rkeys: Vec<String> },
-    /// Too large for the Hello's byte budget, so only the span is given.
-    Range { oldest: String, newest: String, count: u64 },
-    /// Nothing held at all.
-    Empty,
-}
-
-impl From<ConvInventoryDto> for moat_core::ConvInventory {
-    fn from(i: ConvInventoryDto) -> Self {
-        use moat_core::ConvInventory as C;
-        match i {
-            ConvInventoryDto::Complete { rkeys } => C::Complete { rkeys },
-            ConvInventoryDto::Range { oldest, newest, count } => {
-                C::Range { oldest, newest, count }
-            }
-            ConvInventoryDto::Empty => C::Empty,
-        }
-    }
-}
-
-impl From<moat_core::ConvInventory> for ConvInventoryDto {
-    fn from(i: moat_core::ConvInventory) -> Self {
-        use moat_core::ConvInventory as C;
-        match i {
-            C::Complete { rkeys } => ConvInventoryDto::Complete { rkeys },
-            C::Range { oldest, newest, count } => {
-                ConvInventoryDto::Range { oldest, newest, count }
-            }
-            C::Empty => ConvInventoryDto::Empty,
-        }
-    }
-}
-
-pub struct ConvStateDto {
-    pub group_id: Vec<u8>,
-    pub inventory: ConvInventoryDto,
-}
-
-impl From<ConvStateDto> for ConvState {
-    fn from(c: ConvStateDto) -> Self {
-        ConvState {
-            group_id: c.group_id,
-            inventory: c.inventory.into(),
-        }
-    }
-}
-
-impl From<ConvState> for ConvStateDto {
-    fn from(c: ConvState) -> Self {
-        ConvStateDto {
-            group_id: c.group_id,
-            inventory: c.inventory.into(),
-        }
-    }
-}
-
-pub enum SyncOutputDto {
-    /// JSON-encoded `SyncMsg` ready to be sealed and sent on the pair WS.
-    Send { bytes: Vec<u8> },
-    /// Persist these messages for the conversation `conv_id` (hex group ID).
-    Store { conv_id: String, messages: Vec<SyncMessageDto> },
-}
-
-impl From<SyncOutput> for SyncOutputDto {
-    fn from(o: SyncOutput) -> Self {
-        match o {
-            SyncOutput::Send(msg) => SyncOutputDto::Send { bytes: encode_sync_msg(&msg) },
-            SyncOutput::Store { conv_id, messages } => SyncOutputDto::Store {
-                conv_id,
-                messages: messages.into_iter().map(SyncMessageDto::from).collect(),
-            },
-        }
-    }
-}
-
-// --- Live pairing (QR / text code) device onboarding ---
-//
-// Dart mirror of `crates/moat-core/src/pairing.rs` + the pairing
-// interpreter in `crates/moat-cli/src/app.rs`. Fully-qualified
-// `moat_core::` paths throughout (rather than adding to the shared `use`
-// block above) to keep this section's diff self-contained.
-
-/// Decoded pairing code contents: rendezvous token + channel secret.
-pub struct PairingPayloadDto {
-    pub token: Vec<u8>,
-    pub secret: Vec<u8>,
-}
-
-fn payload_from_core(p: moat_core::PairingPayload) -> PairingPayloadDto {
-    PairingPayloadDto { token: p.token.to_vec(), secret: p.secret.to_vec() }
-}
-
-fn payload_to_core(token: Vec<u8>, secret: Vec<u8>) -> Result<moat_core::PairingPayload, String> {
-    let token: [u8; moat_core::PAIRING_TOKEN_LEN] = token
-        .try_into()
-        .map_err(|_| format!("token must be {} bytes", moat_core::PAIRING_TOKEN_LEN))?;
-    let secret: [u8; moat_core::PAIRING_SECRET_LEN] = secret
-        .try_into()
-        .map_err(|_| format!("secret must be {} bytes", moat_core::PAIRING_SECRET_LEN))?;
-    Ok(moat_core::PairingPayload { token, secret })
-}
-
-/// Encode `token`+`secret` to the hyphen-grouped Crockford base32 text form
-/// (`MZXW6-YTBOI-…`), for manual entry / display beneath a QR code.
-pub fn pairing_payload_to_text(token: Vec<u8>, secret: Vec<u8>) -> Result<String, String> {
-    Ok(payload_to_core(token, secret)?.to_text())
-}
-
-/// Decode a pairing code's text form back into token+secret.
-pub fn pairing_payload_from_text(text: String) -> Result<PairingPayloadDto, String> {
-    moat_core::PairingPayload::from_text(&text)
-        .map(payload_from_core)
-        .map_err(|e| e.to_string())
-}
-
-/// Encode `token`+`secret` to the `moat-pair:` URI form used for the QR payload.
-pub fn pairing_payload_to_uri(token: Vec<u8>, secret: Vec<u8>) -> Result<String, String> {
-    Ok(payload_to_core(token, secret)?.to_uri())
-}
-
-/// Decode a `moat-pair:` URI back into token+secret.
-pub fn pairing_payload_from_uri(uri: String) -> Result<PairingPayloadDto, String> {
-    moat_core::PairingPayload::from_uri(&uri)
-        .map(payload_from_core)
-        .map_err(|e| e.to_string())
-}
-
-/// Sent by the new device once the pair channel is up. `credential` reuses
-/// [`CredentialDto`] rather than a new type.
-pub struct EnrollDto {
-    pub credential: CredentialDto,
-    pub stealth_scan_pubkey: Vec<u8>,
-    pub ring_kp: Vec<u8>,
-    pub conv_kps: Vec<OfferedKpDto>,
-}
-
-/// One existing sibling's identity + stealth address, carried in
-/// `Admit.roster`.
-pub struct SiblingInfoDto {
-    pub device_id: Vec<u8>,
-    pub device_name: String,
-    pub stealth_pubkey: Vec<u8>,
-}
-
-impl From<moat_core::SiblingInfo> for SiblingInfoDto {
-    fn from(s: moat_core::SiblingInfo) -> Self {
-        SiblingInfoDto {
-            device_id: s.device_id.to_vec(),
-            device_name: s.device_name,
-            stealth_pubkey: s.stealth_pubkey.to_vec(),
-        }
-    }
-}
-
-fn sibling_info_to_core(s: SiblingInfoDto) -> Result<moat_core::SiblingInfo, String> {
-    Ok(moat_core::SiblingInfo {
-        device_id: s
-            .device_id
-            .try_into()
-            .map_err(|_| "device_id must be 16 bytes".to_string())?,
-        device_name: s.device_name,
-        stealth_pubkey: s
-            .stealth_pubkey
-            .try_into()
-            .map_err(|_| "stealth_pubkey must be 32 bytes".to_string())?,
-    })
-}
-
-/// Side effect requested by [`PairingSessionHandle`]. Mirrors
-/// `moat_core::PairingCommand` 1:1 — see that type's doc for what each
-/// variant means and who's expected to act on it.
-pub enum PairingCommandDto {
-    SendFrame { ciphertext: Vec<u8> },
-    SeedKpPool { device_id: Vec<u8>, kps: Vec<OfferedKpDto> },
-    PublishRingCommit { tag: Vec<u8>, ciphertext: Vec<u8> },
-    SurfaceApprovalPrompt { device_name: String, did: String },
-    PersistRing { ring_id: Vec<u8> },
-    RosterReceived { roster: Vec<SiblingInfoDto> },
-    StartSync,
-}
-
-impl From<moat_core::PairingCommand> for PairingCommandDto {
-    fn from(c: moat_core::PairingCommand) -> Self {
-        use moat_core::PairingCommand;
-        match c {
-            PairingCommand::SendFrame { ciphertext } => {
-                PairingCommandDto::SendFrame { ciphertext }
-            }
-            PairingCommand::SeedKpPool { device_id, kps } => PairingCommandDto::SeedKpPool {
-                device_id: device_id.to_vec(),
-                kps: kps
-                    .into_iter()
-                    .map(|kp| OfferedKpDto { rkey: kp.rkey, seq: kp.seq, key_package: kp.key_package })
-                    .collect(),
-            },
-            PairingCommand::PublishRingCommit { tag, ciphertext } => {
-                PairingCommandDto::PublishRingCommit { tag: tag.to_vec(), ciphertext }
-            }
-            PairingCommand::SurfaceApprovalPrompt { device_name, did } => {
-                PairingCommandDto::SurfaceApprovalPrompt { device_name, did }
-            }
-            PairingCommand::PersistRing { ring_id } => PairingCommandDto::PersistRing { ring_id },
-            PairingCommand::RosterReceived { roster } => PairingCommandDto::RosterReceived {
-                roster: roster.into_iter().map(SiblingInfoDto::from).collect(),
-            },
-            PairingCommand::StartSync => PairingCommandDto::StartSync,
-        }
-    }
-}
-
-/// Mirrors `moat_core::PairingUiState` 1:1 — the presentation projection of
-/// `PairingSessionHandle::ui_state`. Every host (this Dart app, the
+/// Mirrors `moat_core::PairingUiState` 1:1. Every host (this Dart app, the
 /// headless server, moat-cli) renders this; none derives its own.
 pub enum PairingUiStateDto {
-    /// No pairing in flight. `PairingSessionHandle` itself never returns
-    /// this — see the doc on the core `Idle` variant.
+    /// No pairing in flight.
     Idle,
     /// New device: code generated, waiting for the peer to enter it.
     ShowingCode { code: String, uri: String },
@@ -1806,113 +1464,6 @@ fn credential_from_dto(dto: CredentialDto) -> Result<MoatCredential, String> {
     Ok(MoatCredential::new(&dto.did, &dto.device_name, device_id))
 }
 
-// ── Requested sync between established devices ───────────────────────────────
-
-/// Encode a `RingMsg::SyncRequest` for publication on the device ring as
-/// an `EventKindDto::RingMsg` event payload.
-pub fn ring_msg_encode_sync_request(
-    token: Vec<u8>,
-    secret: Vec<u8>,
-    target_device_id: Option<Vec<u8>>,
-) -> Result<Vec<u8>, String> {
-    let moat_core::PairingPayload { token, secret } = payload_to_core(token, secret)?;
-    let target_device_id = match target_device_id {
-        Some(id) => Some(
-            <moat_core::DeviceId>::try_from(id.as_slice())
-                .map_err(|_| "device_id must be 16 bytes".to_string())?,
-        ),
-        None => None,
-    };
-    Ok(moat_core::encode_ring_msg(&moat_core::RingMsg::SyncRequest {
-        token,
-        secret,
-        target_device_id,
-    }))
-}
-
-/// Build a `ring.msg` payload offering history to one sibling. Always
-/// targeted — the relay admits two attaches, so an untargeted offer would
-/// pick its recipient arbitrarily.
-pub fn ring_msg_encode_sync_offer(
-    token: Vec<u8>,
-    secret: Vec<u8>,
-    target_device_id: Vec<u8>,
-) -> Result<Vec<u8>, String> {
-    let moat_core::PairingPayload { token, secret } = payload_to_core(token, secret)?;
-    let target_device_id = <moat_core::DeviceId>::try_from(
-        target_device_id.as_slice(),
-    )
-    .map_err(|_| "device_id must be 16 bytes".to_string())?;
-    Ok(moat_core::encode_ring_msg(&moat_core::RingMsg::SyncOffer {
-        token,
-        secret,
-        target_device_id,
-    }))
-}
-
-/// A decoded `ring.msg` payload.
-pub enum RingMsgDto {
-    /// "I am missing history — open a sync channel with me at this token."
-    /// `target_device_id` names one sibling; `None` is a broadcast.
-    SyncRequest {
-        token: Vec<u8>,
-        secret: Vec<u8>,
-        target_device_id: Option<Vec<u8>>,
-    },
-    /// "I have history you don't — join me." Always targeted.
-    SyncOffer {
-        token: Vec<u8>,
-        secret: Vec<u8>,
-        target_device_id: Vec<u8>,
-    },
-}
-
-/// Decode any `ring.msg` payload.
-pub fn ring_msg_decode(payload: Vec<u8>) -> Result<RingMsgDto, String> {
-    match moat_core::decode_ring_msg(&payload).map_err(|e| e.to_string())? {
-        moat_core::RingMsg::SyncRequest { token, secret, target_device_id } => {
-            Ok(RingMsgDto::SyncRequest {
-                token: token.to_vec(),
-                secret: secret.to_vec(),
-                target_device_id: target_device_id.map(|t| t.to_vec()),
-            })
-        }
-        moat_core::RingMsg::SyncOffer { token, secret, target_device_id } => {
-            Ok(RingMsgDto::SyncOffer {
-                token: token.to_vec(),
-                secret: secret.to_vec(),
-                target_device_id: target_device_id.to_vec(),
-            })
-        }
-    }
-}
-
-/// How long a published sync request stays valid, matching the relay's
-/// token TTL.
-#[frb(sync)]
-pub fn sync_request_ttl_ms() -> i64 {
-    moat_core::SYNC_REQUEST_TTL_MS
-}
-
-/// Byte budget for all inventories in one `Hello` — see
-/// `fit_hello_inventories`.
-#[frb(sync)]
-pub fn hello_inventory_budget_bytes() -> u32 {
-    moat_core::HELLO_INVENTORY_BUDGET_BYTES as u32
-}
-
-/// Fit a Hello's inventories inside that budget by downgrading the largest
-/// enumerations to spans, so the frame stays under the relay's hard limit.
-pub fn fit_hello_inventories(convs: Vec<ConvStateDto>) -> Vec<ConvStateDto> {
-    let mut core: Vec<ConvState> = convs.into_iter().map(Into::into).collect();
-    moat_core::fit_hello_inventories(&mut core);
-    core.into_iter().map(ConvStateDto::from).collect()
-}
-
-/// Presentation projection of a `SyncRequestSessionHandle` — mirrors
-/// `moat_core::SyncRequestUiState`.
-/// Why a sync session ended badly — mirrors `moat_core::SyncFailure`.
-///
 /// An enum rather than a message, because the same fact reads differently
 /// on each side: a rendezvous nobody joined is "no device answered" to the
 /// device that asked and "this expired before you answered" to the device
@@ -1928,19 +1479,6 @@ pub enum SyncFailureDto {
     ChannelClosed { detail: String },
     /// The request could not be published to the ring at all.
     PublishFailed { detail: String },
-}
-
-impl From<SyncFailureDto> for moat_core::SyncFailure {
-    fn from(f: SyncFailureDto) -> Self {
-        use moat_core::SyncFailure as F;
-        match f {
-            SyncFailureDto::NoAnswer => F::NoAnswer,
-            SyncFailureDto::RequestExpired => F::RequestExpired,
-            SyncFailureDto::Declined => F::Declined,
-            SyncFailureDto::ChannelClosed { detail } => F::ChannelClosed { detail },
-            SyncFailureDto::PublishFailed { detail } => F::PublishFailed { detail },
-        }
-    }
 }
 
 impl From<moat_core::SyncFailure> for SyncFailureDto {
@@ -1976,20 +1514,8 @@ impl From<moat_core::SyncTally> for SyncTallyDto {
     }
 }
 
-impl From<SyncTallyDto> for moat_core::SyncTally {
-    fn from(t: SyncTallyDto) -> Self {
-        Self {
-            messages: t.messages,
-            conversations: t.conversations,
-            sent_messages: t.sent_messages,
-            sent_conversations: t.sent_conversations,
-        }
-    }
-}
-
 pub enum SyncRequestUiStateDto {
-    /// No sync request in flight. The handle itself never returns this;
-    /// a host wrapping an optional session reports it when there is none.
+    /// No sync request in flight.
     Idle,
     /// Waiting on the rendezvous, in either role.
     AwaitingPeer,
@@ -2027,382 +1553,361 @@ impl From<moat_core::SyncRequestUiState> for SyncRequestUiStateDto {
     }
 }
 
-/// Opaque handle to a `SyncRequestSession`, thread-safe via Mutex. Both
-/// roles (requester / responder) live in one type, selected at
-/// construction — mirrors `moat_core::sync_request::SyncRequestSession`.
-pub struct SyncRequestSessionHandle {
-    inner: Mutex<moat_core::SyncRequestSession>,
+/// This device's identity, for the driver steps that need its keys.
+pub struct PairIdentityDto {
+    pub credential: CredentialDto,
+    pub key_bundle: Vec<u8>,
+    /// 32-byte X25519 stealth scan public key.
+    pub stealth_pubkey: Vec<u8>,
 }
 
-impl SyncRequestSessionHandle {
-    /// Start a request of our own. The caller publishes
-    /// `ring_msg_encode_sync_request(token, secret)` on the ring and
-    /// registers the same token with the relay via `pair_offer`.
-    #[frb(sync)]
-    pub fn request(
-        token: Vec<u8>,
-        secret: Vec<u8>,
-        now_ms: i64,
-    ) -> Result<SyncRequestSessionHandle, String> {
-        let moat_core::PairingPayload { token, secret } = payload_to_core(token, secret)?;
-        Ok(SyncRequestSessionHandle {
-            inner: Mutex::new(moat_core::SyncRequestSession::request(token, secret, now_ms)),
-        })
-    }
-
-    /// A sibling offered us history and we are joining its rendezvous.
-    /// No prompt: the offer already carries the one human decision, made
-    /// on the side that could judge.
-    #[frb(sync)]
-    pub fn accept_offer(
-        token: Vec<u8>,
-        secret: Vec<u8>,
-        now_ms: i64,
-    ) -> Result<SyncRequestSessionHandle, String> {
-        let moat_core::PairingPayload { token, secret } = payload_to_core(token, secret)?;
-        Ok(SyncRequestSessionHandle {
-            inner: Mutex::new(moat_core::SyncRequestSession::accept_offer(token, secret, now_ms)),
-        })
-    }
-
-    /// A sibling's request arrived on the ring. `device_name` must come
-    /// from the sender's MLS leaf credential, not from the payload.
-    #[frb(sync)]
-    pub fn received(
-        token: Vec<u8>,
-        secret: Vec<u8>,
-        device_name: String,
-        now_ms: i64,
-    ) -> Result<SyncRequestSessionHandle, String> {
-        let moat_core::PairingPayload { token, secret } = payload_to_core(token, secret)?;
-        Ok(SyncRequestSessionHandle {
-            inner: Mutex::new(moat_core::SyncRequestSession::received(
-                token,
-                secret,
-                device_name,
-                now_ms,
-            )),
-        })
-    }
-
-    /// The rendezvous token this session is bound to.
-    #[frb(sync)]
-    pub fn token(&self) -> Vec<u8> {
-        self.inner.lock().unwrap().token().to_vec()
-    }
-
-    /// This session's end of the channel; `None` until the channel is up,
-    /// and after the first call.
-    #[frb(sync)]
-    pub fn transfer_channel(&self) -> Option<PairingFrameChannelHandle> {
-        let channel = self.inner.lock().unwrap().transfer_channel()?;
-        Some(PairingFrameChannelHandle { inner: Mutex::new(channel) })
-    }
-
-    /// Current projection. Computed fresh, never cached.
-    #[frb(sync)]
-    pub fn ui_state(&self) -> SyncRequestUiStateDto {
-        self.inner.lock().unwrap().ui_state().into()
-    }
-
-    /// The user approved a sibling's request. Returns the token to
-    /// `pair_join` with; errors if no decision is outstanding.
-    #[frb(sync)]
-    pub fn accept(&self) -> Result<Vec<u8>, String> {
-        self.inner
-            .lock()
-            .unwrap()
-            .accept()
-            .map(|t| t.to_vec())
-            .map_err(|e| e.to_string())
-    }
-
-    /// The user declined. Local only — nothing goes on the wire, so one
-    /// refusal among several prompted siblings doesn't cancel the request.
-    #[frb(sync)]
-    pub fn decline(&self) {
-        self.inner.lock().unwrap().decline();
-    }
-
-    /// The pair channel reached `paired`.
-    #[frb(sync)]
-    pub fn on_channel_up(&self) -> Result<(), String> {
-        self.inner.lock().unwrap().on_channel_up().map_err(|e| e.to_string())
-    }
-
-    /// The sync session running on this channel finished. `tally` comes
-    /// from that session; `device_name` is the peer as MLS named it on the
-    /// frames it sent.
-    #[frb(sync)]
-    pub fn on_complete(&self, tally: SyncTallyDto, device_name: Option<String>) {
-        self.inner.lock().unwrap().on_complete(tally.into(), device_name);
-    }
-
-    /// Terminal failure. The first reason wins — a late teardown notice
-    /// never overwrites the failure that explains the outcome, nor a
-    /// completed transfer.
-    #[frb(sync)]
-    pub fn fail(&self, reason: SyncFailureDto) {
-        self.inner.lock().unwrap().fail(reason.into());
-    }
-
-    /// `true` once the session can no longer change state.
-    #[frb(sync)]
-    pub fn is_terminal(&self) -> bool {
-        self.inner.lock().unwrap().is_terminal()
-    }
-
-    /// Move an unanswered session to `Failed` once its rendezvous has
-    /// outlived the relay's token TTL. Returns `true` only on the call
-    /// that changed the state, so a host driving this from a periodic
-    /// tick has exactly one edge to react to.
-    #[frb(sync)]
-    pub fn expire_if_due(&self, now_ms: i64) -> bool {
-        self.inner.lock().unwrap().expire_if_due(now_ms)
-    }
-
-    /// `true` once the rendezvous token has outlived the relay's TTL. Only
-    /// the rendezvous is bounded; a session that reached the channel runs
-    /// to completion however long the transfer takes.
-    #[frb(sync)]
-    pub fn is_expired(&self, now_ms: i64) -> bool {
-        self.inner.lock().unwrap().is_expired(now_ms)
-    }
+/// One conversation's settled messages, for a transfer's `Hello`.
+pub struct ConvHistoryDto {
+    pub group_id: Vec<u8>,
+    pub conv_id: String,
+    pub messages: Vec<SyncMessageDto>,
 }
 
-/// Opaque handle to a `PairingSession`, thread-safe via Mutex. Both roles
-/// (new device / existing device) live in one type, selected at
-/// construction — mirrors `moat_core::pairing::PairingSession` exactly.
-pub struct PairingSessionHandle {
-    inner: Mutex<moat_core::PairingSession>,
+/// Mirrors `moat_core::PairChannelCommand`: host I/O, to be carried out in
+/// order.
+pub enum PairChannelCommandDto {
+    SendPairOffer { token: Vec<u8> },
+    SendPairJoin { token: Vec<u8> },
+    ConnectPair { url: String, token: Vec<u8> },
+    SendFrame { data: Vec<u8> },
+    /// Close the pair WS behind the frames already sent.
+    ClosePair,
+    /// Tear the pair WS down now, and stop resending any unacknowledged
+    /// offer or join.
+    DropPair,
+    /// Publish to this device's repo and tell the relay; report a failure
+    /// through `on_ring_publish_failed`.
+    PublishRingEvent { tag: Vec<u8>, ciphertext: Vec<u8> },
+    /// Load every conversation's settled history and hand it to
+    /// `provide_history` with this token.
+    LoadHistory { token: Vec<u8> },
+    StoreMessages { conv_id: String, messages: Vec<SyncMessageDto> },
+    SaveMlsState,
+    SaveRingState,
+    RingJoined { ring_id: Vec<u8> },
+    DeviceAdmitted { ring_id: Vec<u8> },
+    SiblingStealthLearned { device_id: Vec<u8>, scan_pubkey: Vec<u8> },
+    TransferComplete { tally: SyncTallyDto },
+    TransferFailed { detail: String, during_pairing: bool },
+    Log { line: String },
 }
 
-impl PairingSessionHandle {
-    /// Construct a session for the new (joining) device.
-    #[frb(sync)]
-    pub fn new_device(secret: Vec<u8>, token: Vec<u8>) -> Result<PairingSessionHandle, String> {
-        let secret: [u8; moat_core::PAIRING_SECRET_LEN] = secret
-            .try_into()
-            .map_err(|_| format!("secret must be {} bytes", moat_core::PAIRING_SECRET_LEN))?;
-        let token: [u8; moat_core::PAIRING_TOKEN_LEN] = token
-            .try_into()
-            .map_err(|_| "token must be 16 bytes".to_string())?;
-        let payload = moat_core::PairingPayload { secret, token };
-        Ok(PairingSessionHandle {
-            inner: Mutex::new(moat_core::PairingSession::new_device(&payload)),
-        })
-    }
-
-    /// Construct a session for the existing (approving) device.
-    #[frb(sync)]
-    pub fn existing_device(secret: Vec<u8>, token: Vec<u8>) -> Result<PairingSessionHandle, String> {
-        let secret: [u8; moat_core::PAIRING_SECRET_LEN] = secret
-            .try_into()
-            .map_err(|_| format!("secret must be {} bytes", moat_core::PAIRING_SECRET_LEN))?;
-        let token: [u8; moat_core::PAIRING_TOKEN_LEN] = token
-            .try_into()
-            .map_err(|_| "token must be 16 bytes".to_string())?;
-        Ok(PairingSessionHandle {
-            inner: Mutex::new(moat_core::PairingSession::existing_device(&secret, &token)),
-        })
-    }
-
-    /// New device: build and seal the `Enroll` frame once the pair channel
-    /// reaches `paired`.
-    pub fn start_enroll(
-        &self,
-        session: &MoatSessionHandle,
-        credential: CredentialDto,
-        key_bundle: Vec<u8>,
-        stealth_scan_pubkey: Vec<u8>,
-        conv_kps: Vec<OfferedKpDto>,
-    ) -> Result<Vec<PairingCommandDto>, String> {
-        let credential = credential_from_dto(credential)?;
-        let stealth_scan_pubkey: [u8; 32] = stealth_scan_pubkey
-            .try_into()
-            .map_err(|_| "stealth_scan_pubkey must be 32 bytes".to_string())?;
-        let kps: Vec<moat_core::OfferedKp> = conv_kps
-            .into_iter()
-            .map(|kp| moat_core::OfferedKp { rkey: kp.rkey, seq: kp.seq, key_package: kp.key_package })
-            .collect();
-        let session_lock = session.inner.lock().unwrap();
-        let cmds = self
-            .inner
-            .lock()
-            .unwrap()
-            .start_enroll(&session_lock, &credential, &key_bundle, stealth_scan_pubkey, kps)
-            .map_err(|e| e.to_string())?;
-        Ok(cmds.into_iter().map(PairingCommandDto::from).collect())
-    }
-
-    /// Feed a sealed frame received over the pair channel. Dispatches on
-    /// role + phase; a decryption or ordering-violation error aborts the
-    /// session (returned as `Err`).
-    pub fn on_frame_received(
-        &self,
-        session: &MoatSessionHandle,
-        own_credential: CredentialDto,
-        ciphertext: Vec<u8>,
-    ) -> Result<Vec<PairingCommandDto>, String> {
-        let own_credential = credential_from_dto(own_credential)?;
-        let session_lock = session.inner.lock().unwrap();
-        let cmds = self
-            .inner
-            .lock()
-            .unwrap()
-            .on_frame_received(&session_lock, &own_credential, &ciphertext)
-            .map_err(|e| e.to_string())?;
-        Ok(cmds.into_iter().map(PairingCommandDto::from).collect())
-    }
-
-    /// Existing device only: the peer's `Enroll`, once received, pending
-    /// the user's approval decision.
-    #[frb(sync)]
-    pub fn pending_enroll(&self) -> Option<EnrollDto> {
-        self.inner.lock().unwrap().pending_enroll().map(|e| EnrollDto {
-            credential: CredentialDto {
-                did: e.credential.did().to_string(),
-                device_id: e.credential.device_id().to_vec(),
-                device_name: e.credential.device_name().to_string(),
+impl From<moat_core::PairChannelCommand> for PairChannelCommandDto {
+    fn from(c: moat_core::PairChannelCommand) -> Self {
+        use moat_core::PairChannelCommand as C;
+        match c {
+            C::SendPairOffer { token } => Self::SendPairOffer { token: token.to_vec() },
+            C::SendPairJoin { token } => Self::SendPairJoin { token: token.to_vec() },
+            C::ConnectPair { url, token } => Self::ConnectPair { url, token: token.to_vec() },
+            C::SendFrame { data } => Self::SendFrame { data },
+            C::ClosePair => Self::ClosePair,
+            C::DropPair => Self::DropPair,
+            C::PublishRingEvent { tag, ciphertext } => {
+                Self::PublishRingEvent { tag: tag.to_vec(), ciphertext }
+            }
+            C::LoadHistory { token } => Self::LoadHistory { token: token.to_vec() },
+            C::StoreMessages { conv_id, messages } => Self::StoreMessages {
+                conv_id,
+                messages: messages.into_iter().map(Into::into).collect(),
             },
-            stealth_scan_pubkey: e.stealth_scan_pubkey.to_vec(),
-            ring_kp: e.ring_kp.clone(),
-            conv_kps: e
-                .conv_kps
-                .iter()
-                .map(|kp| OfferedKpDto {
-                    rkey: kp.rkey.clone(),
-                    seq: kp.seq,
-                    key_package: kp.key_package.clone(),
-                })
-                .collect(),
-        })
+            C::SaveMlsState => Self::SaveMlsState,
+            C::SaveRingState => Self::SaveRingState,
+            C::RingJoined { ring_id } => Self::RingJoined { ring_id },
+            C::DeviceAdmitted { ring_id } => Self::DeviceAdmitted { ring_id },
+            C::SiblingStealthLearned { device_id, scan_pubkey } => Self::SiblingStealthLearned {
+                device_id: device_id.to_vec(),
+                scan_pubkey: scan_pubkey.to_vec(),
+            },
+            C::TransferComplete { tally } => Self::TransferComplete { tally: tally.into() },
+            C::TransferFailed { detail, during_pairing } => {
+                Self::TransferFailed { detail, during_pairing }
+            }
+            C::Log(line) => Self::Log { line },
+        }
     }
+}
 
-    /// The ring this session ended up in, once known.
+/// `pair_new`'s code, and the commands that start its rendezvous.
+pub struct PairNewDto {
+    pub code: String,
+    pub commands: Vec<PairChannelCommandDto>,
+}
+
+fn commands_dto(cmds: Vec<moat_core::PairChannelCommand>) -> Vec<PairChannelCommandDto> {
+    cmds.into_iter().map(Into::into).collect()
+}
+
+fn token_from(token: &[u8]) -> Result<[u8; moat_core::PAIRING_TOKEN_LEN], String> {
+    token.try_into().map_err(|_| "token must be 16 bytes".to_string())
+}
+
+fn device_id_from(device_id: &[u8]) -> Result<moat_core::DeviceId, String> {
+    device_id.try_into().map_err(|_| "device_id must be 16 bytes".to_string())
+}
+
+/// Opaque handle to a `moat_core::PairChannelDriver`, the one owner of
+/// this device's pair channel. Methods taking a session, ring and identity
+/// run against this device's local state; locks are taken session, ring,
+/// then driver, the same order `RingDriverHandle` uses.
+pub struct PairChannelHandle {
+    inner: Mutex<moat_core::PairChannelDriver>,
+}
+
+impl PairChannelHandle {
     #[frb(sync)]
-    pub fn ring_id(&self) -> Option<Vec<u8>> {
-        self.inner.lock().unwrap().ring_id().map(<[u8]>::to_vec)
+    pub fn new_driver() -> PairChannelHandle {
+        PairChannelHandle { inner: Mutex::new(moat_core::PairChannelDriver::new()) }
     }
 
-    /// Existing device only: called once the user taps Approve. Creates
-    /// the ring (first pairing) or adds the joiner (subsequent pairings),
-    /// seeds the newcomer's KP pool, and emits the sealed `Admit` frame.
-    pub fn approve(
+    fn with_env<T>(
         &self,
         session: &MoatSessionHandle,
-        credential: CredentialDto,
-        key_bundle: Vec<u8>,
-        own_stealth_pubkey: Vec<u8>,
-        known_siblings: Vec<SiblingInfoDto>,
-        existing_ring_id: Option<Vec<u8>>,
-    ) -> Result<Vec<PairingCommandDto>, String> {
-        let credential = credential_from_dto(credential)?;
-        let own_stealth_pubkey: [u8; 32] = own_stealth_pubkey
-            .try_into()
-            .map_err(|_| "own_stealth_pubkey must be 32 bytes".to_string())?;
-        let siblings: Vec<moat_core::SiblingInfo> = known_siblings
+        ring: &RingDriverHandle,
+        identity: PairIdentityDto,
+        sibling_stealth: Vec<SiblingStealthDto>,
+        now_ms: i64,
+        f: impl FnOnce(&mut moat_core::PairChannelDriver, &mut moat_core::PairEnv<'_>) -> T,
+    ) -> Result<T, String> {
+        let identity = moat_core::PairIdentity {
+            credential: credential_from_dto(identity.credential)?,
+            key_bundle: identity.key_bundle,
+            stealth_pubkey: identity
+                .stealth_pubkey
+                .try_into()
+                .map_err(|_| "stealth_pubkey must be 32 bytes".to_string())?,
+        };
+        let sibling_stealth = to_core_sibling_stealth(sibling_stealth)?;
+        let mls = session.inner.lock().unwrap();
+        let mut ring = ring.inner.lock().unwrap();
+        let mut driver = self.inner.lock().unwrap();
+        let mut env = moat_core::PairEnv {
+            mls: &mls,
+            ring: &mut ring,
+            identity: &identity,
+            sibling_stealth: &sibling_stealth,
+            now_ms,
+        };
+        Ok(f(&mut driver, &mut env))
+    }
+
+    #[frb(sync)]
+    pub fn pairing_ui_state(&self) -> PairingUiStateDto {
+        self.inner.lock().unwrap().pairing_ui_state().into()
+    }
+
+    #[frb(sync)]
+    pub fn sync_request_ui_state(&self) -> SyncRequestUiStateDto {
+        self.inner.lock().unwrap().sync_request_ui_state().into()
+    }
+
+    #[frb(sync)]
+    pub fn is_transferring(&self) -> bool {
+        self.inner.lock().unwrap().is_transferring()
+    }
+
+    #[frb(sync)]
+    pub fn progress(&self) -> Option<SyncProgressDto> {
+        self.inner.lock().unwrap().progress().map(Into::into)
+    }
+
+    /// New device: start a pairing; the code is what the screen shows.
+    #[frb(sync)]
+    pub fn pair_new(&self) -> PairNewDto {
+        let (code, cmds) = self.inner.lock().unwrap().pair_new();
+        PairNewDto { code, commands: commands_dto(cmds) }
+    }
+
+    /// Existing device: enter a code, in its text or `moat-pair:` form.
+    #[frb(sync)]
+    pub fn pair_confirm(&self, code: String) -> Result<Vec<PairChannelCommandDto>, String> {
+        self.inner.lock().unwrap().pair_confirm(&code).map(commands_dto).map_err(|e| e.to_string())
+    }
+
+    /// Existing device: approve the pending `Enroll`. A failure while
+    /// approving fails the pairing rather than returning `Err`.
+    pub fn pair_approve(
+        &self,
+        session: &MoatSessionHandle,
+        ring: &RingDriverHandle,
+        identity: PairIdentityDto,
+        sibling_stealth: Vec<SiblingStealthDto>,
+        now_ms: i64,
+    ) -> Result<Vec<PairChannelCommandDto>, String> {
+        self.with_env(session, ring, identity, sibling_stealth, now_ms, |d, env| {
+            d.pair_approve(env)
+        })?
+        .map(commands_dto)
+        .map_err(|e| e.to_string())
+    }
+
+    #[frb(sync)]
+    pub fn pair_reject(&self) -> Result<Vec<PairChannelCommandDto>, String> {
+        self.inner.lock().unwrap().pair_reject().map(commands_dto).map_err(|e| e.to_string())
+    }
+
+    #[frb(sync)]
+    pub fn pair_cancel(&self) -> Result<Vec<PairChannelCommandDto>, String> {
+        self.inner.lock().unwrap().pair_cancel().map(commands_dto).map_err(|e| e.to_string())
+    }
+
+    /// Ask the user's other devices for history; `target` names one.
+    pub fn sync_request(
+        &self,
+        session: &MoatSessionHandle,
+        ring: &RingDriverHandle,
+        identity: PairIdentityDto,
+        sibling_stealth: Vec<SiblingStealthDto>,
+        now_ms: i64,
+        target: Option<Vec<u8>>,
+    ) -> Result<Vec<PairChannelCommandDto>, String> {
+        let target = target.as_deref().map(device_id_from).transpose()?;
+        self.with_env(session, ring, identity, sibling_stealth, now_ms, |d, env| {
+            d.sync_request(env, target)
+        })?
+        .map(commands_dto)
+        .map_err(|e| e.to_string())
+    }
+
+    /// Offer this device's history to `target`.
+    pub fn sync_offer(
+        &self,
+        session: &MoatSessionHandle,
+        ring: &RingDriverHandle,
+        identity: PairIdentityDto,
+        sibling_stealth: Vec<SiblingStealthDto>,
+        now_ms: i64,
+        target: Vec<u8>,
+    ) -> Result<Vec<PairChannelCommandDto>, String> {
+        let target = device_id_from(&target)?;
+        self.with_env(session, ring, identity, sibling_stealth, now_ms, |d, env| {
+            d.sync_offer(env, target)
+        })?
+        .map(commands_dto)
+        .map_err(|e| e.to_string())
+    }
+
+    #[frb(sync)]
+    pub fn sync_accept(&self) -> Result<Vec<PairChannelCommandDto>, String> {
+        self.inner.lock().unwrap().sync_accept().map(commands_dto).map_err(|e| e.to_string())
+    }
+
+    #[frb(sync)]
+    pub fn sync_decline(&self) -> Result<(), String> {
+        self.inner.lock().unwrap().sync_decline().map_err(|e| e.to_string())
+    }
+
+    /// A sibling's `ring.msg` payload. `sender_name` must come from the
+    /// sender's MLS leaf credential.
+    #[frb(sync)]
+    pub fn on_ring_msg(
+        &self,
+        payload: Vec<u8>,
+        sender_name: String,
+        own_device_id: Vec<u8>,
+        now_ms: i64,
+    ) -> Result<Vec<PairChannelCommandDto>, String> {
+        let msg = moat_core::decode_ring_msg(&payload).map_err(|e| e.to_string())?;
+        let own = device_id_from(&own_device_id)?;
+        Ok(commands_dto(self.inner.lock().unwrap().on_ring_msg(msg, sender_name, &own, now_ms)))
+    }
+
+    #[frb(sync)]
+    pub fn on_ring_publish_failed(
+        &self,
+        tag: Vec<u8>,
+        detail: String,
+    ) -> Result<Vec<PairChannelCommandDto>, String> {
+        let tag: [u8; 16] = tag.try_into().map_err(|_| "tag must be 16 bytes".to_string())?;
+        Ok(commands_dto(self.inner.lock().unwrap().on_ring_publish_failed(&tag, detail)))
+    }
+
+    #[frb(sync)]
+    pub fn on_relay_connected(&self) -> Vec<PairChannelCommandDto> {
+        commands_dto(self.inner.lock().unwrap().on_relay_connected())
+    }
+
+    #[frb(sync)]
+    pub fn on_pair_ready(&self, token: Vec<u8>, url: String) -> Vec<PairChannelCommandDto> {
+        commands_dto(self.inner.lock().unwrap().on_pair_ready(&token, url))
+    }
+
+    pub fn on_paired(
+        &self,
+        session: &MoatSessionHandle,
+        ring: &RingDriverHandle,
+        identity: PairIdentityDto,
+        sibling_stealth: Vec<SiblingStealthDto>,
+        now_ms: i64,
+    ) -> Result<Vec<PairChannelCommandDto>, String> {
+        self.with_env(session, ring, identity, sibling_stealth, now_ms, |d, env| d.on_paired(env))
+            .map(commands_dto)
+    }
+
+    pub fn on_frame(
+        &self,
+        session: &MoatSessionHandle,
+        ring: &RingDriverHandle,
+        identity: PairIdentityDto,
+        sibling_stealth: Vec<SiblingStealthDto>,
+        now_ms: i64,
+        data: Vec<u8>,
+    ) -> Result<Vec<PairChannelCommandDto>, String> {
+        self.with_env(session, ring, identity, sibling_stealth, now_ms, |d, env| {
+            d.on_frame(env, data)
+        })
+        .map(commands_dto)
+    }
+
+    pub fn provide_history(
+        &self,
+        session: &MoatSessionHandle,
+        ring: &RingDriverHandle,
+        identity: PairIdentityDto,
+        sibling_stealth: Vec<SiblingStealthDto>,
+        now_ms: i64,
+        token: Vec<u8>,
+        history: Vec<ConvHistoryDto>,
+    ) -> Result<Vec<PairChannelCommandDto>, String> {
+        let token = token_from(&token)?;
+        let history = history
             .into_iter()
-            .map(sibling_info_to_core)
-            .collect::<Result<_, _>>()?;
-        let session_lock = session.inner.lock().unwrap();
-        let cmds = self
-            .inner
-            .lock()
-            .unwrap()
-            .approve(
-                &session_lock,
-                &credential,
-                &key_bundle,
-                own_stealth_pubkey,
-                &siblings,
-                existing_ring_id.as_deref(),
-            )
-            .map_err(|e| e.to_string())?;
-        Ok(cmds.into_iter().map(PairingCommandDto::from).collect())
+            .map(|h| moat_core::ConvHistory {
+                group_id: h.group_id,
+                conv_id: h.conv_id,
+                messages: h.messages.into_iter().map(Into::into).collect(),
+            })
+            .collect();
+        self.with_env(session, ring, identity, sibling_stealth, now_ms, |d, env| {
+            d.provide_history(env, &token, history)
+        })
+        .map(commands_dto)
     }
 
-    /// Whether this is the new (joining) device's side of the pairing.
+    /// The pair channel for `token` ended.
     #[frb(sync)]
-    pub fn is_new_device(&self) -> bool {
-        self.inner.lock().unwrap().is_new_device()
+    pub fn on_pair_closed(
+        &self,
+        token: Option<Vec<u8>>,
+        reason: String,
+    ) -> Vec<PairChannelCommandDto> {
+        commands_dto(self.inner.lock().unwrap().on_pair_closed(token.as_deref(), reason))
     }
 
-    /// `true` once this session has reached its terminal `Done` phase.
     #[frb(sync)]
-    pub fn is_done(&self) -> bool {
-        self.inner.lock().unwrap().is_done()
+    pub fn on_rendezvous_failed(&self, reason: String) -> Vec<PairChannelCommandDto> {
+        commands_dto(self.inner.lock().unwrap().on_rendezvous_failed(reason))
     }
 
-    /// Render this session's current state for UI presentation — mirrors
-    /// `moat_core::PairingSession::ui_state`. The single source of truth
-    /// every render/dispatch site (`PairingService.state`, `/pair/status`)
-    /// reads instead of deriving its own.
+    /// Expire an unanswered sync request.
     #[frb(sync)]
-    pub fn ui_state(&self) -> PairingUiStateDto {
-        self.inner.lock().unwrap().ui_state().into()
+    pub fn tick(&self, now_ms: i64) -> Vec<PairChannelCommandDto> {
+        commands_dto(self.inner.lock().unwrap().tick(now_ms))
     }
-
-    /// Existing device only: decline a pending `Enroll`, moving the session
-    /// to `Failed`. Errors, without changing the session's state, if there
-    /// is no pending `Enroll` to reject (including an already-terminal
-    /// session).
-    #[frb(sync)]
-    pub fn reject(&self) -> Result<(), String> {
-        self.inner.lock().unwrap().reject().map_err(|e| e.to_string())
-    }
-
-    /// Either role: abort an in-flight pairing before it reaches a terminal
-    /// state, moving the session to `Failed`. Errors, without changing the
-    /// session's state, if it has already reached a terminal state.
-    #[frb(sync)]
-    pub fn cancel(&self) -> Result<(), String> {
-        self.inner.lock().unwrap().cancel().map_err(|e| e.to_string())
-    }
-
-    /// The pairing AEAD, for the history transfer that follows; `None`
-    /// until the session is done, and after the first call.
-    #[frb(sync)]
-    pub fn transfer_channel(&self) -> Option<PairingFrameChannelHandle> {
-        let channel = self.inner.lock().unwrap().transfer_channel()?;
-        Some(PairingFrameChannelHandle { inner: Mutex::new(channel) })
-    }
-
-    /// The history transfer this session handed on ended early, so the
-    /// pairing reports as failed. No-op unless the session is done.
-    #[frb(sync)]
-    pub fn transfer_failed(&self, reason: String) {
-        self.inner.lock().unwrap().transfer_failed(&reason);
-    }
-}
-
-/// Opaque handle to a `PairingFrameChannel`: one device's end of the
-/// pairing AEAD, counters included.
-pub struct PairingFrameChannelHandle {
-    inner: Mutex<moat_core::PairingFrameChannel>,
-}
-
-impl PairingFrameChannelHandle {
-    /// Seal `plaintext` as the next frame we send.
-    #[frb(sync)]
-    pub fn seal(&self, plaintext: Vec<u8>) -> Vec<u8> {
-        self.inner.lock().unwrap().seal(&plaintext)
-    }
-
-    /// Open the next frame from the peer. An error ends the channel.
-    #[frb(sync)]
-    pub fn open(&self, ciphertext: Vec<u8>) -> Result<Vec<u8>, String> {
-        self.inner.lock().unwrap().open(&ciphertext).map_err(|e| e.to_string())
-    }
-}
-
-/// How many fresh KeyPackages a new device should seed the approver's pool
-/// with via `Enroll.conv_kps` — `moat_core::device_ring::KP_POOL_TARGET`,
-/// exposed so hosts building that batch (e.g. `PairingService.dart`) don't
-/// hand-duplicate the literal.
-#[frb(sync)]
-pub fn kp_pool_target() -> u64 {
-    moat_core::KP_POOL_TARGET as u64
 }
 
 #[frb(init)]
@@ -2929,25 +2434,6 @@ mod ring_sync_ffi_tests {
     }
 
     #[test]
-    fn sync_session_on_paired_emits_send() {
-        let s = SyncSessionHandle::new_session();
-        let outs = s.on_paired(vec![], vec![7; 16]).unwrap();
-        assert_eq!(outs.len(), 1);
-        match &outs[0] {
-            SyncOutputDto::Send { bytes } => {
-                // Decode round-trip: must be a valid SyncMsg::Hello.
-                let msg = decode_sync_msg(bytes).unwrap();
-                assert!(matches!(
-                    msg,
-                    moat_core::sync::SyncMsg::Hello { device_id, .. } if device_id == [7; 16]
-                ));
-            }
-            _ => panic!("expected Send"),
-        }
-        assert!(!s.is_done());
-    }
-
-    #[test]
     fn sync_message_dto_roundtrip() {
         let core = SyncMessage {
             rkey: "rk1".into(),
@@ -2956,7 +2442,6 @@ mod ring_sync_ffi_tests {
             sender_device_name: "phone".into(),
             timestamp_ms: 1234,
             content: "hi".into(),
-            is_own: true,
             blob_uri: Some("at://x".into()),
             blob_key: Some(vec![2u8; 32]),
             blob_ciphertext_hash: Some(vec![3u8; 32]),
@@ -3276,141 +2761,141 @@ mod push_tests {
 }
 
 #[cfg(test)]
-mod pairing_ffi_tests {
+mod pair_channel_ffi_tests {
     use super::*;
 
-    fn cred(session: &MoatSessionHandle, did: &str, device_name: &str) -> CredentialDto {
-        CredentialDto {
-            did: did.to_string(),
-            device_id: session.device_id(),
-            device_name: device_name.to_string(),
+    struct Device {
+        session: MoatSessionHandle,
+        ring: RingDriverHandle,
+        identity: PairIdentityDto,
+        driver: PairChannelHandle,
+    }
+
+    impl Device {
+        fn new(name: &str) -> Self {
+            let session = MoatSessionHandle::new_session();
+            let kp = session.generate_key_package("did:plc:alice".into(), name.into()).unwrap();
+            let identity = PairIdentityDto {
+                credential: CredentialDto {
+                    did: "did:plc:alice".into(),
+                    device_id: session.device_id(),
+                    device_name: name.into(),
+                },
+                key_bundle: kp.key_bundle,
+                stealth_pubkey: vec![name.len() as u8; 32],
+            };
+            Device {
+                session,
+                ring: RingDriverHandle::new_empty(),
+                identity,
+                driver: PairChannelHandle::new_driver(),
+            }
+        }
+
+        fn identity(&self) -> PairIdentityDto {
+            PairIdentityDto {
+                credential: CredentialDto {
+                    did: self.identity.credential.did.clone(),
+                    device_id: self.identity.credential.device_id.clone(),
+                    device_name: self.identity.credential.device_name.clone(),
+                },
+                key_bundle: self.identity.key_bundle.clone(),
+                stealth_pubkey: self.identity.stealth_pubkey.clone(),
+            }
+        }
+
+        fn on_paired(&self) -> Vec<PairChannelCommandDto> {
+            self.driver.on_paired(&self.session, &self.ring, self.identity(), vec![], 0).unwrap()
+        }
+
+        fn on_frame(&self, data: Vec<u8>) -> Vec<PairChannelCommandDto> {
+            self.driver
+                .on_frame(&self.session, &self.ring, self.identity(), vec![], 0, data)
+                .unwrap()
+        }
+
+        /// Frames to hand to the peer, answering history requests with an
+        /// empty history on the way.
+        fn frames(&self, cmds: Vec<PairChannelCommandDto>) -> Vec<Vec<u8>> {
+            let mut frames = Vec::new();
+            for cmd in cmds {
+                match cmd {
+                    PairChannelCommandDto::SendFrame { data } => frames.push(data),
+                    PairChannelCommandDto::LoadHistory { token } => {
+                        let cmds = self
+                            .driver
+                            .provide_history(
+                                &self.session,
+                                &self.ring,
+                                self.identity(),
+                                vec![],
+                                0,
+                                token,
+                                vec![],
+                            )
+                            .unwrap();
+                        frames.extend(self.frames(cmds));
+                    }
+                    _ => {}
+                }
+            }
+            frames
         }
     }
 
-    #[test]
-    fn pairing_payload_text_roundtrip() {
-        let text = pairing_payload_to_text(
-            vec![0x11u8; moat_core::PAIRING_TOKEN_LEN],
-            vec![0x22u8; moat_core::PAIRING_SECRET_LEN],
-        )
-        .unwrap();
-        assert!(text.contains('-'), "text form should be hyphen-grouped");
-        let decoded = pairing_payload_from_text(text).unwrap();
-        assert_eq!(decoded.token, vec![0x11u8; moat_core::PAIRING_TOKEN_LEN]);
-        assert_eq!(decoded.secret, vec![0x22u8; moat_core::PAIRING_SECRET_LEN]);
+    /// Deliver frames back and forth until neither side has more to say.
+    fn exchange(a: &Device, b: &Device, mut to_b: Vec<Vec<u8>>) {
+        let mut to_a = Vec::new();
+        while !to_a.is_empty() || !to_b.is_empty() {
+            for frame in std::mem::take(&mut to_b) {
+                to_a.extend(b.frames(b.on_frame(frame)));
+            }
+            for frame in std::mem::take(&mut to_a) {
+                to_b.extend(a.frames(a.on_frame(frame)));
+            }
+        }
     }
 
+    /// The whole pairing, and the transfer it hands on to, over the FFI.
     #[test]
-    fn pairing_payload_uri_roundtrip() {
-        let uri = pairing_payload_to_uri(
-            vec![0x33u8; moat_core::PAIRING_TOKEN_LEN],
-            vec![0x44u8; moat_core::PAIRING_SECRET_LEN],
-        )
-        .unwrap();
-        assert!(uri.starts_with("moat-pair:"));
-        let decoded = pairing_payload_from_uri(uri).unwrap();
-        assert_eq!(decoded.token, vec![0x33u8; moat_core::PAIRING_TOKEN_LEN]);
-        assert_eq!(decoded.secret, vec![0x44u8; moat_core::PAIRING_SECRET_LEN]);
-    }
+    fn pairing_converges_via_ffi() {
+        let phone = Device::new("Alice's Phone");
+        let laptop = Device::new("Alice's Laptop");
 
-    #[test]
-    fn pairing_payload_from_text_rejects_bad_characters() {
-        assert!(pairing_payload_from_text("IIIII-LLLLL-OOOOO-UUUUU".to_string()).is_err());
-    }
-
-    /// Full Enroll → Admit exchange over the FFI surface — the Dart
-    /// mirror of `moat-core/tests/pairing_simulation.rs`'s
-    /// `two_device_pairing_converges`.
-    #[test]
-    fn two_device_pairing_converges_via_ffi() {
-        let new_session = MoatSessionHandle::new_session();
-        let existing_session = MoatSessionHandle::new_session();
-        let new_kp = new_session
-            .generate_key_package("did:plc:alice".into(), "Alice's Phone".into())
-            .unwrap();
-        let existing_kp = existing_session
-            .generate_key_package("did:plc:alice".into(), "Alice's Laptop".into())
-            .unwrap();
-
-        let new_pairing = PairingSessionHandle::new_device(
-            vec![0x42u8; moat_core::PAIRING_SECRET_LEN],
-            vec![0x24u8; moat_core::PAIRING_TOKEN_LEN],
-        )
-        .unwrap();
-        let existing_pairing = PairingSessionHandle::existing_device(
-            vec![0x42u8; moat_core::PAIRING_SECRET_LEN],
-            vec![0x24u8; moat_core::PAIRING_TOKEN_LEN],
-        )
-        .unwrap();
-
-        let enroll_cmds = new_pairing
-            .start_enroll(
-                &new_session,
-                cred(&new_session, "did:plc:alice", "Alice's Phone"),
-                new_kp.key_bundle,
-                vec![0u8; 32],
-                vec![],
-            )
-            .unwrap();
-        let enroll_frame = enroll_cmds
-            .into_iter()
+        let started = phone.driver.pair_new();
+        let token = started
+            .commands
+            .iter()
             .find_map(|c| match c {
-                PairingCommandDto::SendFrame { ciphertext } => Some(ciphertext),
+                PairChannelCommandDto::SendPairOffer { token } => Some(token.clone()),
                 _ => None,
             })
-            .expect("start_enroll must emit a SendFrame");
+            .expect("pair_new must send an offer");
+        laptop.driver.pair_confirm(started.code).unwrap();
+        for device in [&phone, &laptop] {
+            let cmds = device.driver.on_pair_ready(token.clone(), "wss://relay/pair".into());
+            assert!(matches!(cmds.as_slice(), [PairChannelCommandDto::ConnectPair { .. }]));
+        }
 
-        let existing_cmds = existing_pairing
-            .on_frame_received(
-                &existing_session,
-                cred(&existing_session, "did:plc:alice", "Alice's Laptop"),
-                enroll_frame,
-            )
+        let enroll = phone.frames(phone.on_paired());
+        assert!(laptop.frames(laptop.on_paired()).is_empty());
+        exchange(&phone, &laptop, enroll);
+        assert!(matches!(
+            laptop.driver.pairing_ui_state(),
+            PairingUiStateDto::AwaitingApproval { .. }
+        ));
+
+        let approved = laptop
+            .driver
+            .pair_approve(&laptop.session, &laptop.ring, laptop.identity(), vec![], 0)
             .unwrap();
-        assert!(existing_cmds
-            .iter()
-            .any(|c| matches!(c, PairingCommandDto::SurfaceApprovalPrompt { .. })));
-        assert!(existing_pairing.pending_enroll().is_some());
+        exchange(&laptop, &phone, laptop.frames(approved));
 
-        let admit_cmds = existing_pairing
-            .approve(
-                &existing_session,
-                cred(&existing_session, "did:plc:alice", "Alice's Laptop"),
-                existing_kp.key_bundle,
-                vec![1u8; 32],
-                vec![],
-                None,
-            )
-            .unwrap();
-        assert!(admit_cmds.iter().any(|c| matches!(c, PairingCommandDto::SeedKpPool { .. })));
-        assert!(admit_cmds
-            .iter()
-            .any(|c| matches!(c, PairingCommandDto::PublishRingCommit { .. })));
-        assert!(admit_cmds.iter().any(|c| matches!(c, PairingCommandDto::StartSync)));
-
-        let admit_frame = admit_cmds
-            .into_iter()
-            .find_map(|c| match c {
-                PairingCommandDto::SendFrame { ciphertext } => Some(ciphertext),
-                _ => None,
-            })
-            .expect("approve must emit a SendFrame");
-
-        let final_cmds = new_pairing
-            .on_frame_received(
-                &new_session,
-                cred(&new_session, "did:plc:alice", "Alice's Phone"),
-                admit_frame,
-            )
-            .unwrap();
-        assert!(final_cmds.iter().any(|c| matches!(c, PairingCommandDto::PersistRing { .. })));
-        assert!(final_cmds
-            .iter()
-            .any(|c| matches!(c, PairingCommandDto::RosterReceived { .. })));
-        assert!(final_cmds.iter().any(|c| matches!(c, PairingCommandDto::StartSync)));
-
-        assert!(new_pairing.is_done());
-        assert!(existing_pairing.is_done());
-        assert_eq!(new_pairing.ring_id(), existing_pairing.ring_id());
+        for device in [&phone, &laptop] {
+            assert!(matches!(device.driver.pairing_ui_state(), PairingUiStateDto::Done { .. }));
+            assert!(!device.driver.is_transferring());
+        }
+        assert!(phone.ring.ring_group_id().is_some());
+        assert_eq!(phone.ring.ring_group_id(), laptop.ring.ring_group_id());
     }
 }

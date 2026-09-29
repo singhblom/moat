@@ -567,6 +567,22 @@ A pairing session exposes one projection of its state, which every host renders 
 
 `failed` is retained on the session rather than discarded. A failed pairing must be distinguishable from a slow one — reporting "not done" forever with no reason is the behaviour this replaces. Terminal states are final: a stray reject or cancel arriving after `done` does not overwrite it.
 
+#### One session per pair channel
+
+A device drives one pair-channel session at a time: a pairing, a sync request or offer, or the history transfer either one hands on to. The channel is **busy** while any of these holds:
+
+- a rendezvous is live: an offer or join has been sent and its channel has not ended;
+- a history transfer is running;
+- a sync request is still waiting for a peer, or a sibling's request is waiting for this user's decision, and it has not expired.
+
+A pairing that has ended — `done`, `failed`, cancelled or rejected — holds nothing, even though its state stays readable. A sibling's `sync_request` or `sync_offer` that arrives while the channel is busy is ignored. A gesture of this user's own (showing or entering a code, requesting, offering or accepting a sync) supersedes whatever held the channel.
+
+`pair_closed` and a pair WS ending are matched against the live rendezvous's token; a notice for any other token is ignored. An offer or join the relay has not acknowledged with `pair_ready` is resent whenever the main WS reauthenticates.
+
+A transfer's first frames can arrive before this device has loaded the history it will declare; they wait for it rather than being dropped.
+
+moat-core's `PairChannelDriver` implements all of this, so every host shares one copy of these rules.
+
 ### Requested Sync
 
 Pairing hands a new device its history over the pairing channel, and that
@@ -645,10 +661,9 @@ looking at it — a rendezvous nobody joined is "no device answered" to the
 device that asked and "this expired before you answered it" to the device
 that was prompted — so the protocol carries the fact and each screen
 supplies its own wording. `no_answer` and `request_expired` are the two
-halves of one expiry, named for their reader. A device drives one sync session at a
-time; a request arriving while one is in flight, or while a pairing is,
-is ignored rather than allowed to supersede a decision the user is
-already looking at.
+halves of one expiry, named for their reader. A request arriving while
+the pair channel is [busy](#one-session-per-pair-channel) is ignored rather
+than allowed to supersede a decision the user is already looking at.
 
 Because the lane is `ring.msg`, a device that has fallen too far behind
 the ring's epochs to send or read ring traffic cannot use this. Its
@@ -686,9 +701,9 @@ would be arbitrary. Concurrent offers simply fail with the same refusal any
 second attach gets, and the offerer learns through the answer deadline that
 already exists — same person, same pocket.
 
-A device drives one sync at a time, so an offer arriving while a sync or a
-pairing is in flight is ignored rather than allowed to supersede a decision
-the user is already looking at.
+An offer arriving while the pair channel is
+[busy](#one-session-per-pair-channel) is ignored rather than allowed to
+supersede a decision the user is already looking at.
 
 ### History Sync
 

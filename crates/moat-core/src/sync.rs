@@ -111,6 +111,15 @@ pub struct ConvState {
     pub inventory: ConvInventory,
 }
 
+/// One conversation's stored history, as a host hands it to
+/// [`SyncSession::start`].
+#[derive(Debug, Clone)]
+pub struct ConvHistory {
+    pub group_id: Vec<u8>,
+    pub conv_id: String,
+    pub messages: Vec<SyncMessage>,
+}
+
 /// Byte budget for all inventories in one `Hello`.
 ///
 /// The pair WS closes the connection on any frame over 1 MiB, and a Hello
@@ -181,7 +190,6 @@ pub struct SyncMessage {
     pub sender_device_name: String,
     pub timestamp_ms: i64,
     pub content: String,
-    pub is_own: bool,
     pub blob_uri: Option<String>,
     #[serde_as(as = "Option<Base64>")]
     pub blob_key: Option<Vec<u8>>,
@@ -218,8 +226,6 @@ pub enum SyncMsg {
     BatchReq {
         #[serde_as(as = "Base64")]
         group_id: Vec<u8>,
-        from_rkey: Option<String>,
-        to_rkey: Option<String>,
         cursor: Option<String>,
     },
     /// Batch of messages.
@@ -388,7 +394,8 @@ const BATCH_SIZE: usize = 50;
 
 impl SyncSession {
     /// Create a new session in the `SendingHello` phase. Add per-conversation
-    /// state via [`add_conv_plan`] before calling [`on_paired`].
+    /// state via [`add_conv_plan`](Self::add_conv_plan) before calling
+    /// [`on_paired`](Self::on_paired), or use [`start`](Self::start).
     pub fn new() -> Self {
         Self {
             phase: Phase::SendingHello,
@@ -403,24 +410,40 @@ impl SyncSession {
         }
     }
 
-    /// Populate the plan for one conversation.
-    ///
-    /// `our_messages` is the (already-converted) list of messages this side
-    /// can serve to the peer. `expecting_batch` = `true` if the peer might
-    /// send us its own backward batch (typically `true` on a new joiner with
-    /// no local history).
+    /// Start a session from this side's stored history and return it with
+    /// the `Hello` to send. `history` holds only settled messages, which
+    /// both serve the peer and make up this side's inventories.
+    pub fn start(device_id: DeviceId, history: Vec<ConvHistory>) -> (Self, Vec<SyncOutput>) {
+        let mut session = Self::new();
+        let mut convs = Vec::with_capacity(history.len());
+        for conv in history {
+            let rkeys = conv.messages.iter().map(|m| m.rkey.clone()).collect();
+            convs.push(ConvState {
+                group_id: conv.group_id.clone(),
+                inventory: ConvInventory::of(rkeys),
+            });
+            session.add_conv_plan(conv.group_id, conv.conv_id, conv.messages);
+        }
+        fit_hello_inventories(&mut convs);
+        let outputs = session.on_paired(convs, device_id);
+        (session, outputs)
+    }
+
+    /// Populate the plan for one conversation. `our_messages` is what this
+    /// side can serve to the peer. [`start`](Self::start) is the host entry
+    /// point; this and [`on_paired`](Self::on_paired) let a test declare an
+    /// inventory that differs from the plan.
     pub fn add_conv_plan(
         &mut self,
         group_id: Vec<u8>,
         conv_id: String,
         our_messages: Vec<SyncMessage>,
-        expecting_batch: bool,
     ) {
         self.plans.push(ConvPlan {
             group_id,
             conv_id,
             our_messages,
-            expecting_batch,
+            expecting_batch: false,
             received_done: false,
             incoming_total: None,
             sent_span: None,
@@ -460,9 +483,7 @@ impl SyncSession {
                 self.peer_device_id = Some(device_id);
                 Ok(self.handle_hello(peer_convs))
             }
-            SyncMsg::BatchReq { group_id, from_rkey, to_rkey, cursor } => {
-                Ok(self.handle_batch_req(group_id, from_rkey, to_rkey, cursor))
-            }
+            SyncMsg::BatchReq { group_id, cursor } => Ok(self.handle_batch_req(group_id, cursor)),
             SyncMsg::Batch { group_id, messages, next_cursor, total } => {
                 self.handle_batch(group_id, messages, next_cursor, total)
             }
@@ -591,8 +612,6 @@ impl SyncSession {
             if want_batch {
                 outputs.push(SyncOutput::Send(SyncMsg::BatchReq {
                     group_id: plan.group_id.clone(),
-                    from_rkey: None,
-                    to_rkey: None,
                     cursor: None,
                 }));
             }
@@ -619,8 +638,6 @@ impl SyncSession {
             });
             outputs.push(SyncOutput::Send(SyncMsg::BatchReq {
                 group_id: peer_state.group_id.clone(),
-                from_rkey: None,
-                to_rkey: None,
                 cursor: None,
             }));
         }
@@ -635,8 +652,6 @@ impl SyncSession {
     fn handle_batch_req(
         &mut self,
         group_id: Vec<u8>,
-        _from_rkey: Option<String>,
-        _to_rkey: Option<String>,
         cursor: Option<String>,
     ) -> Vec<SyncOutput> {
         let cursor_idx: usize = cursor.as_deref().and_then(|c| c.parse().ok()).unwrap_or(0);
@@ -714,8 +729,6 @@ impl SyncSession {
         if next_cursor.is_some() {
             outputs.push(SyncOutput::Send(SyncMsg::BatchReq {
                 group_id: plan.group_id.clone(),
-                from_rkey: None,
-                to_rkey: None,
                 cursor: next_cursor,
             }));
         }
@@ -772,7 +785,6 @@ mod tests {
             sender_device_name: "laptop".to_string(),
             timestamp_ms: 0,
             content: content.to_string(),
-            is_own: true,
             blob_uri: None,
             blob_key: None,
             blob_ciphertext_hash: None,
@@ -858,8 +870,8 @@ mod tests {
         let g2 = vec![2u8; 32];
 
         let mut s = SyncSession::new();
-        s.add_conv_plan(g1.clone(), hex::encode(&g1), vec![], true);
-        s.add_conv_plan(g2.clone(), hex::encode(&g2), vec![], true);
+        s.add_conv_plan(g1.clone(), hex::encode(&g1), vec![]);
+        s.add_conv_plan(g2.clone(), hex::encode(&g2), vec![]);
         let _ = s.on_paired(vec![], [0; 16]);
 
         // Receive peer's Hello — they have history for both.
@@ -916,7 +928,6 @@ mod tests {
             g.clone(),
             hex::encode(&g),
             vec![empty_msg("r1", "a"), empty_msg("r2", "b")],
-            false,
         );
         let _ = s.on_paired(vec![full_state(&g)], [0; 16]);
 
@@ -932,8 +943,6 @@ mod tests {
         // Peer requests our batch.
         let outs = s.on_message(SyncMsg::BatchReq {
                 group_id: g.clone(),
-                from_rkey: None,
-                to_rkey: None,
                 cursor: None,
             }).unwrap();
         // We send a Batch and Done.
@@ -973,7 +982,7 @@ mod tests {
     fn peer_fin_completes_without_unrequested_sends() {
         let g = vec![7u8; 32];
         let mut s = SyncSession::new();
-        s.add_conv_plan(g.clone(), hex::encode(&g), vec![empty_msg("r1", "x")], false);
+        s.add_conv_plan(g.clone(), hex::encode(&g), vec![empty_msg("r1", "x")]);
         let _ = s.on_paired(vec![], [0; 16]);
         let _ = s
             .on_message(SyncMsg::Hello { convs: vec![empty_state(&g)], device_id: [0; 16] })
@@ -989,7 +998,7 @@ mod tests {
     fn two_way_session_needs_both_fins() {
         let g = vec![8u8; 32];
         let mut s = SyncSession::new();
-        s.add_conv_plan(g.clone(), hex::encode(&g), vec![empty_msg("a1", "x")], true);
+        s.add_conv_plan(g.clone(), hex::encode(&g), vec![empty_msg("a1", "x")]);
         let _ = s.on_paired(vec![], [0; 16]);
         let peer = ConvState {
             group_id: g.clone(),
@@ -1000,8 +1009,6 @@ mod tests {
 
         let _ = s.on_message(SyncMsg::BatchReq {
                 group_id: g.clone(),
-                from_rkey: None,
-                to_rkey: None,
                 cursor: None,
             }).unwrap();
         let _ = s.on_message(SyncMsg::Fin).unwrap();
@@ -1063,10 +1070,9 @@ mod tests {
             g.clone(),
             conv.clone(),
             rkeys.iter().map(|r| empty_msg(r, "x")).collect(),
-            false,
         );
         let mut joiner = SyncSession::new();
-        joiner.add_conv_plan(g.clone(), conv, Vec::new(), true);
+        joiner.add_conv_plan(g.clone(), conv, Vec::new());
 
         let mut seen = Vec::new();
         pump(
@@ -1097,7 +1103,7 @@ mod tests {
     fn bare_done_settles_the_receive_total() {
         let g = vec![7u8; 32];
         let mut s = SyncSession::new();
-        s.add_conv_plan(g.clone(), hex::encode(&g), Vec::new(), true);
+        s.add_conv_plan(g.clone(), hex::encode(&g), Vec::new());
         let _ = s.on_paired(vec![empty_state(&g)], [0; 16]);
         let _ = s
             .on_message(SyncMsg::Hello {
@@ -1128,14 +1134,12 @@ mod tests {
             g.clone(),
             conv.clone(),
             vec![empty_msg("r2", "x"), empty_msg("r4", "x")],
-            false,
         );
         let mut complete = SyncSession::new();
         complete.add_conv_plan(
             g.clone(),
             conv,
             ["r1", "r3", "r5"].iter().map(|r| empty_msg(r, "x")).collect(),
-            false,
         );
 
         pump(
@@ -1177,7 +1181,7 @@ mod tests {
         let our_msgs: Vec<SyncMessage> = (0..75)
             .map(|i| empty_msg(&format!("r{i}"), "x"))
             .collect();
-        s.add_conv_plan(g.clone(), hex::encode(&g), our_msgs, false);
+        s.add_conv_plan(g.clone(), hex::encode(&g), our_msgs);
         let _ = s.on_paired(vec![full_state(&g)], [0; 16]);
         let _ = s
             .on_message(SyncMsg::Hello { convs: vec![empty_state(&g)], device_id: [0; 16] })
@@ -1186,8 +1190,6 @@ mod tests {
         // First BatchReq: cursor=None → returns 50, next_cursor=Some("50").
         let outs = s.on_message(SyncMsg::BatchReq {
                 group_id: g.clone(),
-                from_rkey: None,
-                to_rkey: None,
                 cursor: None,
             }).unwrap();
         let next = outs.iter().find_map(|o| match o {
@@ -1204,8 +1206,6 @@ mod tests {
         // Second BatchReq: cursor=Some("50") → returns 25, Done.
         let outs = s.on_message(SyncMsg::BatchReq {
                 group_id: g.clone(),
-                from_rkey: None,
-                to_rkey: None,
                 cursor: Some("50".to_string()),
             }).unwrap();
         let last = outs.iter().find_map(|o| match o {
@@ -1246,8 +1246,6 @@ mod tests {
         let _ = s.on_paired(vec![], [0; 16]);
         let outs = s.on_message(SyncMsg::BatchReq {
                 group_id: g.clone(),
-                from_rkey: None,
-                to_rkey: None,
                 cursor: None,
             }).unwrap();
         assert_eq!(outs.len(), 1);

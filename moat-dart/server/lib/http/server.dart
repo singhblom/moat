@@ -70,13 +70,12 @@ Map<String, dynamic> _syncFailureJson(SyncFailureDto reason) {
   );
 }
 
-/// Shared response for `/pair/approve`, `/pair/reject`, `/pair/cancel`:
-/// `{"ok": true}` on success, or a 500 with the failure reason if the
-/// session landed in `Failed` as a result of the call (mirrors moat-cli's
-/// `app_err`-wrapped `Result<()>` handlers — a *reported* failure, not
-/// silently swallowed into a 200).
-Response _pairResultResponse(PairingService pairingService) {
-  final uiState = pairingService.state.value;
+/// Response for `/pair/approve`: `{"ok": true}`, or a 500 with the reason
+/// if approving failed the pairing — a reported failure, not a 200.
+/// Rejecting or cancelling ends in `Failed` by design, so those answer
+/// `ok` whenever the call itself succeeded, as moat-cli does.
+Response _pairResultResponse(PairChannelService pairChannel) {
+  final uiState = pairChannel.pairingState.value;
   if (uiState is PairingUiStateDto_Failed) {
     return Response(500,
         body: jsonEncode({'error': uiState.reason}), headers: _jsonHeaders);
@@ -92,9 +91,7 @@ Handler buildRouter({
   required PollingService pollingService,
   required BlobService blobService,
   required DeviceRingService ringService,
-  required SyncService syncService,
-  required PairingService pairingService,
-  required SyncRequestService syncRequestService,
+  required PairChannelService pairChannel,
   MessageStorage? messageStorage,
 }) {
   final router = Router();
@@ -567,7 +564,7 @@ Handler buildRouter({
   // POST /pair/new — new device requests a pairing code.
   router.post('/pair/new', (Request request) async {
     try {
-      final code = await pairingService.startEnroll();
+      final code = await pairChannel.startPairing();
       return Response.ok(jsonEncode({'code': code}), headers: _jsonHeaders);
     } catch (e) {
       moatLog('Server: pair/new error: $e');
@@ -582,7 +579,7 @@ Handler buildRouter({
     try {
       final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
       final code = body['code'] as String;
-      await pairingService.confirmCode(code);
+      await pairChannel.confirmPairingCode(code);
       return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
     } catch (e) {
       moatLog('Server: pair/confirm error: $e');
@@ -592,42 +589,42 @@ Handler buildRouter({
   });
 
   // POST /pair/approve — existing device: approve the pending Enroll
-  // `pairingService.state` reports as `awaiting_approval`. No host,
+  // `pairChannel.pairingState` reports as `awaiting_approval`. No host,
   // including this headless server, auto-approves anymore.
   router.post('/pair/approve', (Request request) async {
     try {
-      await pairingService.approvePending();
+      await pairChannel.approvePairing();
     } catch (e) {
       moatLog('Server: pair/approve error: $e');
       return Response(500,
           body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
     }
-    return _pairResultResponse(pairingService);
+    return _pairResultResponse(pairChannel);
   });
 
   // POST /pair/reject — existing device: decline the pending Enroll.
   router.post('/pair/reject', (Request request) async {
     try {
-      await pairingService.rejectPending();
+      await pairChannel.rejectPairing();
     } catch (e) {
       moatLog('Server: pair/reject error: $e');
       return Response(500,
           body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
     }
-    return _pairResultResponse(pairingService);
+    return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
   });
 
   // POST /pair/cancel — either role: abort an in-flight pairing before it
   // reaches a terminal state.
   router.post('/pair/cancel', (Request request) async {
     try {
-      await pairingService.cancel();
+      await pairChannel.cancelPairing();
     } catch (e) {
       moatLog('Server: pair/cancel error: $e');
       return Response(500,
           body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
     }
-    return _pairResultResponse(pairingService);
+    return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
   });
 
   // GET /pair/status — the serialized `PairingUiStateDto` verbatim, e.g.
@@ -636,7 +633,7 @@ Handler buildRouter({
   // `/pair/status` exactly. No host-specific shape on top.
   router.get('/pair/status', (Request request) async {
     return Response.ok(
-      jsonEncode(_pairingUiStateJson(pairingService.state.value)),
+      jsonEncode(_pairingUiStateJson(pairChannel.pairingState.value)),
       headers: _jsonHeaders,
     );
   });
@@ -658,7 +655,7 @@ Handler buildRouter({
   // no host answers automatically, matching pairing's approval rule.
   router.post('/sync/request', (Request request) async {
     try {
-      await syncRequestService.requestSync();
+      await pairChannel.requestSync();
       return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
     } catch (e) {
       moatLog('Server: sync/request error: $e');
@@ -674,7 +671,7 @@ Handler buildRouter({
       final body =
           jsonDecode(await request.readAsString()) as Map<String, dynamic>;
       final deviceId = _hexToBytes(body['device_id'] as String);
-      await syncRequestService.offerSync(deviceId);
+      await pairChannel.offerSync(deviceId);
       return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
     } catch (e) {
       moatLog('Server: sync/offer error: $e');
@@ -687,7 +684,7 @@ Handler buildRouter({
   // asked for it.
   router.post('/sync/accept', (Request request) async {
     try {
-      await syncRequestService.accept();
+      await pairChannel.acceptSyncRequest();
       return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
     } catch (e) {
       moatLog('Server: sync/accept error: $e');
@@ -700,7 +697,7 @@ Handler buildRouter({
   // requester keeps waiting for another sibling.
   router.post('/sync/decline', (Request request) async {
     try {
-      syncRequestService.decline();
+      await pairChannel.declineSyncRequest();
       return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
     } catch (e) {
       moatLog('Server: sync/decline error: $e');
@@ -714,8 +711,8 @@ Handler buildRouter({
   router.get('/sync/status', (Request request) {
     return Response.ok(
       jsonEncode({
-        'active': syncService.isActive,
-        'request': _syncRequestUiStateJson(syncRequestService.refresh()),
+        'active': pairChannel.isTransferring,
+        'request': _syncRequestUiStateJson(pairChannel.refreshSyncRequest()),
       }),
       headers: _jsonHeaders,
     );

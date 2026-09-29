@@ -87,9 +87,7 @@ Future<void> main(List<String> args) async {
     pollingService: bundle.polling,
     blobService: blobService,
     ringService: bundle.ring,
-    syncService: bundle.sync,
-    pairingService: bundle.pairing,
-    syncRequestService: bundle.syncRequest,
+    pairChannel: bundle.pairChannel,
     messageStorage: msgStorage,
   );
 

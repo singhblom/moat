@@ -15,9 +15,9 @@ use moat_core::{
     blob_decrypt, blob_encrypt, encrypt_for_stealth, generate_stealth_keypair,
     stealth_pubkey_from_privkey, try_decrypt_stealth, ControlKind, CoordMsg, DeviceRingState,
     Event, EventKind, ExternalBlob, GroupKind, LongTextMessage, MediaMessage, MessagePayload,
-    MoatCredential, MoatSession, ModifierKind, PairingCommand, PairingPayload, PairingSession,
-    PairingUiState, ParsedMessagePayload, RingCommand, RingMsg, SiblingInfo, SiblingStealth,
-    StepEnv, SyncRequestSession, SyncRequestUiState, CIPHERSUITE,
+    ConvHistory, MoatCredential, MoatSession, ModifierKind, PairChannelCommand, PairChannelDriver,
+    PairEnv, PairIdentity, PairingUiState, ParsedMessagePayload, RingCommand, SiblingStealth,
+    StepEnv, SyncRequestUiState, CIPHERSUITE,
 };
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::collections::{HashMap, HashSet};
@@ -499,20 +499,17 @@ pub(crate) enum BgEvent {
     },
     /// Close the pair WS once the sends queued ahead of this have gone out.
     DrawbridgeClosePair,
-    /// New device: send `pair_offer{token}` on the main WS to start a live
-    /// pairing session (device onboarding, not reconnect sync).
+    /// Send `pair_offer{token}` on the main WS.
     DrawbridgeSendPairOffer {
         token: Vec<u8>,
     },
-    /// Existing device: send `pair_join{token}` on the main WS in response
-    /// to a scanned/typed pairing code.
+    /// Send `pair_join{token}` on the main WS.
     DrawbridgeSendPairJoin {
         token: Vec<u8>,
     },
-    /// Existing device, right after a successful `approve()`: fan the
-    /// newcomer into every pre-existing user conversation immediately
-    /// (`poll_for_new_devices` is async; this hops through the async side
-    /// since `approve_pending_pairing` itself is synchronous).
+    /// Existing device, right after admitting a new one: fan the newcomer
+    /// into every pre-existing user conversation now rather than on the
+    /// next ring tick.
     PollForNewDevicesNow,
     /// New device, right after persisting ring membership (`Done`):
     /// proactively scan for the `UserConvWelcome`s an existing sibling's
@@ -521,15 +518,10 @@ pub(crate) enum BgEvent {
     /// conversations within seconds" promise as `PollForNewDevicesNow`,
     /// mirrored on the receiving side.
     RingTickNow,
-    /// Existing device, on Approve: publish the ring Add commit to the PDS
-    /// under `tag`, so a bystander sibling can pick it up on its own next
-    /// poll (qr-pairing.md §6) — see `PairingCommand::PublishRingCommit`'s
-    /// doc for why this is a second, PDS-borne path distinct from the
-    /// `Welcome` riding the pair channel raw.
-    PublishRingCommit { tag: [u8; 16], ciphertext: Vec<u8> },
-    /// Publish a ring application event (`EventKind::RingMsg`) to our own
-    /// repo and notify Drawbridge, so siblings holding a live relay
-    /// connection see it at once instead of on their next 30 s poll.
+    /// Publish a ring event (a sync request or offer, or a pairing's ring
+    /// Add commit) to our own repo and notify Drawbridge, so siblings
+    /// holding a live relay connection see it at once instead of on their
+    /// next 30 s poll.
     PublishRingEvent { tag: [u8; 16], ciphertext: Vec<u8> },
 
     /// A binary frame arrived on the pair WS.
@@ -558,7 +550,6 @@ impl BgEvent {
             | BgEvent::DrawbridgeSendPairJoin { .. }
             | BgEvent::PollForNewDevicesNow
             | BgEvent::RingTickNow
-            | BgEvent::PublishRingCommit { .. }
             | BgEvent::PublishRingEvent { .. } => true,
 
             BgEvent::PollFetched { .. }
@@ -696,17 +687,13 @@ pub struct App {
     /// When was the last ring tick run?
     last_ring_tick: Option<Instant>,
 
-    /// The history transfer running on the pair WS, whichever gesture
-    /// opened it.
-    sync_transfer: Option<crate::sync::SyncTransfer>,
+    /// Pairing, sync requests and the history transfer on the pair channel.
+    pair_channel: PairChannelDriver,
 
     /// Ex-members this poll cycle actually asked for events, as
     /// `(conv_id, did)`. Cleared from `pending_ex_members` once the
     /// results have been processed — see the note where it is populated.
     swept_ex_members: Vec<(String, String)>,
-
-    /// Pairing token for the in-flight pair WS session.
-    pending_pair_token: Option<Vec<u8>>,
 
     /// Cached per-sibling stealth address records (`scan_pubkey` +
     /// `device_id`), refreshed each `ring_tick_inner` from
@@ -717,30 +704,6 @@ pub struct App {
     /// `KpRequest` retries self-heal any miss caused by a sibling whose
     /// stealth record hasn't propagated yet.
     cached_sibling_stealth: Vec<moat_core::SiblingStealth>,
-
-    // ── Live pairing (QR / text code) device onboarding ─────────────────────
-    /// Active pairing exchange, once `/pair/new` or `/pair/confirm` has been
-    /// called. Left in place (not cleared) once terminal (`Done` or
-    /// `Failed`) — `ui_state()`/`GET /pair/status` must keep reporting the
-    /// real outcome after completion, not just at the instant it happens.
-    /// The single source of truth for pairing progress: every render/
-    /// dispatch site reads it via `pairing_ui_state()` rather than caching
-    /// its own copy of the code, the pending prompt, or a done flag.
-    pairing_session: Option<PairingSession>,
-    /// The rendezvous token for an in-flight `pair_offer`/`pair_join` that
-    /// hasn't been acknowledged (`pair_ready`) yet. If the main WS drops and
-    /// reconnects while this is still set, the reconnect handler resends
-    /// the offer/join — otherwise a `pair_join` that raced an
-    /// not-yet-registered `pair_offer` (relay: "token not found or
-    /// expired") would leave the session stuck forever with no retry.
-    pending_pair_rendezvous_token: Option<Vec<u8>>,
-
-    // ── User-initiated sync between established devices ─────────────────────
-    /// The in-flight sync request, in either role: one we published
-    /// (`/sync/request`) or one a sibling published and we are being asked
-    /// to answer. Left in place once terminal so `/sync/status` reports the
-    /// outcome rather than silently reverting to idle.
-    sync_request: Option<SyncRequestSession>,
 }
 
 impl App {
@@ -874,13 +837,9 @@ impl App {
             poll_interval_override: None,
             ring_driver,
             last_ring_tick: None,
-            sync_transfer: None,
+            pair_channel: PairChannelDriver::new(),
             swept_ex_members: Vec::new(),
-            pending_pair_token: None,
             cached_sibling_stealth: Vec::new(),
-            pairing_session: None,
-            sync_request: None,
-            pending_pair_rendezvous_token: None,
         })
     }
 
@@ -1353,107 +1312,60 @@ impl App {
         (ring_group_id.map(hex::encode), member_count)
     }
 
-    /// HTTP `POST /pair/new` — new device requests a pairing code. Requires
-    /// being logged in (pairing presupposes a logged-in device —
-    /// qr-pairing.md §2). Returns the text-form code; kicks off the
-    /// Drawbridge rendezvous (`pair_offer`) asynchronously.
+    /// HTTP `POST /pair/new` — new device requests a pairing code and
+    /// starts the rendezvous. Returns the text-form code.
     pub fn api_pair_new(&mut self) -> Result<String> {
         if self.client.is_none() {
             return Err(AppError::NotLoggedIn);
         }
-        use rand::RngCore;
-        let mut token = [0u8; moat_core::PAIRING_TOKEN_LEN];
-        let mut secret = [0u8; moat_core::PAIRING_SECRET_LEN];
-        rand::thread_rng().fill_bytes(&mut token);
-        rand::thread_rng().fill_bytes(&mut secret);
-
-        let payload = PairingPayload { token, secret };
-        let code = payload.to_text();
-
-        self.reset_pair_channel(&token);
-        self.pairing_session = Some(PairingSession::new_device(&payload));
-
-        let _ = self
-            .bg_tx
-            .send(BgEvent::DrawbridgeSendPairOffer { token: token.to_vec() });
-
+        let (code, cmds) = self.pair_channel.pair_new();
+        self.apply_pair_commands(cmds);
         Ok(code)
     }
 
     /// HTTP `POST /pair/confirm` — existing device enters a pairing code.
-    /// Parses the code, starts a `PairingSession::existing_device`, and
-    /// kicks off the Drawbridge rendezvous (`pair_join`) asynchronously.
-    /// Approval of the resulting `Enroll` is a separate, explicit step —
-    /// `confirm` no longer implies it. Poll `GET /pair/status` for
-    /// `awaiting_approval` and call `POST /pair/approve` (or `/pair/reject`)
-    /// once it arrives; no host — including `--http` — auto-approves.
+    /// Approving the resulting `Enroll` is a separate step: poll
+    /// `GET /pair/status` for `awaiting_approval`, then `POST /pair/approve`
+    /// or `/pair/reject`. No host auto-approves.
     pub fn api_pair_confirm(&mut self, code: &str) -> Result<()> {
         if self.client.is_none() {
             return Err(AppError::NotLoggedIn);
         }
-        let payload = PairingPayload::from_text(code).map_err(AppError::Mls)?;
-
-        self.reset_pair_channel(&payload.token);
-        self.pairing_session =
-            Some(PairingSession::existing_device(&payload.secret, &payload.token));
-
-        let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairJoin {
-            token: payload.token.to_vec(),
-        });
-
+        let cmds = self.pair_channel.pair_confirm(code).map_err(AppError::Mls)?;
+        self.apply_pair_commands(cmds);
         Ok(())
     }
 
     /// HTTP `POST /pair/approve` — existing device: approve the `Enroll`
-    /// `ui_state()` reports as `awaiting_approval`. Errors if there is no
-    /// active session or nothing pending (mirrors `PairingSession::approve`'s
-    /// own guard).
+    /// `GET /pair/status` reports as `awaiting_approval`.
     pub fn api_pair_approve(&mut self) -> Result<()> {
         self.approve_pending_pairing()
     }
 
     /// HTTP `POST /pair/reject` — existing device: decline the pending
-    /// `Enroll`, moving the session to `Failed`.
+    /// `Enroll`, moving the pairing to `Failed`.
     pub fn api_pair_reject(&mut self) -> Result<()> {
-        let session = self
-            .pairing_session
-            .as_mut()
-            .ok_or_else(|| AppError::Other("no active pairing session".to_string()))?;
-        session.reject().map_err(AppError::Mls)?;
-        self.pending_pair_rendezvous_token = None;
-        self.drawbridge.clear_pair();
+        let cmds = self.pair_channel.pair_reject().map_err(AppError::Mls)?;
+        self.apply_pair_commands(cmds);
         Ok(())
     }
 
-    /// HTTP `POST /pair/cancel` — either role: abort an in-flight pairing
-    /// before it reaches a terminal state, moving the session to `Failed`.
+    /// HTTP `POST /pair/cancel` — either role: abort an in-flight pairing,
+    /// moving it to `Failed`.
     pub fn api_pair_cancel(&mut self) -> Result<()> {
-        let session = self
-            .pairing_session
-            .as_mut()
-            .ok_or_else(|| AppError::Other("no active pairing session".to_string()))?;
-        session.cancel().map_err(AppError::Mls)?;
-        self.pending_pair_rendezvous_token = None;
-        self.drawbridge.clear_pair();
+        let cmds = self.pair_channel.pair_cancel().map_err(AppError::Mls)?;
+        self.apply_pair_commands(cmds);
         Ok(())
     }
 
-    /// HTTP `GET /pair/status` — returns the serialized `PairingUiState`
-    /// verbatim; every host renders this, none derives its own notion of
-    /// pairing progress.
+    /// HTTP `GET /pair/status` — the serialized `PairingUiState` verbatim.
     pub fn api_pair_status(&self) -> PairingUiState {
         self.pairing_ui_state()
     }
 
-    /// The current pairing UI state — `Idle` if no pairing is in flight
-    /// (`pairing_session` is `None`), otherwise the active session's
-    /// `ui_state()`. The single source of truth every render/dispatch site
-    /// (TUI popups, `GET /pair/status`) reads instead of deriving its own.
+    /// The single source of truth every render and dispatch site reads.
     pub(crate) fn pairing_ui_state(&self) -> PairingUiState {
-        self.pairing_session
-            .as_ref()
-            .map(|s| s.ui_state())
-            .unwrap_or(PairingUiState::Idle)
+        self.pair_channel.pairing_ui_state()
     }
 
     /// `true` once the active pairing (if any) has nothing left to do —
@@ -2107,7 +2019,6 @@ impl App {
             | BgEvent::DrawbridgeSendPairJoin { .. }
             | BgEvent::PollForNewDevicesNow
             | BgEvent::RingTickNow
-            | BgEvent::PublishRingCommit { .. }
             | BgEvent::PublishRingEvent { .. } => {}
 
             BgEvent::PairPending => {
@@ -2115,15 +2026,8 @@ impl App {
             }
 
             BgEvent::PairReady { pair_url, token } => {
-                self.debug_log.log(&format!("sync: pair_ready — opening pair WS at {pair_url}"));
-                // The rendezvous succeeded — no more resend-on-reconnect needed.
-                self.pending_pair_rendezvous_token = None;
-                // Build the sync session now so it's ready when PairConnected arrives.
-                self.pending_pair_token = Some(token.clone());
-                let _ = self.bg_tx.send(BgEvent::DrawbridgeConnectPair {
-                    url: pair_url,
-                    token,
-                });
+                let cmds = self.pair_channel.on_pair_ready(&token, pair_url);
+                self.apply_pair_commands(cmds);
             }
 
             BgEvent::PairClosed { session_token, reason, via_relay } => {
@@ -2156,39 +2060,16 @@ impl App {
             }
 
             BgEvent::PairConnected => {
-                // Two possible occupants of the same pair channel: a live
-                // PairingSession (device onboarding — this pairing) or the
-                // established-devices reconnect-sync path (start_sync_session,
-                // pre-existing). At most one is ever active at a time.
-                match self.active_pairing_role() {
-                    Some(true) => {
-                        self.debug_log.log("pairing: pair WS paired — sending Enroll");
-                        self.start_pairing_enroll();
-                    }
-                    Some(false) => {
-                        self.debug_log
-                            .log("pairing: pair WS paired — waiting for Enroll");
-                    }
-                    None => {
-                        self.debug_log.log("sync: pair WS paired — starting sync session");
-                        if let Some(session) = self.sync_request.as_mut() {
-                            if let Err(e) = session.on_channel_up() {
-                                self.debug_log
-                                    .log(&format!("sync: channel up on a finished request: {e}"));
-                            }
-                        }
-                        self.start_sync_session();
-                    }
-                }
+                let cmds = match self.with_pair_env(|d, env| d.on_paired(env)) {
+                    Some(cmds) => cmds,
+                    None => self.pair_channel.on_rendezvous_failed("identity not ready".into()),
+                };
+                self.apply_pair_commands(cmds);
             }
 
             BgEvent::PairFrameReceived { data } => {
-                // A pairing still mid Enroll/Admit takes its own frames;
-                // once done, the channel carries the transfer it handed off.
-                if self.pairing_session.as_ref().is_some_and(|s| !s.is_done()) {
-                    self.handle_pairing_frame(data);
-                } else {
-                    self.process_sync_frame(data);
+                if let Some(cmds) = self.with_pair_env(|d, env| d.on_frame(env, data)) {
+                    self.apply_pair_commands(cmds);
                 }
             }
         }
@@ -2361,30 +2242,12 @@ impl App {
                             });
                         }
 
-                        // Resend a pairing rendezvous message that hasn't been
-                        // acknowledged (`pair_ready`) yet. Covers both a plain
-                        // reconnect and the specific race where a `pair_join`
-                        // reached the relay before the peer's `pair_offer` had
-                        // registered — the relay rejects that with a
-                        // connection-fatal "token not found" error (see the
-                        // field doc on `pending_pair_rendezvous_token`), so
-                        // without this the session would otherwise hang
-                        // forever with no retry.
-                        if let Some(token) = self.pending_pair_rendezvous_token.clone() {
-                            match self.active_pairing_role() {
-                                Some(true) => {
-                                    let _ = self
-                                        .bg_tx
-                                        .send(BgEvent::DrawbridgeSendPairOffer { token });
-                                }
-                                Some(false) => {
-                                    let _ = self
-                                        .bg_tx
-                                        .send(BgEvent::DrawbridgeSendPairJoin { token });
-                                }
-                                None => {}
-                            }
-                        }
+                        // A `pair_join` that reached the relay before the
+                        // peer's `pair_offer` is rejected as connection-fatal
+                        // "token not found", so an unacknowledged offer or
+                        // join is resent on every reconnect.
+                        let cmds = self.pair_channel.on_relay_connected();
+                        self.apply_pair_commands(cmds);
                     }
                     Err(e) => {
                         let delay = self.drawbridge.next_reconnect_delay();
@@ -2432,15 +2295,10 @@ impl App {
                         self.debug_log.log("sync: pair WS connected, waiting for paired");
                     }
                     Err(e) => {
-                        self.debug_log.log(&format!("sync: pair WS connect failed: {e}"));
-                        self.sync_transfer = None;
-                        self.pending_pair_token = None;
-                        // Transport failure the session never saw — cancel
-                        // explicitly so `ui_state()` reports `Failed`.
-                        if let Some(session) = self.pairing_session.as_mut() {
-                            let _ = session.cancel();
-                        }
-                            self.pending_pair_rendezvous_token = None;
+                        let cmds = self
+                            .pair_channel
+                            .on_rendezvous_failed(format!("pair WS connect failed: {e}"));
+                        self.apply_pair_commands(cmds);
                     }
                 }
             }
@@ -2453,21 +2311,14 @@ impl App {
                 self.drawbridge.close_pair().await;
             }
             BgEvent::DrawbridgeSendPairOffer { token } => {
+                // Unsent offers and joins are resent on reconnect.
                 if let Err(e) = self.drawbridge.send_pair_offer(&token).await {
-                    self.debug_log.log(&format!("pairing: send_pair_offer failed: {e}"));
-                    if let Some(session) = self.pairing_session.as_mut() {
-                        let _ = session.cancel();
-                    }
-                    self.pending_pair_rendezvous_token = None;
+                    self.debug_log.log(&format!("pair: send_pair_offer failed: {e}"));
                 }
             }
             BgEvent::DrawbridgeSendPairJoin { token } => {
                 if let Err(e) = self.drawbridge.send_pair_join(&token).await {
-                    self.debug_log.log(&format!("pairing: send_pair_join failed: {e}"));
-                    if let Some(session) = self.pairing_session.as_mut() {
-                        let _ = session.cancel();
-                    }
-                    self.pending_pair_rendezvous_token = None;
+                    self.debug_log.log(&format!("pair: send_pair_join failed: {e}"));
                 }
             }
             BgEvent::PollForNewDevicesNow => {
@@ -2479,21 +2330,11 @@ impl App {
             BgEvent::RingTickNow => {
                 self.do_ring_tick().await;
             }
-            BgEvent::PublishRingCommit { tag, ciphertext } => {
-                let Some(client) = self.client.clone() else { return };
-                match client.publish_event(&tag, &ciphertext, None).await {
-                    Ok(_) => self.debug_log.log("pairing: published ring Add commit"),
-                    Err(e) => self
-                        .debug_log
-                        .log(&format!("pairing: publish ring Add commit failed: {e}")),
-                }
-            }
-
             BgEvent::PublishRingEvent { tag, ciphertext } => {
                 let Some(client) = self.client.clone() else { return };
                 match client.publish_event(&tag, &ciphertext, None).await {
                     Ok(uri) => {
-                        self.debug_log.log("sync: published ring message");
+                        self.debug_log.log("ring: published ring event");
                         // `publish_event` hands back the record's AT URI;
                         // the relay verifies against the bare rkey.
                         let rkey = uri.split('/').next_back().unwrap_or("").to_string();
@@ -2516,13 +2357,9 @@ impl App {
                         }
                     }
                     Err(e) => {
-                        self.debug_log
-                            .log(&format!("sync: publish ring message failed: {e}"));
-                        if let Some(session) = self.sync_request.as_mut() {
-                            session.fail(moat_core::SyncFailure::PublishFailed {
-                                detail: e.to_string(),
-                            });
-                        }
+                        self.debug_log.log(&format!("ring: publish ring event failed: {e}"));
+                        let cmds = self.pair_channel.on_ring_publish_failed(&tag, e.to_string());
+                        self.apply_pair_commands(cmds);
                     }
                 }
             }
@@ -3961,35 +3798,13 @@ impl App {
                             );
                         } else {
                             match moat_core::decode_ring_msg(&decrypted.event.payload) {
-                                Ok(RingMsg::SyncRequest {
-                                    token,
-                                    secret,
-                                    target_device_id,
-                                }) => {
-                                    // A request naming someone else is
-                                    // not ours to answer: prompting here
-                                    // would ask the user about another
-                                    // device's business, and two
-                                    // approvals race for a rendezvous
-                                    // that admits two attaches.
-                                    let for_us = target_device_id
-                                        .is_none_or(|t| &t == self.mls.device_id());
-                                    if for_us {
-                                        self.on_sync_request_received(token, secret, sender_name);
-                                    } else {
-                                        self.debug_log.log(
-                                            "sync: ignoring a request addressed to another device",
-                                        );
-                                    }
-                                }
-                                Ok(RingMsg::SyncOffer { token, secret, target_device_id }) => {
-                                    if &target_device_id == self.mls.device_id() {
-                                        self.on_sync_offer_received(token, secret, sender_name);
-                                    } else {
-                                        self.debug_log.log(
-                                            "sync: ignoring an offer addressed to another device",
-                                        );
-                                    }
+                                Ok(msg) => {
+                                    let own = *self.mls.device_id();
+                                    let now_ms = chrono::Utc::now().timestamp_millis();
+                                    let cmds = self
+                                        .pair_channel
+                                        .on_ring_msg(msg, sender_name, &own, now_ms);
+                                    self.apply_pair_commands(cmds);
                                 }
                                 Err(e) => self
                                     .debug_log
@@ -5790,105 +5605,196 @@ impl App {
         }
     }
 
-    // ── History sync ───────────────────────────────────────────────────────────
+    // ── Pair channel: pairing, sync requests and history transfer ─────────────
 
-    /// Start a requested or offered transfer once the pair WS reports
-    /// `PairConnected`.
-    fn start_sync_session(&mut self) {
-        let channel = self.sync_request.as_mut().and_then(|r| r.transfer_channel());
-        let Some(channel) = channel else {
-            self.debug_log.log("sync: cannot start — no sync request holds the channel");
-            self.drawbridge.clear_pair();
-            self.pending_pair_token = None;
-            if let Some(req) = self.sync_request.as_mut() {
-                req.fail(moat_core::SyncFailure::ChannelClosed {
-                    detail: "not ready to sync".to_string(),
-                });
-            }
-            return;
-        };
-        self.start_sync_transfer(channel, crate::sync::TransferOrigin::SyncRequest);
+    /// This device's credential, key bundle and stealth public key, or
+    /// `None` until logged in with keys loaded.
+    fn pair_identity(&self) -> Option<PairIdentity> {
+        let my_did = self.client.as_ref()?.did().to_string();
+        let key_bundle = self.keys.load_identity_key().ok()?;
+        let stealth_privkey = self.keys.load_stealth_key().ok()?;
+        let device_name = self.keys.get_or_create_device_name().ok()?;
+        Some(PairIdentity {
+            credential: MoatCredential::new(&my_did, &device_name, *self.mls.device_id()),
+            key_bundle,
+            stealth_pubkey: stealth_pubkey_from_privkey(&stealth_privkey),
+        })
     }
 
-    /// Start a transfer on the channel of a `PairingSession` that just
-    /// finished Enroll/Admit — the `PairingCommand::StartSync` handoff.
-    fn start_pairing_sync_session(&mut self) {
-        // `StartSync` only follows a done session, which has a channel.
-        let Some(channel) = self.pairing_session.as_mut().and_then(|s| s.transfer_channel())
-        else {
-            return;
-        };
-        self.start_sync_transfer(channel, crate::sync::TransferOrigin::Pairing);
-    }
-
-    fn start_sync_transfer(
+    /// Run `f` against the pair-channel driver with this device's local
+    /// state, or return `None` if the identity is not ready.
+    fn with_pair_env<T>(
         &mut self,
-        channel: moat_core::PairingFrameChannel,
-        origin: crate::sync::TransferOrigin,
-    ) {
-        let (session, outputs) = self.build_paired_sync_session();
-        self.sync_transfer = Some(crate::sync::SyncTransfer { session, channel, origin });
-        self.process_sync_outputs(outputs);
+        f: impl FnOnce(&mut PairChannelDriver, &mut PairEnv<'_>) -> T,
+    ) -> Option<T> {
+        let identity = self.pair_identity()?;
+        let mut env = PairEnv {
+            mls: &self.mls,
+            ring: &mut self.ring_driver,
+            identity: &identity,
+            sibling_stealth: &self.cached_sibling_stealth,
+            now_ms: chrono::Utc::now().timestamp_millis(),
+        };
+        Some(f(&mut self.pair_channel, &mut env))
     }
 
-    /// Build a fresh `SyncSession` and its initial `on_paired` outputs, from
-    /// local keystore/digest state.
-    fn build_paired_sync_session(
-        &self,
-    ) -> (crate::sync::SyncSession, Vec<crate::sync::SyncOutput>) {
-        use crate::sync::ConvState;
-
-        // Collect all user conversations with their digest state.
-        let conv_ids: Vec<String> = self.conversations.iter().map(|c| c.id.clone()).collect();
-        let mut session = crate::sync::SyncSession::new();
-
-        for conv_id in &conv_ids {
-            let group_id = match hex::decode(conv_id) {
-                Ok(id) => id,
-                Err(_) => continue,
-            };
-            let our_messages = self.keys.load_messages(conv_id)
-                .map(|cm| cm.messages)
-                .unwrap_or_default();
-            let our_messages: Vec<crate::sync::SyncMessage> = our_messages.into_iter()
-                .filter(|m| m.rkey != "pending")
-                .map(|m| crate::sync::sync_message_from_stored(&m))
-                .collect();
-            let has_history = !our_messages.is_empty();
-            session.add_conv_plan(group_id.clone(), conv_id.clone(), our_messages, !has_history);
+    /// Carry out the driver's commands, in order.
+    fn apply_pair_commands(&mut self, cmds: Vec<PairChannelCommand>) {
+        for cmd in cmds {
+            match cmd {
+                PairChannelCommand::SendPairOffer { token } => {
+                    let _ = self
+                        .bg_tx
+                        .send(BgEvent::DrawbridgeSendPairOffer { token: token.to_vec() });
+                }
+                PairChannelCommand::SendPairJoin { token } => {
+                    let _ = self
+                        .bg_tx
+                        .send(BgEvent::DrawbridgeSendPairJoin { token: token.to_vec() });
+                }
+                PairChannelCommand::ConnectPair { url, token } => {
+                    let _ = self
+                        .bg_tx
+                        .send(BgEvent::DrawbridgeConnectPair { url, token: token.to_vec() });
+                }
+                PairChannelCommand::SendFrame { data } => {
+                    let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairBinary { data });
+                }
+                // Queued behind the final sends, which a direct close would drop.
+                PairChannelCommand::ClosePair => {
+                    let _ = self.bg_tx.send(BgEvent::DrawbridgeClosePair);
+                }
+                PairChannelCommand::DropPair => self.drawbridge.clear_pair(),
+                PairChannelCommand::PublishRingEvent { tag, ciphertext } => {
+                    let _ = self.bg_tx.send(BgEvent::PublishRingEvent { tag, ciphertext });
+                }
+                PairChannelCommand::LoadHistory { token } => {
+                    let history = self.load_sync_history();
+                    let cmds = self
+                        .with_pair_env(|d, env| d.provide_history(env, &token, history))
+                        .unwrap_or_default();
+                    self.apply_pair_commands(cmds);
+                }
+                PairChannelCommand::StoreMessages { conv_id, messages } => {
+                    self.store_synced_messages(&conv_id, &messages);
+                }
+                PairChannelCommand::SaveMlsState => {
+                    let _ = self.save_mls_state();
+                }
+                PairChannelCommand::SaveRingState => {
+                    let _ = self.keys.save_ring_state(&self.ring_driver);
+                }
+                PairChannelCommand::RingJoined { ring_id } => {
+                    self.register_ring(&ring_id);
+                    // Fan-out Welcomes may already be waiting.
+                    let _ = self.bg_tx.send(BgEvent::RingTickNow);
+                }
+                PairChannelCommand::DeviceAdmitted { ring_id } => {
+                    // The ring's epoch, and so its candidate tags, advance
+                    // on every Add.
+                    self.register_ring(&ring_id);
+                    let _ = self.bg_tx.send(BgEvent::PollForNewDevicesNow);
+                }
+                PairChannelCommand::SiblingStealthLearned { device_id, scan_pubkey } => {
+                    let cache = &mut self.cached_sibling_stealth;
+                    match cache.iter_mut().find(|c| c.device_id == device_id) {
+                        Some(existing) => existing.scan_pubkey = scan_pubkey,
+                        None => cache.push(SiblingStealth { scan_pubkey, device_id }),
+                    }
+                }
+                PairChannelCommand::TransferComplete { tally } => {
+                    self.debug_log.log(&format!(
+                        "sync: transfer complete — received {} message(s) across {} \
+                         conversation(s), sent {} across {}",
+                        tally.messages,
+                        tally.conversations,
+                        tally.sent_messages,
+                        tally.sent_conversations
+                    ));
+                }
+                PairChannelCommand::TransferFailed { detail, during_pairing } => {
+                    self.debug_log.log(&format!("sync: transfer failed: {detail}"));
+                    // The "Paired!" popup is usually dismissed by now.
+                    if during_pairing && self.overlay == Overlay::None {
+                        self.overlay = match self.pair_channel.pairing_is_new_device() {
+                            Some(false) => Overlay::PairApprove,
+                            _ => Overlay::PairShowCode,
+                        };
+                    }
+                }
+                PairChannelCommand::Log(line) => self.debug_log.log(&line),
+            }
         }
+        self.sync_pair_overlays();
+    }
 
-        // Build our ConvState list for the Hello.
-        let mut our_convs: Vec<ConvState> = conv_ids.iter().filter_map(|conv_id| {
-            let group_id = hex::decode(conv_id).ok()?;
-            // The rkeys we hold, so the peer sends exactly the complement
-            // rather than its whole history. Read from the keystore rather
-            // than `mls.range`, which only tracks events that arrived
-            // through `decrypt_event` — messages received by an earlier
-            // sync are in the keystore only, and omitting them would ask
-            // for them all over again.
-            let held: Vec<String> = self
-                .keys
-                .load_messages(conv_id)
-                .map(|cm| cm.messages)
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|m| m.rkey != "pending")
-                .map(|m| m.rkey)
-                .collect();
+    /// Open the prompt a pairing or a sibling's request is waiting on; either
+    /// can arrive while the user is anywhere in the TUI.
+    fn sync_pair_overlays(&mut self) {
+        if matches!(self.pairing_ui_state(), PairingUiState::AwaitingApproval { .. }) {
+            self.overlay = Overlay::PairApprove;
+        } else if self.overlay == Overlay::None
+            && matches!(self.sync_request_ui_state(), SyncRequestUiState::AwaitingApproval { .. })
+        {
+            self.overlay = Overlay::SyncApprove;
+        }
+    }
 
-            Some(ConvState {
-                group_id,
-                inventory: moat_core::ConvInventory::of(held),
+    /// Candidate tags and group metadata for the ring, so this device
+    /// recognises the ring's traffic at its current epoch.
+    fn register_ring(&mut self, ring_id: &[u8]) {
+        let ring_id_hex = hex::encode(ring_id);
+        let my_did = self.client.as_ref().map(|c| c.did().to_string());
+        let _ = self.keys.store_group_metadata(
+            &ring_id_hex,
+            &GroupMetadata {
+                participant_dids: my_did.into_iter().collect(),
+                participant_handles: vec![],
+                kind: GroupKind::Ring,
+                pending_ex_members: Vec::new(),
+                member_device_ids: Default::default(),
+            },
+        );
+        self.register_group_tags(&ring_id_hex, ring_id);
+    }
+
+    /// Every conversation's settled messages, for the transfer's `Hello`.
+    fn load_sync_history(&self) -> Vec<ConvHistory> {
+        self.conversations
+            .iter()
+            .filter_map(|conv| {
+                let group_id = hex::decode(&conv.id).ok()?;
+                let messages = self
+                    .keys
+                    .load_messages(&conv.id)
+                    .map(|cm| cm.messages)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|m| m.rkey != "pending")
+                    .map(|m| crate::sync::sync_message_from_stored(&m))
+                    .collect();
+                Some(ConvHistory { group_id, conv_id: conv.id.clone(), messages })
             })
-        }).collect();
-        // One Hello carries every conversation, against a hard 1 MiB frame
-        // limit that closes the connection rather than truncating — so the
-        // budget has to be spent across the whole message.
-        moat_core::fit_hello_inventories(&mut our_convs);
+            .collect()
+    }
 
-        let outputs = session.on_paired(our_convs, *self.mls.device_id());
-        (session, outputs)
+    fn store_synced_messages(&mut self, conv_id: &str, messages: &[crate::sync::SyncMessage]) {
+        self.register_synced_conversation(conv_id, messages);
+        let my_did = self.client.as_ref().map(|c| c.did().to_string());
+        // One write for the batch; per-message append is quadratic.
+        let stored = messages
+            .iter()
+            .map(|m| crate::sync::stored_from_sync_message(m, my_did.as_deref()))
+            .collect();
+        let _ = self.keys.append_messages(conv_id, stored);
+        self.debug_log.log(&format!("sync: stored batch for conv {conv_id}"));
+        let active_id = self
+            .active_conversation
+            .and_then(|i| self.conversations.get(i))
+            .map(|c| c.id.clone());
+        if active_id.as_deref() == Some(conv_id) {
+            let _ = self.load_messages();
+        }
     }
 
     /// Surface a conversation whose history arrived by sync before we were
@@ -5961,219 +5867,20 @@ impl App {
         });
     }
 
-    /// Process `SyncOutput` actions from the state machine.
-    fn process_sync_outputs(&mut self, outputs: Vec<crate::sync::SyncOutput>) {
-        use crate::sync::{SyncOutput, TransferOrigin};
-
-        for output in outputs {
-            match output {
-                SyncOutput::Send(msg) => {
-                    let Some(transfer) = self.sync_transfer.as_mut() else { continue };
-                    let data = transfer.channel.seal(&crate::sync::encode_sync_msg(&msg));
-                    let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairBinary { data });
-                }
-                SyncOutput::Store { conv_id, messages } => {
-                    self.register_synced_conversation(&conv_id, &messages);
-                    let my_did = self.client.as_ref().map(|c| c.did().to_string());
-                    // One write for the batch; per-message append is quadratic.
-                    let stored: Vec<_> = messages
-                        .iter()
-                        .map(|sync_msg| {
-                            let mut stored = crate::sync::stored_from_sync_message(sync_msg);
-                            if let (Some(ref did), Some(ref sender)) = (&my_did, &stored.sender_did) {
-                                stored.is_own = sender == did;
-                            }
-                            stored
-                        })
-                        .collect();
-                    let _ = self.keys.append_messages(&conv_id, stored);
-                    self.debug_log.log(&format!("sync: stored batch for conv {conv_id}"));
-                    // Refresh UI if this is the active conversation.
-                    let active_id = self.active_conversation
-                        .and_then(|i| self.conversations.get(i))
-                        .map(|c| c.id.clone());
-                    if active_id.as_deref() == Some(&conv_id) {
-                        let _ = self.load_messages();
-                    }
-                }
-            }
-        }
-
-        // Teardown happens after every output has been applied, never as
-        // one of them: closing the channel mid-list would strand whatever
-        // followed.
-        if !self.sync_transfer.as_ref().is_some_and(|t| t.session.is_done()) {
-            return;
-        }
-        let Some(transfer) = self.sync_transfer.take() else { return };
-        let tally = transfer.session.tally();
-        self.debug_log.log(&format!(
-            "sync: session complete — received {} message(s) across {} conversation(s), \
-             sent {} across {}; closing pair WS",
-            tally.messages, tally.conversations, tally.sent_messages, tally.sent_conversations
-        ));
-        // Queued behind the final sends, which a direct close would drop.
-        let _ = self.bg_tx.send(BgEvent::DrawbridgeClosePair);
-        if let TransferOrigin::SyncRequest = transfer.origin {
-            self.pending_pair_token = None;
-            let peer_name = self.ring_member_name(transfer.session.peer_device_id());
-            if let Some(session) = self.sync_request.as_mut() {
-                session.on_complete(tally, peer_name);
-            }
-        }
-    }
-
-    /// The ring member with `device_id`, by the name its credential carries.
-    fn ring_member_name(&self, device_id: Option<&moat_core::DeviceId>) -> Option<String> {
-        let ring_id = self.ring_driver.ring_id()?;
-        self.mls.member_device_name(ring_id, device_id?).ok().flatten()
-    }
-
-    /// End the running transfer early and close its channel.
-    fn abort_sync_transfer(&mut self, detail: String) {
-        self.debug_log.log(&format!("sync: {detail}"));
-        let Some(transfer) = self.sync_transfer.take() else { return };
-        self.drawbridge.clear_pair();
-        self.report_transfer_failure(transfer.origin, detail);
-    }
-
-    /// Tell whichever gesture opened a transfer that it ended early.
-    fn report_transfer_failure(&mut self, origin: crate::sync::TransferOrigin, detail: String) {
-        match origin {
-            crate::sync::TransferOrigin::SyncRequest => {
-                if let Some(req) = self.sync_request.as_mut() {
-                    req.fail(moat_core::SyncFailure::ChannelClosed { detail });
-                }
-            }
-            crate::sync::TransferOrigin::Pairing => {
-                if let Some(session) = self.pairing_session.as_mut() {
-                    session.transfer_failed(&detail);
-                }
-                // The "Paired!" popup is usually dismissed by now.
-                if self.overlay == Overlay::None {
-                    self.overlay = if self
-                        .pairing_session
-                        .as_ref()
-                        .is_some_and(|s| !s.is_new_device())
-                    {
-                        Overlay::PairApprove
-                    } else {
-                        Overlay::PairShowCode
-                    };
-                }
-            }
-        }
-    }
-
-    /// Supersede whatever held the pair channel before a new rendezvous
-    /// on `token`: a device drives one pair session at a time, and a
-    /// leftover transfer would misread the next session's frames.
-    fn reset_pair_channel(&mut self, token: &[u8]) {
-        self.drawbridge.clear_pair();
-        self.sync_transfer = None;
-        self.pairing_session = None;
-        self.pending_pair_rendezvous_token = Some(token.to_vec());
-    }
-
-    /// The role of the in-flight pairing, if one is still running:
-    /// `Some(true)` for the new device, `Some(false)` for the existing one.
-    fn active_pairing_role(&self) -> Option<bool> {
-        self.pairing_session
-            .as_ref()
-            .filter(|s| !s.is_terminal())
-            .map(|s| s.is_new_device())
-    }
-
-    /// The pair channel ended: drop its session, and fail whatever was
-    /// still running on it.
+    /// The pair channel for `session_token` ended.
     fn on_pair_closed(&mut self, session_token: Option<Vec<u8>>, reason: String) {
-        // A completed round's teardown notice routinely lands after
-        // the next round has started. The reconnect-sync path has no
-        // `PairingSession`, so fall back to `pending_pair_token`.
-        let live_session_token: Option<Vec<u8>> = match self.pairing_session.as_ref() {
-            Some(s) => Some(s.rendezvous_token().to_vec()),
-            None => self.pending_pair_token.clone(),
-        };
-        if let (Some(closed), Some(live)) =
-            (session_token.as_ref(), live_session_token.as_ref())
-        {
-            if closed != live {
-                self.debug_log.log(&format!(
-                    "sync: ignoring pair_closed ({reason}) for a superseded session"
-                ));
-                return;
-            }
-        }
-
-        self.debug_log.log(&format!("sync: pair WS closed: {reason}"));
-        self.drawbridge.clear_pair();
-        self.pending_pair_token = None;
-        // A transfer cut short must say so.
-        if let Some(transfer) = self.sync_transfer.take() {
-            self.report_transfer_failure(transfer.origin, reason);
-            return;
-        }
-        // `fail` is a no-op once the request completed, which is the
-        // ordinary case: the relay closes the channel right after a
-        // successful sync.
-        if let Some(session) = self.sync_request.as_mut() {
-            session.fail(moat_core::SyncFailure::ChannelClosed { detail: reason });
-        }
-        // Peer walked away / relay TTL: cancel so `ui_state()`
-        // reports why rather than stalling. No-op if terminal.
-        if let Some(session) = self.pairing_session.as_mut() {
-            let _ = session.cancel();
-        }
-    }
-
-    /// Open and dispatch an incoming binary frame from the pair WS.
-    fn process_sync_frame(&mut self, data: Vec<u8>) {
-        // A precondition, not a value: the `Store` arm needs our DID to
-        // decide which synced messages are our own, so a frame arriving
-        // while logged out has nowhere to go.
-        if self.client.is_none() {
-            return;
-        }
-        let Some(transfer) = self.sync_transfer.as_mut() else {
-            self.debug_log.log("sync: frame received but no active session");
-            return;
-        };
-        // A frame that fails to open ends the channel: its counter is the
-        // nonce, and the peer sealed the next one expecting it to advance.
-        let payload = match transfer.channel.open(&data) {
-            Ok(p) => p,
-            Err(e) => {
-                self.abort_sync_transfer(format!("frame failed to open: {e}"));
-                return;
-            }
-        };
-        let msg = match crate::sync::decode_sync_msg(&payload) {
-            Ok(m) => m,
-            Err(e) => {
-                self.debug_log.log(&format!("sync: decode_sync_msg failed: {e}"));
-                return;
-            }
-        };
-        let Some(transfer) = self.sync_transfer.as_mut() else { return };
-        match transfer.session.on_message(msg) {
-            Ok(outputs) => self.process_sync_outputs(outputs),
-            // A message the session can't account for means the peer
-            // believes it delivered something we did not take. Abort
-            // loudly rather than continue a sync that is now wrong.
-            Err(e) => self.abort_sync_transfer(format!("protocol error: {e}")),
-        }
+        let cmds = self.pair_channel.on_pair_closed(session_token.as_deref(), reason);
+        self.apply_pair_commands(cmds);
     }
 
     /// Return the current sync status for the HTTP API.
     ///
     /// Takes `&mut self` so a request whose rendezvous has expired is
-    /// reported as failed the moment it is *read*, not on the next 30s
-    /// tick — a poller watching this endpoint would otherwise see
-    /// `awaiting_peer` for up to half a minute after the token died.
+    /// reported as failed the moment it is *read*.
     pub fn sync_status(&mut self) -> serde_json::Value {
         self.expire_sync_request_if_due();
         serde_json::json!({
-            "active": self.sync_transfer.is_some(),
+            "active": self.pair_channel.is_transferring(),
             "request": self.sync_request_ui_state(),
         })
     }
@@ -6181,160 +5888,51 @@ impl App {
     /// Progress of the history transfer on the pair channel, whichever
     /// gesture opened it; `None` when nothing is transferring.
     pub fn sync_progress(&self) -> Option<moat_core::SyncProgress> {
-        self.sync_transfer.as_ref().map(|t| t.session.progress())
+        self.pair_channel.progress()
     }
-
-    // ── User-initiated sync between established devices ─────────────────────
 
     /// Move an unanswered sync request to `Failed` once its rendezvous
     /// token has expired. Driven from the periodic tick and from every
-    /// read of the status, since the session has no clock of its own.
+    /// read of the status, since the driver has no clock of its own.
     pub fn expire_sync_request_if_due(&mut self) {
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        if let Some(session) = self.sync_request.as_mut() {
-            if session.expire_if_due(now_ms) {
-                self.debug_log
-                    .log("sync: request expired with no device answering");
-            }
-        }
+        let cmds = self.pair_channel.tick(chrono::Utc::now().timestamp_millis());
+        self.apply_pair_commands(cmds);
     }
 
-    /// Projection of the sync-request gesture, for `/sync/status` and the
-    /// TUI. Never derived anywhere else — see [`SyncRequestSession`].
+    /// Projection of the sync-request gesture, for `/sync/status` and the TUI.
     pub fn sync_request_ui_state(&self) -> SyncRequestUiState {
-        SyncRequestSession::ui_state_of(self.sync_request.as_ref())
+        self.pair_channel.sync_request_ui_state()
     }
 
     /// HTTP `POST /sync/request` — ask the user's other devices for
-    /// history this one is missing.
-    ///
-    /// Publishes a `RingMsg::SyncRequest` on the device ring and registers
-    /// the same rendezvous token with the relay. Every online sibling
-    /// prompts its user; whichever one they approve joins the rendezvous,
-    /// and the transfer runs as an ordinary ring-encrypted
-    /// [`crate::sync::SyncSession`]. There is no election and no automatic
-    /// responder: the person holding the devices picks the one that has
-    /// the history.
+    /// history this one is missing. Every online sibling prompts its user;
+    /// whichever one they approve serves.
     pub fn api_sync_request(&mut self) -> Result<()> {
         self.api_sync_request_from(None)
     }
 
-    /// HTTP `POST /sync/request` with a chosen donor.
-    ///
-    /// `target_device_id` names the sibling to ask; siblings that are not
-    /// the target ignore the message rather than prompting about another
-    /// device's business. `None` is the broadcast: every sibling prompts,
-    /// and whichever the user approves on serves.
+    /// HTTP `POST /sync/request` with a chosen donor; `None` asks every
+    /// sibling.
     pub fn api_sync_request_from(
         &mut self,
         target_device_id: Option<moat_core::DeviceId>,
     ) -> Result<()> {
-        if self.client.is_none() {
-            return Err(AppError::NotLoggedIn);
-        }
-        let ring_id = self
-            .ring_driver
-            .ring_id()
-            .map(<[u8]>::to_vec)
-            .ok_or_else(|| AppError::Other("no device ring — pair a device first".to_string()))?;
-        let key_bundle = self.keys.load_identity_key()?;
-
-        use rand::RngCore;
-        let mut token = [0u8; moat_core::PAIRING_TOKEN_LEN];
-        let mut secret = [0u8; moat_core::PAIRING_SECRET_LEN];
-        rand::thread_rng().fill_bytes(&mut token);
-        rand::thread_rng().fill_bytes(&mut secret);
-
-        // Seal the request to the ring first: if this fails there is no
-        // point registering a rendezvous nobody will ever be told about.
-        let epoch = self.mls.get_group_epoch(&ring_id).ok().flatten().unwrap_or(0);
-        let payload = moat_core::encode_ring_msg(&RingMsg::SyncRequest {
-            token,
-            secret,
-            target_device_id,
-        });
-        let event = Event::ring_msg(ring_id.clone(), epoch, payload);
-        let encrypted = self
-            .mls
-            .encrypt_event(&ring_id, &key_bundle, &event)
+        let cmds = self
+            .with_pair_env(|d, env| d.sync_request(env, target_device_id))
+            .ok_or(AppError::NotLoggedIn)?
             .map_err(AppError::Mls)?;
-        let _ = self.save_mls_state();
-
-        self.reset_pair_channel(&token);
-        self.sync_request = Some(SyncRequestSession::request(
-            token,
-            secret,
-            chrono::Utc::now().timestamp_millis(),
-        ));
-
-        let _ = self
-            .bg_tx
-            .send(BgEvent::DrawbridgeSendPairOffer { token: token.to_vec() });
-        let _ = self.bg_tx.send(BgEvent::PublishRingEvent {
-            tag: encrypted.tag,
-            ciphertext: encrypted.ciphertext,
-        });
+        self.apply_pair_commands(cmds);
         Ok(())
     }
 
-    /// HTTP `POST /sync/offer` — send history to another device.
-    ///
-    /// This call *is* the human approval, so the target joins without a
-    /// prompt of its own — exactly one approval per session, on the side
-    /// that can judge. Always targeted: the relay admits two attaches, so
-    /// an untargeted offer would pick its recipient arbitrarily.
-    pub fn api_sync_offer(
-        &mut self,
-        target_device_id: moat_core::DeviceId,
-    ) -> Result<()> {
-        if self.client.is_none() {
-            return Err(AppError::NotLoggedIn);
-        }
-        if &target_device_id == self.mls.device_id() {
-            return Err(AppError::Other("cannot offer history to this device".to_string()));
-        }
-        let ring_id = self
-            .ring_driver
-            .ring_id()
-            .map(<[u8]>::to_vec)
-            .ok_or_else(|| AppError::Other("no device ring — pair a device first".to_string()))?;
-        let key_bundle = self.keys.load_identity_key()?;
-
-        use rand::RngCore;
-        let mut token = [0u8; moat_core::PAIRING_TOKEN_LEN];
-        let mut secret = [0u8; moat_core::PAIRING_SECRET_LEN];
-        rand::thread_rng().fill_bytes(&mut token);
-        rand::thread_rng().fill_bytes(&mut secret);
-
-        // Seal to the ring first: there is no point registering a
-        // rendezvous nobody will be told about.
-        let epoch = self.mls.get_group_epoch(&ring_id).ok().flatten().unwrap_or(0);
-        let payload = moat_core::encode_ring_msg(&RingMsg::SyncOffer {
-            token,
-            secret,
-            target_device_id,
-        });
-        let event = Event::ring_msg(ring_id.clone(), epoch, payload);
-        let encrypted = self
-            .mls
-            .encrypt_event(&ring_id, &key_bundle, &event)
+    /// HTTP `POST /sync/offer` — send history to another device. This call
+    /// is the human approval, so the target joins without a prompt.
+    pub fn api_sync_offer(&mut self, target_device_id: moat_core::DeviceId) -> Result<()> {
+        let cmds = self
+            .with_pair_env(|d, env| d.sync_offer(env, target_device_id))
+            .ok_or(AppError::NotLoggedIn)?
             .map_err(AppError::Mls)?;
-        let _ = self.save_mls_state();
-
-        self.reset_pair_channel(&token);
-        self.sync_request = Some(SyncRequestSession::request(
-            token,
-            secret,
-            chrono::Utc::now().timestamp_millis(),
-        ));
-
-        let _ = self
-            .bg_tx
-            .send(BgEvent::DrawbridgeSendPairOffer { token: token.to_vec() });
-        let _ = self.bg_tx.send(BgEvent::PublishRingEvent {
-            tag: encrypted.tag,
-            ciphertext: encrypted.ciphertext,
-        });
+        self.apply_pair_commands(cmds);
         Ok(())
     }
 
@@ -6344,445 +5942,28 @@ impl App {
         if self.client.is_none() {
             return Err(AppError::NotLoggedIn);
         }
-        let session = self
-            .sync_request
-            .as_mut()
-            .ok_or_else(|| AppError::Other("no sync request to accept".to_string()))?;
-        let token = session.accept().map_err(AppError::Mls)?;
-
-        self.reset_pair_channel(&token);
-
-        let _ = self
-            .bg_tx
-            .send(BgEvent::DrawbridgeSendPairJoin { token: token.to_vec() });
+        let cmds = self.pair_channel.sync_accept().map_err(AppError::Mls)?;
+        self.apply_pair_commands(cmds);
         Ok(())
     }
 
-    /// HTTP `POST /sync/decline` — refuse a sibling's request.
-    ///
-    /// Local only. With several siblings prompted, one refusal must not
-    /// cancel the requester's outstanding request; it keeps waiting for
-    /// another sibling or for its token to expire.
+    /// HTTP `POST /sync/decline` — refuse a sibling's request. Local only:
+    /// it keeps waiting for another sibling or for its token to expire.
     pub fn api_sync_decline(&mut self) -> Result<()> {
-        let session = self
-            .sync_request
-            .as_mut()
-            .ok_or_else(|| AppError::Other("no sync request to decline".to_string()))?;
-        session.decline();
-        Ok(())
+        self.pair_channel.sync_decline().map_err(AppError::Mls)
     }
 
-    /// A sibling's `RingMsg::SyncRequest` arrived on the ring.
-    ///
-    /// `device_name` comes from the sender's MLS leaf credential, which is
-    /// why this lane is the ring and not the stealth one: the prompt names
-    /// an authenticated device rather than a self-declared payload field.
-    fn on_sync_request_received(&mut self, token: [u8; 16], secret: [u8; 16], device_name: String) {
-        let now_ms = chrono::Utc::now().timestamp_millis();
-
-        // One sync session at a time. A live request of our own, or a
-        // prompt the user is already looking at, outranks a new arrival —
-        // superseding either would yank a decision out from under them.
-        if let Some(existing) = self.sync_request.as_ref() {
-            if !existing.is_terminal() && !existing.is_expired(now_ms) {
-                self.debug_log
-                    .log("sync: ignoring a sibling's request — one is already in flight");
-                return;
-            }
-        }
-        if self.pairing_session.as_ref().is_some_and(|s| !s.is_done()) {
-            self.debug_log
-                .log("sync: ignoring a sibling's request — a pairing is in flight");
-            return;
-        }
-
-        self.debug_log
-            .log(&format!("sync: {device_name} is asking for history"));
-        self.sync_request = Some(SyncRequestSession::received(token, secret, device_name, now_ms));
-        self.overlay = Overlay::SyncApprove;
-    }
-
-    /// A sibling is offering us history.
-    ///
-    /// Joined without a prompt, deliberately. The rule is exactly one
-    /// human approval per session, on the side that can judge — and for
-    /// an offer that is the offerer, who already decided. Asking again
-    /// here would be asking the user to approve receiving their own
-    /// messages from a device that can already read them.
-    ///
-    /// Still refused while something else is in flight: an offer must not
-    /// supersede a decision the user is already looking at.
-    fn on_sync_offer_received(&mut self, token: [u8; 16], secret: [u8; 16], device_name: String) {
-        let now_ms = chrono::Utc::now().timestamp_millis();
-
-        if let Some(existing) = self.sync_request.as_ref() {
-            if !existing.is_terminal() && !existing.is_expired(now_ms) {
-                self.debug_log
-                    .log("sync: ignoring an offer — a sync is already in flight");
-                return;
-            }
-        }
-        if self.pairing_session.as_ref().is_some_and(|s| !s.is_done()) {
-            self.debug_log
-                .log("sync: ignoring an offer — a pairing is in flight");
-            return;
-        }
-
-        self.debug_log
-            .log(&format!("sync: accepting {device_name}'s offer of history"));
-        self.reset_pair_channel(&token);
-        self.sync_request = Some(SyncRequestSession::accept_offer(token, secret, now_ms));
-
-        let _ = self
-            .bg_tx
-            .send(BgEvent::DrawbridgeSendPairJoin { token: token.to_vec() });
-    }
-
-
-    // ── Live pairing (QR / text code) device onboarding ─────────────────────
-
-    /// Own credential/key_bundle/stealth pubkey, gathered synchronously the
-    /// same way `ring_tick_inner`/`start_sync_session` do. `None` if any
-    /// required local state is missing (not logged in, keys not loaded).
-    fn own_pairing_identity(&self) -> Option<(MoatCredential, Vec<u8>, [u8; 32])> {
-        let my_did = self.client.as_ref()?.did().to_string();
-        let key_bundle = self.keys.load_identity_key().ok()?;
-        let stealth_privkey = self.keys.load_stealth_key().ok()?;
-        let device_name = self.keys.get_or_create_device_name().ok()?;
-        let credential = MoatCredential::new(&my_did, &device_name, *self.mls.device_id());
-        let stealth_pubkey = stealth_pubkey_from_privkey(&stealth_privkey);
-        Some((credential, key_bundle, stealth_pubkey))
-    }
-
-    /// New device: build and send the `Enroll` frame once the pair WS
-    /// reports `PairConnected`. No-op (logged) if local identity state
-    /// isn't ready — there's no synchronous caller to report an error to.
-    fn start_pairing_enroll(&mut self) {
-        let Some((credential, key_bundle, stealth_pubkey)) = self.own_pairing_identity() else {
-            self.debug_log.log("pairing: cannot start_enroll — identity not ready");
-            return;
-        };
-        // Seed the approver's `kp_pools` entry for us directly
-        // (`Enroll.conv_kps`), so it can fan us into pre-existing user
-        // conversations immediately instead of waiting on a
-        // KpRequest/KpBatch round trip over the stealth lane — this field's
-        // whole purpose per qr-pairing.md §3.3. Mirrors
-        // `DeviceRingState::build_kp_batch`'s generation (seq allocation +
-        // fresh KeyPackage per entry), which is private to that module.
-        let conv_kps: Vec<moat_core::OfferedKp> = {
-            let seqs = self.ring_driver.allocate_kp_seqs(moat_core::KP_POOL_TARGET);
-            let mut out = Vec::with_capacity(seqs.len());
-            for seq in seqs {
-                let Ok(kp_bytes) = self.mls.replenish_key_package(&credential, &key_bundle) else {
-                    break;
-                };
-                let mut rkey = [0u8; 16];
-                rand::Rng::fill(&mut rand::thread_rng(), &mut rkey);
-                out.push(moat_core::OfferedKp {
-                    rkey: rkey.to_vec(),
-                    seq,
-                    key_package: kp_bytes,
-                });
-            }
-            out
-        };
-        let _ = self.keys.save_ring_state(&self.ring_driver);
-
-        let Some(session) = self.pairing_session.as_mut() else { return };
-        let cmds = match session.start_enroll(
-            &self.mls,
-            &credential,
-            &key_bundle,
-            stealth_pubkey,
-            conv_kps,
-        ) {
-            Ok(cmds) => cmds,
-            Err(e) => {
-                // `start_enroll` already recorded `Failed { reason }` on
-                // the session — don't null it out; `ui_state()` needs it.
-                self.debug_log.log(&format!("pairing: start_enroll failed: {e}"));
-                self.pending_pair_rendezvous_token = None;
-                self.drawbridge.clear_pair();
-                return;
-            }
-        };
-        // start_enroll (the conv_kps loop above, and the ring_kp inside
-        // start_enroll itself) consumes init keys via replenish_key_package
-        // — persist now rather than relying on some later, unrelated
-        // command to happen to save (qr-pairing.md Phase 5a: "the driver
-        // calls save_mls_state itself after each mutation").
-        let _ = self.save_mls_state();
-        self.interpret_pairing_commands(cmds);
-    }
-
-    /// Feed a sealed frame received on the pair WS to the active
-    /// `PairingSession`. On a protocol/crypto error, the session itself is
-    /// already `Failed { reason }` (see `on_frame_received`'s doc) — this
-    /// only tears down the *transport* (pair WS, rendezvous token), not the
-    /// session, so `ui_state()` keeps reporting why it failed.
-    fn handle_pairing_frame(&mut self, data: Vec<u8>) {
-        let Some((credential, _key_bundle, _stealth_pubkey)) = self.own_pairing_identity() else {
-            self.debug_log.log("pairing: cannot process frame — identity not ready");
-            return;
-        };
-        let Some(session) = self.pairing_session.as_mut() else { return };
-        match session.on_frame_received(&self.mls, &credential, &data) {
-            Ok(cmds) => {
-                // New device: this may have just processed a Welcome
-                // (process_welcome) — the heaviest MLS mutation in this
-                // flow. Persist immediately rather than relying on
-                // PersistRing's follow-on RingTickNow to happen to save.
-                let _ = self.save_mls_state();
-                self.interpret_pairing_commands(cmds);
-            }
-            Err(e) => {
-                self.debug_log.log(&format!("pairing: frame rejected: {e}"));
-                self.pending_pair_rendezvous_token = None;
-                self.drawbridge.clear_pair();
-            }
-        }
-    }
-
-    /// Existing device: assemble the roster of already-known ring siblings
-    /// for `Admit.roster` — `device_name` comes from ring MLS member
-    /// credentials, stealth key from `cached_sibling_stealth`. Empty for a
-    /// first pairing (no ring, no siblings yet).
-    fn known_pairing_siblings(&self) -> Vec<SiblingInfo> {
-        let Some(ring_id) = self.ring_driver.ring_id() else {
-            return Vec::new();
-        };
-        let members = self.mls.get_group_members(ring_id).unwrap_or_default();
-        self.cached_sibling_stealth
-            .iter()
-            .filter_map(|s| {
-                let device_name = members
-                    .iter()
-                    .find(|(_, cred)| cred.as_ref().map(|c| *c.device_id()) == Some(s.device_id))
-                    .and_then(|(_, cred)| cred.as_ref())
-                    .map(|c| c.device_name().to_string())?;
-                Some(SiblingInfo {
-                    device_id: s.device_id,
-                    device_name,
-                    stealth_pubkey: s.scan_pubkey,
-                })
-            })
-            .collect()
-    }
-
-    /// Existing device: called once the user taps Approve (interactive UI)
-    /// or `POST /pair/approve` is called (headless — no host auto-approves
-    /// anymore; see `interpret_pairing_commands`'s `SurfaceApprovalPrompt`
-    /// arm). Errors without side effects if identity state isn't ready or
-    /// there's no active session; `session.approve()`'s own guard (no
-    /// pending `Enroll`) is reported the same way.
+    /// Existing device: approve the pending `Enroll`, from the TUI or
+    /// `POST /pair/approve`.
     fn approve_pending_pairing(&mut self) -> Result<()> {
-        let Some((credential, key_bundle, stealth_pubkey)) = self.own_pairing_identity() else {
-            return Err(AppError::Other(
-                "pairing: cannot approve — identity not ready".to_string(),
-            ));
-        };
-        let existing_ring_id = self.ring_driver.ring_id().map(<[u8]>::to_vec);
-        let is_first_pairing = existing_ring_id.is_none();
-        let known_siblings = self.known_pairing_siblings();
-
-        let Some(session) = self.pairing_session.as_mut() else {
-            return Err(AppError::Other("no active pairing session".to_string()));
-        };
-        // `approve()` consumes `pending_enroll` internally and has no
-        // command to hand the newcomer's stealth key back to the host —
-        // `Admit.roster` only ever carries *already-known* siblings (see
-        // its doc). Capture it now, before the call, so `poll_for_new_devices`
-        // (triggered below on success) can actually reach the newcomer over
-        // the stealth lane instead of silently finding no address for it.
-        let newcomer_stealth = session
-            .pending_enroll()
-            .map(|e| (*e.credential.device_id(), e.stealth_scan_pubkey));
-        let result = session.approve(
-            &self.mls,
-            &credential,
-            &key_bundle,
-            stealth_pubkey,
-            &known_siblings,
-            existing_ring_id.as_deref(),
-        );
-        // `approve()` records the ring id (freshly created or passed in) on
-        // success; capture it now while `session` is still borrowed, since
-        // — unlike the new device — nothing in `approve()`'s own command
-        // list tells the *existing* device host to persist its own
-        // membership (it already knew it was joining/creating `ring_id`).
-        let new_ring_id = session.ring_id().map(<[u8]>::to_vec);
-
-        match result {
-            Ok(cmds) => {
-                // approve() just performed create_group/add_member —
-                // the heaviest MLS mutations in this flow. Persist
-                // immediately rather than relying on PollForNewDevicesNow
-                // (enqueued below) to happen to save — it returns early
-                // whenever there are no pre-existing conversations yet,
-                // the common first-pairing case, which would otherwise
-                // leave ring.json claiming InRing with no MLS group behind
-                // it for up to 30s (until the next periodic ring tick).
-                let _ = self.save_mls_state();
-                if let Some(ref ring_id) = new_ring_id {
-                    if is_first_pairing {
-                        let now_ms = chrono::Utc::now().timestamp_millis();
-                        if let Err(e) = self.ring_driver.record_ring_membership(
-                            &self.mls,
-                            ring_id.clone(),
-                            now_ms,
-                        ) {
-                            self.debug_log.log(&format!(
-                                "pairing: record_ring_membership (approver) failed: {e}"
-                            ));
-                        }
-                        let _ = self.keys.save_ring_state(&self.ring_driver);
-                    }
-                    // Candidate tags + group metadata for the ring,
-                    // refreshed on *every* approve() (not just the first)
-                    // since the epoch — and therefore the candidate tag
-                    // set — advances on every Add. Without this a
-                    // bystander sibling's poll could never recognize the
-                    // commit `PublishRingCommit` is about to publish
-                    // (there was previously no `RegisterGroup`-equivalent
-                    // for the ring at all).
-                    let ring_id_hex = hex::encode(ring_id);
-                    let _ = self.keys.store_group_metadata(
-                        &ring_id_hex,
-                        &GroupMetadata {
-                            participant_dids: vec![credential.did().to_string()],
-                            participant_handles: vec![],
-                            kind: GroupKind::Ring,
-                            pending_ex_members: Vec::new(),
-                            member_device_ids: Default::default(),
-                        },
-                    );
-                    self.register_group_tags(&ring_id_hex, ring_id);
-                }
-                if let Some((device_id, scan_pubkey)) = newcomer_stealth {
-                    if let Some(existing) = self
-                        .cached_sibling_stealth
-                        .iter_mut()
-                        .find(|c| c.device_id == device_id)
-                    {
-                        existing.scan_pubkey = scan_pubkey;
-                    } else {
-                        self.cached_sibling_stealth
-                            .push(SiblingStealth { scan_pubkey, device_id });
-                    }
-                }
-                self.interpret_pairing_commands(cmds);
-                // qr-pairing.md §2: "On approve: ring add + conversation
-                // fan-out + history sync all run over the established
-                // channel. The new device shows conversations within
-                // seconds" — fan the newcomer into every pre-existing user
-                // conversation right away rather than waiting for the next
-                // periodic ring tick (every 30s, which can outlast a
-                // bounded test/UX wait entirely).
-                let _ = self.bg_tx.send(BgEvent::PollForNewDevicesNow);
-                Ok(())
-            }
-            Err(e) => {
-                // `approve()` already recorded `Failed { reason }` on the
-                // session — don't null it out; `ui_state()` needs it.
-                self.debug_log.log(&format!("pairing: approve failed: {e}"));
-                self.pending_pair_rendezvous_token = None;
-                self.drawbridge.clear_pair();
-                Err(AppError::Mls(e))
-            }
-        }
-    }
-
-    /// Interpret `PairingCommand`s from `PairingSession` — mirrors the
-    /// `RingCommand` interpreter in `ring_tick_inner` and
-    /// `process_sync_outputs`. Deliberately does not clear
-    /// `pairing_session` on `StartSync`: `ui_state()`/`GET /pair/status`
-    /// must keep reporting the real terminal outcome after completion, not
-    /// just at the instant it happens.
-    fn interpret_pairing_commands(&mut self, cmds: Vec<PairingCommand>) {
-        for cmd in cmds {
-            match cmd {
-                PairingCommand::SendFrame { ciphertext } => {
-                    let _ = self
-                        .bg_tx
-                        .send(BgEvent::DrawbridgeSendPairBinary { data: ciphertext });
-                }
-                PairingCommand::SeedKpPool { device_id, kps } => {
-                    self.ring_driver.ingest_kp_batch(&device_id, kps);
-                    let _ = self.keys.save_ring_state(&self.ring_driver);
-                }
-                PairingCommand::PublishRingCommit { tag, ciphertext } => {
-                    let _ = self
-                        .bg_tx
-                        .send(BgEvent::PublishRingCommit { tag, ciphertext });
-                }
-                // Nothing to cache: `ui_state()`'s `AwaitingApproval`
-                // already carries device_name/did. Approval is always an
-                // explicit step (TUI tap or `POST /pair/approve`), and
-                // `sync_pairing_overlay` below opens the TUI prompt.
-                PairingCommand::SurfaceApprovalPrompt { .. } => {}
-                PairingCommand::PersistRing { ring_id } => {
-                    let now_ms = chrono::Utc::now().timestamp_millis();
-                    let ring_id_hex = hex::encode(&ring_id);
-                    if let Err(e) = self.ring_driver.record_ring_membership(
-                        &self.mls,
-                        ring_id.clone(),
-                        now_ms,
-                    ) {
-                        self.debug_log
-                            .log(&format!("pairing: record_ring_membership failed: {e}"));
-                    }
-                    let _ = self.keys.save_ring_state(&self.ring_driver);
-                    // Candidate tags + group metadata for the ring — see
-                    // the matching note in `approve_pending_pairing`. The
-                    // new device needs this too: if a *third* device later
-                    // pairs into this same ring, this device becomes the
-                    // bystander and must recognize that Add commit on its
-                    // own next poll.
-                    let my_did = self.client.as_ref().map(|c| c.did().to_string());
-                    let _ = self.keys.store_group_metadata(
-                        &ring_id_hex,
-                        &GroupMetadata {
-                            participant_dids: my_did.into_iter().collect(),
-                            participant_handles: vec![],
-                            kind: GroupKind::Ring,
-                            pending_ex_members: Vec::new(),
-                            member_device_ids: Default::default(),
-                        },
-                    );
-                    self.register_group_tags(&ring_id_hex, &ring_id);
-                    let _ = self.bg_tx.send(BgEvent::RingTickNow);
-                }
-                PairingCommand::RosterReceived { roster } => {
-                    for s in roster {
-                        if s.device_id == *self.mls.device_id() {
-                            continue;
-                        }
-                        if let Some(existing) = self
-                            .cached_sibling_stealth
-                            .iter_mut()
-                            .find(|c| c.device_id == s.device_id)
-                        {
-                            existing.scan_pubkey = s.stealth_pubkey;
-                        } else {
-                            self.cached_sibling_stealth.push(SiblingStealth {
-                                scan_pubkey: s.stealth_pubkey,
-                                device_id: s.device_id,
-                            });
-                        }
-                    }
-                }
-                PairingCommand::StartSync => self.start_pairing_sync_session(),
-            }
-        }
-        self.sync_pairing_overlay();
-    }
-
-    /// Derive the overlay from `ui_state()` rather than setting it per
-    /// command. Only `AwaitingApproval` needs a transition — an incoming
-    /// `Enroll` can arrive while the user is anywhere in the TUI.
-    fn sync_pairing_overlay(&mut self) {
-        if matches!(self.pairing_ui_state(), PairingUiState::AwaitingApproval { .. }) {
-            self.overlay = Overlay::PairApprove;
+        let cmds = self
+            .with_pair_env(|d, env| d.pair_approve(env))
+            .ok_or_else(|| AppError::Other("cannot approve — identity not ready".into()))?
+            .map_err(AppError::Mls)?;
+        self.apply_pair_commands(cmds);
+        match self.pairing_ui_state() {
+            PairingUiState::Failed { reason } => Err(AppError::Other(reason)),
+            _ => Ok(()),
         }
     }
 }

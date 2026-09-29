@@ -8,46 +8,22 @@ import '../utils/platform_int64.dart';
 import 'conversations_service.dart';
 import 'message_storage.dart';
 
-/// Result of [buildPairedSyncSession]: a freshly-built `SyncSession`
-/// (already past `onPaired`) plus the outputs that call produced.
-class PairedSyncSetup {
-  final ffi.SyncSessionHandle session;
-  final List<ffi.SyncOutputDto> outputs;
-  PairedSyncSetup({required this.session, required this.outputs});
-}
-
-/// Build a fresh `SyncSessionHandle` and call `onPaired` for it, from
-/// local keystore/digest state.
+/// Every conversation's settled messages, for a transfer's `Hello`.
 ///
-/// Dart mirror of `App::build_paired_sync_session` in
-/// `crates/moat-cli/src/app.rs`.
-Future<PairedSyncSetup> buildPairedSyncSession({
-  required ffi.MoatSessionHandle session,
-  required ConversationsService convService,
-  required MessageStorage messageStorage,
-}) async {
-  final conversations = convService.conversations;
-  final syncSession = ffi.SyncSessionHandle.newSession();
-
-  final convStates = <ffi.ConvStateDto>[];
-  for (final conv in conversations) {
-    final ourMessages = await _loadSyncMessagesFor(messageStorage, conv.groupIdHex);
-    await syncSession.addConvPlan(
+/// Dart mirror of `App::load_sync_history` in `crates/moat-cli/src/app.rs`.
+Future<List<ffi.ConvHistoryDto>> loadSyncHistory(
+  ConversationsService convService,
+  MessageStorage messageStorage,
+) async {
+  final out = <ffi.ConvHistoryDto>[];
+  for (final conv in convService.conversations) {
+    out.add(ffi.ConvHistoryDto(
       groupId: conv.groupId,
       convId: conv.groupIdHex,
-      ourMessages: ourMessages,
-      expectingBatch: ourMessages.isEmpty,
-    );
-    convStates.add(_convStateFor(conv, ourMessages));
+      messages: await _loadSyncMessagesFor(messageStorage, conv.groupIdHex),
+    ));
   }
-
-  // One Hello carries every conversation, against a hard 1 MiB frame limit
-  // that closes the connection rather than truncating — so the inventory
-  // budget has to be spent across the whole message, not per conversation.
-  final fitted = await ffi.fitHelloInventories(convs: convStates);
-  final outputs =
-      await syncSession.onPaired(ourConvs: fitted, deviceId: session.deviceId());
-  return PairedSyncSetup(session: syncSession, outputs: outputs);
+  return out;
 }
 
 /// Surface a conversation whose history arrived by sync before we were a
@@ -197,7 +173,6 @@ Future<List<ffi.SyncMessageDto>> _loadSyncMessagesFor(
       senderDeviceName: m.senderDeviceId ?? '',
       timestampMs: toPlatformInt64(m.timestamp.millisecondsSinceEpoch),
       content: m.content,
-      isOwn: m.isOwn,
       // The attachment *reference*, not its bytes: the blob stays on the
       // PDS and is fetched when the user opens it. Without these fields a
       // synced image has nothing to open, and the original PDS record is
@@ -222,22 +197,4 @@ Future<List<ffi.SyncMessageDto>> _loadSyncMessagesFor(
     ));
   }
   return out;
-}
-
-ffi.ConvStateDto _convStateFor(
-  Conversation conv,
-  List<ffi.SyncMessageDto> ourMessages,
-) {
-  // The rkeys we hold, so the peer sends exactly the complement rather than
-  // its whole history. Enumerating is the normal case; the budget pass in
-  // `buildPairedSyncSession` downgrades to a span only where the frame
-  // demands it.
-  return ffi.ConvStateDto(
-    groupId: conv.groupId,
-    inventory: ourMessages.isEmpty
-        ? const ffi.ConvInventoryDto.empty()
-        : ffi.ConvInventoryDto.complete(
-            rkeys: ourMessages.map((m) => m.rkey).toList(growable: false),
-          ),
-  );
 }

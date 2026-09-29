@@ -15,656 +15,220 @@ final _privateConstructorUsedError = UnsupportedError(
     'It seems like you constructed your class using `MyClass._()`. This constructor is only meant to be used by freezed and you are not supposed to need it nor use it.\nPlease check the documentation here for more information: https://github.com/rrousselGit/freezed#adding-getters-and-methods-to-our-models');
 
 /// @nodoc
-mixin _$ConvInventoryDto {
+mixin _$PairChannelCommandDto {
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(List<String> rkeys) complete,
-    required TResult Function(String oldest, String newest, BigInt count) range,
-    required TResult Function() empty,
-  }) =>
-      throw _privateConstructorUsedError;
-  @optionalTypeArgs
-  TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(List<String> rkeys)? complete,
-    TResult? Function(String oldest, String newest, BigInt count)? range,
-    TResult? Function()? empty,
-  }) =>
-      throw _privateConstructorUsedError;
-  @optionalTypeArgs
-  TResult maybeWhen<TResult extends Object?>({
-    TResult Function(List<String> rkeys)? complete,
-    TResult Function(String oldest, String newest, BigInt count)? range,
-    TResult Function()? empty,
-    required TResult orElse(),
-  }) =>
-      throw _privateConstructorUsedError;
-  @optionalTypeArgs
-  TResult map<TResult extends Object?>({
-    required TResult Function(ConvInventoryDto_Complete value) complete,
-    required TResult Function(ConvInventoryDto_Range value) range,
-    required TResult Function(ConvInventoryDto_Empty value) empty,
-  }) =>
-      throw _privateConstructorUsedError;
-  @optionalTypeArgs
-  TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(ConvInventoryDto_Complete value)? complete,
-    TResult? Function(ConvInventoryDto_Range value)? range,
-    TResult? Function(ConvInventoryDto_Empty value)? empty,
-  }) =>
-      throw _privateConstructorUsedError;
-  @optionalTypeArgs
-  TResult maybeMap<TResult extends Object?>({
-    TResult Function(ConvInventoryDto_Complete value)? complete,
-    TResult Function(ConvInventoryDto_Range value)? range,
-    TResult Function(ConvInventoryDto_Empty value)? empty,
-    required TResult orElse(),
-  }) =>
-      throw _privateConstructorUsedError;
-}
-
-/// @nodoc
-abstract class $ConvInventoryDtoCopyWith<$Res> {
-  factory $ConvInventoryDtoCopyWith(
-          ConvInventoryDto value, $Res Function(ConvInventoryDto) then) =
-      _$ConvInventoryDtoCopyWithImpl<$Res, ConvInventoryDto>;
-}
-
-/// @nodoc
-class _$ConvInventoryDtoCopyWithImpl<$Res, $Val extends ConvInventoryDto>
-    implements $ConvInventoryDtoCopyWith<$Res> {
-  _$ConvInventoryDtoCopyWithImpl(this._value, this._then);
-
-  // ignore: unused_field
-  final $Val _value;
-  // ignore: unused_field
-  final $Res Function($Val) _then;
-
-  /// Create a copy of ConvInventoryDto
-  /// with the given fields replaced by the non-null parameter values.
-}
-
-/// @nodoc
-abstract class _$$ConvInventoryDto_CompleteImplCopyWith<$Res> {
-  factory _$$ConvInventoryDto_CompleteImplCopyWith(
-          _$ConvInventoryDto_CompleteImpl value,
-          $Res Function(_$ConvInventoryDto_CompleteImpl) then) =
-      __$$ConvInventoryDto_CompleteImplCopyWithImpl<$Res>;
-  @useResult
-  $Res call({List<String> rkeys});
-}
-
-/// @nodoc
-class __$$ConvInventoryDto_CompleteImplCopyWithImpl<$Res>
-    extends _$ConvInventoryDtoCopyWithImpl<$Res,
-        _$ConvInventoryDto_CompleteImpl>
-    implements _$$ConvInventoryDto_CompleteImplCopyWith<$Res> {
-  __$$ConvInventoryDto_CompleteImplCopyWithImpl(
-      _$ConvInventoryDto_CompleteImpl _value,
-      $Res Function(_$ConvInventoryDto_CompleteImpl) _then)
-      : super(_value, _then);
-
-  /// Create a copy of ConvInventoryDto
-  /// with the given fields replaced by the non-null parameter values.
-  @pragma('vm:prefer-inline')
-  @override
-  $Res call({
-    Object? rkeys = null,
-  }) {
-    return _then(_$ConvInventoryDto_CompleteImpl(
-      rkeys: null == rkeys
-          ? _value._rkeys
-          : rkeys // ignore: cast_nullable_to_non_nullable
-              as List<String>,
-    ));
-  }
-}
-
-/// @nodoc
-
-class _$ConvInventoryDto_CompleteImpl extends ConvInventoryDto_Complete {
-  const _$ConvInventoryDto_CompleteImpl({required final List<String> rkeys})
-      : _rkeys = rkeys,
-        super._();
-
-  final List<String> _rkeys;
-  @override
-  List<String> get rkeys {
-    if (_rkeys is EqualUnmodifiableListView) return _rkeys;
-    // ignore: implicit_dynamic_type
-    return EqualUnmodifiableListView(_rkeys);
-  }
-
-  @override
-  String toString() {
-    return 'ConvInventoryDto.complete(rkeys: $rkeys)';
-  }
-
-  @override
-  bool operator ==(Object other) {
-    return identical(this, other) ||
-        (other.runtimeType == runtimeType &&
-            other is _$ConvInventoryDto_CompleteImpl &&
-            const DeepCollectionEquality().equals(other._rkeys, _rkeys));
-  }
-
-  @override
-  int get hashCode =>
-      Object.hash(runtimeType, const DeepCollectionEquality().hash(_rkeys));
-
-  /// Create a copy of ConvInventoryDto
-  /// with the given fields replaced by the non-null parameter values.
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  @override
-  @pragma('vm:prefer-inline')
-  _$$ConvInventoryDto_CompleteImplCopyWith<_$ConvInventoryDto_CompleteImpl>
-      get copyWith => __$$ConvInventoryDto_CompleteImplCopyWithImpl<
-          _$ConvInventoryDto_CompleteImpl>(this, _$identity);
-
-  @override
-  @optionalTypeArgs
-  TResult when<TResult extends Object?>({
-    required TResult Function(List<String> rkeys) complete,
-    required TResult Function(String oldest, String newest, BigInt count) range,
-    required TResult Function() empty,
-  }) {
-    return complete(rkeys);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(List<String> rkeys)? complete,
-    TResult? Function(String oldest, String newest, BigInt count)? range,
-    TResult? Function()? empty,
-  }) {
-    return complete?.call(rkeys);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeWhen<TResult extends Object?>({
-    TResult Function(List<String> rkeys)? complete,
-    TResult Function(String oldest, String newest, BigInt count)? range,
-    TResult Function()? empty,
-    required TResult orElse(),
-  }) {
-    if (complete != null) {
-      return complete(rkeys);
-    }
-    return orElse();
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult map<TResult extends Object?>({
-    required TResult Function(ConvInventoryDto_Complete value) complete,
-    required TResult Function(ConvInventoryDto_Range value) range,
-    required TResult Function(ConvInventoryDto_Empty value) empty,
-  }) {
-    return complete(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(ConvInventoryDto_Complete value)? complete,
-    TResult? Function(ConvInventoryDto_Range value)? range,
-    TResult? Function(ConvInventoryDto_Empty value)? empty,
-  }) {
-    return complete?.call(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeMap<TResult extends Object?>({
-    TResult Function(ConvInventoryDto_Complete value)? complete,
-    TResult Function(ConvInventoryDto_Range value)? range,
-    TResult Function(ConvInventoryDto_Empty value)? empty,
-    required TResult orElse(),
-  }) {
-    if (complete != null) {
-      return complete(this);
-    }
-    return orElse();
-  }
-}
-
-abstract class ConvInventoryDto_Complete extends ConvInventoryDto {
-  const factory ConvInventoryDto_Complete({required final List<String> rkeys}) =
-      _$ConvInventoryDto_CompleteImpl;
-  const ConvInventoryDto_Complete._() : super._();
-
-  List<String> get rkeys;
-
-  /// Create a copy of ConvInventoryDto
-  /// with the given fields replaced by the non-null parameter values.
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  _$$ConvInventoryDto_CompleteImplCopyWith<_$ConvInventoryDto_CompleteImpl>
-      get copyWith => throw _privateConstructorUsedError;
-}
-
-/// @nodoc
-abstract class _$$ConvInventoryDto_RangeImplCopyWith<$Res> {
-  factory _$$ConvInventoryDto_RangeImplCopyWith(
-          _$ConvInventoryDto_RangeImpl value,
-          $Res Function(_$ConvInventoryDto_RangeImpl) then) =
-      __$$ConvInventoryDto_RangeImplCopyWithImpl<$Res>;
-  @useResult
-  $Res call({String oldest, String newest, BigInt count});
-}
-
-/// @nodoc
-class __$$ConvInventoryDto_RangeImplCopyWithImpl<$Res>
-    extends _$ConvInventoryDtoCopyWithImpl<$Res, _$ConvInventoryDto_RangeImpl>
-    implements _$$ConvInventoryDto_RangeImplCopyWith<$Res> {
-  __$$ConvInventoryDto_RangeImplCopyWithImpl(
-      _$ConvInventoryDto_RangeImpl _value,
-      $Res Function(_$ConvInventoryDto_RangeImpl) _then)
-      : super(_value, _then);
-
-  /// Create a copy of ConvInventoryDto
-  /// with the given fields replaced by the non-null parameter values.
-  @pragma('vm:prefer-inline')
-  @override
-  $Res call({
-    Object? oldest = null,
-    Object? newest = null,
-    Object? count = null,
-  }) {
-    return _then(_$ConvInventoryDto_RangeImpl(
-      oldest: null == oldest
-          ? _value.oldest
-          : oldest // ignore: cast_nullable_to_non_nullable
-              as String,
-      newest: null == newest
-          ? _value.newest
-          : newest // ignore: cast_nullable_to_non_nullable
-              as String,
-      count: null == count
-          ? _value.count
-          : count // ignore: cast_nullable_to_non_nullable
-              as BigInt,
-    ));
-  }
-}
-
-/// @nodoc
-
-class _$ConvInventoryDto_RangeImpl extends ConvInventoryDto_Range {
-  const _$ConvInventoryDto_RangeImpl(
-      {required this.oldest, required this.newest, required this.count})
-      : super._();
-
-  @override
-  final String oldest;
-  @override
-  final String newest;
-  @override
-  final BigInt count;
-
-  @override
-  String toString() {
-    return 'ConvInventoryDto.range(oldest: $oldest, newest: $newest, count: $count)';
-  }
-
-  @override
-  bool operator ==(Object other) {
-    return identical(this, other) ||
-        (other.runtimeType == runtimeType &&
-            other is _$ConvInventoryDto_RangeImpl &&
-            (identical(other.oldest, oldest) || other.oldest == oldest) &&
-            (identical(other.newest, newest) || other.newest == newest) &&
-            (identical(other.count, count) || other.count == count));
-  }
-
-  @override
-  int get hashCode => Object.hash(runtimeType, oldest, newest, count);
-
-  /// Create a copy of ConvInventoryDto
-  /// with the given fields replaced by the non-null parameter values.
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  @override
-  @pragma('vm:prefer-inline')
-  _$$ConvInventoryDto_RangeImplCopyWith<_$ConvInventoryDto_RangeImpl>
-      get copyWith => __$$ConvInventoryDto_RangeImplCopyWithImpl<
-          _$ConvInventoryDto_RangeImpl>(this, _$identity);
-
-  @override
-  @optionalTypeArgs
-  TResult when<TResult extends Object?>({
-    required TResult Function(List<String> rkeys) complete,
-    required TResult Function(String oldest, String newest, BigInt count) range,
-    required TResult Function() empty,
-  }) {
-    return range(oldest, newest, count);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(List<String> rkeys)? complete,
-    TResult? Function(String oldest, String newest, BigInt count)? range,
-    TResult? Function()? empty,
-  }) {
-    return range?.call(oldest, newest, count);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeWhen<TResult extends Object?>({
-    TResult Function(List<String> rkeys)? complete,
-    TResult Function(String oldest, String newest, BigInt count)? range,
-    TResult Function()? empty,
-    required TResult orElse(),
-  }) {
-    if (range != null) {
-      return range(oldest, newest, count);
-    }
-    return orElse();
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult map<TResult extends Object?>({
-    required TResult Function(ConvInventoryDto_Complete value) complete,
-    required TResult Function(ConvInventoryDto_Range value) range,
-    required TResult Function(ConvInventoryDto_Empty value) empty,
-  }) {
-    return range(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(ConvInventoryDto_Complete value)? complete,
-    TResult? Function(ConvInventoryDto_Range value)? range,
-    TResult? Function(ConvInventoryDto_Empty value)? empty,
-  }) {
-    return range?.call(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeMap<TResult extends Object?>({
-    TResult Function(ConvInventoryDto_Complete value)? complete,
-    TResult Function(ConvInventoryDto_Range value)? range,
-    TResult Function(ConvInventoryDto_Empty value)? empty,
-    required TResult orElse(),
-  }) {
-    if (range != null) {
-      return range(this);
-    }
-    return orElse();
-  }
-}
-
-abstract class ConvInventoryDto_Range extends ConvInventoryDto {
-  const factory ConvInventoryDto_Range(
-      {required final String oldest,
-      required final String newest,
-      required final BigInt count}) = _$ConvInventoryDto_RangeImpl;
-  const ConvInventoryDto_Range._() : super._();
-
-  String get oldest;
-  String get newest;
-  BigInt get count;
-
-  /// Create a copy of ConvInventoryDto
-  /// with the given fields replaced by the non-null parameter values.
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  _$$ConvInventoryDto_RangeImplCopyWith<_$ConvInventoryDto_RangeImpl>
-      get copyWith => throw _privateConstructorUsedError;
-}
-
-/// @nodoc
-abstract class _$$ConvInventoryDto_EmptyImplCopyWith<$Res> {
-  factory _$$ConvInventoryDto_EmptyImplCopyWith(
-          _$ConvInventoryDto_EmptyImpl value,
-          $Res Function(_$ConvInventoryDto_EmptyImpl) then) =
-      __$$ConvInventoryDto_EmptyImplCopyWithImpl<$Res>;
-}
-
-/// @nodoc
-class __$$ConvInventoryDto_EmptyImplCopyWithImpl<$Res>
-    extends _$ConvInventoryDtoCopyWithImpl<$Res, _$ConvInventoryDto_EmptyImpl>
-    implements _$$ConvInventoryDto_EmptyImplCopyWith<$Res> {
-  __$$ConvInventoryDto_EmptyImplCopyWithImpl(
-      _$ConvInventoryDto_EmptyImpl _value,
-      $Res Function(_$ConvInventoryDto_EmptyImpl) _then)
-      : super(_value, _then);
-
-  /// Create a copy of ConvInventoryDto
-  /// with the given fields replaced by the non-null parameter values.
-}
-
-/// @nodoc
-
-class _$ConvInventoryDto_EmptyImpl extends ConvInventoryDto_Empty {
-  const _$ConvInventoryDto_EmptyImpl() : super._();
-
-  @override
-  String toString() {
-    return 'ConvInventoryDto.empty()';
-  }
-
-  @override
-  bool operator ==(Object other) {
-    return identical(this, other) ||
-        (other.runtimeType == runtimeType &&
-            other is _$ConvInventoryDto_EmptyImpl);
-  }
-
-  @override
-  int get hashCode => runtimeType.hashCode;
-
-  @override
-  @optionalTypeArgs
-  TResult when<TResult extends Object?>({
-    required TResult Function(List<String> rkeys) complete,
-    required TResult Function(String oldest, String newest, BigInt count) range,
-    required TResult Function() empty,
-  }) {
-    return empty();
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(List<String> rkeys)? complete,
-    TResult? Function(String oldest, String newest, BigInt count)? range,
-    TResult? Function()? empty,
-  }) {
-    return empty?.call();
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeWhen<TResult extends Object?>({
-    TResult Function(List<String> rkeys)? complete,
-    TResult Function(String oldest, String newest, BigInt count)? range,
-    TResult Function()? empty,
-    required TResult orElse(),
-  }) {
-    if (empty != null) {
-      return empty();
-    }
-    return orElse();
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult map<TResult extends Object?>({
-    required TResult Function(ConvInventoryDto_Complete value) complete,
-    required TResult Function(ConvInventoryDto_Range value) range,
-    required TResult Function(ConvInventoryDto_Empty value) empty,
-  }) {
-    return empty(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(ConvInventoryDto_Complete value)? complete,
-    TResult? Function(ConvInventoryDto_Range value)? range,
-    TResult? Function(ConvInventoryDto_Empty value)? empty,
-  }) {
-    return empty?.call(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeMap<TResult extends Object?>({
-    TResult Function(ConvInventoryDto_Complete value)? complete,
-    TResult Function(ConvInventoryDto_Range value)? range,
-    TResult Function(ConvInventoryDto_Empty value)? empty,
-    required TResult orElse(),
-  }) {
-    if (empty != null) {
-      return empty(this);
-    }
-    return orElse();
-  }
-}
-
-abstract class ConvInventoryDto_Empty extends ConvInventoryDto {
-  const factory ConvInventoryDto_Empty() = _$ConvInventoryDto_EmptyImpl;
-  const ConvInventoryDto_Empty._() : super._();
-}
-
-/// @nodoc
-mixin _$PairingCommandDto {
-  @optionalTypeArgs
-  TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List ciphertext) sendFrame,
-    required TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)
-        seedKpPool,
+    required TResult Function(Uint8List token) sendPairOffer,
+    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String url, Uint8List token) connectPair,
+    required TResult Function(Uint8List data) sendFrame,
+    required TResult Function() closePair,
+    required TResult Function() dropPair,
     required TResult Function(Uint8List tag, Uint8List ciphertext)
-        publishRingCommit,
-    required TResult Function(String deviceName, String did)
-        surfaceApprovalPrompt,
-    required TResult Function(Uint8List ringId) persistRing,
-    required TResult Function(List<SiblingInfoDto> roster) rosterReceived,
-    required TResult Function() startSync,
+        publishRingEvent,
+    required TResult Function(Uint8List token) loadHistory,
+    required TResult Function(String convId, List<SyncMessageDto> messages)
+        storeMessages,
+    required TResult Function() saveMlsState,
+    required TResult Function() saveRingState,
+    required TResult Function(Uint8List ringId) ringJoined,
+    required TResult Function(Uint8List ringId) deviceAdmitted,
+    required TResult Function(Uint8List deviceId, Uint8List scanPubkey)
+        siblingStealthLearned,
+    required TResult Function(SyncTallyDto tally) transferComplete,
+    required TResult Function(String detail, bool duringPairing) transferFailed,
+    required TResult Function(String line) log,
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List ciphertext)? sendFrame,
-    TResult? Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
-    TResult? Function(String deviceName, String did)? surfaceApprovalPrompt,
-    TResult? Function(Uint8List ringId)? persistRing,
-    TResult? Function(List<SiblingInfoDto> roster)? rosterReceived,
-    TResult? Function()? startSync,
+    TResult? Function(Uint8List token)? sendPairOffer,
+    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String url, Uint8List token)? connectPair,
+    TResult? Function(Uint8List data)? sendFrame,
+    TResult? Function()? closePair,
+    TResult? Function()? dropPair,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult? Function(Uint8List token)? loadHistory,
+    TResult? Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult? Function()? saveMlsState,
+    TResult? Function()? saveRingState,
+    TResult? Function(Uint8List ringId)? ringJoined,
+    TResult? Function(Uint8List ringId)? deviceAdmitted,
+    TResult? Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult? Function(SyncTallyDto tally)? transferComplete,
+    TResult? Function(String detail, bool duringPairing)? transferFailed,
+    TResult? Function(String line)? log,
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List ciphertext)? sendFrame,
-    TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
-    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
-    TResult Function(String deviceName, String did)? surfaceApprovalPrompt,
-    TResult Function(Uint8List ringId)? persistRing,
-    TResult Function(List<SiblingInfoDto> roster)? rosterReceived,
-    TResult Function()? startSync,
+    TResult Function(Uint8List token)? sendPairOffer,
+    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String url, Uint8List token)? connectPair,
+    TResult Function(Uint8List data)? sendFrame,
+    TResult Function()? closePair,
+    TResult Function()? dropPair,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult Function(Uint8List token)? loadHistory,
+    TResult Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult Function()? saveMlsState,
+    TResult Function()? saveRingState,
+    TResult Function(Uint8List ringId)? ringJoined,
+    TResult Function(Uint8List ringId)? deviceAdmitted,
+    TResult Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult Function(SyncTallyDto tally)? transferComplete,
+    TResult Function(String detail, bool duringPairing)? transferFailed,
+    TResult Function(String line)? log,
     required TResult orElse(),
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult map<TResult extends Object?>({
-    required TResult Function(PairingCommandDto_SendFrame value) sendFrame,
-    required TResult Function(PairingCommandDto_SeedKpPool value) seedKpPool,
-    required TResult Function(PairingCommandDto_PublishRingCommit value)
-        publishRingCommit,
-    required TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)
-        surfaceApprovalPrompt,
-    required TResult Function(PairingCommandDto_PersistRing value) persistRing,
-    required TResult Function(PairingCommandDto_RosterReceived value)
-        rosterReceived,
-    required TResult Function(PairingCommandDto_StartSync value) startSync,
+    required TResult Function(PairChannelCommandDto_SendPairOffer value)
+        sendPairOffer,
+    required TResult Function(PairChannelCommandDto_SendPairJoin value)
+        sendPairJoin,
+    required TResult Function(PairChannelCommandDto_ConnectPair value)
+        connectPair,
+    required TResult Function(PairChannelCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairChannelCommandDto_ClosePair value) closePair,
+    required TResult Function(PairChannelCommandDto_DropPair value) dropPair,
+    required TResult Function(PairChannelCommandDto_PublishRingEvent value)
+        publishRingEvent,
+    required TResult Function(PairChannelCommandDto_LoadHistory value)
+        loadHistory,
+    required TResult Function(PairChannelCommandDto_StoreMessages value)
+        storeMessages,
+    required TResult Function(PairChannelCommandDto_SaveMlsState value)
+        saveMlsState,
+    required TResult Function(PairChannelCommandDto_SaveRingState value)
+        saveRingState,
+    required TResult Function(PairChannelCommandDto_RingJoined value)
+        ringJoined,
+    required TResult Function(PairChannelCommandDto_DeviceAdmitted value)
+        deviceAdmitted,
+    required TResult Function(PairChannelCommandDto_SiblingStealthLearned value)
+        siblingStealthLearned,
+    required TResult Function(PairChannelCommandDto_TransferComplete value)
+        transferComplete,
+    required TResult Function(PairChannelCommandDto_TransferFailed value)
+        transferFailed,
+    required TResult Function(PairChannelCommandDto_Log value) log,
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(PairingCommandDto_SendFrame value)? sendFrame,
-    TResult? Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
-    TResult? Function(PairingCommandDto_PublishRingCommit value)?
-        publishRingCommit,
-    TResult? Function(PairingCommandDto_SurfaceApprovalPrompt value)?
-        surfaceApprovalPrompt,
-    TResult? Function(PairingCommandDto_PersistRing value)? persistRing,
-    TResult? Function(PairingCommandDto_RosterReceived value)? rosterReceived,
-    TResult? Function(PairingCommandDto_StartSync value)? startSync,
+    TResult? Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult? Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult? Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult? Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult? Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult? Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult? Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult? Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult? Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult? Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult? Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult? Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult? Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult? Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult? Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult? Function(PairChannelCommandDto_Log value)? log,
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult maybeMap<TResult extends Object?>({
-    TResult Function(PairingCommandDto_SendFrame value)? sendFrame,
-    TResult Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
-    TResult Function(PairingCommandDto_PublishRingCommit value)?
-        publishRingCommit,
-    TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)?
-        surfaceApprovalPrompt,
-    TResult Function(PairingCommandDto_PersistRing value)? persistRing,
-    TResult Function(PairingCommandDto_RosterReceived value)? rosterReceived,
-    TResult Function(PairingCommandDto_StartSync value)? startSync,
+    TResult Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult Function(PairChannelCommandDto_Log value)? log,
     required TResult orElse(),
   }) =>
       throw _privateConstructorUsedError;
 }
 
 /// @nodoc
-abstract class $PairingCommandDtoCopyWith<$Res> {
-  factory $PairingCommandDtoCopyWith(
-          PairingCommandDto value, $Res Function(PairingCommandDto) then) =
-      _$PairingCommandDtoCopyWithImpl<$Res, PairingCommandDto>;
+abstract class $PairChannelCommandDtoCopyWith<$Res> {
+  factory $PairChannelCommandDtoCopyWith(PairChannelCommandDto value,
+          $Res Function(PairChannelCommandDto) then) =
+      _$PairChannelCommandDtoCopyWithImpl<$Res, PairChannelCommandDto>;
 }
 
 /// @nodoc
-class _$PairingCommandDtoCopyWithImpl<$Res, $Val extends PairingCommandDto>
-    implements $PairingCommandDtoCopyWith<$Res> {
-  _$PairingCommandDtoCopyWithImpl(this._value, this._then);
+class _$PairChannelCommandDtoCopyWithImpl<$Res,
+        $Val extends PairChannelCommandDto>
+    implements $PairChannelCommandDtoCopyWith<$Res> {
+  _$PairChannelCommandDtoCopyWithImpl(this._value, this._then);
 
   // ignore: unused_field
   final $Val _value;
   // ignore: unused_field
   final $Res Function($Val) _then;
 
-  /// Create a copy of PairingCommandDto
+  /// Create a copy of PairChannelCommandDto
   /// with the given fields replaced by the non-null parameter values.
 }
 
 /// @nodoc
-abstract class _$$PairingCommandDto_SendFrameImplCopyWith<$Res> {
-  factory _$$PairingCommandDto_SendFrameImplCopyWith(
-          _$PairingCommandDto_SendFrameImpl value,
-          $Res Function(_$PairingCommandDto_SendFrameImpl) then) =
-      __$$PairingCommandDto_SendFrameImplCopyWithImpl<$Res>;
+abstract class _$$PairChannelCommandDto_SendPairOfferImplCopyWith<$Res> {
+  factory _$$PairChannelCommandDto_SendPairOfferImplCopyWith(
+          _$PairChannelCommandDto_SendPairOfferImpl value,
+          $Res Function(_$PairChannelCommandDto_SendPairOfferImpl) then) =
+      __$$PairChannelCommandDto_SendPairOfferImplCopyWithImpl<$Res>;
   @useResult
-  $Res call({Uint8List ciphertext});
+  $Res call({Uint8List token});
 }
 
 /// @nodoc
-class __$$PairingCommandDto_SendFrameImplCopyWithImpl<$Res>
-    extends _$PairingCommandDtoCopyWithImpl<$Res,
-        _$PairingCommandDto_SendFrameImpl>
-    implements _$$PairingCommandDto_SendFrameImplCopyWith<$Res> {
-  __$$PairingCommandDto_SendFrameImplCopyWithImpl(
-      _$PairingCommandDto_SendFrameImpl _value,
-      $Res Function(_$PairingCommandDto_SendFrameImpl) _then)
+class __$$PairChannelCommandDto_SendPairOfferImplCopyWithImpl<$Res>
+    extends _$PairChannelCommandDtoCopyWithImpl<$Res,
+        _$PairChannelCommandDto_SendPairOfferImpl>
+    implements _$$PairChannelCommandDto_SendPairOfferImplCopyWith<$Res> {
+  __$$PairChannelCommandDto_SendPairOfferImplCopyWithImpl(
+      _$PairChannelCommandDto_SendPairOfferImpl _value,
+      $Res Function(_$PairChannelCommandDto_SendPairOfferImpl) _then)
       : super(_value, _then);
 
-  /// Create a copy of PairingCommandDto
+  /// Create a copy of PairChannelCommandDto
   /// with the given fields replaced by the non-null parameter values.
   @pragma('vm:prefer-inline')
   @override
   $Res call({
-    Object? ciphertext = null,
+    Object? token = null,
   }) {
-    return _then(_$PairingCommandDto_SendFrameImpl(
-      ciphertext: null == ciphertext
-          ? _value.ciphertext
-          : ciphertext // ignore: cast_nullable_to_non_nullable
+    return _then(_$PairChannelCommandDto_SendPairOfferImpl(
+      token: null == token
+          ? _value.token
+          : token // ignore: cast_nullable_to_non_nullable
               as Uint8List,
     ));
   }
@@ -672,85 +236,120 @@ class __$$PairingCommandDto_SendFrameImplCopyWithImpl<$Res>
 
 /// @nodoc
 
-class _$PairingCommandDto_SendFrameImpl extends PairingCommandDto_SendFrame {
-  const _$PairingCommandDto_SendFrameImpl({required this.ciphertext})
+class _$PairChannelCommandDto_SendPairOfferImpl
+    extends PairChannelCommandDto_SendPairOffer {
+  const _$PairChannelCommandDto_SendPairOfferImpl({required this.token})
       : super._();
 
   @override
-  final Uint8List ciphertext;
+  final Uint8List token;
 
   @override
   String toString() {
-    return 'PairingCommandDto.sendFrame(ciphertext: $ciphertext)';
+    return 'PairChannelCommandDto.sendPairOffer(token: $token)';
   }
 
   @override
   bool operator ==(Object other) {
     return identical(this, other) ||
         (other.runtimeType == runtimeType &&
-            other is _$PairingCommandDto_SendFrameImpl &&
-            const DeepCollectionEquality()
-                .equals(other.ciphertext, ciphertext));
+            other is _$PairChannelCommandDto_SendPairOfferImpl &&
+            const DeepCollectionEquality().equals(other.token, token));
   }
 
   @override
   int get hashCode =>
-      Object.hash(runtimeType, const DeepCollectionEquality().hash(ciphertext));
+      Object.hash(runtimeType, const DeepCollectionEquality().hash(token));
 
-  /// Create a copy of PairingCommandDto
+  /// Create a copy of PairChannelCommandDto
   /// with the given fields replaced by the non-null parameter values.
   @JsonKey(includeFromJson: false, includeToJson: false)
   @override
   @pragma('vm:prefer-inline')
-  _$$PairingCommandDto_SendFrameImplCopyWith<_$PairingCommandDto_SendFrameImpl>
-      get copyWith => __$$PairingCommandDto_SendFrameImplCopyWithImpl<
-          _$PairingCommandDto_SendFrameImpl>(this, _$identity);
+  _$$PairChannelCommandDto_SendPairOfferImplCopyWith<
+          _$PairChannelCommandDto_SendPairOfferImpl>
+      get copyWith => __$$PairChannelCommandDto_SendPairOfferImplCopyWithImpl<
+          _$PairChannelCommandDto_SendPairOfferImpl>(this, _$identity);
 
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List ciphertext) sendFrame,
-    required TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)
-        seedKpPool,
+    required TResult Function(Uint8List token) sendPairOffer,
+    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String url, Uint8List token) connectPair,
+    required TResult Function(Uint8List data) sendFrame,
+    required TResult Function() closePair,
+    required TResult Function() dropPair,
     required TResult Function(Uint8List tag, Uint8List ciphertext)
-        publishRingCommit,
-    required TResult Function(String deviceName, String did)
-        surfaceApprovalPrompt,
-    required TResult Function(Uint8List ringId) persistRing,
-    required TResult Function(List<SiblingInfoDto> roster) rosterReceived,
-    required TResult Function() startSync,
+        publishRingEvent,
+    required TResult Function(Uint8List token) loadHistory,
+    required TResult Function(String convId, List<SyncMessageDto> messages)
+        storeMessages,
+    required TResult Function() saveMlsState,
+    required TResult Function() saveRingState,
+    required TResult Function(Uint8List ringId) ringJoined,
+    required TResult Function(Uint8List ringId) deviceAdmitted,
+    required TResult Function(Uint8List deviceId, Uint8List scanPubkey)
+        siblingStealthLearned,
+    required TResult Function(SyncTallyDto tally) transferComplete,
+    required TResult Function(String detail, bool duringPairing) transferFailed,
+    required TResult Function(String line) log,
   }) {
-    return sendFrame(ciphertext);
+    return sendPairOffer(token);
   }
 
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List ciphertext)? sendFrame,
-    TResult? Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
-    TResult? Function(String deviceName, String did)? surfaceApprovalPrompt,
-    TResult? Function(Uint8List ringId)? persistRing,
-    TResult? Function(List<SiblingInfoDto> roster)? rosterReceived,
-    TResult? Function()? startSync,
+    TResult? Function(Uint8List token)? sendPairOffer,
+    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String url, Uint8List token)? connectPair,
+    TResult? Function(Uint8List data)? sendFrame,
+    TResult? Function()? closePair,
+    TResult? Function()? dropPair,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult? Function(Uint8List token)? loadHistory,
+    TResult? Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult? Function()? saveMlsState,
+    TResult? Function()? saveRingState,
+    TResult? Function(Uint8List ringId)? ringJoined,
+    TResult? Function(Uint8List ringId)? deviceAdmitted,
+    TResult? Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult? Function(SyncTallyDto tally)? transferComplete,
+    TResult? Function(String detail, bool duringPairing)? transferFailed,
+    TResult? Function(String line)? log,
   }) {
-    return sendFrame?.call(ciphertext);
+    return sendPairOffer?.call(token);
   }
 
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List ciphertext)? sendFrame,
-    TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
-    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
-    TResult Function(String deviceName, String did)? surfaceApprovalPrompt,
-    TResult Function(Uint8List ringId)? persistRing,
-    TResult Function(List<SiblingInfoDto> roster)? rosterReceived,
-    TResult Function()? startSync,
+    TResult Function(Uint8List token)? sendPairOffer,
+    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String url, Uint8List token)? connectPair,
+    TResult Function(Uint8List data)? sendFrame,
+    TResult Function()? closePair,
+    TResult Function()? dropPair,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult Function(Uint8List token)? loadHistory,
+    TResult Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult Function()? saveMlsState,
+    TResult Function()? saveRingState,
+    TResult Function(Uint8List ringId)? ringJoined,
+    TResult Function(Uint8List ringId)? deviceAdmitted,
+    TResult Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult Function(SyncTallyDto tally)? transferComplete,
+    TResult Function(String detail, bool duringPairing)? transferFailed,
+    TResult Function(String line)? log,
     required TResult orElse(),
   }) {
-    if (sendFrame != null) {
-      return sendFrame(ciphertext);
+    if (sendPairOffer != null) {
+      return sendPairOffer(token);
     }
     return orElse();
   }
@@ -758,16 +357,863 @@ class _$PairingCommandDto_SendFrameImpl extends PairingCommandDto_SendFrame {
   @override
   @optionalTypeArgs
   TResult map<TResult extends Object?>({
-    required TResult Function(PairingCommandDto_SendFrame value) sendFrame,
-    required TResult Function(PairingCommandDto_SeedKpPool value) seedKpPool,
-    required TResult Function(PairingCommandDto_PublishRingCommit value)
-        publishRingCommit,
-    required TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)
-        surfaceApprovalPrompt,
-    required TResult Function(PairingCommandDto_PersistRing value) persistRing,
-    required TResult Function(PairingCommandDto_RosterReceived value)
-        rosterReceived,
-    required TResult Function(PairingCommandDto_StartSync value) startSync,
+    required TResult Function(PairChannelCommandDto_SendPairOffer value)
+        sendPairOffer,
+    required TResult Function(PairChannelCommandDto_SendPairJoin value)
+        sendPairJoin,
+    required TResult Function(PairChannelCommandDto_ConnectPair value)
+        connectPair,
+    required TResult Function(PairChannelCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairChannelCommandDto_ClosePair value) closePair,
+    required TResult Function(PairChannelCommandDto_DropPair value) dropPair,
+    required TResult Function(PairChannelCommandDto_PublishRingEvent value)
+        publishRingEvent,
+    required TResult Function(PairChannelCommandDto_LoadHistory value)
+        loadHistory,
+    required TResult Function(PairChannelCommandDto_StoreMessages value)
+        storeMessages,
+    required TResult Function(PairChannelCommandDto_SaveMlsState value)
+        saveMlsState,
+    required TResult Function(PairChannelCommandDto_SaveRingState value)
+        saveRingState,
+    required TResult Function(PairChannelCommandDto_RingJoined value)
+        ringJoined,
+    required TResult Function(PairChannelCommandDto_DeviceAdmitted value)
+        deviceAdmitted,
+    required TResult Function(PairChannelCommandDto_SiblingStealthLearned value)
+        siblingStealthLearned,
+    required TResult Function(PairChannelCommandDto_TransferComplete value)
+        transferComplete,
+    required TResult Function(PairChannelCommandDto_TransferFailed value)
+        transferFailed,
+    required TResult Function(PairChannelCommandDto_Log value) log,
+  }) {
+    return sendPairOffer(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult? Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult? Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult? Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult? Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult? Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult? Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult? Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult? Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult? Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult? Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult? Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult? Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult? Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult? Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult? Function(PairChannelCommandDto_Log value)? log,
+  }) {
+    return sendPairOffer?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult Function(PairChannelCommandDto_Log value)? log,
+    required TResult orElse(),
+  }) {
+    if (sendPairOffer != null) {
+      return sendPairOffer(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class PairChannelCommandDto_SendPairOffer
+    extends PairChannelCommandDto {
+  const factory PairChannelCommandDto_SendPairOffer(
+          {required final Uint8List token}) =
+      _$PairChannelCommandDto_SendPairOfferImpl;
+  const PairChannelCommandDto_SendPairOffer._() : super._();
+
+  Uint8List get token;
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$PairChannelCommandDto_SendPairOfferImplCopyWith<
+          _$PairChannelCommandDto_SendPairOfferImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class _$$PairChannelCommandDto_SendPairJoinImplCopyWith<$Res> {
+  factory _$$PairChannelCommandDto_SendPairJoinImplCopyWith(
+          _$PairChannelCommandDto_SendPairJoinImpl value,
+          $Res Function(_$PairChannelCommandDto_SendPairJoinImpl) then) =
+      __$$PairChannelCommandDto_SendPairJoinImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({Uint8List token});
+}
+
+/// @nodoc
+class __$$PairChannelCommandDto_SendPairJoinImplCopyWithImpl<$Res>
+    extends _$PairChannelCommandDtoCopyWithImpl<$Res,
+        _$PairChannelCommandDto_SendPairJoinImpl>
+    implements _$$PairChannelCommandDto_SendPairJoinImplCopyWith<$Res> {
+  __$$PairChannelCommandDto_SendPairJoinImplCopyWithImpl(
+      _$PairChannelCommandDto_SendPairJoinImpl _value,
+      $Res Function(_$PairChannelCommandDto_SendPairJoinImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? token = null,
+  }) {
+    return _then(_$PairChannelCommandDto_SendPairJoinImpl(
+      token: null == token
+          ? _value.token
+          : token // ignore: cast_nullable_to_non_nullable
+              as Uint8List,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$PairChannelCommandDto_SendPairJoinImpl
+    extends PairChannelCommandDto_SendPairJoin {
+  const _$PairChannelCommandDto_SendPairJoinImpl({required this.token})
+      : super._();
+
+  @override
+  final Uint8List token;
+
+  @override
+  String toString() {
+    return 'PairChannelCommandDto.sendPairJoin(token: $token)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$PairChannelCommandDto_SendPairJoinImpl &&
+            const DeepCollectionEquality().equals(other.token, token));
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(runtimeType, const DeepCollectionEquality().hash(token));
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$PairChannelCommandDto_SendPairJoinImplCopyWith<
+          _$PairChannelCommandDto_SendPairJoinImpl>
+      get copyWith => __$$PairChannelCommandDto_SendPairJoinImplCopyWithImpl<
+          _$PairChannelCommandDto_SendPairJoinImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(Uint8List token) sendPairOffer,
+    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String url, Uint8List token) connectPair,
+    required TResult Function(Uint8List data) sendFrame,
+    required TResult Function() closePair,
+    required TResult Function() dropPair,
+    required TResult Function(Uint8List tag, Uint8List ciphertext)
+        publishRingEvent,
+    required TResult Function(Uint8List token) loadHistory,
+    required TResult Function(String convId, List<SyncMessageDto> messages)
+        storeMessages,
+    required TResult Function() saveMlsState,
+    required TResult Function() saveRingState,
+    required TResult Function(Uint8List ringId) ringJoined,
+    required TResult Function(Uint8List ringId) deviceAdmitted,
+    required TResult Function(Uint8List deviceId, Uint8List scanPubkey)
+        siblingStealthLearned,
+    required TResult Function(SyncTallyDto tally) transferComplete,
+    required TResult Function(String detail, bool duringPairing) transferFailed,
+    required TResult Function(String line) log,
+  }) {
+    return sendPairJoin(token);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(Uint8List token)? sendPairOffer,
+    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String url, Uint8List token)? connectPair,
+    TResult? Function(Uint8List data)? sendFrame,
+    TResult? Function()? closePair,
+    TResult? Function()? dropPair,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult? Function(Uint8List token)? loadHistory,
+    TResult? Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult? Function()? saveMlsState,
+    TResult? Function()? saveRingState,
+    TResult? Function(Uint8List ringId)? ringJoined,
+    TResult? Function(Uint8List ringId)? deviceAdmitted,
+    TResult? Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult? Function(SyncTallyDto tally)? transferComplete,
+    TResult? Function(String detail, bool duringPairing)? transferFailed,
+    TResult? Function(String line)? log,
+  }) {
+    return sendPairJoin?.call(token);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(Uint8List token)? sendPairOffer,
+    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String url, Uint8List token)? connectPair,
+    TResult Function(Uint8List data)? sendFrame,
+    TResult Function()? closePair,
+    TResult Function()? dropPair,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult Function(Uint8List token)? loadHistory,
+    TResult Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult Function()? saveMlsState,
+    TResult Function()? saveRingState,
+    TResult Function(Uint8List ringId)? ringJoined,
+    TResult Function(Uint8List ringId)? deviceAdmitted,
+    TResult Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult Function(SyncTallyDto tally)? transferComplete,
+    TResult Function(String detail, bool duringPairing)? transferFailed,
+    TResult Function(String line)? log,
+    required TResult orElse(),
+  }) {
+    if (sendPairJoin != null) {
+      return sendPairJoin(token);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(PairChannelCommandDto_SendPairOffer value)
+        sendPairOffer,
+    required TResult Function(PairChannelCommandDto_SendPairJoin value)
+        sendPairJoin,
+    required TResult Function(PairChannelCommandDto_ConnectPair value)
+        connectPair,
+    required TResult Function(PairChannelCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairChannelCommandDto_ClosePair value) closePair,
+    required TResult Function(PairChannelCommandDto_DropPair value) dropPair,
+    required TResult Function(PairChannelCommandDto_PublishRingEvent value)
+        publishRingEvent,
+    required TResult Function(PairChannelCommandDto_LoadHistory value)
+        loadHistory,
+    required TResult Function(PairChannelCommandDto_StoreMessages value)
+        storeMessages,
+    required TResult Function(PairChannelCommandDto_SaveMlsState value)
+        saveMlsState,
+    required TResult Function(PairChannelCommandDto_SaveRingState value)
+        saveRingState,
+    required TResult Function(PairChannelCommandDto_RingJoined value)
+        ringJoined,
+    required TResult Function(PairChannelCommandDto_DeviceAdmitted value)
+        deviceAdmitted,
+    required TResult Function(PairChannelCommandDto_SiblingStealthLearned value)
+        siblingStealthLearned,
+    required TResult Function(PairChannelCommandDto_TransferComplete value)
+        transferComplete,
+    required TResult Function(PairChannelCommandDto_TransferFailed value)
+        transferFailed,
+    required TResult Function(PairChannelCommandDto_Log value) log,
+  }) {
+    return sendPairJoin(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult? Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult? Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult? Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult? Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult? Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult? Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult? Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult? Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult? Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult? Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult? Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult? Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult? Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult? Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult? Function(PairChannelCommandDto_Log value)? log,
+  }) {
+    return sendPairJoin?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult Function(PairChannelCommandDto_Log value)? log,
+    required TResult orElse(),
+  }) {
+    if (sendPairJoin != null) {
+      return sendPairJoin(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class PairChannelCommandDto_SendPairJoin
+    extends PairChannelCommandDto {
+  const factory PairChannelCommandDto_SendPairJoin(
+          {required final Uint8List token}) =
+      _$PairChannelCommandDto_SendPairJoinImpl;
+  const PairChannelCommandDto_SendPairJoin._() : super._();
+
+  Uint8List get token;
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$PairChannelCommandDto_SendPairJoinImplCopyWith<
+          _$PairChannelCommandDto_SendPairJoinImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class _$$PairChannelCommandDto_ConnectPairImplCopyWith<$Res> {
+  factory _$$PairChannelCommandDto_ConnectPairImplCopyWith(
+          _$PairChannelCommandDto_ConnectPairImpl value,
+          $Res Function(_$PairChannelCommandDto_ConnectPairImpl) then) =
+      __$$PairChannelCommandDto_ConnectPairImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({String url, Uint8List token});
+}
+
+/// @nodoc
+class __$$PairChannelCommandDto_ConnectPairImplCopyWithImpl<$Res>
+    extends _$PairChannelCommandDtoCopyWithImpl<$Res,
+        _$PairChannelCommandDto_ConnectPairImpl>
+    implements _$$PairChannelCommandDto_ConnectPairImplCopyWith<$Res> {
+  __$$PairChannelCommandDto_ConnectPairImplCopyWithImpl(
+      _$PairChannelCommandDto_ConnectPairImpl _value,
+      $Res Function(_$PairChannelCommandDto_ConnectPairImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? url = null,
+    Object? token = null,
+  }) {
+    return _then(_$PairChannelCommandDto_ConnectPairImpl(
+      url: null == url
+          ? _value.url
+          : url // ignore: cast_nullable_to_non_nullable
+              as String,
+      token: null == token
+          ? _value.token
+          : token // ignore: cast_nullable_to_non_nullable
+              as Uint8List,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$PairChannelCommandDto_ConnectPairImpl
+    extends PairChannelCommandDto_ConnectPair {
+  const _$PairChannelCommandDto_ConnectPairImpl(
+      {required this.url, required this.token})
+      : super._();
+
+  @override
+  final String url;
+  @override
+  final Uint8List token;
+
+  @override
+  String toString() {
+    return 'PairChannelCommandDto.connectPair(url: $url, token: $token)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$PairChannelCommandDto_ConnectPairImpl &&
+            (identical(other.url, url) || other.url == url) &&
+            const DeepCollectionEquality().equals(other.token, token));
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(runtimeType, url, const DeepCollectionEquality().hash(token));
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$PairChannelCommandDto_ConnectPairImplCopyWith<
+          _$PairChannelCommandDto_ConnectPairImpl>
+      get copyWith => __$$PairChannelCommandDto_ConnectPairImplCopyWithImpl<
+          _$PairChannelCommandDto_ConnectPairImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(Uint8List token) sendPairOffer,
+    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String url, Uint8List token) connectPair,
+    required TResult Function(Uint8List data) sendFrame,
+    required TResult Function() closePair,
+    required TResult Function() dropPair,
+    required TResult Function(Uint8List tag, Uint8List ciphertext)
+        publishRingEvent,
+    required TResult Function(Uint8List token) loadHistory,
+    required TResult Function(String convId, List<SyncMessageDto> messages)
+        storeMessages,
+    required TResult Function() saveMlsState,
+    required TResult Function() saveRingState,
+    required TResult Function(Uint8List ringId) ringJoined,
+    required TResult Function(Uint8List ringId) deviceAdmitted,
+    required TResult Function(Uint8List deviceId, Uint8List scanPubkey)
+        siblingStealthLearned,
+    required TResult Function(SyncTallyDto tally) transferComplete,
+    required TResult Function(String detail, bool duringPairing) transferFailed,
+    required TResult Function(String line) log,
+  }) {
+    return connectPair(url, token);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(Uint8List token)? sendPairOffer,
+    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String url, Uint8List token)? connectPair,
+    TResult? Function(Uint8List data)? sendFrame,
+    TResult? Function()? closePair,
+    TResult? Function()? dropPair,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult? Function(Uint8List token)? loadHistory,
+    TResult? Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult? Function()? saveMlsState,
+    TResult? Function()? saveRingState,
+    TResult? Function(Uint8List ringId)? ringJoined,
+    TResult? Function(Uint8List ringId)? deviceAdmitted,
+    TResult? Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult? Function(SyncTallyDto tally)? transferComplete,
+    TResult? Function(String detail, bool duringPairing)? transferFailed,
+    TResult? Function(String line)? log,
+  }) {
+    return connectPair?.call(url, token);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(Uint8List token)? sendPairOffer,
+    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String url, Uint8List token)? connectPair,
+    TResult Function(Uint8List data)? sendFrame,
+    TResult Function()? closePair,
+    TResult Function()? dropPair,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult Function(Uint8List token)? loadHistory,
+    TResult Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult Function()? saveMlsState,
+    TResult Function()? saveRingState,
+    TResult Function(Uint8List ringId)? ringJoined,
+    TResult Function(Uint8List ringId)? deviceAdmitted,
+    TResult Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult Function(SyncTallyDto tally)? transferComplete,
+    TResult Function(String detail, bool duringPairing)? transferFailed,
+    TResult Function(String line)? log,
+    required TResult orElse(),
+  }) {
+    if (connectPair != null) {
+      return connectPair(url, token);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(PairChannelCommandDto_SendPairOffer value)
+        sendPairOffer,
+    required TResult Function(PairChannelCommandDto_SendPairJoin value)
+        sendPairJoin,
+    required TResult Function(PairChannelCommandDto_ConnectPair value)
+        connectPair,
+    required TResult Function(PairChannelCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairChannelCommandDto_ClosePair value) closePair,
+    required TResult Function(PairChannelCommandDto_DropPair value) dropPair,
+    required TResult Function(PairChannelCommandDto_PublishRingEvent value)
+        publishRingEvent,
+    required TResult Function(PairChannelCommandDto_LoadHistory value)
+        loadHistory,
+    required TResult Function(PairChannelCommandDto_StoreMessages value)
+        storeMessages,
+    required TResult Function(PairChannelCommandDto_SaveMlsState value)
+        saveMlsState,
+    required TResult Function(PairChannelCommandDto_SaveRingState value)
+        saveRingState,
+    required TResult Function(PairChannelCommandDto_RingJoined value)
+        ringJoined,
+    required TResult Function(PairChannelCommandDto_DeviceAdmitted value)
+        deviceAdmitted,
+    required TResult Function(PairChannelCommandDto_SiblingStealthLearned value)
+        siblingStealthLearned,
+    required TResult Function(PairChannelCommandDto_TransferComplete value)
+        transferComplete,
+    required TResult Function(PairChannelCommandDto_TransferFailed value)
+        transferFailed,
+    required TResult Function(PairChannelCommandDto_Log value) log,
+  }) {
+    return connectPair(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult? Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult? Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult? Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult? Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult? Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult? Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult? Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult? Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult? Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult? Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult? Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult? Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult? Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult? Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult? Function(PairChannelCommandDto_Log value)? log,
+  }) {
+    return connectPair?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult Function(PairChannelCommandDto_Log value)? log,
+    required TResult orElse(),
+  }) {
+    if (connectPair != null) {
+      return connectPair(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class PairChannelCommandDto_ConnectPair extends PairChannelCommandDto {
+  const factory PairChannelCommandDto_ConnectPair(
+          {required final String url, required final Uint8List token}) =
+      _$PairChannelCommandDto_ConnectPairImpl;
+  const PairChannelCommandDto_ConnectPair._() : super._();
+
+  String get url;
+  Uint8List get token;
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$PairChannelCommandDto_ConnectPairImplCopyWith<
+          _$PairChannelCommandDto_ConnectPairImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class _$$PairChannelCommandDto_SendFrameImplCopyWith<$Res> {
+  factory _$$PairChannelCommandDto_SendFrameImplCopyWith(
+          _$PairChannelCommandDto_SendFrameImpl value,
+          $Res Function(_$PairChannelCommandDto_SendFrameImpl) then) =
+      __$$PairChannelCommandDto_SendFrameImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({Uint8List data});
+}
+
+/// @nodoc
+class __$$PairChannelCommandDto_SendFrameImplCopyWithImpl<$Res>
+    extends _$PairChannelCommandDtoCopyWithImpl<$Res,
+        _$PairChannelCommandDto_SendFrameImpl>
+    implements _$$PairChannelCommandDto_SendFrameImplCopyWith<$Res> {
+  __$$PairChannelCommandDto_SendFrameImplCopyWithImpl(
+      _$PairChannelCommandDto_SendFrameImpl _value,
+      $Res Function(_$PairChannelCommandDto_SendFrameImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? data = null,
+  }) {
+    return _then(_$PairChannelCommandDto_SendFrameImpl(
+      data: null == data
+          ? _value.data
+          : data // ignore: cast_nullable_to_non_nullable
+              as Uint8List,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$PairChannelCommandDto_SendFrameImpl
+    extends PairChannelCommandDto_SendFrame {
+  const _$PairChannelCommandDto_SendFrameImpl({required this.data}) : super._();
+
+  @override
+  final Uint8List data;
+
+  @override
+  String toString() {
+    return 'PairChannelCommandDto.sendFrame(data: $data)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$PairChannelCommandDto_SendFrameImpl &&
+            const DeepCollectionEquality().equals(other.data, data));
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(runtimeType, const DeepCollectionEquality().hash(data));
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$PairChannelCommandDto_SendFrameImplCopyWith<
+          _$PairChannelCommandDto_SendFrameImpl>
+      get copyWith => __$$PairChannelCommandDto_SendFrameImplCopyWithImpl<
+          _$PairChannelCommandDto_SendFrameImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(Uint8List token) sendPairOffer,
+    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String url, Uint8List token) connectPair,
+    required TResult Function(Uint8List data) sendFrame,
+    required TResult Function() closePair,
+    required TResult Function() dropPair,
+    required TResult Function(Uint8List tag, Uint8List ciphertext)
+        publishRingEvent,
+    required TResult Function(Uint8List token) loadHistory,
+    required TResult Function(String convId, List<SyncMessageDto> messages)
+        storeMessages,
+    required TResult Function() saveMlsState,
+    required TResult Function() saveRingState,
+    required TResult Function(Uint8List ringId) ringJoined,
+    required TResult Function(Uint8List ringId) deviceAdmitted,
+    required TResult Function(Uint8List deviceId, Uint8List scanPubkey)
+        siblingStealthLearned,
+    required TResult Function(SyncTallyDto tally) transferComplete,
+    required TResult Function(String detail, bool duringPairing) transferFailed,
+    required TResult Function(String line) log,
+  }) {
+    return sendFrame(data);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(Uint8List token)? sendPairOffer,
+    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String url, Uint8List token)? connectPair,
+    TResult? Function(Uint8List data)? sendFrame,
+    TResult? Function()? closePair,
+    TResult? Function()? dropPair,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult? Function(Uint8List token)? loadHistory,
+    TResult? Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult? Function()? saveMlsState,
+    TResult? Function()? saveRingState,
+    TResult? Function(Uint8List ringId)? ringJoined,
+    TResult? Function(Uint8List ringId)? deviceAdmitted,
+    TResult? Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult? Function(SyncTallyDto tally)? transferComplete,
+    TResult? Function(String detail, bool duringPairing)? transferFailed,
+    TResult? Function(String line)? log,
+  }) {
+    return sendFrame?.call(data);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(Uint8List token)? sendPairOffer,
+    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String url, Uint8List token)? connectPair,
+    TResult Function(Uint8List data)? sendFrame,
+    TResult Function()? closePair,
+    TResult Function()? dropPair,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult Function(Uint8List token)? loadHistory,
+    TResult Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult Function()? saveMlsState,
+    TResult Function()? saveRingState,
+    TResult Function(Uint8List ringId)? ringJoined,
+    TResult Function(Uint8List ringId)? deviceAdmitted,
+    TResult Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult Function(SyncTallyDto tally)? transferComplete,
+    TResult Function(String detail, bool duringPairing)? transferFailed,
+    TResult Function(String line)? log,
+    required TResult orElse(),
+  }) {
+    if (sendFrame != null) {
+      return sendFrame(data);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(PairChannelCommandDto_SendPairOffer value)
+        sendPairOffer,
+    required TResult Function(PairChannelCommandDto_SendPairJoin value)
+        sendPairJoin,
+    required TResult Function(PairChannelCommandDto_ConnectPair value)
+        connectPair,
+    required TResult Function(PairChannelCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairChannelCommandDto_ClosePair value) closePair,
+    required TResult Function(PairChannelCommandDto_DropPair value) dropPair,
+    required TResult Function(PairChannelCommandDto_PublishRingEvent value)
+        publishRingEvent,
+    required TResult Function(PairChannelCommandDto_LoadHistory value)
+        loadHistory,
+    required TResult Function(PairChannelCommandDto_StoreMessages value)
+        storeMessages,
+    required TResult Function(PairChannelCommandDto_SaveMlsState value)
+        saveMlsState,
+    required TResult Function(PairChannelCommandDto_SaveRingState value)
+        saveRingState,
+    required TResult Function(PairChannelCommandDto_RingJoined value)
+        ringJoined,
+    required TResult Function(PairChannelCommandDto_DeviceAdmitted value)
+        deviceAdmitted,
+    required TResult Function(PairChannelCommandDto_SiblingStealthLearned value)
+        siblingStealthLearned,
+    required TResult Function(PairChannelCommandDto_TransferComplete value)
+        transferComplete,
+    required TResult Function(PairChannelCommandDto_TransferFailed value)
+        transferFailed,
+    required TResult Function(PairChannelCommandDto_Log value) log,
   }) {
     return sendFrame(this);
   }
@@ -775,15 +1221,28 @@ class _$PairingCommandDto_SendFrameImpl extends PairingCommandDto_SendFrame {
   @override
   @optionalTypeArgs
   TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(PairingCommandDto_SendFrame value)? sendFrame,
-    TResult? Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
-    TResult? Function(PairingCommandDto_PublishRingCommit value)?
-        publishRingCommit,
-    TResult? Function(PairingCommandDto_SurfaceApprovalPrompt value)?
-        surfaceApprovalPrompt,
-    TResult? Function(PairingCommandDto_PersistRing value)? persistRing,
-    TResult? Function(PairingCommandDto_RosterReceived value)? rosterReceived,
-    TResult? Function(PairingCommandDto_StartSync value)? startSync,
+    TResult? Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult? Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult? Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult? Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult? Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult? Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult? Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult? Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult? Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult? Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult? Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult? Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult? Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult? Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult? Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult? Function(PairChannelCommandDto_Log value)? log,
   }) {
     return sendFrame?.call(this);
   }
@@ -791,15 +1250,28 @@ class _$PairingCommandDto_SendFrameImpl extends PairingCommandDto_SendFrame {
   @override
   @optionalTypeArgs
   TResult maybeMap<TResult extends Object?>({
-    TResult Function(PairingCommandDto_SendFrame value)? sendFrame,
-    TResult Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
-    TResult Function(PairingCommandDto_PublishRingCommit value)?
-        publishRingCommit,
-    TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)?
-        surfaceApprovalPrompt,
-    TResult Function(PairingCommandDto_PersistRing value)? persistRing,
-    TResult Function(PairingCommandDto_RosterReceived value)? rosterReceived,
-    TResult Function(PairingCommandDto_StartSync value)? startSync,
+    TResult Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult Function(PairChannelCommandDto_Log value)? log,
     required TResult orElse(),
   }) {
     if (sendFrame != null) {
@@ -809,155 +1281,143 @@ class _$PairingCommandDto_SendFrameImpl extends PairingCommandDto_SendFrame {
   }
 }
 
-abstract class PairingCommandDto_SendFrame extends PairingCommandDto {
-  const factory PairingCommandDto_SendFrame(
-          {required final Uint8List ciphertext}) =
-      _$PairingCommandDto_SendFrameImpl;
-  const PairingCommandDto_SendFrame._() : super._();
+abstract class PairChannelCommandDto_SendFrame extends PairChannelCommandDto {
+  const factory PairChannelCommandDto_SendFrame(
+      {required final Uint8List data}) = _$PairChannelCommandDto_SendFrameImpl;
+  const PairChannelCommandDto_SendFrame._() : super._();
 
-  Uint8List get ciphertext;
+  Uint8List get data;
 
-  /// Create a copy of PairingCommandDto
+  /// Create a copy of PairChannelCommandDto
   /// with the given fields replaced by the non-null parameter values.
   @JsonKey(includeFromJson: false, includeToJson: false)
-  _$$PairingCommandDto_SendFrameImplCopyWith<_$PairingCommandDto_SendFrameImpl>
+  _$$PairChannelCommandDto_SendFrameImplCopyWith<
+          _$PairChannelCommandDto_SendFrameImpl>
       get copyWith => throw _privateConstructorUsedError;
 }
 
 /// @nodoc
-abstract class _$$PairingCommandDto_SeedKpPoolImplCopyWith<$Res> {
-  factory _$$PairingCommandDto_SeedKpPoolImplCopyWith(
-          _$PairingCommandDto_SeedKpPoolImpl value,
-          $Res Function(_$PairingCommandDto_SeedKpPoolImpl) then) =
-      __$$PairingCommandDto_SeedKpPoolImplCopyWithImpl<$Res>;
-  @useResult
-  $Res call({Uint8List deviceId, List<OfferedKpDto> kps});
+abstract class _$$PairChannelCommandDto_ClosePairImplCopyWith<$Res> {
+  factory _$$PairChannelCommandDto_ClosePairImplCopyWith(
+          _$PairChannelCommandDto_ClosePairImpl value,
+          $Res Function(_$PairChannelCommandDto_ClosePairImpl) then) =
+      __$$PairChannelCommandDto_ClosePairImplCopyWithImpl<$Res>;
 }
 
 /// @nodoc
-class __$$PairingCommandDto_SeedKpPoolImplCopyWithImpl<$Res>
-    extends _$PairingCommandDtoCopyWithImpl<$Res,
-        _$PairingCommandDto_SeedKpPoolImpl>
-    implements _$$PairingCommandDto_SeedKpPoolImplCopyWith<$Res> {
-  __$$PairingCommandDto_SeedKpPoolImplCopyWithImpl(
-      _$PairingCommandDto_SeedKpPoolImpl _value,
-      $Res Function(_$PairingCommandDto_SeedKpPoolImpl) _then)
+class __$$PairChannelCommandDto_ClosePairImplCopyWithImpl<$Res>
+    extends _$PairChannelCommandDtoCopyWithImpl<$Res,
+        _$PairChannelCommandDto_ClosePairImpl>
+    implements _$$PairChannelCommandDto_ClosePairImplCopyWith<$Res> {
+  __$$PairChannelCommandDto_ClosePairImplCopyWithImpl(
+      _$PairChannelCommandDto_ClosePairImpl _value,
+      $Res Function(_$PairChannelCommandDto_ClosePairImpl) _then)
       : super(_value, _then);
 
-  /// Create a copy of PairingCommandDto
+  /// Create a copy of PairChannelCommandDto
   /// with the given fields replaced by the non-null parameter values.
-  @pragma('vm:prefer-inline')
-  @override
-  $Res call({
-    Object? deviceId = null,
-    Object? kps = null,
-  }) {
-    return _then(_$PairingCommandDto_SeedKpPoolImpl(
-      deviceId: null == deviceId
-          ? _value.deviceId
-          : deviceId // ignore: cast_nullable_to_non_nullable
-              as Uint8List,
-      kps: null == kps
-          ? _value._kps
-          : kps // ignore: cast_nullable_to_non_nullable
-              as List<OfferedKpDto>,
-    ));
-  }
 }
 
 /// @nodoc
 
-class _$PairingCommandDto_SeedKpPoolImpl extends PairingCommandDto_SeedKpPool {
-  const _$PairingCommandDto_SeedKpPoolImpl(
-      {required this.deviceId, required final List<OfferedKpDto> kps})
-      : _kps = kps,
-        super._();
-
-  @override
-  final Uint8List deviceId;
-  final List<OfferedKpDto> _kps;
-  @override
-  List<OfferedKpDto> get kps {
-    if (_kps is EqualUnmodifiableListView) return _kps;
-    // ignore: implicit_dynamic_type
-    return EqualUnmodifiableListView(_kps);
-  }
+class _$PairChannelCommandDto_ClosePairImpl
+    extends PairChannelCommandDto_ClosePair {
+  const _$PairChannelCommandDto_ClosePairImpl() : super._();
 
   @override
   String toString() {
-    return 'PairingCommandDto.seedKpPool(deviceId: $deviceId, kps: $kps)';
+    return 'PairChannelCommandDto.closePair()';
   }
 
   @override
   bool operator ==(Object other) {
     return identical(this, other) ||
         (other.runtimeType == runtimeType &&
-            other is _$PairingCommandDto_SeedKpPoolImpl &&
-            const DeepCollectionEquality().equals(other.deviceId, deviceId) &&
-            const DeepCollectionEquality().equals(other._kps, _kps));
+            other is _$PairChannelCommandDto_ClosePairImpl);
   }
 
   @override
-  int get hashCode => Object.hash(
-      runtimeType,
-      const DeepCollectionEquality().hash(deviceId),
-      const DeepCollectionEquality().hash(_kps));
-
-  /// Create a copy of PairingCommandDto
-  /// with the given fields replaced by the non-null parameter values.
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  @override
-  @pragma('vm:prefer-inline')
-  _$$PairingCommandDto_SeedKpPoolImplCopyWith<
-          _$PairingCommandDto_SeedKpPoolImpl>
-      get copyWith => __$$PairingCommandDto_SeedKpPoolImplCopyWithImpl<
-          _$PairingCommandDto_SeedKpPoolImpl>(this, _$identity);
+  int get hashCode => runtimeType.hashCode;
 
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List ciphertext) sendFrame,
-    required TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)
-        seedKpPool,
+    required TResult Function(Uint8List token) sendPairOffer,
+    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String url, Uint8List token) connectPair,
+    required TResult Function(Uint8List data) sendFrame,
+    required TResult Function() closePair,
+    required TResult Function() dropPair,
     required TResult Function(Uint8List tag, Uint8List ciphertext)
-        publishRingCommit,
-    required TResult Function(String deviceName, String did)
-        surfaceApprovalPrompt,
-    required TResult Function(Uint8List ringId) persistRing,
-    required TResult Function(List<SiblingInfoDto> roster) rosterReceived,
-    required TResult Function() startSync,
+        publishRingEvent,
+    required TResult Function(Uint8List token) loadHistory,
+    required TResult Function(String convId, List<SyncMessageDto> messages)
+        storeMessages,
+    required TResult Function() saveMlsState,
+    required TResult Function() saveRingState,
+    required TResult Function(Uint8List ringId) ringJoined,
+    required TResult Function(Uint8List ringId) deviceAdmitted,
+    required TResult Function(Uint8List deviceId, Uint8List scanPubkey)
+        siblingStealthLearned,
+    required TResult Function(SyncTallyDto tally) transferComplete,
+    required TResult Function(String detail, bool duringPairing) transferFailed,
+    required TResult Function(String line) log,
   }) {
-    return seedKpPool(deviceId, kps);
+    return closePair();
   }
 
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List ciphertext)? sendFrame,
-    TResult? Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
-    TResult? Function(String deviceName, String did)? surfaceApprovalPrompt,
-    TResult? Function(Uint8List ringId)? persistRing,
-    TResult? Function(List<SiblingInfoDto> roster)? rosterReceived,
-    TResult? Function()? startSync,
+    TResult? Function(Uint8List token)? sendPairOffer,
+    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String url, Uint8List token)? connectPair,
+    TResult? Function(Uint8List data)? sendFrame,
+    TResult? Function()? closePair,
+    TResult? Function()? dropPair,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult? Function(Uint8List token)? loadHistory,
+    TResult? Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult? Function()? saveMlsState,
+    TResult? Function()? saveRingState,
+    TResult? Function(Uint8List ringId)? ringJoined,
+    TResult? Function(Uint8List ringId)? deviceAdmitted,
+    TResult? Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult? Function(SyncTallyDto tally)? transferComplete,
+    TResult? Function(String detail, bool duringPairing)? transferFailed,
+    TResult? Function(String line)? log,
   }) {
-    return seedKpPool?.call(deviceId, kps);
+    return closePair?.call();
   }
 
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List ciphertext)? sendFrame,
-    TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
-    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
-    TResult Function(String deviceName, String did)? surfaceApprovalPrompt,
-    TResult Function(Uint8List ringId)? persistRing,
-    TResult Function(List<SiblingInfoDto> roster)? rosterReceived,
-    TResult Function()? startSync,
+    TResult Function(Uint8List token)? sendPairOffer,
+    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String url, Uint8List token)? connectPair,
+    TResult Function(Uint8List data)? sendFrame,
+    TResult Function()? closePair,
+    TResult Function()? dropPair,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult Function(Uint8List token)? loadHistory,
+    TResult Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult Function()? saveMlsState,
+    TResult Function()? saveRingState,
+    TResult Function(Uint8List ringId)? ringJoined,
+    TResult Function(Uint8List ringId)? deviceAdmitted,
+    TResult Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult Function(SyncTallyDto tally)? transferComplete,
+    TResult Function(String detail, bool duringPairing)? transferFailed,
+    TResult Function(String line)? log,
     required TResult orElse(),
   }) {
-    if (seedKpPool != null) {
-      return seedKpPool(deviceId, kps);
+    if (closePair != null) {
+      return closePair();
     }
     return orElse();
   }
@@ -965,96 +1425,362 @@ class _$PairingCommandDto_SeedKpPoolImpl extends PairingCommandDto_SeedKpPool {
   @override
   @optionalTypeArgs
   TResult map<TResult extends Object?>({
-    required TResult Function(PairingCommandDto_SendFrame value) sendFrame,
-    required TResult Function(PairingCommandDto_SeedKpPool value) seedKpPool,
-    required TResult Function(PairingCommandDto_PublishRingCommit value)
-        publishRingCommit,
-    required TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)
-        surfaceApprovalPrompt,
-    required TResult Function(PairingCommandDto_PersistRing value) persistRing,
-    required TResult Function(PairingCommandDto_RosterReceived value)
-        rosterReceived,
-    required TResult Function(PairingCommandDto_StartSync value) startSync,
+    required TResult Function(PairChannelCommandDto_SendPairOffer value)
+        sendPairOffer,
+    required TResult Function(PairChannelCommandDto_SendPairJoin value)
+        sendPairJoin,
+    required TResult Function(PairChannelCommandDto_ConnectPair value)
+        connectPair,
+    required TResult Function(PairChannelCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairChannelCommandDto_ClosePair value) closePair,
+    required TResult Function(PairChannelCommandDto_DropPair value) dropPair,
+    required TResult Function(PairChannelCommandDto_PublishRingEvent value)
+        publishRingEvent,
+    required TResult Function(PairChannelCommandDto_LoadHistory value)
+        loadHistory,
+    required TResult Function(PairChannelCommandDto_StoreMessages value)
+        storeMessages,
+    required TResult Function(PairChannelCommandDto_SaveMlsState value)
+        saveMlsState,
+    required TResult Function(PairChannelCommandDto_SaveRingState value)
+        saveRingState,
+    required TResult Function(PairChannelCommandDto_RingJoined value)
+        ringJoined,
+    required TResult Function(PairChannelCommandDto_DeviceAdmitted value)
+        deviceAdmitted,
+    required TResult Function(PairChannelCommandDto_SiblingStealthLearned value)
+        siblingStealthLearned,
+    required TResult Function(PairChannelCommandDto_TransferComplete value)
+        transferComplete,
+    required TResult Function(PairChannelCommandDto_TransferFailed value)
+        transferFailed,
+    required TResult Function(PairChannelCommandDto_Log value) log,
   }) {
-    return seedKpPool(this);
+    return closePair(this);
   }
 
   @override
   @optionalTypeArgs
   TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(PairingCommandDto_SendFrame value)? sendFrame,
-    TResult? Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
-    TResult? Function(PairingCommandDto_PublishRingCommit value)?
-        publishRingCommit,
-    TResult? Function(PairingCommandDto_SurfaceApprovalPrompt value)?
-        surfaceApprovalPrompt,
-    TResult? Function(PairingCommandDto_PersistRing value)? persistRing,
-    TResult? Function(PairingCommandDto_RosterReceived value)? rosterReceived,
-    TResult? Function(PairingCommandDto_StartSync value)? startSync,
+    TResult? Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult? Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult? Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult? Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult? Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult? Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult? Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult? Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult? Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult? Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult? Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult? Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult? Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult? Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult? Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult? Function(PairChannelCommandDto_Log value)? log,
   }) {
-    return seedKpPool?.call(this);
+    return closePair?.call(this);
   }
 
   @override
   @optionalTypeArgs
   TResult maybeMap<TResult extends Object?>({
-    TResult Function(PairingCommandDto_SendFrame value)? sendFrame,
-    TResult Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
-    TResult Function(PairingCommandDto_PublishRingCommit value)?
-        publishRingCommit,
-    TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)?
-        surfaceApprovalPrompt,
-    TResult Function(PairingCommandDto_PersistRing value)? persistRing,
-    TResult Function(PairingCommandDto_RosterReceived value)? rosterReceived,
-    TResult Function(PairingCommandDto_StartSync value)? startSync,
+    TResult Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult Function(PairChannelCommandDto_Log value)? log,
     required TResult orElse(),
   }) {
-    if (seedKpPool != null) {
-      return seedKpPool(this);
+    if (closePair != null) {
+      return closePair(this);
     }
     return orElse();
   }
 }
 
-abstract class PairingCommandDto_SeedKpPool extends PairingCommandDto {
-  const factory PairingCommandDto_SeedKpPool(
-          {required final Uint8List deviceId,
-          required final List<OfferedKpDto> kps}) =
-      _$PairingCommandDto_SeedKpPoolImpl;
-  const PairingCommandDto_SeedKpPool._() : super._();
-
-  Uint8List get deviceId;
-  List<OfferedKpDto> get kps;
-
-  /// Create a copy of PairingCommandDto
-  /// with the given fields replaced by the non-null parameter values.
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  _$$PairingCommandDto_SeedKpPoolImplCopyWith<
-          _$PairingCommandDto_SeedKpPoolImpl>
-      get copyWith => throw _privateConstructorUsedError;
+abstract class PairChannelCommandDto_ClosePair extends PairChannelCommandDto {
+  const factory PairChannelCommandDto_ClosePair() =
+      _$PairChannelCommandDto_ClosePairImpl;
+  const PairChannelCommandDto_ClosePair._() : super._();
 }
 
 /// @nodoc
-abstract class _$$PairingCommandDto_PublishRingCommitImplCopyWith<$Res> {
-  factory _$$PairingCommandDto_PublishRingCommitImplCopyWith(
-          _$PairingCommandDto_PublishRingCommitImpl value,
-          $Res Function(_$PairingCommandDto_PublishRingCommitImpl) then) =
-      __$$PairingCommandDto_PublishRingCommitImplCopyWithImpl<$Res>;
+abstract class _$$PairChannelCommandDto_DropPairImplCopyWith<$Res> {
+  factory _$$PairChannelCommandDto_DropPairImplCopyWith(
+          _$PairChannelCommandDto_DropPairImpl value,
+          $Res Function(_$PairChannelCommandDto_DropPairImpl) then) =
+      __$$PairChannelCommandDto_DropPairImplCopyWithImpl<$Res>;
+}
+
+/// @nodoc
+class __$$PairChannelCommandDto_DropPairImplCopyWithImpl<$Res>
+    extends _$PairChannelCommandDtoCopyWithImpl<$Res,
+        _$PairChannelCommandDto_DropPairImpl>
+    implements _$$PairChannelCommandDto_DropPairImplCopyWith<$Res> {
+  __$$PairChannelCommandDto_DropPairImplCopyWithImpl(
+      _$PairChannelCommandDto_DropPairImpl _value,
+      $Res Function(_$PairChannelCommandDto_DropPairImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+}
+
+/// @nodoc
+
+class _$PairChannelCommandDto_DropPairImpl
+    extends PairChannelCommandDto_DropPair {
+  const _$PairChannelCommandDto_DropPairImpl() : super._();
+
+  @override
+  String toString() {
+    return 'PairChannelCommandDto.dropPair()';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$PairChannelCommandDto_DropPairImpl);
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(Uint8List token) sendPairOffer,
+    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String url, Uint8List token) connectPair,
+    required TResult Function(Uint8List data) sendFrame,
+    required TResult Function() closePair,
+    required TResult Function() dropPair,
+    required TResult Function(Uint8List tag, Uint8List ciphertext)
+        publishRingEvent,
+    required TResult Function(Uint8List token) loadHistory,
+    required TResult Function(String convId, List<SyncMessageDto> messages)
+        storeMessages,
+    required TResult Function() saveMlsState,
+    required TResult Function() saveRingState,
+    required TResult Function(Uint8List ringId) ringJoined,
+    required TResult Function(Uint8List ringId) deviceAdmitted,
+    required TResult Function(Uint8List deviceId, Uint8List scanPubkey)
+        siblingStealthLearned,
+    required TResult Function(SyncTallyDto tally) transferComplete,
+    required TResult Function(String detail, bool duringPairing) transferFailed,
+    required TResult Function(String line) log,
+  }) {
+    return dropPair();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(Uint8List token)? sendPairOffer,
+    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String url, Uint8List token)? connectPair,
+    TResult? Function(Uint8List data)? sendFrame,
+    TResult? Function()? closePair,
+    TResult? Function()? dropPair,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult? Function(Uint8List token)? loadHistory,
+    TResult? Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult? Function()? saveMlsState,
+    TResult? Function()? saveRingState,
+    TResult? Function(Uint8List ringId)? ringJoined,
+    TResult? Function(Uint8List ringId)? deviceAdmitted,
+    TResult? Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult? Function(SyncTallyDto tally)? transferComplete,
+    TResult? Function(String detail, bool duringPairing)? transferFailed,
+    TResult? Function(String line)? log,
+  }) {
+    return dropPair?.call();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(Uint8List token)? sendPairOffer,
+    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String url, Uint8List token)? connectPair,
+    TResult Function(Uint8List data)? sendFrame,
+    TResult Function()? closePair,
+    TResult Function()? dropPair,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult Function(Uint8List token)? loadHistory,
+    TResult Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult Function()? saveMlsState,
+    TResult Function()? saveRingState,
+    TResult Function(Uint8List ringId)? ringJoined,
+    TResult Function(Uint8List ringId)? deviceAdmitted,
+    TResult Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult Function(SyncTallyDto tally)? transferComplete,
+    TResult Function(String detail, bool duringPairing)? transferFailed,
+    TResult Function(String line)? log,
+    required TResult orElse(),
+  }) {
+    if (dropPair != null) {
+      return dropPair();
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(PairChannelCommandDto_SendPairOffer value)
+        sendPairOffer,
+    required TResult Function(PairChannelCommandDto_SendPairJoin value)
+        sendPairJoin,
+    required TResult Function(PairChannelCommandDto_ConnectPair value)
+        connectPair,
+    required TResult Function(PairChannelCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairChannelCommandDto_ClosePair value) closePair,
+    required TResult Function(PairChannelCommandDto_DropPair value) dropPair,
+    required TResult Function(PairChannelCommandDto_PublishRingEvent value)
+        publishRingEvent,
+    required TResult Function(PairChannelCommandDto_LoadHistory value)
+        loadHistory,
+    required TResult Function(PairChannelCommandDto_StoreMessages value)
+        storeMessages,
+    required TResult Function(PairChannelCommandDto_SaveMlsState value)
+        saveMlsState,
+    required TResult Function(PairChannelCommandDto_SaveRingState value)
+        saveRingState,
+    required TResult Function(PairChannelCommandDto_RingJoined value)
+        ringJoined,
+    required TResult Function(PairChannelCommandDto_DeviceAdmitted value)
+        deviceAdmitted,
+    required TResult Function(PairChannelCommandDto_SiblingStealthLearned value)
+        siblingStealthLearned,
+    required TResult Function(PairChannelCommandDto_TransferComplete value)
+        transferComplete,
+    required TResult Function(PairChannelCommandDto_TransferFailed value)
+        transferFailed,
+    required TResult Function(PairChannelCommandDto_Log value) log,
+  }) {
+    return dropPair(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult? Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult? Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult? Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult? Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult? Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult? Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult? Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult? Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult? Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult? Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult? Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult? Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult? Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult? Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult? Function(PairChannelCommandDto_Log value)? log,
+  }) {
+    return dropPair?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult Function(PairChannelCommandDto_Log value)? log,
+    required TResult orElse(),
+  }) {
+    if (dropPair != null) {
+      return dropPair(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class PairChannelCommandDto_DropPair extends PairChannelCommandDto {
+  const factory PairChannelCommandDto_DropPair() =
+      _$PairChannelCommandDto_DropPairImpl;
+  const PairChannelCommandDto_DropPair._() : super._();
+}
+
+/// @nodoc
+abstract class _$$PairChannelCommandDto_PublishRingEventImplCopyWith<$Res> {
+  factory _$$PairChannelCommandDto_PublishRingEventImplCopyWith(
+          _$PairChannelCommandDto_PublishRingEventImpl value,
+          $Res Function(_$PairChannelCommandDto_PublishRingEventImpl) then) =
+      __$$PairChannelCommandDto_PublishRingEventImplCopyWithImpl<$Res>;
   @useResult
   $Res call({Uint8List tag, Uint8List ciphertext});
 }
 
 /// @nodoc
-class __$$PairingCommandDto_PublishRingCommitImplCopyWithImpl<$Res>
-    extends _$PairingCommandDtoCopyWithImpl<$Res,
-        _$PairingCommandDto_PublishRingCommitImpl>
-    implements _$$PairingCommandDto_PublishRingCommitImplCopyWith<$Res> {
-  __$$PairingCommandDto_PublishRingCommitImplCopyWithImpl(
-      _$PairingCommandDto_PublishRingCommitImpl _value,
-      $Res Function(_$PairingCommandDto_PublishRingCommitImpl) _then)
+class __$$PairChannelCommandDto_PublishRingEventImplCopyWithImpl<$Res>
+    extends _$PairChannelCommandDtoCopyWithImpl<$Res,
+        _$PairChannelCommandDto_PublishRingEventImpl>
+    implements _$$PairChannelCommandDto_PublishRingEventImplCopyWith<$Res> {
+  __$$PairChannelCommandDto_PublishRingEventImplCopyWithImpl(
+      _$PairChannelCommandDto_PublishRingEventImpl _value,
+      $Res Function(_$PairChannelCommandDto_PublishRingEventImpl) _then)
       : super(_value, _then);
 
-  /// Create a copy of PairingCommandDto
+  /// Create a copy of PairChannelCommandDto
   /// with the given fields replaced by the non-null parameter values.
   @pragma('vm:prefer-inline')
   @override
@@ -1062,7 +1788,7 @@ class __$$PairingCommandDto_PublishRingCommitImplCopyWithImpl<$Res>
     Object? tag = null,
     Object? ciphertext = null,
   }) {
-    return _then(_$PairingCommandDto_PublishRingCommitImpl(
+    return _then(_$PairChannelCommandDto_PublishRingEventImpl(
       tag: null == tag
           ? _value.tag
           : tag // ignore: cast_nullable_to_non_nullable
@@ -1077,9 +1803,9 @@ class __$$PairingCommandDto_PublishRingCommitImplCopyWithImpl<$Res>
 
 /// @nodoc
 
-class _$PairingCommandDto_PublishRingCommitImpl
-    extends PairingCommandDto_PublishRingCommit {
-  const _$PairingCommandDto_PublishRingCommitImpl(
+class _$PairChannelCommandDto_PublishRingEventImpl
+    extends PairChannelCommandDto_PublishRingEvent {
+  const _$PairChannelCommandDto_PublishRingEventImpl(
       {required this.tag, required this.ciphertext})
       : super._();
 
@@ -1090,14 +1816,14 @@ class _$PairingCommandDto_PublishRingCommitImpl
 
   @override
   String toString() {
-    return 'PairingCommandDto.publishRingCommit(tag: $tag, ciphertext: $ciphertext)';
+    return 'PairChannelCommandDto.publishRingEvent(tag: $tag, ciphertext: $ciphertext)';
   }
 
   @override
   bool operator ==(Object other) {
     return identical(this, other) ||
         (other.runtimeType == runtimeType &&
-            other is _$PairingCommandDto_PublishRingCommitImpl &&
+            other is _$PairChannelCommandDto_PublishRingEventImpl &&
             const DeepCollectionEquality().equals(other.tag, tag) &&
             const DeepCollectionEquality()
                 .equals(other.ciphertext, ciphertext));
@@ -1109,61 +1835,96 @@ class _$PairingCommandDto_PublishRingCommitImpl
       const DeepCollectionEquality().hash(tag),
       const DeepCollectionEquality().hash(ciphertext));
 
-  /// Create a copy of PairingCommandDto
+  /// Create a copy of PairChannelCommandDto
   /// with the given fields replaced by the non-null parameter values.
   @JsonKey(includeFromJson: false, includeToJson: false)
   @override
   @pragma('vm:prefer-inline')
-  _$$PairingCommandDto_PublishRingCommitImplCopyWith<
-          _$PairingCommandDto_PublishRingCommitImpl>
-      get copyWith => __$$PairingCommandDto_PublishRingCommitImplCopyWithImpl<
-          _$PairingCommandDto_PublishRingCommitImpl>(this, _$identity);
+  _$$PairChannelCommandDto_PublishRingEventImplCopyWith<
+          _$PairChannelCommandDto_PublishRingEventImpl>
+      get copyWith =>
+          __$$PairChannelCommandDto_PublishRingEventImplCopyWithImpl<
+              _$PairChannelCommandDto_PublishRingEventImpl>(this, _$identity);
 
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List ciphertext) sendFrame,
-    required TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)
-        seedKpPool,
+    required TResult Function(Uint8List token) sendPairOffer,
+    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String url, Uint8List token) connectPair,
+    required TResult Function(Uint8List data) sendFrame,
+    required TResult Function() closePair,
+    required TResult Function() dropPair,
     required TResult Function(Uint8List tag, Uint8List ciphertext)
-        publishRingCommit,
-    required TResult Function(String deviceName, String did)
-        surfaceApprovalPrompt,
-    required TResult Function(Uint8List ringId) persistRing,
-    required TResult Function(List<SiblingInfoDto> roster) rosterReceived,
-    required TResult Function() startSync,
+        publishRingEvent,
+    required TResult Function(Uint8List token) loadHistory,
+    required TResult Function(String convId, List<SyncMessageDto> messages)
+        storeMessages,
+    required TResult Function() saveMlsState,
+    required TResult Function() saveRingState,
+    required TResult Function(Uint8List ringId) ringJoined,
+    required TResult Function(Uint8List ringId) deviceAdmitted,
+    required TResult Function(Uint8List deviceId, Uint8List scanPubkey)
+        siblingStealthLearned,
+    required TResult Function(SyncTallyDto tally) transferComplete,
+    required TResult Function(String detail, bool duringPairing) transferFailed,
+    required TResult Function(String line) log,
   }) {
-    return publishRingCommit(tag, ciphertext);
+    return publishRingEvent(tag, ciphertext);
   }
 
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List ciphertext)? sendFrame,
-    TResult? Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
-    TResult? Function(String deviceName, String did)? surfaceApprovalPrompt,
-    TResult? Function(Uint8List ringId)? persistRing,
-    TResult? Function(List<SiblingInfoDto> roster)? rosterReceived,
-    TResult? Function()? startSync,
+    TResult? Function(Uint8List token)? sendPairOffer,
+    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String url, Uint8List token)? connectPair,
+    TResult? Function(Uint8List data)? sendFrame,
+    TResult? Function()? closePair,
+    TResult? Function()? dropPair,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult? Function(Uint8List token)? loadHistory,
+    TResult? Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult? Function()? saveMlsState,
+    TResult? Function()? saveRingState,
+    TResult? Function(Uint8List ringId)? ringJoined,
+    TResult? Function(Uint8List ringId)? deviceAdmitted,
+    TResult? Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult? Function(SyncTallyDto tally)? transferComplete,
+    TResult? Function(String detail, bool duringPairing)? transferFailed,
+    TResult? Function(String line)? log,
   }) {
-    return publishRingCommit?.call(tag, ciphertext);
+    return publishRingEvent?.call(tag, ciphertext);
   }
 
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List ciphertext)? sendFrame,
-    TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
-    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
-    TResult Function(String deviceName, String did)? surfaceApprovalPrompt,
-    TResult Function(Uint8List ringId)? persistRing,
-    TResult Function(List<SiblingInfoDto> roster)? rosterReceived,
-    TResult Function()? startSync,
+    TResult Function(Uint8List token)? sendPairOffer,
+    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String url, Uint8List token)? connectPair,
+    TResult Function(Uint8List data)? sendFrame,
+    TResult Function()? closePair,
+    TResult Function()? dropPair,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult Function(Uint8List token)? loadHistory,
+    TResult Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult Function()? saveMlsState,
+    TResult Function()? saveRingState,
+    TResult Function(Uint8List ringId)? ringJoined,
+    TResult Function(Uint8List ringId)? deviceAdmitted,
+    TResult Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult Function(SyncTallyDto tally)? transferComplete,
+    TResult Function(String detail, bool duringPairing)? transferFailed,
+    TResult Function(String line)? log,
     required TResult orElse(),
   }) {
-    if (publishRingCommit != null) {
-      return publishRingCommit(tag, ciphertext);
+    if (publishRingEvent != null) {
+      return publishRingEvent(tag, ciphertext);
     }
     return orElse();
   }
@@ -1171,202 +1932,273 @@ class _$PairingCommandDto_PublishRingCommitImpl
   @override
   @optionalTypeArgs
   TResult map<TResult extends Object?>({
-    required TResult Function(PairingCommandDto_SendFrame value) sendFrame,
-    required TResult Function(PairingCommandDto_SeedKpPool value) seedKpPool,
-    required TResult Function(PairingCommandDto_PublishRingCommit value)
-        publishRingCommit,
-    required TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)
-        surfaceApprovalPrompt,
-    required TResult Function(PairingCommandDto_PersistRing value) persistRing,
-    required TResult Function(PairingCommandDto_RosterReceived value)
-        rosterReceived,
-    required TResult Function(PairingCommandDto_StartSync value) startSync,
+    required TResult Function(PairChannelCommandDto_SendPairOffer value)
+        sendPairOffer,
+    required TResult Function(PairChannelCommandDto_SendPairJoin value)
+        sendPairJoin,
+    required TResult Function(PairChannelCommandDto_ConnectPair value)
+        connectPair,
+    required TResult Function(PairChannelCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairChannelCommandDto_ClosePair value) closePair,
+    required TResult Function(PairChannelCommandDto_DropPair value) dropPair,
+    required TResult Function(PairChannelCommandDto_PublishRingEvent value)
+        publishRingEvent,
+    required TResult Function(PairChannelCommandDto_LoadHistory value)
+        loadHistory,
+    required TResult Function(PairChannelCommandDto_StoreMessages value)
+        storeMessages,
+    required TResult Function(PairChannelCommandDto_SaveMlsState value)
+        saveMlsState,
+    required TResult Function(PairChannelCommandDto_SaveRingState value)
+        saveRingState,
+    required TResult Function(PairChannelCommandDto_RingJoined value)
+        ringJoined,
+    required TResult Function(PairChannelCommandDto_DeviceAdmitted value)
+        deviceAdmitted,
+    required TResult Function(PairChannelCommandDto_SiblingStealthLearned value)
+        siblingStealthLearned,
+    required TResult Function(PairChannelCommandDto_TransferComplete value)
+        transferComplete,
+    required TResult Function(PairChannelCommandDto_TransferFailed value)
+        transferFailed,
+    required TResult Function(PairChannelCommandDto_Log value) log,
   }) {
-    return publishRingCommit(this);
+    return publishRingEvent(this);
   }
 
   @override
   @optionalTypeArgs
   TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(PairingCommandDto_SendFrame value)? sendFrame,
-    TResult? Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
-    TResult? Function(PairingCommandDto_PublishRingCommit value)?
-        publishRingCommit,
-    TResult? Function(PairingCommandDto_SurfaceApprovalPrompt value)?
-        surfaceApprovalPrompt,
-    TResult? Function(PairingCommandDto_PersistRing value)? persistRing,
-    TResult? Function(PairingCommandDto_RosterReceived value)? rosterReceived,
-    TResult? Function(PairingCommandDto_StartSync value)? startSync,
+    TResult? Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult? Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult? Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult? Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult? Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult? Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult? Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult? Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult? Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult? Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult? Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult? Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult? Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult? Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult? Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult? Function(PairChannelCommandDto_Log value)? log,
   }) {
-    return publishRingCommit?.call(this);
+    return publishRingEvent?.call(this);
   }
 
   @override
   @optionalTypeArgs
   TResult maybeMap<TResult extends Object?>({
-    TResult Function(PairingCommandDto_SendFrame value)? sendFrame,
-    TResult Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
-    TResult Function(PairingCommandDto_PublishRingCommit value)?
-        publishRingCommit,
-    TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)?
-        surfaceApprovalPrompt,
-    TResult Function(PairingCommandDto_PersistRing value)? persistRing,
-    TResult Function(PairingCommandDto_RosterReceived value)? rosterReceived,
-    TResult Function(PairingCommandDto_StartSync value)? startSync,
+    TResult Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult Function(PairChannelCommandDto_Log value)? log,
     required TResult orElse(),
   }) {
-    if (publishRingCommit != null) {
-      return publishRingCommit(this);
+    if (publishRingEvent != null) {
+      return publishRingEvent(this);
     }
     return orElse();
   }
 }
 
-abstract class PairingCommandDto_PublishRingCommit extends PairingCommandDto {
-  const factory PairingCommandDto_PublishRingCommit(
+abstract class PairChannelCommandDto_PublishRingEvent
+    extends PairChannelCommandDto {
+  const factory PairChannelCommandDto_PublishRingEvent(
           {required final Uint8List tag, required final Uint8List ciphertext}) =
-      _$PairingCommandDto_PublishRingCommitImpl;
-  const PairingCommandDto_PublishRingCommit._() : super._();
+      _$PairChannelCommandDto_PublishRingEventImpl;
+  const PairChannelCommandDto_PublishRingEvent._() : super._();
 
   Uint8List get tag;
   Uint8List get ciphertext;
 
-  /// Create a copy of PairingCommandDto
+  /// Create a copy of PairChannelCommandDto
   /// with the given fields replaced by the non-null parameter values.
   @JsonKey(includeFromJson: false, includeToJson: false)
-  _$$PairingCommandDto_PublishRingCommitImplCopyWith<
-          _$PairingCommandDto_PublishRingCommitImpl>
+  _$$PairChannelCommandDto_PublishRingEventImplCopyWith<
+          _$PairChannelCommandDto_PublishRingEventImpl>
       get copyWith => throw _privateConstructorUsedError;
 }
 
 /// @nodoc
-abstract class _$$PairingCommandDto_SurfaceApprovalPromptImplCopyWith<$Res> {
-  factory _$$PairingCommandDto_SurfaceApprovalPromptImplCopyWith(
-          _$PairingCommandDto_SurfaceApprovalPromptImpl value,
-          $Res Function(_$PairingCommandDto_SurfaceApprovalPromptImpl) then) =
-      __$$PairingCommandDto_SurfaceApprovalPromptImplCopyWithImpl<$Res>;
+abstract class _$$PairChannelCommandDto_LoadHistoryImplCopyWith<$Res> {
+  factory _$$PairChannelCommandDto_LoadHistoryImplCopyWith(
+          _$PairChannelCommandDto_LoadHistoryImpl value,
+          $Res Function(_$PairChannelCommandDto_LoadHistoryImpl) then) =
+      __$$PairChannelCommandDto_LoadHistoryImplCopyWithImpl<$Res>;
   @useResult
-  $Res call({String deviceName, String did});
+  $Res call({Uint8List token});
 }
 
 /// @nodoc
-class __$$PairingCommandDto_SurfaceApprovalPromptImplCopyWithImpl<$Res>
-    extends _$PairingCommandDtoCopyWithImpl<$Res,
-        _$PairingCommandDto_SurfaceApprovalPromptImpl>
-    implements _$$PairingCommandDto_SurfaceApprovalPromptImplCopyWith<$Res> {
-  __$$PairingCommandDto_SurfaceApprovalPromptImplCopyWithImpl(
-      _$PairingCommandDto_SurfaceApprovalPromptImpl _value,
-      $Res Function(_$PairingCommandDto_SurfaceApprovalPromptImpl) _then)
+class __$$PairChannelCommandDto_LoadHistoryImplCopyWithImpl<$Res>
+    extends _$PairChannelCommandDtoCopyWithImpl<$Res,
+        _$PairChannelCommandDto_LoadHistoryImpl>
+    implements _$$PairChannelCommandDto_LoadHistoryImplCopyWith<$Res> {
+  __$$PairChannelCommandDto_LoadHistoryImplCopyWithImpl(
+      _$PairChannelCommandDto_LoadHistoryImpl _value,
+      $Res Function(_$PairChannelCommandDto_LoadHistoryImpl) _then)
       : super(_value, _then);
 
-  /// Create a copy of PairingCommandDto
+  /// Create a copy of PairChannelCommandDto
   /// with the given fields replaced by the non-null parameter values.
   @pragma('vm:prefer-inline')
   @override
   $Res call({
-    Object? deviceName = null,
-    Object? did = null,
+    Object? token = null,
   }) {
-    return _then(_$PairingCommandDto_SurfaceApprovalPromptImpl(
-      deviceName: null == deviceName
-          ? _value.deviceName
-          : deviceName // ignore: cast_nullable_to_non_nullable
-              as String,
-      did: null == did
-          ? _value.did
-          : did // ignore: cast_nullable_to_non_nullable
-              as String,
+    return _then(_$PairChannelCommandDto_LoadHistoryImpl(
+      token: null == token
+          ? _value.token
+          : token // ignore: cast_nullable_to_non_nullable
+              as Uint8List,
     ));
   }
 }
 
 /// @nodoc
 
-class _$PairingCommandDto_SurfaceApprovalPromptImpl
-    extends PairingCommandDto_SurfaceApprovalPrompt {
-  const _$PairingCommandDto_SurfaceApprovalPromptImpl(
-      {required this.deviceName, required this.did})
+class _$PairChannelCommandDto_LoadHistoryImpl
+    extends PairChannelCommandDto_LoadHistory {
+  const _$PairChannelCommandDto_LoadHistoryImpl({required this.token})
       : super._();
 
   @override
-  final String deviceName;
-  @override
-  final String did;
+  final Uint8List token;
 
   @override
   String toString() {
-    return 'PairingCommandDto.surfaceApprovalPrompt(deviceName: $deviceName, did: $did)';
+    return 'PairChannelCommandDto.loadHistory(token: $token)';
   }
 
   @override
   bool operator ==(Object other) {
     return identical(this, other) ||
         (other.runtimeType == runtimeType &&
-            other is _$PairingCommandDto_SurfaceApprovalPromptImpl &&
-            (identical(other.deviceName, deviceName) ||
-                other.deviceName == deviceName) &&
-            (identical(other.did, did) || other.did == did));
+            other is _$PairChannelCommandDto_LoadHistoryImpl &&
+            const DeepCollectionEquality().equals(other.token, token));
   }
 
   @override
-  int get hashCode => Object.hash(runtimeType, deviceName, did);
+  int get hashCode =>
+      Object.hash(runtimeType, const DeepCollectionEquality().hash(token));
 
-  /// Create a copy of PairingCommandDto
+  /// Create a copy of PairChannelCommandDto
   /// with the given fields replaced by the non-null parameter values.
   @JsonKey(includeFromJson: false, includeToJson: false)
   @override
   @pragma('vm:prefer-inline')
-  _$$PairingCommandDto_SurfaceApprovalPromptImplCopyWith<
-          _$PairingCommandDto_SurfaceApprovalPromptImpl>
-      get copyWith =>
-          __$$PairingCommandDto_SurfaceApprovalPromptImplCopyWithImpl<
-              _$PairingCommandDto_SurfaceApprovalPromptImpl>(this, _$identity);
+  _$$PairChannelCommandDto_LoadHistoryImplCopyWith<
+          _$PairChannelCommandDto_LoadHistoryImpl>
+      get copyWith => __$$PairChannelCommandDto_LoadHistoryImplCopyWithImpl<
+          _$PairChannelCommandDto_LoadHistoryImpl>(this, _$identity);
 
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List ciphertext) sendFrame,
-    required TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)
-        seedKpPool,
+    required TResult Function(Uint8List token) sendPairOffer,
+    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String url, Uint8List token) connectPair,
+    required TResult Function(Uint8List data) sendFrame,
+    required TResult Function() closePair,
+    required TResult Function() dropPair,
     required TResult Function(Uint8List tag, Uint8List ciphertext)
-        publishRingCommit,
-    required TResult Function(String deviceName, String did)
-        surfaceApprovalPrompt,
-    required TResult Function(Uint8List ringId) persistRing,
-    required TResult Function(List<SiblingInfoDto> roster) rosterReceived,
-    required TResult Function() startSync,
+        publishRingEvent,
+    required TResult Function(Uint8List token) loadHistory,
+    required TResult Function(String convId, List<SyncMessageDto> messages)
+        storeMessages,
+    required TResult Function() saveMlsState,
+    required TResult Function() saveRingState,
+    required TResult Function(Uint8List ringId) ringJoined,
+    required TResult Function(Uint8List ringId) deviceAdmitted,
+    required TResult Function(Uint8List deviceId, Uint8List scanPubkey)
+        siblingStealthLearned,
+    required TResult Function(SyncTallyDto tally) transferComplete,
+    required TResult Function(String detail, bool duringPairing) transferFailed,
+    required TResult Function(String line) log,
   }) {
-    return surfaceApprovalPrompt(deviceName, did);
+    return loadHistory(token);
   }
 
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List ciphertext)? sendFrame,
-    TResult? Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
-    TResult? Function(String deviceName, String did)? surfaceApprovalPrompt,
-    TResult? Function(Uint8List ringId)? persistRing,
-    TResult? Function(List<SiblingInfoDto> roster)? rosterReceived,
-    TResult? Function()? startSync,
+    TResult? Function(Uint8List token)? sendPairOffer,
+    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String url, Uint8List token)? connectPair,
+    TResult? Function(Uint8List data)? sendFrame,
+    TResult? Function()? closePair,
+    TResult? Function()? dropPair,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult? Function(Uint8List token)? loadHistory,
+    TResult? Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult? Function()? saveMlsState,
+    TResult? Function()? saveRingState,
+    TResult? Function(Uint8List ringId)? ringJoined,
+    TResult? Function(Uint8List ringId)? deviceAdmitted,
+    TResult? Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult? Function(SyncTallyDto tally)? transferComplete,
+    TResult? Function(String detail, bool duringPairing)? transferFailed,
+    TResult? Function(String line)? log,
   }) {
-    return surfaceApprovalPrompt?.call(deviceName, did);
+    return loadHistory?.call(token);
   }
 
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List ciphertext)? sendFrame,
-    TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
-    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
-    TResult Function(String deviceName, String did)? surfaceApprovalPrompt,
-    TResult Function(Uint8List ringId)? persistRing,
-    TResult Function(List<SiblingInfoDto> roster)? rosterReceived,
-    TResult Function()? startSync,
+    TResult Function(Uint8List token)? sendPairOffer,
+    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String url, Uint8List token)? connectPair,
+    TResult Function(Uint8List data)? sendFrame,
+    TResult Function()? closePair,
+    TResult Function()? dropPair,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult Function(Uint8List token)? loadHistory,
+    TResult Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult Function()? saveMlsState,
+    TResult Function()? saveRingState,
+    TResult Function(Uint8List ringId)? ringJoined,
+    TResult Function(Uint8List ringId)? deviceAdmitted,
+    TResult Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult Function(SyncTallyDto tally)? transferComplete,
+    TResult Function(String detail, bool duringPairing)? transferFailed,
+    TResult Function(String line)? log,
     required TResult orElse(),
   }) {
-    if (surfaceApprovalPrompt != null) {
-      return surfaceApprovalPrompt(deviceName, did);
+    if (loadHistory != null) {
+      return loadHistory(token);
     }
     return orElse();
   }
@@ -1374,103 +2206,903 @@ class _$PairingCommandDto_SurfaceApprovalPromptImpl
   @override
   @optionalTypeArgs
   TResult map<TResult extends Object?>({
-    required TResult Function(PairingCommandDto_SendFrame value) sendFrame,
-    required TResult Function(PairingCommandDto_SeedKpPool value) seedKpPool,
-    required TResult Function(PairingCommandDto_PublishRingCommit value)
-        publishRingCommit,
-    required TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)
-        surfaceApprovalPrompt,
-    required TResult Function(PairingCommandDto_PersistRing value) persistRing,
-    required TResult Function(PairingCommandDto_RosterReceived value)
-        rosterReceived,
-    required TResult Function(PairingCommandDto_StartSync value) startSync,
+    required TResult Function(PairChannelCommandDto_SendPairOffer value)
+        sendPairOffer,
+    required TResult Function(PairChannelCommandDto_SendPairJoin value)
+        sendPairJoin,
+    required TResult Function(PairChannelCommandDto_ConnectPair value)
+        connectPair,
+    required TResult Function(PairChannelCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairChannelCommandDto_ClosePair value) closePair,
+    required TResult Function(PairChannelCommandDto_DropPair value) dropPair,
+    required TResult Function(PairChannelCommandDto_PublishRingEvent value)
+        publishRingEvent,
+    required TResult Function(PairChannelCommandDto_LoadHistory value)
+        loadHistory,
+    required TResult Function(PairChannelCommandDto_StoreMessages value)
+        storeMessages,
+    required TResult Function(PairChannelCommandDto_SaveMlsState value)
+        saveMlsState,
+    required TResult Function(PairChannelCommandDto_SaveRingState value)
+        saveRingState,
+    required TResult Function(PairChannelCommandDto_RingJoined value)
+        ringJoined,
+    required TResult Function(PairChannelCommandDto_DeviceAdmitted value)
+        deviceAdmitted,
+    required TResult Function(PairChannelCommandDto_SiblingStealthLearned value)
+        siblingStealthLearned,
+    required TResult Function(PairChannelCommandDto_TransferComplete value)
+        transferComplete,
+    required TResult Function(PairChannelCommandDto_TransferFailed value)
+        transferFailed,
+    required TResult Function(PairChannelCommandDto_Log value) log,
   }) {
-    return surfaceApprovalPrompt(this);
+    return loadHistory(this);
   }
 
   @override
   @optionalTypeArgs
   TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(PairingCommandDto_SendFrame value)? sendFrame,
-    TResult? Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
-    TResult? Function(PairingCommandDto_PublishRingCommit value)?
-        publishRingCommit,
-    TResult? Function(PairingCommandDto_SurfaceApprovalPrompt value)?
-        surfaceApprovalPrompt,
-    TResult? Function(PairingCommandDto_PersistRing value)? persistRing,
-    TResult? Function(PairingCommandDto_RosterReceived value)? rosterReceived,
-    TResult? Function(PairingCommandDto_StartSync value)? startSync,
+    TResult? Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult? Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult? Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult? Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult? Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult? Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult? Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult? Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult? Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult? Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult? Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult? Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult? Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult? Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult? Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult? Function(PairChannelCommandDto_Log value)? log,
   }) {
-    return surfaceApprovalPrompt?.call(this);
+    return loadHistory?.call(this);
   }
 
   @override
   @optionalTypeArgs
   TResult maybeMap<TResult extends Object?>({
-    TResult Function(PairingCommandDto_SendFrame value)? sendFrame,
-    TResult Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
-    TResult Function(PairingCommandDto_PublishRingCommit value)?
-        publishRingCommit,
-    TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)?
-        surfaceApprovalPrompt,
-    TResult Function(PairingCommandDto_PersistRing value)? persistRing,
-    TResult Function(PairingCommandDto_RosterReceived value)? rosterReceived,
-    TResult Function(PairingCommandDto_StartSync value)? startSync,
+    TResult Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult Function(PairChannelCommandDto_Log value)? log,
     required TResult orElse(),
   }) {
-    if (surfaceApprovalPrompt != null) {
-      return surfaceApprovalPrompt(this);
+    if (loadHistory != null) {
+      return loadHistory(this);
     }
     return orElse();
   }
 }
 
-abstract class PairingCommandDto_SurfaceApprovalPrompt
-    extends PairingCommandDto {
-  const factory PairingCommandDto_SurfaceApprovalPrompt(
-          {required final String deviceName, required final String did}) =
-      _$PairingCommandDto_SurfaceApprovalPromptImpl;
-  const PairingCommandDto_SurfaceApprovalPrompt._() : super._();
+abstract class PairChannelCommandDto_LoadHistory extends PairChannelCommandDto {
+  const factory PairChannelCommandDto_LoadHistory(
+          {required final Uint8List token}) =
+      _$PairChannelCommandDto_LoadHistoryImpl;
+  const PairChannelCommandDto_LoadHistory._() : super._();
 
-  String get deviceName;
-  String get did;
+  Uint8List get token;
 
-  /// Create a copy of PairingCommandDto
+  /// Create a copy of PairChannelCommandDto
   /// with the given fields replaced by the non-null parameter values.
   @JsonKey(includeFromJson: false, includeToJson: false)
-  _$$PairingCommandDto_SurfaceApprovalPromptImplCopyWith<
-          _$PairingCommandDto_SurfaceApprovalPromptImpl>
+  _$$PairChannelCommandDto_LoadHistoryImplCopyWith<
+          _$PairChannelCommandDto_LoadHistoryImpl>
       get copyWith => throw _privateConstructorUsedError;
 }
 
 /// @nodoc
-abstract class _$$PairingCommandDto_PersistRingImplCopyWith<$Res> {
-  factory _$$PairingCommandDto_PersistRingImplCopyWith(
-          _$PairingCommandDto_PersistRingImpl value,
-          $Res Function(_$PairingCommandDto_PersistRingImpl) then) =
-      __$$PairingCommandDto_PersistRingImplCopyWithImpl<$Res>;
+abstract class _$$PairChannelCommandDto_StoreMessagesImplCopyWith<$Res> {
+  factory _$$PairChannelCommandDto_StoreMessagesImplCopyWith(
+          _$PairChannelCommandDto_StoreMessagesImpl value,
+          $Res Function(_$PairChannelCommandDto_StoreMessagesImpl) then) =
+      __$$PairChannelCommandDto_StoreMessagesImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({String convId, List<SyncMessageDto> messages});
+}
+
+/// @nodoc
+class __$$PairChannelCommandDto_StoreMessagesImplCopyWithImpl<$Res>
+    extends _$PairChannelCommandDtoCopyWithImpl<$Res,
+        _$PairChannelCommandDto_StoreMessagesImpl>
+    implements _$$PairChannelCommandDto_StoreMessagesImplCopyWith<$Res> {
+  __$$PairChannelCommandDto_StoreMessagesImplCopyWithImpl(
+      _$PairChannelCommandDto_StoreMessagesImpl _value,
+      $Res Function(_$PairChannelCommandDto_StoreMessagesImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? convId = null,
+    Object? messages = null,
+  }) {
+    return _then(_$PairChannelCommandDto_StoreMessagesImpl(
+      convId: null == convId
+          ? _value.convId
+          : convId // ignore: cast_nullable_to_non_nullable
+              as String,
+      messages: null == messages
+          ? _value._messages
+          : messages // ignore: cast_nullable_to_non_nullable
+              as List<SyncMessageDto>,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$PairChannelCommandDto_StoreMessagesImpl
+    extends PairChannelCommandDto_StoreMessages {
+  const _$PairChannelCommandDto_StoreMessagesImpl(
+      {required this.convId, required final List<SyncMessageDto> messages})
+      : _messages = messages,
+        super._();
+
+  @override
+  final String convId;
+  final List<SyncMessageDto> _messages;
+  @override
+  List<SyncMessageDto> get messages {
+    if (_messages is EqualUnmodifiableListView) return _messages;
+    // ignore: implicit_dynamic_type
+    return EqualUnmodifiableListView(_messages);
+  }
+
+  @override
+  String toString() {
+    return 'PairChannelCommandDto.storeMessages(convId: $convId, messages: $messages)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$PairChannelCommandDto_StoreMessagesImpl &&
+            (identical(other.convId, convId) || other.convId == convId) &&
+            const DeepCollectionEquality().equals(other._messages, _messages));
+  }
+
+  @override
+  int get hashCode => Object.hash(
+      runtimeType, convId, const DeepCollectionEquality().hash(_messages));
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$PairChannelCommandDto_StoreMessagesImplCopyWith<
+          _$PairChannelCommandDto_StoreMessagesImpl>
+      get copyWith => __$$PairChannelCommandDto_StoreMessagesImplCopyWithImpl<
+          _$PairChannelCommandDto_StoreMessagesImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(Uint8List token) sendPairOffer,
+    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String url, Uint8List token) connectPair,
+    required TResult Function(Uint8List data) sendFrame,
+    required TResult Function() closePair,
+    required TResult Function() dropPair,
+    required TResult Function(Uint8List tag, Uint8List ciphertext)
+        publishRingEvent,
+    required TResult Function(Uint8List token) loadHistory,
+    required TResult Function(String convId, List<SyncMessageDto> messages)
+        storeMessages,
+    required TResult Function() saveMlsState,
+    required TResult Function() saveRingState,
+    required TResult Function(Uint8List ringId) ringJoined,
+    required TResult Function(Uint8List ringId) deviceAdmitted,
+    required TResult Function(Uint8List deviceId, Uint8List scanPubkey)
+        siblingStealthLearned,
+    required TResult Function(SyncTallyDto tally) transferComplete,
+    required TResult Function(String detail, bool duringPairing) transferFailed,
+    required TResult Function(String line) log,
+  }) {
+    return storeMessages(convId, messages);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(Uint8List token)? sendPairOffer,
+    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String url, Uint8List token)? connectPair,
+    TResult? Function(Uint8List data)? sendFrame,
+    TResult? Function()? closePair,
+    TResult? Function()? dropPair,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult? Function(Uint8List token)? loadHistory,
+    TResult? Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult? Function()? saveMlsState,
+    TResult? Function()? saveRingState,
+    TResult? Function(Uint8List ringId)? ringJoined,
+    TResult? Function(Uint8List ringId)? deviceAdmitted,
+    TResult? Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult? Function(SyncTallyDto tally)? transferComplete,
+    TResult? Function(String detail, bool duringPairing)? transferFailed,
+    TResult? Function(String line)? log,
+  }) {
+    return storeMessages?.call(convId, messages);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(Uint8List token)? sendPairOffer,
+    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String url, Uint8List token)? connectPair,
+    TResult Function(Uint8List data)? sendFrame,
+    TResult Function()? closePair,
+    TResult Function()? dropPair,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult Function(Uint8List token)? loadHistory,
+    TResult Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult Function()? saveMlsState,
+    TResult Function()? saveRingState,
+    TResult Function(Uint8List ringId)? ringJoined,
+    TResult Function(Uint8List ringId)? deviceAdmitted,
+    TResult Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult Function(SyncTallyDto tally)? transferComplete,
+    TResult Function(String detail, bool duringPairing)? transferFailed,
+    TResult Function(String line)? log,
+    required TResult orElse(),
+  }) {
+    if (storeMessages != null) {
+      return storeMessages(convId, messages);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(PairChannelCommandDto_SendPairOffer value)
+        sendPairOffer,
+    required TResult Function(PairChannelCommandDto_SendPairJoin value)
+        sendPairJoin,
+    required TResult Function(PairChannelCommandDto_ConnectPair value)
+        connectPair,
+    required TResult Function(PairChannelCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairChannelCommandDto_ClosePair value) closePair,
+    required TResult Function(PairChannelCommandDto_DropPair value) dropPair,
+    required TResult Function(PairChannelCommandDto_PublishRingEvent value)
+        publishRingEvent,
+    required TResult Function(PairChannelCommandDto_LoadHistory value)
+        loadHistory,
+    required TResult Function(PairChannelCommandDto_StoreMessages value)
+        storeMessages,
+    required TResult Function(PairChannelCommandDto_SaveMlsState value)
+        saveMlsState,
+    required TResult Function(PairChannelCommandDto_SaveRingState value)
+        saveRingState,
+    required TResult Function(PairChannelCommandDto_RingJoined value)
+        ringJoined,
+    required TResult Function(PairChannelCommandDto_DeviceAdmitted value)
+        deviceAdmitted,
+    required TResult Function(PairChannelCommandDto_SiblingStealthLearned value)
+        siblingStealthLearned,
+    required TResult Function(PairChannelCommandDto_TransferComplete value)
+        transferComplete,
+    required TResult Function(PairChannelCommandDto_TransferFailed value)
+        transferFailed,
+    required TResult Function(PairChannelCommandDto_Log value) log,
+  }) {
+    return storeMessages(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult? Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult? Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult? Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult? Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult? Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult? Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult? Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult? Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult? Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult? Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult? Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult? Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult? Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult? Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult? Function(PairChannelCommandDto_Log value)? log,
+  }) {
+    return storeMessages?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult Function(PairChannelCommandDto_Log value)? log,
+    required TResult orElse(),
+  }) {
+    if (storeMessages != null) {
+      return storeMessages(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class PairChannelCommandDto_StoreMessages
+    extends PairChannelCommandDto {
+  const factory PairChannelCommandDto_StoreMessages(
+          {required final String convId,
+          required final List<SyncMessageDto> messages}) =
+      _$PairChannelCommandDto_StoreMessagesImpl;
+  const PairChannelCommandDto_StoreMessages._() : super._();
+
+  String get convId;
+  List<SyncMessageDto> get messages;
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$PairChannelCommandDto_StoreMessagesImplCopyWith<
+          _$PairChannelCommandDto_StoreMessagesImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class _$$PairChannelCommandDto_SaveMlsStateImplCopyWith<$Res> {
+  factory _$$PairChannelCommandDto_SaveMlsStateImplCopyWith(
+          _$PairChannelCommandDto_SaveMlsStateImpl value,
+          $Res Function(_$PairChannelCommandDto_SaveMlsStateImpl) then) =
+      __$$PairChannelCommandDto_SaveMlsStateImplCopyWithImpl<$Res>;
+}
+
+/// @nodoc
+class __$$PairChannelCommandDto_SaveMlsStateImplCopyWithImpl<$Res>
+    extends _$PairChannelCommandDtoCopyWithImpl<$Res,
+        _$PairChannelCommandDto_SaveMlsStateImpl>
+    implements _$$PairChannelCommandDto_SaveMlsStateImplCopyWith<$Res> {
+  __$$PairChannelCommandDto_SaveMlsStateImplCopyWithImpl(
+      _$PairChannelCommandDto_SaveMlsStateImpl _value,
+      $Res Function(_$PairChannelCommandDto_SaveMlsStateImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+}
+
+/// @nodoc
+
+class _$PairChannelCommandDto_SaveMlsStateImpl
+    extends PairChannelCommandDto_SaveMlsState {
+  const _$PairChannelCommandDto_SaveMlsStateImpl() : super._();
+
+  @override
+  String toString() {
+    return 'PairChannelCommandDto.saveMlsState()';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$PairChannelCommandDto_SaveMlsStateImpl);
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(Uint8List token) sendPairOffer,
+    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String url, Uint8List token) connectPair,
+    required TResult Function(Uint8List data) sendFrame,
+    required TResult Function() closePair,
+    required TResult Function() dropPair,
+    required TResult Function(Uint8List tag, Uint8List ciphertext)
+        publishRingEvent,
+    required TResult Function(Uint8List token) loadHistory,
+    required TResult Function(String convId, List<SyncMessageDto> messages)
+        storeMessages,
+    required TResult Function() saveMlsState,
+    required TResult Function() saveRingState,
+    required TResult Function(Uint8List ringId) ringJoined,
+    required TResult Function(Uint8List ringId) deviceAdmitted,
+    required TResult Function(Uint8List deviceId, Uint8List scanPubkey)
+        siblingStealthLearned,
+    required TResult Function(SyncTallyDto tally) transferComplete,
+    required TResult Function(String detail, bool duringPairing) transferFailed,
+    required TResult Function(String line) log,
+  }) {
+    return saveMlsState();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(Uint8List token)? sendPairOffer,
+    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String url, Uint8List token)? connectPair,
+    TResult? Function(Uint8List data)? sendFrame,
+    TResult? Function()? closePair,
+    TResult? Function()? dropPair,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult? Function(Uint8List token)? loadHistory,
+    TResult? Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult? Function()? saveMlsState,
+    TResult? Function()? saveRingState,
+    TResult? Function(Uint8List ringId)? ringJoined,
+    TResult? Function(Uint8List ringId)? deviceAdmitted,
+    TResult? Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult? Function(SyncTallyDto tally)? transferComplete,
+    TResult? Function(String detail, bool duringPairing)? transferFailed,
+    TResult? Function(String line)? log,
+  }) {
+    return saveMlsState?.call();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(Uint8List token)? sendPairOffer,
+    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String url, Uint8List token)? connectPair,
+    TResult Function(Uint8List data)? sendFrame,
+    TResult Function()? closePair,
+    TResult Function()? dropPair,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult Function(Uint8List token)? loadHistory,
+    TResult Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult Function()? saveMlsState,
+    TResult Function()? saveRingState,
+    TResult Function(Uint8List ringId)? ringJoined,
+    TResult Function(Uint8List ringId)? deviceAdmitted,
+    TResult Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult Function(SyncTallyDto tally)? transferComplete,
+    TResult Function(String detail, bool duringPairing)? transferFailed,
+    TResult Function(String line)? log,
+    required TResult orElse(),
+  }) {
+    if (saveMlsState != null) {
+      return saveMlsState();
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(PairChannelCommandDto_SendPairOffer value)
+        sendPairOffer,
+    required TResult Function(PairChannelCommandDto_SendPairJoin value)
+        sendPairJoin,
+    required TResult Function(PairChannelCommandDto_ConnectPair value)
+        connectPair,
+    required TResult Function(PairChannelCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairChannelCommandDto_ClosePair value) closePair,
+    required TResult Function(PairChannelCommandDto_DropPair value) dropPair,
+    required TResult Function(PairChannelCommandDto_PublishRingEvent value)
+        publishRingEvent,
+    required TResult Function(PairChannelCommandDto_LoadHistory value)
+        loadHistory,
+    required TResult Function(PairChannelCommandDto_StoreMessages value)
+        storeMessages,
+    required TResult Function(PairChannelCommandDto_SaveMlsState value)
+        saveMlsState,
+    required TResult Function(PairChannelCommandDto_SaveRingState value)
+        saveRingState,
+    required TResult Function(PairChannelCommandDto_RingJoined value)
+        ringJoined,
+    required TResult Function(PairChannelCommandDto_DeviceAdmitted value)
+        deviceAdmitted,
+    required TResult Function(PairChannelCommandDto_SiblingStealthLearned value)
+        siblingStealthLearned,
+    required TResult Function(PairChannelCommandDto_TransferComplete value)
+        transferComplete,
+    required TResult Function(PairChannelCommandDto_TransferFailed value)
+        transferFailed,
+    required TResult Function(PairChannelCommandDto_Log value) log,
+  }) {
+    return saveMlsState(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult? Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult? Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult? Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult? Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult? Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult? Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult? Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult? Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult? Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult? Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult? Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult? Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult? Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult? Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult? Function(PairChannelCommandDto_Log value)? log,
+  }) {
+    return saveMlsState?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult Function(PairChannelCommandDto_Log value)? log,
+    required TResult orElse(),
+  }) {
+    if (saveMlsState != null) {
+      return saveMlsState(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class PairChannelCommandDto_SaveMlsState
+    extends PairChannelCommandDto {
+  const factory PairChannelCommandDto_SaveMlsState() =
+      _$PairChannelCommandDto_SaveMlsStateImpl;
+  const PairChannelCommandDto_SaveMlsState._() : super._();
+}
+
+/// @nodoc
+abstract class _$$PairChannelCommandDto_SaveRingStateImplCopyWith<$Res> {
+  factory _$$PairChannelCommandDto_SaveRingStateImplCopyWith(
+          _$PairChannelCommandDto_SaveRingStateImpl value,
+          $Res Function(_$PairChannelCommandDto_SaveRingStateImpl) then) =
+      __$$PairChannelCommandDto_SaveRingStateImplCopyWithImpl<$Res>;
+}
+
+/// @nodoc
+class __$$PairChannelCommandDto_SaveRingStateImplCopyWithImpl<$Res>
+    extends _$PairChannelCommandDtoCopyWithImpl<$Res,
+        _$PairChannelCommandDto_SaveRingStateImpl>
+    implements _$$PairChannelCommandDto_SaveRingStateImplCopyWith<$Res> {
+  __$$PairChannelCommandDto_SaveRingStateImplCopyWithImpl(
+      _$PairChannelCommandDto_SaveRingStateImpl _value,
+      $Res Function(_$PairChannelCommandDto_SaveRingStateImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+}
+
+/// @nodoc
+
+class _$PairChannelCommandDto_SaveRingStateImpl
+    extends PairChannelCommandDto_SaveRingState {
+  const _$PairChannelCommandDto_SaveRingStateImpl() : super._();
+
+  @override
+  String toString() {
+    return 'PairChannelCommandDto.saveRingState()';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$PairChannelCommandDto_SaveRingStateImpl);
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(Uint8List token) sendPairOffer,
+    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String url, Uint8List token) connectPair,
+    required TResult Function(Uint8List data) sendFrame,
+    required TResult Function() closePair,
+    required TResult Function() dropPair,
+    required TResult Function(Uint8List tag, Uint8List ciphertext)
+        publishRingEvent,
+    required TResult Function(Uint8List token) loadHistory,
+    required TResult Function(String convId, List<SyncMessageDto> messages)
+        storeMessages,
+    required TResult Function() saveMlsState,
+    required TResult Function() saveRingState,
+    required TResult Function(Uint8List ringId) ringJoined,
+    required TResult Function(Uint8List ringId) deviceAdmitted,
+    required TResult Function(Uint8List deviceId, Uint8List scanPubkey)
+        siblingStealthLearned,
+    required TResult Function(SyncTallyDto tally) transferComplete,
+    required TResult Function(String detail, bool duringPairing) transferFailed,
+    required TResult Function(String line) log,
+  }) {
+    return saveRingState();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(Uint8List token)? sendPairOffer,
+    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String url, Uint8List token)? connectPair,
+    TResult? Function(Uint8List data)? sendFrame,
+    TResult? Function()? closePair,
+    TResult? Function()? dropPair,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult? Function(Uint8List token)? loadHistory,
+    TResult? Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult? Function()? saveMlsState,
+    TResult? Function()? saveRingState,
+    TResult? Function(Uint8List ringId)? ringJoined,
+    TResult? Function(Uint8List ringId)? deviceAdmitted,
+    TResult? Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult? Function(SyncTallyDto tally)? transferComplete,
+    TResult? Function(String detail, bool duringPairing)? transferFailed,
+    TResult? Function(String line)? log,
+  }) {
+    return saveRingState?.call();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(Uint8List token)? sendPairOffer,
+    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String url, Uint8List token)? connectPair,
+    TResult Function(Uint8List data)? sendFrame,
+    TResult Function()? closePair,
+    TResult Function()? dropPair,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult Function(Uint8List token)? loadHistory,
+    TResult Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult Function()? saveMlsState,
+    TResult Function()? saveRingState,
+    TResult Function(Uint8List ringId)? ringJoined,
+    TResult Function(Uint8List ringId)? deviceAdmitted,
+    TResult Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult Function(SyncTallyDto tally)? transferComplete,
+    TResult Function(String detail, bool duringPairing)? transferFailed,
+    TResult Function(String line)? log,
+    required TResult orElse(),
+  }) {
+    if (saveRingState != null) {
+      return saveRingState();
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(PairChannelCommandDto_SendPairOffer value)
+        sendPairOffer,
+    required TResult Function(PairChannelCommandDto_SendPairJoin value)
+        sendPairJoin,
+    required TResult Function(PairChannelCommandDto_ConnectPair value)
+        connectPair,
+    required TResult Function(PairChannelCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairChannelCommandDto_ClosePair value) closePair,
+    required TResult Function(PairChannelCommandDto_DropPair value) dropPair,
+    required TResult Function(PairChannelCommandDto_PublishRingEvent value)
+        publishRingEvent,
+    required TResult Function(PairChannelCommandDto_LoadHistory value)
+        loadHistory,
+    required TResult Function(PairChannelCommandDto_StoreMessages value)
+        storeMessages,
+    required TResult Function(PairChannelCommandDto_SaveMlsState value)
+        saveMlsState,
+    required TResult Function(PairChannelCommandDto_SaveRingState value)
+        saveRingState,
+    required TResult Function(PairChannelCommandDto_RingJoined value)
+        ringJoined,
+    required TResult Function(PairChannelCommandDto_DeviceAdmitted value)
+        deviceAdmitted,
+    required TResult Function(PairChannelCommandDto_SiblingStealthLearned value)
+        siblingStealthLearned,
+    required TResult Function(PairChannelCommandDto_TransferComplete value)
+        transferComplete,
+    required TResult Function(PairChannelCommandDto_TransferFailed value)
+        transferFailed,
+    required TResult Function(PairChannelCommandDto_Log value) log,
+  }) {
+    return saveRingState(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult? Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult? Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult? Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult? Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult? Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult? Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult? Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult? Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult? Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult? Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult? Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult? Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult? Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult? Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult? Function(PairChannelCommandDto_Log value)? log,
+  }) {
+    return saveRingState?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult Function(PairChannelCommandDto_Log value)? log,
+    required TResult orElse(),
+  }) {
+    if (saveRingState != null) {
+      return saveRingState(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class PairChannelCommandDto_SaveRingState
+    extends PairChannelCommandDto {
+  const factory PairChannelCommandDto_SaveRingState() =
+      _$PairChannelCommandDto_SaveRingStateImpl;
+  const PairChannelCommandDto_SaveRingState._() : super._();
+}
+
+/// @nodoc
+abstract class _$$PairChannelCommandDto_RingJoinedImplCopyWith<$Res> {
+  factory _$$PairChannelCommandDto_RingJoinedImplCopyWith(
+          _$PairChannelCommandDto_RingJoinedImpl value,
+          $Res Function(_$PairChannelCommandDto_RingJoinedImpl) then) =
+      __$$PairChannelCommandDto_RingJoinedImplCopyWithImpl<$Res>;
   @useResult
   $Res call({Uint8List ringId});
 }
 
 /// @nodoc
-class __$$PairingCommandDto_PersistRingImplCopyWithImpl<$Res>
-    extends _$PairingCommandDtoCopyWithImpl<$Res,
-        _$PairingCommandDto_PersistRingImpl>
-    implements _$$PairingCommandDto_PersistRingImplCopyWith<$Res> {
-  __$$PairingCommandDto_PersistRingImplCopyWithImpl(
-      _$PairingCommandDto_PersistRingImpl _value,
-      $Res Function(_$PairingCommandDto_PersistRingImpl) _then)
+class __$$PairChannelCommandDto_RingJoinedImplCopyWithImpl<$Res>
+    extends _$PairChannelCommandDtoCopyWithImpl<$Res,
+        _$PairChannelCommandDto_RingJoinedImpl>
+    implements _$$PairChannelCommandDto_RingJoinedImplCopyWith<$Res> {
+  __$$PairChannelCommandDto_RingJoinedImplCopyWithImpl(
+      _$PairChannelCommandDto_RingJoinedImpl _value,
+      $Res Function(_$PairChannelCommandDto_RingJoinedImpl) _then)
       : super(_value, _then);
 
-  /// Create a copy of PairingCommandDto
+  /// Create a copy of PairChannelCommandDto
   /// with the given fields replaced by the non-null parameter values.
   @pragma('vm:prefer-inline')
   @override
   $Res call({
     Object? ringId = null,
   }) {
-    return _then(_$PairingCommandDto_PersistRingImpl(
+    return _then(_$PairChannelCommandDto_RingJoinedImpl(
       ringId: null == ringId
           ? _value.ringId
           : ringId // ignore: cast_nullable_to_non_nullable
@@ -1481,23 +3113,24 @@ class __$$PairingCommandDto_PersistRingImplCopyWithImpl<$Res>
 
 /// @nodoc
 
-class _$PairingCommandDto_PersistRingImpl
-    extends PairingCommandDto_PersistRing {
-  const _$PairingCommandDto_PersistRingImpl({required this.ringId}) : super._();
+class _$PairChannelCommandDto_RingJoinedImpl
+    extends PairChannelCommandDto_RingJoined {
+  const _$PairChannelCommandDto_RingJoinedImpl({required this.ringId})
+      : super._();
 
   @override
   final Uint8List ringId;
 
   @override
   String toString() {
-    return 'PairingCommandDto.persistRing(ringId: $ringId)';
+    return 'PairChannelCommandDto.ringJoined(ringId: $ringId)';
   }
 
   @override
   bool operator ==(Object other) {
     return identical(this, other) ||
         (other.runtimeType == runtimeType &&
-            other is _$PairingCommandDto_PersistRingImpl &&
+            other is _$PairChannelCommandDto_RingJoinedImpl &&
             const DeepCollectionEquality().equals(other.ringId, ringId));
   }
 
@@ -1505,61 +3138,95 @@ class _$PairingCommandDto_PersistRingImpl
   int get hashCode =>
       Object.hash(runtimeType, const DeepCollectionEquality().hash(ringId));
 
-  /// Create a copy of PairingCommandDto
+  /// Create a copy of PairChannelCommandDto
   /// with the given fields replaced by the non-null parameter values.
   @JsonKey(includeFromJson: false, includeToJson: false)
   @override
   @pragma('vm:prefer-inline')
-  _$$PairingCommandDto_PersistRingImplCopyWith<
-          _$PairingCommandDto_PersistRingImpl>
-      get copyWith => __$$PairingCommandDto_PersistRingImplCopyWithImpl<
-          _$PairingCommandDto_PersistRingImpl>(this, _$identity);
+  _$$PairChannelCommandDto_RingJoinedImplCopyWith<
+          _$PairChannelCommandDto_RingJoinedImpl>
+      get copyWith => __$$PairChannelCommandDto_RingJoinedImplCopyWithImpl<
+          _$PairChannelCommandDto_RingJoinedImpl>(this, _$identity);
 
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List ciphertext) sendFrame,
-    required TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)
-        seedKpPool,
+    required TResult Function(Uint8List token) sendPairOffer,
+    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String url, Uint8List token) connectPair,
+    required TResult Function(Uint8List data) sendFrame,
+    required TResult Function() closePair,
+    required TResult Function() dropPair,
     required TResult Function(Uint8List tag, Uint8List ciphertext)
-        publishRingCommit,
-    required TResult Function(String deviceName, String did)
-        surfaceApprovalPrompt,
-    required TResult Function(Uint8List ringId) persistRing,
-    required TResult Function(List<SiblingInfoDto> roster) rosterReceived,
-    required TResult Function() startSync,
+        publishRingEvent,
+    required TResult Function(Uint8List token) loadHistory,
+    required TResult Function(String convId, List<SyncMessageDto> messages)
+        storeMessages,
+    required TResult Function() saveMlsState,
+    required TResult Function() saveRingState,
+    required TResult Function(Uint8List ringId) ringJoined,
+    required TResult Function(Uint8List ringId) deviceAdmitted,
+    required TResult Function(Uint8List deviceId, Uint8List scanPubkey)
+        siblingStealthLearned,
+    required TResult Function(SyncTallyDto tally) transferComplete,
+    required TResult Function(String detail, bool duringPairing) transferFailed,
+    required TResult Function(String line) log,
   }) {
-    return persistRing(ringId);
+    return ringJoined(ringId);
   }
 
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List ciphertext)? sendFrame,
-    TResult? Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
-    TResult? Function(String deviceName, String did)? surfaceApprovalPrompt,
-    TResult? Function(Uint8List ringId)? persistRing,
-    TResult? Function(List<SiblingInfoDto> roster)? rosterReceived,
-    TResult? Function()? startSync,
+    TResult? Function(Uint8List token)? sendPairOffer,
+    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String url, Uint8List token)? connectPair,
+    TResult? Function(Uint8List data)? sendFrame,
+    TResult? Function()? closePair,
+    TResult? Function()? dropPair,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult? Function(Uint8List token)? loadHistory,
+    TResult? Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult? Function()? saveMlsState,
+    TResult? Function()? saveRingState,
+    TResult? Function(Uint8List ringId)? ringJoined,
+    TResult? Function(Uint8List ringId)? deviceAdmitted,
+    TResult? Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult? Function(SyncTallyDto tally)? transferComplete,
+    TResult? Function(String detail, bool duringPairing)? transferFailed,
+    TResult? Function(String line)? log,
   }) {
-    return persistRing?.call(ringId);
+    return ringJoined?.call(ringId);
   }
 
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List ciphertext)? sendFrame,
-    TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
-    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
-    TResult Function(String deviceName, String did)? surfaceApprovalPrompt,
-    TResult Function(Uint8List ringId)? persistRing,
-    TResult Function(List<SiblingInfoDto> roster)? rosterReceived,
-    TResult Function()? startSync,
+    TResult Function(Uint8List token)? sendPairOffer,
+    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String url, Uint8List token)? connectPair,
+    TResult Function(Uint8List data)? sendFrame,
+    TResult Function()? closePair,
+    TResult Function()? dropPair,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult Function(Uint8List token)? loadHistory,
+    TResult Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult Function()? saveMlsState,
+    TResult Function()? saveRingState,
+    TResult Function(Uint8List ringId)? ringJoined,
+    TResult Function(Uint8List ringId)? deviceAdmitted,
+    TResult Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult Function(SyncTallyDto tally)? transferComplete,
+    TResult Function(String detail, bool duringPairing)? transferFailed,
+    TResult Function(String line)? log,
     required TResult orElse(),
   }) {
-    if (persistRing != null) {
-      return persistRing(ringId);
+    if (ringJoined != null) {
+      return ringJoined(ringId);
     }
     return orElse();
   }
@@ -1567,197 +3234,271 @@ class _$PairingCommandDto_PersistRingImpl
   @override
   @optionalTypeArgs
   TResult map<TResult extends Object?>({
-    required TResult Function(PairingCommandDto_SendFrame value) sendFrame,
-    required TResult Function(PairingCommandDto_SeedKpPool value) seedKpPool,
-    required TResult Function(PairingCommandDto_PublishRingCommit value)
-        publishRingCommit,
-    required TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)
-        surfaceApprovalPrompt,
-    required TResult Function(PairingCommandDto_PersistRing value) persistRing,
-    required TResult Function(PairingCommandDto_RosterReceived value)
-        rosterReceived,
-    required TResult Function(PairingCommandDto_StartSync value) startSync,
+    required TResult Function(PairChannelCommandDto_SendPairOffer value)
+        sendPairOffer,
+    required TResult Function(PairChannelCommandDto_SendPairJoin value)
+        sendPairJoin,
+    required TResult Function(PairChannelCommandDto_ConnectPair value)
+        connectPair,
+    required TResult Function(PairChannelCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairChannelCommandDto_ClosePair value) closePair,
+    required TResult Function(PairChannelCommandDto_DropPair value) dropPair,
+    required TResult Function(PairChannelCommandDto_PublishRingEvent value)
+        publishRingEvent,
+    required TResult Function(PairChannelCommandDto_LoadHistory value)
+        loadHistory,
+    required TResult Function(PairChannelCommandDto_StoreMessages value)
+        storeMessages,
+    required TResult Function(PairChannelCommandDto_SaveMlsState value)
+        saveMlsState,
+    required TResult Function(PairChannelCommandDto_SaveRingState value)
+        saveRingState,
+    required TResult Function(PairChannelCommandDto_RingJoined value)
+        ringJoined,
+    required TResult Function(PairChannelCommandDto_DeviceAdmitted value)
+        deviceAdmitted,
+    required TResult Function(PairChannelCommandDto_SiblingStealthLearned value)
+        siblingStealthLearned,
+    required TResult Function(PairChannelCommandDto_TransferComplete value)
+        transferComplete,
+    required TResult Function(PairChannelCommandDto_TransferFailed value)
+        transferFailed,
+    required TResult Function(PairChannelCommandDto_Log value) log,
   }) {
-    return persistRing(this);
+    return ringJoined(this);
   }
 
   @override
   @optionalTypeArgs
   TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(PairingCommandDto_SendFrame value)? sendFrame,
-    TResult? Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
-    TResult? Function(PairingCommandDto_PublishRingCommit value)?
-        publishRingCommit,
-    TResult? Function(PairingCommandDto_SurfaceApprovalPrompt value)?
-        surfaceApprovalPrompt,
-    TResult? Function(PairingCommandDto_PersistRing value)? persistRing,
-    TResult? Function(PairingCommandDto_RosterReceived value)? rosterReceived,
-    TResult? Function(PairingCommandDto_StartSync value)? startSync,
+    TResult? Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult? Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult? Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult? Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult? Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult? Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult? Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult? Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult? Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult? Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult? Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult? Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult? Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult? Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult? Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult? Function(PairChannelCommandDto_Log value)? log,
   }) {
-    return persistRing?.call(this);
+    return ringJoined?.call(this);
   }
 
   @override
   @optionalTypeArgs
   TResult maybeMap<TResult extends Object?>({
-    TResult Function(PairingCommandDto_SendFrame value)? sendFrame,
-    TResult Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
-    TResult Function(PairingCommandDto_PublishRingCommit value)?
-        publishRingCommit,
-    TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)?
-        surfaceApprovalPrompt,
-    TResult Function(PairingCommandDto_PersistRing value)? persistRing,
-    TResult Function(PairingCommandDto_RosterReceived value)? rosterReceived,
-    TResult Function(PairingCommandDto_StartSync value)? startSync,
+    TResult Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult Function(PairChannelCommandDto_Log value)? log,
     required TResult orElse(),
   }) {
-    if (persistRing != null) {
-      return persistRing(this);
+    if (ringJoined != null) {
+      return ringJoined(this);
     }
     return orElse();
   }
 }
 
-abstract class PairingCommandDto_PersistRing extends PairingCommandDto {
-  const factory PairingCommandDto_PersistRing(
-      {required final Uint8List ringId}) = _$PairingCommandDto_PersistRingImpl;
-  const PairingCommandDto_PersistRing._() : super._();
+abstract class PairChannelCommandDto_RingJoined extends PairChannelCommandDto {
+  const factory PairChannelCommandDto_RingJoined(
+          {required final Uint8List ringId}) =
+      _$PairChannelCommandDto_RingJoinedImpl;
+  const PairChannelCommandDto_RingJoined._() : super._();
 
   Uint8List get ringId;
 
-  /// Create a copy of PairingCommandDto
+  /// Create a copy of PairChannelCommandDto
   /// with the given fields replaced by the non-null parameter values.
   @JsonKey(includeFromJson: false, includeToJson: false)
-  _$$PairingCommandDto_PersistRingImplCopyWith<
-          _$PairingCommandDto_PersistRingImpl>
+  _$$PairChannelCommandDto_RingJoinedImplCopyWith<
+          _$PairChannelCommandDto_RingJoinedImpl>
       get copyWith => throw _privateConstructorUsedError;
 }
 
 /// @nodoc
-abstract class _$$PairingCommandDto_RosterReceivedImplCopyWith<$Res> {
-  factory _$$PairingCommandDto_RosterReceivedImplCopyWith(
-          _$PairingCommandDto_RosterReceivedImpl value,
-          $Res Function(_$PairingCommandDto_RosterReceivedImpl) then) =
-      __$$PairingCommandDto_RosterReceivedImplCopyWithImpl<$Res>;
+abstract class _$$PairChannelCommandDto_DeviceAdmittedImplCopyWith<$Res> {
+  factory _$$PairChannelCommandDto_DeviceAdmittedImplCopyWith(
+          _$PairChannelCommandDto_DeviceAdmittedImpl value,
+          $Res Function(_$PairChannelCommandDto_DeviceAdmittedImpl) then) =
+      __$$PairChannelCommandDto_DeviceAdmittedImplCopyWithImpl<$Res>;
   @useResult
-  $Res call({List<SiblingInfoDto> roster});
+  $Res call({Uint8List ringId});
 }
 
 /// @nodoc
-class __$$PairingCommandDto_RosterReceivedImplCopyWithImpl<$Res>
-    extends _$PairingCommandDtoCopyWithImpl<$Res,
-        _$PairingCommandDto_RosterReceivedImpl>
-    implements _$$PairingCommandDto_RosterReceivedImplCopyWith<$Res> {
-  __$$PairingCommandDto_RosterReceivedImplCopyWithImpl(
-      _$PairingCommandDto_RosterReceivedImpl _value,
-      $Res Function(_$PairingCommandDto_RosterReceivedImpl) _then)
+class __$$PairChannelCommandDto_DeviceAdmittedImplCopyWithImpl<$Res>
+    extends _$PairChannelCommandDtoCopyWithImpl<$Res,
+        _$PairChannelCommandDto_DeviceAdmittedImpl>
+    implements _$$PairChannelCommandDto_DeviceAdmittedImplCopyWith<$Res> {
+  __$$PairChannelCommandDto_DeviceAdmittedImplCopyWithImpl(
+      _$PairChannelCommandDto_DeviceAdmittedImpl _value,
+      $Res Function(_$PairChannelCommandDto_DeviceAdmittedImpl) _then)
       : super(_value, _then);
 
-  /// Create a copy of PairingCommandDto
+  /// Create a copy of PairChannelCommandDto
   /// with the given fields replaced by the non-null parameter values.
   @pragma('vm:prefer-inline')
   @override
   $Res call({
-    Object? roster = null,
+    Object? ringId = null,
   }) {
-    return _then(_$PairingCommandDto_RosterReceivedImpl(
-      roster: null == roster
-          ? _value._roster
-          : roster // ignore: cast_nullable_to_non_nullable
-              as List<SiblingInfoDto>,
+    return _then(_$PairChannelCommandDto_DeviceAdmittedImpl(
+      ringId: null == ringId
+          ? _value.ringId
+          : ringId // ignore: cast_nullable_to_non_nullable
+              as Uint8List,
     ));
   }
 }
 
 /// @nodoc
 
-class _$PairingCommandDto_RosterReceivedImpl
-    extends PairingCommandDto_RosterReceived {
-  const _$PairingCommandDto_RosterReceivedImpl(
-      {required final List<SiblingInfoDto> roster})
-      : _roster = roster,
-        super._();
+class _$PairChannelCommandDto_DeviceAdmittedImpl
+    extends PairChannelCommandDto_DeviceAdmitted {
+  const _$PairChannelCommandDto_DeviceAdmittedImpl({required this.ringId})
+      : super._();
 
-  final List<SiblingInfoDto> _roster;
   @override
-  List<SiblingInfoDto> get roster {
-    if (_roster is EqualUnmodifiableListView) return _roster;
-    // ignore: implicit_dynamic_type
-    return EqualUnmodifiableListView(_roster);
-  }
+  final Uint8List ringId;
 
   @override
   String toString() {
-    return 'PairingCommandDto.rosterReceived(roster: $roster)';
+    return 'PairChannelCommandDto.deviceAdmitted(ringId: $ringId)';
   }
 
   @override
   bool operator ==(Object other) {
     return identical(this, other) ||
         (other.runtimeType == runtimeType &&
-            other is _$PairingCommandDto_RosterReceivedImpl &&
-            const DeepCollectionEquality().equals(other._roster, _roster));
+            other is _$PairChannelCommandDto_DeviceAdmittedImpl &&
+            const DeepCollectionEquality().equals(other.ringId, ringId));
   }
 
   @override
   int get hashCode =>
-      Object.hash(runtimeType, const DeepCollectionEquality().hash(_roster));
+      Object.hash(runtimeType, const DeepCollectionEquality().hash(ringId));
 
-  /// Create a copy of PairingCommandDto
+  /// Create a copy of PairChannelCommandDto
   /// with the given fields replaced by the non-null parameter values.
   @JsonKey(includeFromJson: false, includeToJson: false)
   @override
   @pragma('vm:prefer-inline')
-  _$$PairingCommandDto_RosterReceivedImplCopyWith<
-          _$PairingCommandDto_RosterReceivedImpl>
-      get copyWith => __$$PairingCommandDto_RosterReceivedImplCopyWithImpl<
-          _$PairingCommandDto_RosterReceivedImpl>(this, _$identity);
+  _$$PairChannelCommandDto_DeviceAdmittedImplCopyWith<
+          _$PairChannelCommandDto_DeviceAdmittedImpl>
+      get copyWith => __$$PairChannelCommandDto_DeviceAdmittedImplCopyWithImpl<
+          _$PairChannelCommandDto_DeviceAdmittedImpl>(this, _$identity);
 
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List ciphertext) sendFrame,
-    required TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)
-        seedKpPool,
+    required TResult Function(Uint8List token) sendPairOffer,
+    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String url, Uint8List token) connectPair,
+    required TResult Function(Uint8List data) sendFrame,
+    required TResult Function() closePair,
+    required TResult Function() dropPair,
     required TResult Function(Uint8List tag, Uint8List ciphertext)
-        publishRingCommit,
-    required TResult Function(String deviceName, String did)
-        surfaceApprovalPrompt,
-    required TResult Function(Uint8List ringId) persistRing,
-    required TResult Function(List<SiblingInfoDto> roster) rosterReceived,
-    required TResult Function() startSync,
+        publishRingEvent,
+    required TResult Function(Uint8List token) loadHistory,
+    required TResult Function(String convId, List<SyncMessageDto> messages)
+        storeMessages,
+    required TResult Function() saveMlsState,
+    required TResult Function() saveRingState,
+    required TResult Function(Uint8List ringId) ringJoined,
+    required TResult Function(Uint8List ringId) deviceAdmitted,
+    required TResult Function(Uint8List deviceId, Uint8List scanPubkey)
+        siblingStealthLearned,
+    required TResult Function(SyncTallyDto tally) transferComplete,
+    required TResult Function(String detail, bool duringPairing) transferFailed,
+    required TResult Function(String line) log,
   }) {
-    return rosterReceived(roster);
+    return deviceAdmitted(ringId);
   }
 
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List ciphertext)? sendFrame,
-    TResult? Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
-    TResult? Function(String deviceName, String did)? surfaceApprovalPrompt,
-    TResult? Function(Uint8List ringId)? persistRing,
-    TResult? Function(List<SiblingInfoDto> roster)? rosterReceived,
-    TResult? Function()? startSync,
+    TResult? Function(Uint8List token)? sendPairOffer,
+    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String url, Uint8List token)? connectPair,
+    TResult? Function(Uint8List data)? sendFrame,
+    TResult? Function()? closePair,
+    TResult? Function()? dropPair,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult? Function(Uint8List token)? loadHistory,
+    TResult? Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult? Function()? saveMlsState,
+    TResult? Function()? saveRingState,
+    TResult? Function(Uint8List ringId)? ringJoined,
+    TResult? Function(Uint8List ringId)? deviceAdmitted,
+    TResult? Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult? Function(SyncTallyDto tally)? transferComplete,
+    TResult? Function(String detail, bool duringPairing)? transferFailed,
+    TResult? Function(String line)? log,
   }) {
-    return rosterReceived?.call(roster);
+    return deviceAdmitted?.call(ringId);
   }
 
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List ciphertext)? sendFrame,
-    TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
-    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
-    TResult Function(String deviceName, String did)? surfaceApprovalPrompt,
-    TResult Function(Uint8List ringId)? persistRing,
-    TResult Function(List<SiblingInfoDto> roster)? rosterReceived,
-    TResult Function()? startSync,
+    TResult Function(Uint8List token)? sendPairOffer,
+    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String url, Uint8List token)? connectPair,
+    TResult Function(Uint8List data)? sendFrame,
+    TResult Function()? closePair,
+    TResult Function()? dropPair,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult Function(Uint8List token)? loadHistory,
+    TResult Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult Function()? saveMlsState,
+    TResult Function()? saveRingState,
+    TResult Function(Uint8List ringId)? ringJoined,
+    TResult Function(Uint8List ringId)? deviceAdmitted,
+    TResult Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult Function(SyncTallyDto tally)? transferComplete,
+    TResult Function(String detail, bool duringPairing)? transferFailed,
+    TResult Function(String line)? log,
     required TResult orElse(),
   }) {
-    if (rosterReceived != null) {
-      return rosterReceived(roster);
+    if (deviceAdmitted != null) {
+      return deviceAdmitted(ringId);
     }
     return orElse();
   }
@@ -1765,160 +3506,289 @@ class _$PairingCommandDto_RosterReceivedImpl
   @override
   @optionalTypeArgs
   TResult map<TResult extends Object?>({
-    required TResult Function(PairingCommandDto_SendFrame value) sendFrame,
-    required TResult Function(PairingCommandDto_SeedKpPool value) seedKpPool,
-    required TResult Function(PairingCommandDto_PublishRingCommit value)
-        publishRingCommit,
-    required TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)
-        surfaceApprovalPrompt,
-    required TResult Function(PairingCommandDto_PersistRing value) persistRing,
-    required TResult Function(PairingCommandDto_RosterReceived value)
-        rosterReceived,
-    required TResult Function(PairingCommandDto_StartSync value) startSync,
+    required TResult Function(PairChannelCommandDto_SendPairOffer value)
+        sendPairOffer,
+    required TResult Function(PairChannelCommandDto_SendPairJoin value)
+        sendPairJoin,
+    required TResult Function(PairChannelCommandDto_ConnectPair value)
+        connectPair,
+    required TResult Function(PairChannelCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairChannelCommandDto_ClosePair value) closePair,
+    required TResult Function(PairChannelCommandDto_DropPair value) dropPair,
+    required TResult Function(PairChannelCommandDto_PublishRingEvent value)
+        publishRingEvent,
+    required TResult Function(PairChannelCommandDto_LoadHistory value)
+        loadHistory,
+    required TResult Function(PairChannelCommandDto_StoreMessages value)
+        storeMessages,
+    required TResult Function(PairChannelCommandDto_SaveMlsState value)
+        saveMlsState,
+    required TResult Function(PairChannelCommandDto_SaveRingState value)
+        saveRingState,
+    required TResult Function(PairChannelCommandDto_RingJoined value)
+        ringJoined,
+    required TResult Function(PairChannelCommandDto_DeviceAdmitted value)
+        deviceAdmitted,
+    required TResult Function(PairChannelCommandDto_SiblingStealthLearned value)
+        siblingStealthLearned,
+    required TResult Function(PairChannelCommandDto_TransferComplete value)
+        transferComplete,
+    required TResult Function(PairChannelCommandDto_TransferFailed value)
+        transferFailed,
+    required TResult Function(PairChannelCommandDto_Log value) log,
   }) {
-    return rosterReceived(this);
+    return deviceAdmitted(this);
   }
 
   @override
   @optionalTypeArgs
   TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(PairingCommandDto_SendFrame value)? sendFrame,
-    TResult? Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
-    TResult? Function(PairingCommandDto_PublishRingCommit value)?
-        publishRingCommit,
-    TResult? Function(PairingCommandDto_SurfaceApprovalPrompt value)?
-        surfaceApprovalPrompt,
-    TResult? Function(PairingCommandDto_PersistRing value)? persistRing,
-    TResult? Function(PairingCommandDto_RosterReceived value)? rosterReceived,
-    TResult? Function(PairingCommandDto_StartSync value)? startSync,
+    TResult? Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult? Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult? Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult? Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult? Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult? Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult? Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult? Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult? Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult? Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult? Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult? Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult? Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult? Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult? Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult? Function(PairChannelCommandDto_Log value)? log,
   }) {
-    return rosterReceived?.call(this);
+    return deviceAdmitted?.call(this);
   }
 
   @override
   @optionalTypeArgs
   TResult maybeMap<TResult extends Object?>({
-    TResult Function(PairingCommandDto_SendFrame value)? sendFrame,
-    TResult Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
-    TResult Function(PairingCommandDto_PublishRingCommit value)?
-        publishRingCommit,
-    TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)?
-        surfaceApprovalPrompt,
-    TResult Function(PairingCommandDto_PersistRing value)? persistRing,
-    TResult Function(PairingCommandDto_RosterReceived value)? rosterReceived,
-    TResult Function(PairingCommandDto_StartSync value)? startSync,
+    TResult Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult Function(PairChannelCommandDto_Log value)? log,
     required TResult orElse(),
   }) {
-    if (rosterReceived != null) {
-      return rosterReceived(this);
+    if (deviceAdmitted != null) {
+      return deviceAdmitted(this);
     }
     return orElse();
   }
 }
 
-abstract class PairingCommandDto_RosterReceived extends PairingCommandDto {
-  const factory PairingCommandDto_RosterReceived(
-          {required final List<SiblingInfoDto> roster}) =
-      _$PairingCommandDto_RosterReceivedImpl;
-  const PairingCommandDto_RosterReceived._() : super._();
+abstract class PairChannelCommandDto_DeviceAdmitted
+    extends PairChannelCommandDto {
+  const factory PairChannelCommandDto_DeviceAdmitted(
+          {required final Uint8List ringId}) =
+      _$PairChannelCommandDto_DeviceAdmittedImpl;
+  const PairChannelCommandDto_DeviceAdmitted._() : super._();
 
-  List<SiblingInfoDto> get roster;
+  Uint8List get ringId;
 
-  /// Create a copy of PairingCommandDto
+  /// Create a copy of PairChannelCommandDto
   /// with the given fields replaced by the non-null parameter values.
   @JsonKey(includeFromJson: false, includeToJson: false)
-  _$$PairingCommandDto_RosterReceivedImplCopyWith<
-          _$PairingCommandDto_RosterReceivedImpl>
+  _$$PairChannelCommandDto_DeviceAdmittedImplCopyWith<
+          _$PairChannelCommandDto_DeviceAdmittedImpl>
       get copyWith => throw _privateConstructorUsedError;
 }
 
 /// @nodoc
-abstract class _$$PairingCommandDto_StartSyncImplCopyWith<$Res> {
-  factory _$$PairingCommandDto_StartSyncImplCopyWith(
-          _$PairingCommandDto_StartSyncImpl value,
-          $Res Function(_$PairingCommandDto_StartSyncImpl) then) =
-      __$$PairingCommandDto_StartSyncImplCopyWithImpl<$Res>;
+abstract class _$$PairChannelCommandDto_SiblingStealthLearnedImplCopyWith<
+    $Res> {
+  factory _$$PairChannelCommandDto_SiblingStealthLearnedImplCopyWith(
+          _$PairChannelCommandDto_SiblingStealthLearnedImpl value,
+          $Res Function(_$PairChannelCommandDto_SiblingStealthLearnedImpl)
+              then) =
+      __$$PairChannelCommandDto_SiblingStealthLearnedImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({Uint8List deviceId, Uint8List scanPubkey});
 }
 
 /// @nodoc
-class __$$PairingCommandDto_StartSyncImplCopyWithImpl<$Res>
-    extends _$PairingCommandDtoCopyWithImpl<$Res,
-        _$PairingCommandDto_StartSyncImpl>
-    implements _$$PairingCommandDto_StartSyncImplCopyWith<$Res> {
-  __$$PairingCommandDto_StartSyncImplCopyWithImpl(
-      _$PairingCommandDto_StartSyncImpl _value,
-      $Res Function(_$PairingCommandDto_StartSyncImpl) _then)
+class __$$PairChannelCommandDto_SiblingStealthLearnedImplCopyWithImpl<$Res>
+    extends _$PairChannelCommandDtoCopyWithImpl<$Res,
+        _$PairChannelCommandDto_SiblingStealthLearnedImpl>
+    implements
+        _$$PairChannelCommandDto_SiblingStealthLearnedImplCopyWith<$Res> {
+  __$$PairChannelCommandDto_SiblingStealthLearnedImplCopyWithImpl(
+      _$PairChannelCommandDto_SiblingStealthLearnedImpl _value,
+      $Res Function(_$PairChannelCommandDto_SiblingStealthLearnedImpl) _then)
       : super(_value, _then);
 
-  /// Create a copy of PairingCommandDto
+  /// Create a copy of PairChannelCommandDto
   /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? deviceId = null,
+    Object? scanPubkey = null,
+  }) {
+    return _then(_$PairChannelCommandDto_SiblingStealthLearnedImpl(
+      deviceId: null == deviceId
+          ? _value.deviceId
+          : deviceId // ignore: cast_nullable_to_non_nullable
+              as Uint8List,
+      scanPubkey: null == scanPubkey
+          ? _value.scanPubkey
+          : scanPubkey // ignore: cast_nullable_to_non_nullable
+              as Uint8List,
+    ));
+  }
 }
 
 /// @nodoc
 
-class _$PairingCommandDto_StartSyncImpl extends PairingCommandDto_StartSync {
-  const _$PairingCommandDto_StartSyncImpl() : super._();
+class _$PairChannelCommandDto_SiblingStealthLearnedImpl
+    extends PairChannelCommandDto_SiblingStealthLearned {
+  const _$PairChannelCommandDto_SiblingStealthLearnedImpl(
+      {required this.deviceId, required this.scanPubkey})
+      : super._();
+
+  @override
+  final Uint8List deviceId;
+  @override
+  final Uint8List scanPubkey;
 
   @override
   String toString() {
-    return 'PairingCommandDto.startSync()';
+    return 'PairChannelCommandDto.siblingStealthLearned(deviceId: $deviceId, scanPubkey: $scanPubkey)';
   }
 
   @override
   bool operator ==(Object other) {
     return identical(this, other) ||
         (other.runtimeType == runtimeType &&
-            other is _$PairingCommandDto_StartSyncImpl);
+            other is _$PairChannelCommandDto_SiblingStealthLearnedImpl &&
+            const DeepCollectionEquality().equals(other.deviceId, deviceId) &&
+            const DeepCollectionEquality()
+                .equals(other.scanPubkey, scanPubkey));
   }
 
   @override
-  int get hashCode => runtimeType.hashCode;
+  int get hashCode => Object.hash(
+      runtimeType,
+      const DeepCollectionEquality().hash(deviceId),
+      const DeepCollectionEquality().hash(scanPubkey));
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$PairChannelCommandDto_SiblingStealthLearnedImplCopyWith<
+          _$PairChannelCommandDto_SiblingStealthLearnedImpl>
+      get copyWith =>
+          __$$PairChannelCommandDto_SiblingStealthLearnedImplCopyWithImpl<
+                  _$PairChannelCommandDto_SiblingStealthLearnedImpl>(
+              this, _$identity);
 
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List ciphertext) sendFrame,
-    required TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)
-        seedKpPool,
+    required TResult Function(Uint8List token) sendPairOffer,
+    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String url, Uint8List token) connectPair,
+    required TResult Function(Uint8List data) sendFrame,
+    required TResult Function() closePair,
+    required TResult Function() dropPair,
     required TResult Function(Uint8List tag, Uint8List ciphertext)
-        publishRingCommit,
-    required TResult Function(String deviceName, String did)
-        surfaceApprovalPrompt,
-    required TResult Function(Uint8List ringId) persistRing,
-    required TResult Function(List<SiblingInfoDto> roster) rosterReceived,
-    required TResult Function() startSync,
+        publishRingEvent,
+    required TResult Function(Uint8List token) loadHistory,
+    required TResult Function(String convId, List<SyncMessageDto> messages)
+        storeMessages,
+    required TResult Function() saveMlsState,
+    required TResult Function() saveRingState,
+    required TResult Function(Uint8List ringId) ringJoined,
+    required TResult Function(Uint8List ringId) deviceAdmitted,
+    required TResult Function(Uint8List deviceId, Uint8List scanPubkey)
+        siblingStealthLearned,
+    required TResult Function(SyncTallyDto tally) transferComplete,
+    required TResult Function(String detail, bool duringPairing) transferFailed,
+    required TResult Function(String line) log,
   }) {
-    return startSync();
+    return siblingStealthLearned(deviceId, scanPubkey);
   }
 
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List ciphertext)? sendFrame,
-    TResult? Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
-    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
-    TResult? Function(String deviceName, String did)? surfaceApprovalPrompt,
-    TResult? Function(Uint8List ringId)? persistRing,
-    TResult? Function(List<SiblingInfoDto> roster)? rosterReceived,
-    TResult? Function()? startSync,
+    TResult? Function(Uint8List token)? sendPairOffer,
+    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String url, Uint8List token)? connectPair,
+    TResult? Function(Uint8List data)? sendFrame,
+    TResult? Function()? closePair,
+    TResult? Function()? dropPair,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult? Function(Uint8List token)? loadHistory,
+    TResult? Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult? Function()? saveMlsState,
+    TResult? Function()? saveRingState,
+    TResult? Function(Uint8List ringId)? ringJoined,
+    TResult? Function(Uint8List ringId)? deviceAdmitted,
+    TResult? Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult? Function(SyncTallyDto tally)? transferComplete,
+    TResult? Function(String detail, bool duringPairing)? transferFailed,
+    TResult? Function(String line)? log,
   }) {
-    return startSync?.call();
+    return siblingStealthLearned?.call(deviceId, scanPubkey);
   }
 
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List ciphertext)? sendFrame,
-    TResult Function(Uint8List deviceId, List<OfferedKpDto> kps)? seedKpPool,
-    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingCommit,
-    TResult Function(String deviceName, String did)? surfaceApprovalPrompt,
-    TResult Function(Uint8List ringId)? persistRing,
-    TResult Function(List<SiblingInfoDto> roster)? rosterReceived,
-    TResult Function()? startSync,
+    TResult Function(Uint8List token)? sendPairOffer,
+    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String url, Uint8List token)? connectPair,
+    TResult Function(Uint8List data)? sendFrame,
+    TResult Function()? closePair,
+    TResult Function()? dropPair,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult Function(Uint8List token)? loadHistory,
+    TResult Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult Function()? saveMlsState,
+    TResult Function()? saveRingState,
+    TResult Function(Uint8List ringId)? ringJoined,
+    TResult Function(Uint8List ringId)? deviceAdmitted,
+    TResult Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult Function(SyncTallyDto tally)? transferComplete,
+    TResult Function(String detail, bool duringPairing)? transferFailed,
+    TResult Function(String line)? log,
     required TResult orElse(),
   }) {
-    if (startSync != null) {
-      return startSync();
+    if (siblingStealthLearned != null) {
+      return siblingStealthLearned(deviceId, scanPubkey);
     }
     return orElse();
   }
@@ -1926,61 +3796,942 @@ class _$PairingCommandDto_StartSyncImpl extends PairingCommandDto_StartSync {
   @override
   @optionalTypeArgs
   TResult map<TResult extends Object?>({
-    required TResult Function(PairingCommandDto_SendFrame value) sendFrame,
-    required TResult Function(PairingCommandDto_SeedKpPool value) seedKpPool,
-    required TResult Function(PairingCommandDto_PublishRingCommit value)
-        publishRingCommit,
-    required TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)
-        surfaceApprovalPrompt,
-    required TResult Function(PairingCommandDto_PersistRing value) persistRing,
-    required TResult Function(PairingCommandDto_RosterReceived value)
-        rosterReceived,
-    required TResult Function(PairingCommandDto_StartSync value) startSync,
+    required TResult Function(PairChannelCommandDto_SendPairOffer value)
+        sendPairOffer,
+    required TResult Function(PairChannelCommandDto_SendPairJoin value)
+        sendPairJoin,
+    required TResult Function(PairChannelCommandDto_ConnectPair value)
+        connectPair,
+    required TResult Function(PairChannelCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairChannelCommandDto_ClosePair value) closePair,
+    required TResult Function(PairChannelCommandDto_DropPair value) dropPair,
+    required TResult Function(PairChannelCommandDto_PublishRingEvent value)
+        publishRingEvent,
+    required TResult Function(PairChannelCommandDto_LoadHistory value)
+        loadHistory,
+    required TResult Function(PairChannelCommandDto_StoreMessages value)
+        storeMessages,
+    required TResult Function(PairChannelCommandDto_SaveMlsState value)
+        saveMlsState,
+    required TResult Function(PairChannelCommandDto_SaveRingState value)
+        saveRingState,
+    required TResult Function(PairChannelCommandDto_RingJoined value)
+        ringJoined,
+    required TResult Function(PairChannelCommandDto_DeviceAdmitted value)
+        deviceAdmitted,
+    required TResult Function(PairChannelCommandDto_SiblingStealthLearned value)
+        siblingStealthLearned,
+    required TResult Function(PairChannelCommandDto_TransferComplete value)
+        transferComplete,
+    required TResult Function(PairChannelCommandDto_TransferFailed value)
+        transferFailed,
+    required TResult Function(PairChannelCommandDto_Log value) log,
   }) {
-    return startSync(this);
+    return siblingStealthLearned(this);
   }
 
   @override
   @optionalTypeArgs
   TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(PairingCommandDto_SendFrame value)? sendFrame,
-    TResult? Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
-    TResult? Function(PairingCommandDto_PublishRingCommit value)?
-        publishRingCommit,
-    TResult? Function(PairingCommandDto_SurfaceApprovalPrompt value)?
-        surfaceApprovalPrompt,
-    TResult? Function(PairingCommandDto_PersistRing value)? persistRing,
-    TResult? Function(PairingCommandDto_RosterReceived value)? rosterReceived,
-    TResult? Function(PairingCommandDto_StartSync value)? startSync,
+    TResult? Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult? Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult? Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult? Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult? Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult? Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult? Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult? Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult? Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult? Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult? Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult? Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult? Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult? Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult? Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult? Function(PairChannelCommandDto_Log value)? log,
   }) {
-    return startSync?.call(this);
+    return siblingStealthLearned?.call(this);
   }
 
   @override
   @optionalTypeArgs
   TResult maybeMap<TResult extends Object?>({
-    TResult Function(PairingCommandDto_SendFrame value)? sendFrame,
-    TResult Function(PairingCommandDto_SeedKpPool value)? seedKpPool,
-    TResult Function(PairingCommandDto_PublishRingCommit value)?
-        publishRingCommit,
-    TResult Function(PairingCommandDto_SurfaceApprovalPrompt value)?
-        surfaceApprovalPrompt,
-    TResult Function(PairingCommandDto_PersistRing value)? persistRing,
-    TResult Function(PairingCommandDto_RosterReceived value)? rosterReceived,
-    TResult Function(PairingCommandDto_StartSync value)? startSync,
+    TResult Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult Function(PairChannelCommandDto_Log value)? log,
     required TResult orElse(),
   }) {
-    if (startSync != null) {
-      return startSync(this);
+    if (siblingStealthLearned != null) {
+      return siblingStealthLearned(this);
     }
     return orElse();
   }
 }
 
-abstract class PairingCommandDto_StartSync extends PairingCommandDto {
-  const factory PairingCommandDto_StartSync() =
-      _$PairingCommandDto_StartSyncImpl;
-  const PairingCommandDto_StartSync._() : super._();
+abstract class PairChannelCommandDto_SiblingStealthLearned
+    extends PairChannelCommandDto {
+  const factory PairChannelCommandDto_SiblingStealthLearned(
+          {required final Uint8List deviceId,
+          required final Uint8List scanPubkey}) =
+      _$PairChannelCommandDto_SiblingStealthLearnedImpl;
+  const PairChannelCommandDto_SiblingStealthLearned._() : super._();
+
+  Uint8List get deviceId;
+  Uint8List get scanPubkey;
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$PairChannelCommandDto_SiblingStealthLearnedImplCopyWith<
+          _$PairChannelCommandDto_SiblingStealthLearnedImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class _$$PairChannelCommandDto_TransferCompleteImplCopyWith<$Res> {
+  factory _$$PairChannelCommandDto_TransferCompleteImplCopyWith(
+          _$PairChannelCommandDto_TransferCompleteImpl value,
+          $Res Function(_$PairChannelCommandDto_TransferCompleteImpl) then) =
+      __$$PairChannelCommandDto_TransferCompleteImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({SyncTallyDto tally});
+}
+
+/// @nodoc
+class __$$PairChannelCommandDto_TransferCompleteImplCopyWithImpl<$Res>
+    extends _$PairChannelCommandDtoCopyWithImpl<$Res,
+        _$PairChannelCommandDto_TransferCompleteImpl>
+    implements _$$PairChannelCommandDto_TransferCompleteImplCopyWith<$Res> {
+  __$$PairChannelCommandDto_TransferCompleteImplCopyWithImpl(
+      _$PairChannelCommandDto_TransferCompleteImpl _value,
+      $Res Function(_$PairChannelCommandDto_TransferCompleteImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? tally = null,
+  }) {
+    return _then(_$PairChannelCommandDto_TransferCompleteImpl(
+      tally: null == tally
+          ? _value.tally
+          : tally // ignore: cast_nullable_to_non_nullable
+              as SyncTallyDto,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$PairChannelCommandDto_TransferCompleteImpl
+    extends PairChannelCommandDto_TransferComplete {
+  const _$PairChannelCommandDto_TransferCompleteImpl({required this.tally})
+      : super._();
+
+  @override
+  final SyncTallyDto tally;
+
+  @override
+  String toString() {
+    return 'PairChannelCommandDto.transferComplete(tally: $tally)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$PairChannelCommandDto_TransferCompleteImpl &&
+            (identical(other.tally, tally) || other.tally == tally));
+  }
+
+  @override
+  int get hashCode => Object.hash(runtimeType, tally);
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$PairChannelCommandDto_TransferCompleteImplCopyWith<
+          _$PairChannelCommandDto_TransferCompleteImpl>
+      get copyWith =>
+          __$$PairChannelCommandDto_TransferCompleteImplCopyWithImpl<
+              _$PairChannelCommandDto_TransferCompleteImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(Uint8List token) sendPairOffer,
+    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String url, Uint8List token) connectPair,
+    required TResult Function(Uint8List data) sendFrame,
+    required TResult Function() closePair,
+    required TResult Function() dropPair,
+    required TResult Function(Uint8List tag, Uint8List ciphertext)
+        publishRingEvent,
+    required TResult Function(Uint8List token) loadHistory,
+    required TResult Function(String convId, List<SyncMessageDto> messages)
+        storeMessages,
+    required TResult Function() saveMlsState,
+    required TResult Function() saveRingState,
+    required TResult Function(Uint8List ringId) ringJoined,
+    required TResult Function(Uint8List ringId) deviceAdmitted,
+    required TResult Function(Uint8List deviceId, Uint8List scanPubkey)
+        siblingStealthLearned,
+    required TResult Function(SyncTallyDto tally) transferComplete,
+    required TResult Function(String detail, bool duringPairing) transferFailed,
+    required TResult Function(String line) log,
+  }) {
+    return transferComplete(tally);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(Uint8List token)? sendPairOffer,
+    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String url, Uint8List token)? connectPair,
+    TResult? Function(Uint8List data)? sendFrame,
+    TResult? Function()? closePair,
+    TResult? Function()? dropPair,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult? Function(Uint8List token)? loadHistory,
+    TResult? Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult? Function()? saveMlsState,
+    TResult? Function()? saveRingState,
+    TResult? Function(Uint8List ringId)? ringJoined,
+    TResult? Function(Uint8List ringId)? deviceAdmitted,
+    TResult? Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult? Function(SyncTallyDto tally)? transferComplete,
+    TResult? Function(String detail, bool duringPairing)? transferFailed,
+    TResult? Function(String line)? log,
+  }) {
+    return transferComplete?.call(tally);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(Uint8List token)? sendPairOffer,
+    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String url, Uint8List token)? connectPair,
+    TResult Function(Uint8List data)? sendFrame,
+    TResult Function()? closePair,
+    TResult Function()? dropPair,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult Function(Uint8List token)? loadHistory,
+    TResult Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult Function()? saveMlsState,
+    TResult Function()? saveRingState,
+    TResult Function(Uint8List ringId)? ringJoined,
+    TResult Function(Uint8List ringId)? deviceAdmitted,
+    TResult Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult Function(SyncTallyDto tally)? transferComplete,
+    TResult Function(String detail, bool duringPairing)? transferFailed,
+    TResult Function(String line)? log,
+    required TResult orElse(),
+  }) {
+    if (transferComplete != null) {
+      return transferComplete(tally);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(PairChannelCommandDto_SendPairOffer value)
+        sendPairOffer,
+    required TResult Function(PairChannelCommandDto_SendPairJoin value)
+        sendPairJoin,
+    required TResult Function(PairChannelCommandDto_ConnectPair value)
+        connectPair,
+    required TResult Function(PairChannelCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairChannelCommandDto_ClosePair value) closePair,
+    required TResult Function(PairChannelCommandDto_DropPair value) dropPair,
+    required TResult Function(PairChannelCommandDto_PublishRingEvent value)
+        publishRingEvent,
+    required TResult Function(PairChannelCommandDto_LoadHistory value)
+        loadHistory,
+    required TResult Function(PairChannelCommandDto_StoreMessages value)
+        storeMessages,
+    required TResult Function(PairChannelCommandDto_SaveMlsState value)
+        saveMlsState,
+    required TResult Function(PairChannelCommandDto_SaveRingState value)
+        saveRingState,
+    required TResult Function(PairChannelCommandDto_RingJoined value)
+        ringJoined,
+    required TResult Function(PairChannelCommandDto_DeviceAdmitted value)
+        deviceAdmitted,
+    required TResult Function(PairChannelCommandDto_SiblingStealthLearned value)
+        siblingStealthLearned,
+    required TResult Function(PairChannelCommandDto_TransferComplete value)
+        transferComplete,
+    required TResult Function(PairChannelCommandDto_TransferFailed value)
+        transferFailed,
+    required TResult Function(PairChannelCommandDto_Log value) log,
+  }) {
+    return transferComplete(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult? Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult? Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult? Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult? Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult? Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult? Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult? Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult? Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult? Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult? Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult? Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult? Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult? Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult? Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult? Function(PairChannelCommandDto_Log value)? log,
+  }) {
+    return transferComplete?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult Function(PairChannelCommandDto_Log value)? log,
+    required TResult orElse(),
+  }) {
+    if (transferComplete != null) {
+      return transferComplete(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class PairChannelCommandDto_TransferComplete
+    extends PairChannelCommandDto {
+  const factory PairChannelCommandDto_TransferComplete(
+          {required final SyncTallyDto tally}) =
+      _$PairChannelCommandDto_TransferCompleteImpl;
+  const PairChannelCommandDto_TransferComplete._() : super._();
+
+  SyncTallyDto get tally;
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$PairChannelCommandDto_TransferCompleteImplCopyWith<
+          _$PairChannelCommandDto_TransferCompleteImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class _$$PairChannelCommandDto_TransferFailedImplCopyWith<$Res> {
+  factory _$$PairChannelCommandDto_TransferFailedImplCopyWith(
+          _$PairChannelCommandDto_TransferFailedImpl value,
+          $Res Function(_$PairChannelCommandDto_TransferFailedImpl) then) =
+      __$$PairChannelCommandDto_TransferFailedImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({String detail, bool duringPairing});
+}
+
+/// @nodoc
+class __$$PairChannelCommandDto_TransferFailedImplCopyWithImpl<$Res>
+    extends _$PairChannelCommandDtoCopyWithImpl<$Res,
+        _$PairChannelCommandDto_TransferFailedImpl>
+    implements _$$PairChannelCommandDto_TransferFailedImplCopyWith<$Res> {
+  __$$PairChannelCommandDto_TransferFailedImplCopyWithImpl(
+      _$PairChannelCommandDto_TransferFailedImpl _value,
+      $Res Function(_$PairChannelCommandDto_TransferFailedImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? detail = null,
+    Object? duringPairing = null,
+  }) {
+    return _then(_$PairChannelCommandDto_TransferFailedImpl(
+      detail: null == detail
+          ? _value.detail
+          : detail // ignore: cast_nullable_to_non_nullable
+              as String,
+      duringPairing: null == duringPairing
+          ? _value.duringPairing
+          : duringPairing // ignore: cast_nullable_to_non_nullable
+              as bool,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$PairChannelCommandDto_TransferFailedImpl
+    extends PairChannelCommandDto_TransferFailed {
+  const _$PairChannelCommandDto_TransferFailedImpl(
+      {required this.detail, required this.duringPairing})
+      : super._();
+
+  @override
+  final String detail;
+  @override
+  final bool duringPairing;
+
+  @override
+  String toString() {
+    return 'PairChannelCommandDto.transferFailed(detail: $detail, duringPairing: $duringPairing)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$PairChannelCommandDto_TransferFailedImpl &&
+            (identical(other.detail, detail) || other.detail == detail) &&
+            (identical(other.duringPairing, duringPairing) ||
+                other.duringPairing == duringPairing));
+  }
+
+  @override
+  int get hashCode => Object.hash(runtimeType, detail, duringPairing);
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$PairChannelCommandDto_TransferFailedImplCopyWith<
+          _$PairChannelCommandDto_TransferFailedImpl>
+      get copyWith => __$$PairChannelCommandDto_TransferFailedImplCopyWithImpl<
+          _$PairChannelCommandDto_TransferFailedImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(Uint8List token) sendPairOffer,
+    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String url, Uint8List token) connectPair,
+    required TResult Function(Uint8List data) sendFrame,
+    required TResult Function() closePair,
+    required TResult Function() dropPair,
+    required TResult Function(Uint8List tag, Uint8List ciphertext)
+        publishRingEvent,
+    required TResult Function(Uint8List token) loadHistory,
+    required TResult Function(String convId, List<SyncMessageDto> messages)
+        storeMessages,
+    required TResult Function() saveMlsState,
+    required TResult Function() saveRingState,
+    required TResult Function(Uint8List ringId) ringJoined,
+    required TResult Function(Uint8List ringId) deviceAdmitted,
+    required TResult Function(Uint8List deviceId, Uint8List scanPubkey)
+        siblingStealthLearned,
+    required TResult Function(SyncTallyDto tally) transferComplete,
+    required TResult Function(String detail, bool duringPairing) transferFailed,
+    required TResult Function(String line) log,
+  }) {
+    return transferFailed(detail, duringPairing);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(Uint8List token)? sendPairOffer,
+    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String url, Uint8List token)? connectPair,
+    TResult? Function(Uint8List data)? sendFrame,
+    TResult? Function()? closePair,
+    TResult? Function()? dropPair,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult? Function(Uint8List token)? loadHistory,
+    TResult? Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult? Function()? saveMlsState,
+    TResult? Function()? saveRingState,
+    TResult? Function(Uint8List ringId)? ringJoined,
+    TResult? Function(Uint8List ringId)? deviceAdmitted,
+    TResult? Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult? Function(SyncTallyDto tally)? transferComplete,
+    TResult? Function(String detail, bool duringPairing)? transferFailed,
+    TResult? Function(String line)? log,
+  }) {
+    return transferFailed?.call(detail, duringPairing);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(Uint8List token)? sendPairOffer,
+    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String url, Uint8List token)? connectPair,
+    TResult Function(Uint8List data)? sendFrame,
+    TResult Function()? closePair,
+    TResult Function()? dropPair,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult Function(Uint8List token)? loadHistory,
+    TResult Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult Function()? saveMlsState,
+    TResult Function()? saveRingState,
+    TResult Function(Uint8List ringId)? ringJoined,
+    TResult Function(Uint8List ringId)? deviceAdmitted,
+    TResult Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult Function(SyncTallyDto tally)? transferComplete,
+    TResult Function(String detail, bool duringPairing)? transferFailed,
+    TResult Function(String line)? log,
+    required TResult orElse(),
+  }) {
+    if (transferFailed != null) {
+      return transferFailed(detail, duringPairing);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(PairChannelCommandDto_SendPairOffer value)
+        sendPairOffer,
+    required TResult Function(PairChannelCommandDto_SendPairJoin value)
+        sendPairJoin,
+    required TResult Function(PairChannelCommandDto_ConnectPair value)
+        connectPair,
+    required TResult Function(PairChannelCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairChannelCommandDto_ClosePair value) closePair,
+    required TResult Function(PairChannelCommandDto_DropPair value) dropPair,
+    required TResult Function(PairChannelCommandDto_PublishRingEvent value)
+        publishRingEvent,
+    required TResult Function(PairChannelCommandDto_LoadHistory value)
+        loadHistory,
+    required TResult Function(PairChannelCommandDto_StoreMessages value)
+        storeMessages,
+    required TResult Function(PairChannelCommandDto_SaveMlsState value)
+        saveMlsState,
+    required TResult Function(PairChannelCommandDto_SaveRingState value)
+        saveRingState,
+    required TResult Function(PairChannelCommandDto_RingJoined value)
+        ringJoined,
+    required TResult Function(PairChannelCommandDto_DeviceAdmitted value)
+        deviceAdmitted,
+    required TResult Function(PairChannelCommandDto_SiblingStealthLearned value)
+        siblingStealthLearned,
+    required TResult Function(PairChannelCommandDto_TransferComplete value)
+        transferComplete,
+    required TResult Function(PairChannelCommandDto_TransferFailed value)
+        transferFailed,
+    required TResult Function(PairChannelCommandDto_Log value) log,
+  }) {
+    return transferFailed(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult? Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult? Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult? Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult? Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult? Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult? Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult? Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult? Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult? Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult? Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult? Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult? Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult? Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult? Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult? Function(PairChannelCommandDto_Log value)? log,
+  }) {
+    return transferFailed?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult Function(PairChannelCommandDto_Log value)? log,
+    required TResult orElse(),
+  }) {
+    if (transferFailed != null) {
+      return transferFailed(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class PairChannelCommandDto_TransferFailed
+    extends PairChannelCommandDto {
+  const factory PairChannelCommandDto_TransferFailed(
+          {required final String detail, required final bool duringPairing}) =
+      _$PairChannelCommandDto_TransferFailedImpl;
+  const PairChannelCommandDto_TransferFailed._() : super._();
+
+  String get detail;
+  bool get duringPairing;
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$PairChannelCommandDto_TransferFailedImplCopyWith<
+          _$PairChannelCommandDto_TransferFailedImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class _$$PairChannelCommandDto_LogImplCopyWith<$Res> {
+  factory _$$PairChannelCommandDto_LogImplCopyWith(
+          _$PairChannelCommandDto_LogImpl value,
+          $Res Function(_$PairChannelCommandDto_LogImpl) then) =
+      __$$PairChannelCommandDto_LogImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({String line});
+}
+
+/// @nodoc
+class __$$PairChannelCommandDto_LogImplCopyWithImpl<$Res>
+    extends _$PairChannelCommandDtoCopyWithImpl<$Res,
+        _$PairChannelCommandDto_LogImpl>
+    implements _$$PairChannelCommandDto_LogImplCopyWith<$Res> {
+  __$$PairChannelCommandDto_LogImplCopyWithImpl(
+      _$PairChannelCommandDto_LogImpl _value,
+      $Res Function(_$PairChannelCommandDto_LogImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? line = null,
+  }) {
+    return _then(_$PairChannelCommandDto_LogImpl(
+      line: null == line
+          ? _value.line
+          : line // ignore: cast_nullable_to_non_nullable
+              as String,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$PairChannelCommandDto_LogImpl extends PairChannelCommandDto_Log {
+  const _$PairChannelCommandDto_LogImpl({required this.line}) : super._();
+
+  @override
+  final String line;
+
+  @override
+  String toString() {
+    return 'PairChannelCommandDto.log(line: $line)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$PairChannelCommandDto_LogImpl &&
+            (identical(other.line, line) || other.line == line));
+  }
+
+  @override
+  int get hashCode => Object.hash(runtimeType, line);
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$PairChannelCommandDto_LogImplCopyWith<_$PairChannelCommandDto_LogImpl>
+      get copyWith => __$$PairChannelCommandDto_LogImplCopyWithImpl<
+          _$PairChannelCommandDto_LogImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(Uint8List token) sendPairOffer,
+    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String url, Uint8List token) connectPair,
+    required TResult Function(Uint8List data) sendFrame,
+    required TResult Function() closePair,
+    required TResult Function() dropPair,
+    required TResult Function(Uint8List tag, Uint8List ciphertext)
+        publishRingEvent,
+    required TResult Function(Uint8List token) loadHistory,
+    required TResult Function(String convId, List<SyncMessageDto> messages)
+        storeMessages,
+    required TResult Function() saveMlsState,
+    required TResult Function() saveRingState,
+    required TResult Function(Uint8List ringId) ringJoined,
+    required TResult Function(Uint8List ringId) deviceAdmitted,
+    required TResult Function(Uint8List deviceId, Uint8List scanPubkey)
+        siblingStealthLearned,
+    required TResult Function(SyncTallyDto tally) transferComplete,
+    required TResult Function(String detail, bool duringPairing) transferFailed,
+    required TResult Function(String line) log,
+  }) {
+    return log(line);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(Uint8List token)? sendPairOffer,
+    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String url, Uint8List token)? connectPair,
+    TResult? Function(Uint8List data)? sendFrame,
+    TResult? Function()? closePair,
+    TResult? Function()? dropPair,
+    TResult? Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult? Function(Uint8List token)? loadHistory,
+    TResult? Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult? Function()? saveMlsState,
+    TResult? Function()? saveRingState,
+    TResult? Function(Uint8List ringId)? ringJoined,
+    TResult? Function(Uint8List ringId)? deviceAdmitted,
+    TResult? Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult? Function(SyncTallyDto tally)? transferComplete,
+    TResult? Function(String detail, bool duringPairing)? transferFailed,
+    TResult? Function(String line)? log,
+  }) {
+    return log?.call(line);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(Uint8List token)? sendPairOffer,
+    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String url, Uint8List token)? connectPair,
+    TResult Function(Uint8List data)? sendFrame,
+    TResult Function()? closePair,
+    TResult Function()? dropPair,
+    TResult Function(Uint8List tag, Uint8List ciphertext)? publishRingEvent,
+    TResult Function(Uint8List token)? loadHistory,
+    TResult Function(String convId, List<SyncMessageDto> messages)?
+        storeMessages,
+    TResult Function()? saveMlsState,
+    TResult Function()? saveRingState,
+    TResult Function(Uint8List ringId)? ringJoined,
+    TResult Function(Uint8List ringId)? deviceAdmitted,
+    TResult Function(Uint8List deviceId, Uint8List scanPubkey)?
+        siblingStealthLearned,
+    TResult Function(SyncTallyDto tally)? transferComplete,
+    TResult Function(String detail, bool duringPairing)? transferFailed,
+    TResult Function(String line)? log,
+    required TResult orElse(),
+  }) {
+    if (log != null) {
+      return log(line);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(PairChannelCommandDto_SendPairOffer value)
+        sendPairOffer,
+    required TResult Function(PairChannelCommandDto_SendPairJoin value)
+        sendPairJoin,
+    required TResult Function(PairChannelCommandDto_ConnectPair value)
+        connectPair,
+    required TResult Function(PairChannelCommandDto_SendFrame value) sendFrame,
+    required TResult Function(PairChannelCommandDto_ClosePair value) closePair,
+    required TResult Function(PairChannelCommandDto_DropPair value) dropPair,
+    required TResult Function(PairChannelCommandDto_PublishRingEvent value)
+        publishRingEvent,
+    required TResult Function(PairChannelCommandDto_LoadHistory value)
+        loadHistory,
+    required TResult Function(PairChannelCommandDto_StoreMessages value)
+        storeMessages,
+    required TResult Function(PairChannelCommandDto_SaveMlsState value)
+        saveMlsState,
+    required TResult Function(PairChannelCommandDto_SaveRingState value)
+        saveRingState,
+    required TResult Function(PairChannelCommandDto_RingJoined value)
+        ringJoined,
+    required TResult Function(PairChannelCommandDto_DeviceAdmitted value)
+        deviceAdmitted,
+    required TResult Function(PairChannelCommandDto_SiblingStealthLearned value)
+        siblingStealthLearned,
+    required TResult Function(PairChannelCommandDto_TransferComplete value)
+        transferComplete,
+    required TResult Function(PairChannelCommandDto_TransferFailed value)
+        transferFailed,
+    required TResult Function(PairChannelCommandDto_Log value) log,
+  }) {
+    return log(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult? Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult? Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult? Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult? Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult? Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult? Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult? Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult? Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult? Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult? Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult? Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult? Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult? Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult? Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult? Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult? Function(PairChannelCommandDto_Log value)? log,
+  }) {
+    return log?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(PairChannelCommandDto_SendPairOffer value)? sendPairOffer,
+    TResult Function(PairChannelCommandDto_SendPairJoin value)? sendPairJoin,
+    TResult Function(PairChannelCommandDto_ConnectPair value)? connectPair,
+    TResult Function(PairChannelCommandDto_SendFrame value)? sendFrame,
+    TResult Function(PairChannelCommandDto_ClosePair value)? closePair,
+    TResult Function(PairChannelCommandDto_DropPair value)? dropPair,
+    TResult Function(PairChannelCommandDto_PublishRingEvent value)?
+        publishRingEvent,
+    TResult Function(PairChannelCommandDto_LoadHistory value)? loadHistory,
+    TResult Function(PairChannelCommandDto_StoreMessages value)? storeMessages,
+    TResult Function(PairChannelCommandDto_SaveMlsState value)? saveMlsState,
+    TResult Function(PairChannelCommandDto_SaveRingState value)? saveRingState,
+    TResult Function(PairChannelCommandDto_RingJoined value)? ringJoined,
+    TResult Function(PairChannelCommandDto_DeviceAdmitted value)?
+        deviceAdmitted,
+    TResult Function(PairChannelCommandDto_SiblingStealthLearned value)?
+        siblingStealthLearned,
+    TResult Function(PairChannelCommandDto_TransferComplete value)?
+        transferComplete,
+    TResult Function(PairChannelCommandDto_TransferFailed value)?
+        transferFailed,
+    TResult Function(PairChannelCommandDto_Log value)? log,
+    required TResult orElse(),
+  }) {
+    if (log != null) {
+      return log(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class PairChannelCommandDto_Log extends PairChannelCommandDto {
+  const factory PairChannelCommandDto_Log({required final String line}) =
+      _$PairChannelCommandDto_LogImpl;
+  const PairChannelCommandDto_Log._() : super._();
+
+  String get line;
+
+  /// Create a copy of PairChannelCommandDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$PairChannelCommandDto_LogImplCopyWith<_$PairChannelCommandDto_LogImpl>
+      get copyWith => throw _privateConstructorUsedError;
 }
 
 /// @nodoc
@@ -3802,493 +6553,6 @@ abstract class RingCommandDto_PollForNewDevices extends RingCommandDto {
 }
 
 /// @nodoc
-mixin _$RingMsgDto {
-  Uint8List get token => throw _privateConstructorUsedError;
-  Uint8List get secret => throw _privateConstructorUsedError;
-  Uint8List? get targetDeviceId => throw _privateConstructorUsedError;
-  @optionalTypeArgs
-  TResult when<TResult extends Object?>({
-    required TResult Function(
-            Uint8List token, Uint8List secret, Uint8List? targetDeviceId)
-        syncRequest,
-    required TResult Function(
-            Uint8List token, Uint8List secret, Uint8List targetDeviceId)
-        syncOffer,
-  }) =>
-      throw _privateConstructorUsedError;
-  @optionalTypeArgs
-  TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(
-            Uint8List token, Uint8List secret, Uint8List? targetDeviceId)?
-        syncRequest,
-    TResult? Function(
-            Uint8List token, Uint8List secret, Uint8List targetDeviceId)?
-        syncOffer,
-  }) =>
-      throw _privateConstructorUsedError;
-  @optionalTypeArgs
-  TResult maybeWhen<TResult extends Object?>({
-    TResult Function(
-            Uint8List token, Uint8List secret, Uint8List? targetDeviceId)?
-        syncRequest,
-    TResult Function(
-            Uint8List token, Uint8List secret, Uint8List targetDeviceId)?
-        syncOffer,
-    required TResult orElse(),
-  }) =>
-      throw _privateConstructorUsedError;
-  @optionalTypeArgs
-  TResult map<TResult extends Object?>({
-    required TResult Function(RingMsgDto_SyncRequest value) syncRequest,
-    required TResult Function(RingMsgDto_SyncOffer value) syncOffer,
-  }) =>
-      throw _privateConstructorUsedError;
-  @optionalTypeArgs
-  TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(RingMsgDto_SyncRequest value)? syncRequest,
-    TResult? Function(RingMsgDto_SyncOffer value)? syncOffer,
-  }) =>
-      throw _privateConstructorUsedError;
-  @optionalTypeArgs
-  TResult maybeMap<TResult extends Object?>({
-    TResult Function(RingMsgDto_SyncRequest value)? syncRequest,
-    TResult Function(RingMsgDto_SyncOffer value)? syncOffer,
-    required TResult orElse(),
-  }) =>
-      throw _privateConstructorUsedError;
-
-  /// Create a copy of RingMsgDto
-  /// with the given fields replaced by the non-null parameter values.
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  $RingMsgDtoCopyWith<RingMsgDto> get copyWith =>
-      throw _privateConstructorUsedError;
-}
-
-/// @nodoc
-abstract class $RingMsgDtoCopyWith<$Res> {
-  factory $RingMsgDtoCopyWith(
-          RingMsgDto value, $Res Function(RingMsgDto) then) =
-      _$RingMsgDtoCopyWithImpl<$Res, RingMsgDto>;
-  @useResult
-  $Res call({Uint8List token, Uint8List secret, Uint8List targetDeviceId});
-}
-
-/// @nodoc
-class _$RingMsgDtoCopyWithImpl<$Res, $Val extends RingMsgDto>
-    implements $RingMsgDtoCopyWith<$Res> {
-  _$RingMsgDtoCopyWithImpl(this._value, this._then);
-
-  // ignore: unused_field
-  final $Val _value;
-  // ignore: unused_field
-  final $Res Function($Val) _then;
-
-  /// Create a copy of RingMsgDto
-  /// with the given fields replaced by the non-null parameter values.
-  @pragma('vm:prefer-inline')
-  @override
-  $Res call({
-    Object? token = null,
-    Object? secret = null,
-    Object? targetDeviceId = null,
-  }) {
-    return _then(_value.copyWith(
-      token: null == token
-          ? _value.token
-          : token // ignore: cast_nullable_to_non_nullable
-              as Uint8List,
-      secret: null == secret
-          ? _value.secret
-          : secret // ignore: cast_nullable_to_non_nullable
-              as Uint8List,
-      targetDeviceId: null == targetDeviceId
-          ? _value.targetDeviceId!
-          : targetDeviceId // ignore: cast_nullable_to_non_nullable
-              as Uint8List,
-    ) as $Val);
-  }
-}
-
-/// @nodoc
-abstract class _$$RingMsgDto_SyncRequestImplCopyWith<$Res>
-    implements $RingMsgDtoCopyWith<$Res> {
-  factory _$$RingMsgDto_SyncRequestImplCopyWith(
-          _$RingMsgDto_SyncRequestImpl value,
-          $Res Function(_$RingMsgDto_SyncRequestImpl) then) =
-      __$$RingMsgDto_SyncRequestImplCopyWithImpl<$Res>;
-  @override
-  @useResult
-  $Res call({Uint8List token, Uint8List secret, Uint8List? targetDeviceId});
-}
-
-/// @nodoc
-class __$$RingMsgDto_SyncRequestImplCopyWithImpl<$Res>
-    extends _$RingMsgDtoCopyWithImpl<$Res, _$RingMsgDto_SyncRequestImpl>
-    implements _$$RingMsgDto_SyncRequestImplCopyWith<$Res> {
-  __$$RingMsgDto_SyncRequestImplCopyWithImpl(
-      _$RingMsgDto_SyncRequestImpl _value,
-      $Res Function(_$RingMsgDto_SyncRequestImpl) _then)
-      : super(_value, _then);
-
-  /// Create a copy of RingMsgDto
-  /// with the given fields replaced by the non-null parameter values.
-  @pragma('vm:prefer-inline')
-  @override
-  $Res call({
-    Object? token = null,
-    Object? secret = null,
-    Object? targetDeviceId = freezed,
-  }) {
-    return _then(_$RingMsgDto_SyncRequestImpl(
-      token: null == token
-          ? _value.token
-          : token // ignore: cast_nullable_to_non_nullable
-              as Uint8List,
-      secret: null == secret
-          ? _value.secret
-          : secret // ignore: cast_nullable_to_non_nullable
-              as Uint8List,
-      targetDeviceId: freezed == targetDeviceId
-          ? _value.targetDeviceId
-          : targetDeviceId // ignore: cast_nullable_to_non_nullable
-              as Uint8List?,
-    ));
-  }
-}
-
-/// @nodoc
-
-class _$RingMsgDto_SyncRequestImpl extends RingMsgDto_SyncRequest {
-  const _$RingMsgDto_SyncRequestImpl(
-      {required this.token, required this.secret, this.targetDeviceId})
-      : super._();
-
-  @override
-  final Uint8List token;
-  @override
-  final Uint8List secret;
-  @override
-  final Uint8List? targetDeviceId;
-
-  @override
-  String toString() {
-    return 'RingMsgDto.syncRequest(token: $token, secret: $secret, targetDeviceId: $targetDeviceId)';
-  }
-
-  @override
-  bool operator ==(Object other) {
-    return identical(this, other) ||
-        (other.runtimeType == runtimeType &&
-            other is _$RingMsgDto_SyncRequestImpl &&
-            const DeepCollectionEquality().equals(other.token, token) &&
-            const DeepCollectionEquality().equals(other.secret, secret) &&
-            const DeepCollectionEquality()
-                .equals(other.targetDeviceId, targetDeviceId));
-  }
-
-  @override
-  int get hashCode => Object.hash(
-      runtimeType,
-      const DeepCollectionEquality().hash(token),
-      const DeepCollectionEquality().hash(secret),
-      const DeepCollectionEquality().hash(targetDeviceId));
-
-  /// Create a copy of RingMsgDto
-  /// with the given fields replaced by the non-null parameter values.
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  @override
-  @pragma('vm:prefer-inline')
-  _$$RingMsgDto_SyncRequestImplCopyWith<_$RingMsgDto_SyncRequestImpl>
-      get copyWith => __$$RingMsgDto_SyncRequestImplCopyWithImpl<
-          _$RingMsgDto_SyncRequestImpl>(this, _$identity);
-
-  @override
-  @optionalTypeArgs
-  TResult when<TResult extends Object?>({
-    required TResult Function(
-            Uint8List token, Uint8List secret, Uint8List? targetDeviceId)
-        syncRequest,
-    required TResult Function(
-            Uint8List token, Uint8List secret, Uint8List targetDeviceId)
-        syncOffer,
-  }) {
-    return syncRequest(token, secret, targetDeviceId);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(
-            Uint8List token, Uint8List secret, Uint8List? targetDeviceId)?
-        syncRequest,
-    TResult? Function(
-            Uint8List token, Uint8List secret, Uint8List targetDeviceId)?
-        syncOffer,
-  }) {
-    return syncRequest?.call(token, secret, targetDeviceId);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeWhen<TResult extends Object?>({
-    TResult Function(
-            Uint8List token, Uint8List secret, Uint8List? targetDeviceId)?
-        syncRequest,
-    TResult Function(
-            Uint8List token, Uint8List secret, Uint8List targetDeviceId)?
-        syncOffer,
-    required TResult orElse(),
-  }) {
-    if (syncRequest != null) {
-      return syncRequest(token, secret, targetDeviceId);
-    }
-    return orElse();
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult map<TResult extends Object?>({
-    required TResult Function(RingMsgDto_SyncRequest value) syncRequest,
-    required TResult Function(RingMsgDto_SyncOffer value) syncOffer,
-  }) {
-    return syncRequest(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(RingMsgDto_SyncRequest value)? syncRequest,
-    TResult? Function(RingMsgDto_SyncOffer value)? syncOffer,
-  }) {
-    return syncRequest?.call(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeMap<TResult extends Object?>({
-    TResult Function(RingMsgDto_SyncRequest value)? syncRequest,
-    TResult Function(RingMsgDto_SyncOffer value)? syncOffer,
-    required TResult orElse(),
-  }) {
-    if (syncRequest != null) {
-      return syncRequest(this);
-    }
-    return orElse();
-  }
-}
-
-abstract class RingMsgDto_SyncRequest extends RingMsgDto {
-  const factory RingMsgDto_SyncRequest(
-      {required final Uint8List token,
-      required final Uint8List secret,
-      final Uint8List? targetDeviceId}) = _$RingMsgDto_SyncRequestImpl;
-  const RingMsgDto_SyncRequest._() : super._();
-
-  @override
-  Uint8List get token;
-  @override
-  Uint8List get secret;
-  @override
-  Uint8List? get targetDeviceId;
-
-  /// Create a copy of RingMsgDto
-  /// with the given fields replaced by the non-null parameter values.
-  @override
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  _$$RingMsgDto_SyncRequestImplCopyWith<_$RingMsgDto_SyncRequestImpl>
-      get copyWith => throw _privateConstructorUsedError;
-}
-
-/// @nodoc
-abstract class _$$RingMsgDto_SyncOfferImplCopyWith<$Res>
-    implements $RingMsgDtoCopyWith<$Res> {
-  factory _$$RingMsgDto_SyncOfferImplCopyWith(_$RingMsgDto_SyncOfferImpl value,
-          $Res Function(_$RingMsgDto_SyncOfferImpl) then) =
-      __$$RingMsgDto_SyncOfferImplCopyWithImpl<$Res>;
-  @override
-  @useResult
-  $Res call({Uint8List token, Uint8List secret, Uint8List targetDeviceId});
-}
-
-/// @nodoc
-class __$$RingMsgDto_SyncOfferImplCopyWithImpl<$Res>
-    extends _$RingMsgDtoCopyWithImpl<$Res, _$RingMsgDto_SyncOfferImpl>
-    implements _$$RingMsgDto_SyncOfferImplCopyWith<$Res> {
-  __$$RingMsgDto_SyncOfferImplCopyWithImpl(_$RingMsgDto_SyncOfferImpl _value,
-      $Res Function(_$RingMsgDto_SyncOfferImpl) _then)
-      : super(_value, _then);
-
-  /// Create a copy of RingMsgDto
-  /// with the given fields replaced by the non-null parameter values.
-  @pragma('vm:prefer-inline')
-  @override
-  $Res call({
-    Object? token = null,
-    Object? secret = null,
-    Object? targetDeviceId = null,
-  }) {
-    return _then(_$RingMsgDto_SyncOfferImpl(
-      token: null == token
-          ? _value.token
-          : token // ignore: cast_nullable_to_non_nullable
-              as Uint8List,
-      secret: null == secret
-          ? _value.secret
-          : secret // ignore: cast_nullable_to_non_nullable
-              as Uint8List,
-      targetDeviceId: null == targetDeviceId
-          ? _value.targetDeviceId
-          : targetDeviceId // ignore: cast_nullable_to_non_nullable
-              as Uint8List,
-    ));
-  }
-}
-
-/// @nodoc
-
-class _$RingMsgDto_SyncOfferImpl extends RingMsgDto_SyncOffer {
-  const _$RingMsgDto_SyncOfferImpl(
-      {required this.token, required this.secret, required this.targetDeviceId})
-      : super._();
-
-  @override
-  final Uint8List token;
-  @override
-  final Uint8List secret;
-  @override
-  final Uint8List targetDeviceId;
-
-  @override
-  String toString() {
-    return 'RingMsgDto.syncOffer(token: $token, secret: $secret, targetDeviceId: $targetDeviceId)';
-  }
-
-  @override
-  bool operator ==(Object other) {
-    return identical(this, other) ||
-        (other.runtimeType == runtimeType &&
-            other is _$RingMsgDto_SyncOfferImpl &&
-            const DeepCollectionEquality().equals(other.token, token) &&
-            const DeepCollectionEquality().equals(other.secret, secret) &&
-            const DeepCollectionEquality()
-                .equals(other.targetDeviceId, targetDeviceId));
-  }
-
-  @override
-  int get hashCode => Object.hash(
-      runtimeType,
-      const DeepCollectionEquality().hash(token),
-      const DeepCollectionEquality().hash(secret),
-      const DeepCollectionEquality().hash(targetDeviceId));
-
-  /// Create a copy of RingMsgDto
-  /// with the given fields replaced by the non-null parameter values.
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  @override
-  @pragma('vm:prefer-inline')
-  _$$RingMsgDto_SyncOfferImplCopyWith<_$RingMsgDto_SyncOfferImpl>
-      get copyWith =>
-          __$$RingMsgDto_SyncOfferImplCopyWithImpl<_$RingMsgDto_SyncOfferImpl>(
-              this, _$identity);
-
-  @override
-  @optionalTypeArgs
-  TResult when<TResult extends Object?>({
-    required TResult Function(
-            Uint8List token, Uint8List secret, Uint8List? targetDeviceId)
-        syncRequest,
-    required TResult Function(
-            Uint8List token, Uint8List secret, Uint8List targetDeviceId)
-        syncOffer,
-  }) {
-    return syncOffer(token, secret, targetDeviceId);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(
-            Uint8List token, Uint8List secret, Uint8List? targetDeviceId)?
-        syncRequest,
-    TResult? Function(
-            Uint8List token, Uint8List secret, Uint8List targetDeviceId)?
-        syncOffer,
-  }) {
-    return syncOffer?.call(token, secret, targetDeviceId);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeWhen<TResult extends Object?>({
-    TResult Function(
-            Uint8List token, Uint8List secret, Uint8List? targetDeviceId)?
-        syncRequest,
-    TResult Function(
-            Uint8List token, Uint8List secret, Uint8List targetDeviceId)?
-        syncOffer,
-    required TResult orElse(),
-  }) {
-    if (syncOffer != null) {
-      return syncOffer(token, secret, targetDeviceId);
-    }
-    return orElse();
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult map<TResult extends Object?>({
-    required TResult Function(RingMsgDto_SyncRequest value) syncRequest,
-    required TResult Function(RingMsgDto_SyncOffer value) syncOffer,
-  }) {
-    return syncOffer(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(RingMsgDto_SyncRequest value)? syncRequest,
-    TResult? Function(RingMsgDto_SyncOffer value)? syncOffer,
-  }) {
-    return syncOffer?.call(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeMap<TResult extends Object?>({
-    TResult Function(RingMsgDto_SyncRequest value)? syncRequest,
-    TResult Function(RingMsgDto_SyncOffer value)? syncOffer,
-    required TResult orElse(),
-  }) {
-    if (syncOffer != null) {
-      return syncOffer(this);
-    }
-    return orElse();
-  }
-}
-
-abstract class RingMsgDto_SyncOffer extends RingMsgDto {
-  const factory RingMsgDto_SyncOffer(
-      {required final Uint8List token,
-      required final Uint8List secret,
-      required final Uint8List targetDeviceId}) = _$RingMsgDto_SyncOfferImpl;
-  const RingMsgDto_SyncOffer._() : super._();
-
-  @override
-  Uint8List get token;
-  @override
-  Uint8List get secret;
-  @override
-  Uint8List get targetDeviceId;
-
-  /// Create a copy of RingMsgDto
-  /// with the given fields replaced by the non-null parameter values.
-  @override
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  _$$RingMsgDto_SyncOfferImplCopyWith<_$RingMsgDto_SyncOfferImpl>
-      get copyWith => throw _privateConstructorUsedError;
-}
-
-/// @nodoc
 mixin _$SyncFailureDto {
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
@@ -5089,379 +7353,6 @@ abstract class SyncFailureDto_PublishFailed extends SyncFailureDto {
   _$$SyncFailureDto_PublishFailedImplCopyWith<
           _$SyncFailureDto_PublishFailedImpl>
       get copyWith => throw _privateConstructorUsedError;
-}
-
-/// @nodoc
-mixin _$SyncOutputDto {
-  @optionalTypeArgs
-  TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List bytes) send,
-    required TResult Function(String convId, List<SyncMessageDto> messages)
-        store,
-  }) =>
-      throw _privateConstructorUsedError;
-  @optionalTypeArgs
-  TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List bytes)? send,
-    TResult? Function(String convId, List<SyncMessageDto> messages)? store,
-  }) =>
-      throw _privateConstructorUsedError;
-  @optionalTypeArgs
-  TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List bytes)? send,
-    TResult Function(String convId, List<SyncMessageDto> messages)? store,
-    required TResult orElse(),
-  }) =>
-      throw _privateConstructorUsedError;
-  @optionalTypeArgs
-  TResult map<TResult extends Object?>({
-    required TResult Function(SyncOutputDto_Send value) send,
-    required TResult Function(SyncOutputDto_Store value) store,
-  }) =>
-      throw _privateConstructorUsedError;
-  @optionalTypeArgs
-  TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(SyncOutputDto_Send value)? send,
-    TResult? Function(SyncOutputDto_Store value)? store,
-  }) =>
-      throw _privateConstructorUsedError;
-  @optionalTypeArgs
-  TResult maybeMap<TResult extends Object?>({
-    TResult Function(SyncOutputDto_Send value)? send,
-    TResult Function(SyncOutputDto_Store value)? store,
-    required TResult orElse(),
-  }) =>
-      throw _privateConstructorUsedError;
-}
-
-/// @nodoc
-abstract class $SyncOutputDtoCopyWith<$Res> {
-  factory $SyncOutputDtoCopyWith(
-          SyncOutputDto value, $Res Function(SyncOutputDto) then) =
-      _$SyncOutputDtoCopyWithImpl<$Res, SyncOutputDto>;
-}
-
-/// @nodoc
-class _$SyncOutputDtoCopyWithImpl<$Res, $Val extends SyncOutputDto>
-    implements $SyncOutputDtoCopyWith<$Res> {
-  _$SyncOutputDtoCopyWithImpl(this._value, this._then);
-
-  // ignore: unused_field
-  final $Val _value;
-  // ignore: unused_field
-  final $Res Function($Val) _then;
-
-  /// Create a copy of SyncOutputDto
-  /// with the given fields replaced by the non-null parameter values.
-}
-
-/// @nodoc
-abstract class _$$SyncOutputDto_SendImplCopyWith<$Res> {
-  factory _$$SyncOutputDto_SendImplCopyWith(_$SyncOutputDto_SendImpl value,
-          $Res Function(_$SyncOutputDto_SendImpl) then) =
-      __$$SyncOutputDto_SendImplCopyWithImpl<$Res>;
-  @useResult
-  $Res call({Uint8List bytes});
-}
-
-/// @nodoc
-class __$$SyncOutputDto_SendImplCopyWithImpl<$Res>
-    extends _$SyncOutputDtoCopyWithImpl<$Res, _$SyncOutputDto_SendImpl>
-    implements _$$SyncOutputDto_SendImplCopyWith<$Res> {
-  __$$SyncOutputDto_SendImplCopyWithImpl(_$SyncOutputDto_SendImpl _value,
-      $Res Function(_$SyncOutputDto_SendImpl) _then)
-      : super(_value, _then);
-
-  /// Create a copy of SyncOutputDto
-  /// with the given fields replaced by the non-null parameter values.
-  @pragma('vm:prefer-inline')
-  @override
-  $Res call({
-    Object? bytes = null,
-  }) {
-    return _then(_$SyncOutputDto_SendImpl(
-      bytes: null == bytes
-          ? _value.bytes
-          : bytes // ignore: cast_nullable_to_non_nullable
-              as Uint8List,
-    ));
-  }
-}
-
-/// @nodoc
-
-class _$SyncOutputDto_SendImpl extends SyncOutputDto_Send {
-  const _$SyncOutputDto_SendImpl({required this.bytes}) : super._();
-
-  @override
-  final Uint8List bytes;
-
-  @override
-  String toString() {
-    return 'SyncOutputDto.send(bytes: $bytes)';
-  }
-
-  @override
-  bool operator ==(Object other) {
-    return identical(this, other) ||
-        (other.runtimeType == runtimeType &&
-            other is _$SyncOutputDto_SendImpl &&
-            const DeepCollectionEquality().equals(other.bytes, bytes));
-  }
-
-  @override
-  int get hashCode =>
-      Object.hash(runtimeType, const DeepCollectionEquality().hash(bytes));
-
-  /// Create a copy of SyncOutputDto
-  /// with the given fields replaced by the non-null parameter values.
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  @override
-  @pragma('vm:prefer-inline')
-  _$$SyncOutputDto_SendImplCopyWith<_$SyncOutputDto_SendImpl> get copyWith =>
-      __$$SyncOutputDto_SendImplCopyWithImpl<_$SyncOutputDto_SendImpl>(
-          this, _$identity);
-
-  @override
-  @optionalTypeArgs
-  TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List bytes) send,
-    required TResult Function(String convId, List<SyncMessageDto> messages)
-        store,
-  }) {
-    return send(bytes);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List bytes)? send,
-    TResult? Function(String convId, List<SyncMessageDto> messages)? store,
-  }) {
-    return send?.call(bytes);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List bytes)? send,
-    TResult Function(String convId, List<SyncMessageDto> messages)? store,
-    required TResult orElse(),
-  }) {
-    if (send != null) {
-      return send(bytes);
-    }
-    return orElse();
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult map<TResult extends Object?>({
-    required TResult Function(SyncOutputDto_Send value) send,
-    required TResult Function(SyncOutputDto_Store value) store,
-  }) {
-    return send(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(SyncOutputDto_Send value)? send,
-    TResult? Function(SyncOutputDto_Store value)? store,
-  }) {
-    return send?.call(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeMap<TResult extends Object?>({
-    TResult Function(SyncOutputDto_Send value)? send,
-    TResult Function(SyncOutputDto_Store value)? store,
-    required TResult orElse(),
-  }) {
-    if (send != null) {
-      return send(this);
-    }
-    return orElse();
-  }
-}
-
-abstract class SyncOutputDto_Send extends SyncOutputDto {
-  const factory SyncOutputDto_Send({required final Uint8List bytes}) =
-      _$SyncOutputDto_SendImpl;
-  const SyncOutputDto_Send._() : super._();
-
-  Uint8List get bytes;
-
-  /// Create a copy of SyncOutputDto
-  /// with the given fields replaced by the non-null parameter values.
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  _$$SyncOutputDto_SendImplCopyWith<_$SyncOutputDto_SendImpl> get copyWith =>
-      throw _privateConstructorUsedError;
-}
-
-/// @nodoc
-abstract class _$$SyncOutputDto_StoreImplCopyWith<$Res> {
-  factory _$$SyncOutputDto_StoreImplCopyWith(_$SyncOutputDto_StoreImpl value,
-          $Res Function(_$SyncOutputDto_StoreImpl) then) =
-      __$$SyncOutputDto_StoreImplCopyWithImpl<$Res>;
-  @useResult
-  $Res call({String convId, List<SyncMessageDto> messages});
-}
-
-/// @nodoc
-class __$$SyncOutputDto_StoreImplCopyWithImpl<$Res>
-    extends _$SyncOutputDtoCopyWithImpl<$Res, _$SyncOutputDto_StoreImpl>
-    implements _$$SyncOutputDto_StoreImplCopyWith<$Res> {
-  __$$SyncOutputDto_StoreImplCopyWithImpl(_$SyncOutputDto_StoreImpl _value,
-      $Res Function(_$SyncOutputDto_StoreImpl) _then)
-      : super(_value, _then);
-
-  /// Create a copy of SyncOutputDto
-  /// with the given fields replaced by the non-null parameter values.
-  @pragma('vm:prefer-inline')
-  @override
-  $Res call({
-    Object? convId = null,
-    Object? messages = null,
-  }) {
-    return _then(_$SyncOutputDto_StoreImpl(
-      convId: null == convId
-          ? _value.convId
-          : convId // ignore: cast_nullable_to_non_nullable
-              as String,
-      messages: null == messages
-          ? _value._messages
-          : messages // ignore: cast_nullable_to_non_nullable
-              as List<SyncMessageDto>,
-    ));
-  }
-}
-
-/// @nodoc
-
-class _$SyncOutputDto_StoreImpl extends SyncOutputDto_Store {
-  const _$SyncOutputDto_StoreImpl(
-      {required this.convId, required final List<SyncMessageDto> messages})
-      : _messages = messages,
-        super._();
-
-  @override
-  final String convId;
-  final List<SyncMessageDto> _messages;
-  @override
-  List<SyncMessageDto> get messages {
-    if (_messages is EqualUnmodifiableListView) return _messages;
-    // ignore: implicit_dynamic_type
-    return EqualUnmodifiableListView(_messages);
-  }
-
-  @override
-  String toString() {
-    return 'SyncOutputDto.store(convId: $convId, messages: $messages)';
-  }
-
-  @override
-  bool operator ==(Object other) {
-    return identical(this, other) ||
-        (other.runtimeType == runtimeType &&
-            other is _$SyncOutputDto_StoreImpl &&
-            (identical(other.convId, convId) || other.convId == convId) &&
-            const DeepCollectionEquality().equals(other._messages, _messages));
-  }
-
-  @override
-  int get hashCode => Object.hash(
-      runtimeType, convId, const DeepCollectionEquality().hash(_messages));
-
-  /// Create a copy of SyncOutputDto
-  /// with the given fields replaced by the non-null parameter values.
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  @override
-  @pragma('vm:prefer-inline')
-  _$$SyncOutputDto_StoreImplCopyWith<_$SyncOutputDto_StoreImpl> get copyWith =>
-      __$$SyncOutputDto_StoreImplCopyWithImpl<_$SyncOutputDto_StoreImpl>(
-          this, _$identity);
-
-  @override
-  @optionalTypeArgs
-  TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List bytes) send,
-    required TResult Function(String convId, List<SyncMessageDto> messages)
-        store,
-  }) {
-    return store(convId, messages);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List bytes)? send,
-    TResult? Function(String convId, List<SyncMessageDto> messages)? store,
-  }) {
-    return store?.call(convId, messages);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List bytes)? send,
-    TResult Function(String convId, List<SyncMessageDto> messages)? store,
-    required TResult orElse(),
-  }) {
-    if (store != null) {
-      return store(convId, messages);
-    }
-    return orElse();
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult map<TResult extends Object?>({
-    required TResult Function(SyncOutputDto_Send value) send,
-    required TResult Function(SyncOutputDto_Store value) store,
-  }) {
-    return store(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult? mapOrNull<TResult extends Object?>({
-    TResult? Function(SyncOutputDto_Send value)? send,
-    TResult? Function(SyncOutputDto_Store value)? store,
-  }) {
-    return store?.call(this);
-  }
-
-  @override
-  @optionalTypeArgs
-  TResult maybeMap<TResult extends Object?>({
-    TResult Function(SyncOutputDto_Send value)? send,
-    TResult Function(SyncOutputDto_Store value)? store,
-    required TResult orElse(),
-  }) {
-    if (store != null) {
-      return store(this);
-    }
-    return orElse();
-  }
-}
-
-abstract class SyncOutputDto_Store extends SyncOutputDto {
-  const factory SyncOutputDto_Store(
-          {required final String convId,
-          required final List<SyncMessageDto> messages}) =
-      _$SyncOutputDto_StoreImpl;
-  const SyncOutputDto_Store._() : super._();
-
-  String get convId;
-  List<SyncMessageDto> get messages;
-
-  /// Create a copy of SyncOutputDto
-  /// with the given fields replaced by the non-null parameter values.
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  _$$SyncOutputDto_StoreImplCopyWith<_$SyncOutputDto_StoreImpl> get copyWith =>
-      throw _privateConstructorUsedError;
 }
 
 /// @nodoc

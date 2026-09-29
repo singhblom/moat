@@ -81,7 +81,7 @@ pub enum CoordMsg {
     /// to one of the sender's user conversations using a KP drawn from the
     /// new sibling's ring-borne pool.  The Welcome embeds the MLS init
     /// secret the recipient must already hold locally (it generated the KP
-    /// in `build_kp_batch`).  Other ring members ignore this message.
+    /// in `mint_kp_batch`).  Other ring members ignore this message.
     UserConvWelcome {
         /// Device id of the intended recipient (16 bytes).  The Welcome
         /// only makes sense to the device whose init key is referenced.
@@ -418,7 +418,7 @@ impl DeviceRingState {
         self.own_events_cursor = Some(rkey);
     }
 
-    pub fn allocate_kp_seqs(&mut self, count: usize) -> Vec<u64> {
+    fn allocate_kp_seqs(&mut self, count: usize) -> Vec<u64> {
         let mut out = Vec::with_capacity(count);
         for _ in 0..count {
             self.next_kp_seq = self.next_kp_seq.saturating_add(1);
@@ -610,7 +610,7 @@ impl DeviceRingState {
                     return Vec::new();
                 }
                 // The init key for this Welcome lives in our local keystore
-                // (we generated it in `build_kp_batch` and shipped the
+                // (we generated it in `mint_kp_batch` and shipped the
                 // public KP via `CoordMsg::KpBatch`).  `process_welcome`
                 // consumes it.  No `ReplenishKeyPackage` is emitted: the
                 // consumed key was a pool init key, not a PDS-pool one, so
@@ -744,7 +744,7 @@ impl DeviceRingState {
         let mut remaining = count as usize;
         while remaining > 0 {
             let take = remaining.min(KP_BATCH_CAP);
-            let batch = match self.build_kp_batch(mls, env, take) {
+            let batch = match self.mint_kp_batch(mls, env.credential, env.key_bundle, take) {
                 Some(b) => b,
                 None => break,
             };
@@ -766,18 +766,17 @@ impl DeviceRingState {
     ///
     /// `replenish_key_package`, not `generate_key_package`: each KP must carry
     /// our *identity* signing key.  See the module note on signing-key identity.
-    fn build_kp_batch(
+    pub fn mint_kp_batch(
         &mut self,
         mls: &MoatSession,
-        env: &StepEnv<'_>,
+        credential: &MoatCredential,
+        key_bundle: &[u8],
         count: usize,
     ) -> Option<Vec<OfferedKp>> {
         let seqs = self.allocate_kp_seqs(count);
         let mut out = Vec::with_capacity(count);
         for seq in seqs {
-            let kp_bytes = mls
-                .replenish_key_package(env.credential, env.key_bundle)
-                .ok()?;
+            let kp_bytes = mls.replenish_key_package(credential, key_bundle).ok()?;
             let mut rkey = [0u8; 16];
             rand::Rng::fill(&mut rand::thread_rng(), &mut rkey);
             out.push(OfferedKp {
@@ -1660,7 +1659,7 @@ mod tests {
         let consumer_env = env_for(&consumer, &consumer_sib);
 
         // Owner mints a batch; consumer ingests it.
-        let batch = owner_state.build_kp_batch(&owner.mls, &owner_env, 1).expect("batch");
+        let batch = owner_state.mint_kp_batch(&owner.mls, owner_env.credential, owner_env.key_bundle, 1).expect("batch");
         consumer_state.ingest_kp_batch(&owner_id, batch);
         assert!(consumer_state.kp_pool_size(&owner_id) > 0);
 

@@ -8,7 +8,6 @@ import 'auth_service.dart';
 import 'conversations_service.dart';
 import 'debug_log.dart';
 import 'document_backend.dart';
-import 'drawbridge_service.dart';
 
 /// Owns a [ffi.RingDriverHandle] and drives the moat-core ring state machine.
 ///
@@ -24,12 +23,10 @@ class DeviceRingService {
   static const String _statePath = 'device_ring/ring_state.json';
 
   final AuthService _auth;
-  final DrawbridgeService _drawbridge;
   final DocumentBackend _backend;
 
   ffi.RingDriverHandle? _driver;
   bool _tickInFlight = false;
-  Uint8List? _pendingPairToken;
 
   /// Last tick's sibling stealth addresses, kept so KP-lane calls outside
   /// `tick()` (e.g. [emitKpRequestFor], [encryptUserConvWelcome] in
@@ -39,16 +36,12 @@ class DeviceRingService {
   /// KpRequest refill.
   List<ffi.SiblingStealthDto> _cachedSiblingStealth = const [];
 
-  /// Read-only view of the cached sibling stealth addresses — used by
-  /// `PairingService` to assemble `known_siblings` for `approve()`
-  /// (`Admit.roster` needs every already-known sibling's stealth key,
-  /// which lives here, not in MLS group state).
+  /// Read-only view of the cached sibling stealth addresses, which the
+  /// pair-channel driver reads for `Admit.roster`.
   List<ffi.SiblingStealthDto> get cachedSiblingStealth => _cachedSiblingStealth;
 
-  /// Upsert one sibling's stealth address into the cache — used by
-  /// `PairingService` to record a newcomer's stealth key (from its
-  /// `Enroll`) or a roster entry (from a processed `Admit`) immediately,
-  /// without waiting for the next `tick()`'s `stealthAddress`-record fetch.
+  /// Upsert one sibling's stealth address into the cache, for one learned
+  /// during a pairing ahead of the next `tick()`'s fetch.
   void upsertSiblingStealth(Uint8List deviceId, Uint8List scanPubkey) {
     final idx = _cachedSiblingStealth
         .indexWhere((s) => _bytesEqual(s.deviceId, deviceId));
@@ -66,26 +59,11 @@ class DeviceRingService {
   /// for User groups can surface conversations.
   ConversationsService? convsService;
 
-  /// True once a pair WS is in-flight (offer sent or join sent + ready received).
-  bool get hasPendingPairToken => _pendingPairToken != null;
-
   DeviceRingService({
     required AuthService auth,
-    required DrawbridgeService drawbridge,
     required DocumentBackend backend,
   })  : _auth = auth,
-        _drawbridge = drawbridge,
-        _backend = backend {
-    reclaimPairReadyCallback();
-  }
-
-  /// (Re-)claim `DrawbridgeService.onPairReady`. Normally only needed once,
-  /// from the constructor — exposed as a public method so `PairingService`
-  /// can hand this callback slot back after a live pairing exchange
-  /// (which needs it too, for its own rendezvous) completes or aborts.
-  void reclaimPairReadyCallback() {
-    _drawbridge.onPairReady = _handlePairReady;
-  }
+        _backend = backend;
 
   /// Load persisted state (or start empty) and prime the driver.
   Future<void> init() async {
@@ -108,56 +86,15 @@ class DeviceRingService {
     }
   }
 
+  /// The ring driver, for the pair-channel driver's calls that read or
+  /// change ring state; `null` before [init].
+  ffi.RingDriverHandle? get driverHandle => _driver;
+
   /// Returns the ring group id if the device is enrolled.
   Future<Uint8List?> ringGroupId() async {
     final d = _driver;
     if (d == null) return null;
     return d.ringGroupId();
-  }
-
-  /// Allocate `count` fresh, monotonic KP sequence numbers from this
-  /// device's own owner-global counter, persisting the advanced counter
-  /// immediately. Used by `PairingService.startEnroll` to build
-  /// `Enroll.conv_kps` — must go through the driver's own counter (not a
-  /// caller-local one) so seqs never collide with ones allocated elsewhere.
-  Future<List<BigInt>> allocateKpSeqs(int count) async {
-    final d = _driver;
-    if (d == null) return const [];
-    final seqs = d.allocateKpSeqs(count: BigInt.from(count));
-    await _persist();
-    return seqs;
-  }
-
-  /// Seed `ownerDeviceId`'s consumer-side pool with a freshly-received
-  /// batch — called by `PairingService` (existing device, on Approve)
-  /// with the newcomer's `Enroll.conv_kps`.
-  Future<void> ingestKpBatch(Uint8List ownerDeviceId, List<ffi.OfferedKpDto> kps) async {
-    final d = _driver;
-    if (d == null) return;
-    try {
-      d.ingestKpBatch(ownerDeviceId: ownerDeviceId, kps: kps);
-    } catch (e) {
-      moatLog('DeviceRingService: ingestKpBatch failed: $e');
-    }
-    await _persist();
-  }
-
-  /// Record that we are now an MLS member of `ringId`, persisting
-  /// immediately. Called by `PairingService` once on the new device (after
-  /// processing `Admit`) and once on the existing device (right after a
-  /// successful `approve()`, first pairing only — see the note on why the
-  /// existing device has no command of its own for this).
-  Future<void> recordRingMembership(Uint8List ringId) async {
-    final d = _driver;
-    final session = _auth.moatSession;
-    if (d == null || session == null) return;
-    final nowMs = toPlatformInt64(DateTime.now().millisecondsSinceEpoch);
-    try {
-      await d.recordRingMembership(session: session, ringId: ringId, nowMs: nowMs);
-    } catch (e) {
-      moatLog('DeviceRingService: recordRingMembership failed: $e');
-    }
-    await _persist();
   }
 
   /// The rkey cursor up to which the ring driver has consumed own-DID events.
@@ -539,12 +476,8 @@ class DeviceRingService {
     await _persist();
   }
 
-  void _handlePairReady(DrawbridgePairReady ready) {
-    moatLog('DeviceRingService: pair_ready received, connecting pair WS at ${ready.pairUrl}');
-    // The /pair WS handshake itself is owned by SyncService, which subscribes
-    // to onPairConnected / onPairFrame. We only need to forward the connect.
-    _drawbridge.connectPair(ready.pairUrl, ready.token);
-  }
+  /// Write the ring state to storage.
+  Future<void> persist() => _persist();
 
   Future<void> _persist() async {
     final driver = _driver;
@@ -557,14 +490,7 @@ class DeviceRingService {
     }
   }
 
-  /// Drop any pending pair-WS state — used when sync ends or aborts.
-  void clearPendingPair() {
-    _pendingPairToken = null;
-  }
-
   Future<void> dispose() async {
-    _drawbridge.onPairReady = null;
-    _pendingPairToken = null;
     _driver = null;
   }
 

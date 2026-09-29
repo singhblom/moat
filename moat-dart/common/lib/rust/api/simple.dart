@@ -8,9 +8,9 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'simple.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `credential_from_dto`, `from_core`, `into_core`, `payload_from_core`, `payload_to_core`, `push_media_label`, `push_plaintext_preview`, `sibling_info_to_core`, `to_core_sibling_stealth`
+// These functions are ignored because they are not marked as `pub`: `commands_dto`, `credential_from_dto`, `device_id_from`, `from_core`, `into_core`, `push_media_label`, `push_plaintext_preview`, `to_core_sibling_stealth`, `token_from`, `with_env`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `MoatError`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `try_from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `try_from`
 
 /// Generate a stealth keypair. Returns (private_key, public_key) each 32 bytes.
 StealthKeypair generateStealthKeypair() =>
@@ -122,72 +122,6 @@ Future<DecryptedPush> decryptPushPayload(
         groupIds: groupIds,
         tag: tag,
         ciphertext: ciphertext);
-
-/// Encode `token`+`secret` to the hyphen-grouped Crockford base32 text form
-/// (`MZXW6-YTBOI-…`), for manual entry / display beneath a QR code.
-Future<String> pairingPayloadToText(
-        {required List<int> token, required List<int> secret}) =>
-    RustLib.instance.api
-        .crateApiSimplePairingPayloadToText(token: token, secret: secret);
-
-/// Decode a pairing code's text form back into token+secret.
-Future<PairingPayloadDto> pairingPayloadFromText({required String text}) =>
-    RustLib.instance.api.crateApiSimplePairingPayloadFromText(text: text);
-
-/// Encode `token`+`secret` to the `moat-pair:` URI form used for the QR payload.
-Future<String> pairingPayloadToUri(
-        {required List<int> token, required List<int> secret}) =>
-    RustLib.instance.api
-        .crateApiSimplePairingPayloadToUri(token: token, secret: secret);
-
-/// Decode a `moat-pair:` URI back into token+secret.
-Future<PairingPayloadDto> pairingPayloadFromUri({required String uri}) =>
-    RustLib.instance.api.crateApiSimplePairingPayloadFromUri(uri: uri);
-
-/// Encode a `RingMsg::SyncRequest` for publication on the device ring as
-/// an `EventKindDto::RingMsg` event payload.
-Future<Uint8List> ringMsgEncodeSyncRequest(
-        {required List<int> token,
-        required List<int> secret,
-        Uint8List? targetDeviceId}) =>
-    RustLib.instance.api.crateApiSimpleRingMsgEncodeSyncRequest(
-        token: token, secret: secret, targetDeviceId: targetDeviceId);
-
-/// Build a `ring.msg` payload offering history to one sibling. Always
-/// targeted — the relay admits two attaches, so an untargeted offer would
-/// pick its recipient arbitrarily.
-Future<Uint8List> ringMsgEncodeSyncOffer(
-        {required List<int> token,
-        required List<int> secret,
-        required List<int> targetDeviceId}) =>
-    RustLib.instance.api.crateApiSimpleRingMsgEncodeSyncOffer(
-        token: token, secret: secret, targetDeviceId: targetDeviceId);
-
-/// Decode any `ring.msg` payload.
-Future<RingMsgDto> ringMsgDecode({required List<int> payload}) =>
-    RustLib.instance.api.crateApiSimpleRingMsgDecode(payload: payload);
-
-/// How long a published sync request stays valid, matching the relay's
-/// token TTL.
-PlatformInt64 syncRequestTtlMs() =>
-    RustLib.instance.api.crateApiSimpleSyncRequestTtlMs();
-
-/// Byte budget for all inventories in one `Hello` — see
-/// `fit_hello_inventories`.
-int helloInventoryBudgetBytes() =>
-    RustLib.instance.api.crateApiSimpleHelloInventoryBudgetBytes();
-
-/// Fit a Hello's inventories inside that budget by downgrading the largest
-/// enumerations to spans, so the frame stays under the relay's hard limit.
-Future<List<ConvStateDto>> fitHelloInventories(
-        {required List<ConvStateDto> convs}) =>
-    RustLib.instance.api.crateApiSimpleFitHelloInventories(convs: convs);
-
-/// How many fresh KeyPackages a new device should seed the approver's pool
-/// with via `Enroll.conv_kps` — `moat_core::device_ring::KP_POOL_TARGET`,
-/// exposed so hosts building that batch (e.g. `PairingService.dart`) don't
-/// hand-duplicate the literal.
-BigInt kpPoolTarget() => RustLib.instance.api.crateApiSimpleKpPoolTarget();
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MoatSessionHandle>>
 abstract class MoatSessionHandle implements RustOpaqueInterface {
@@ -306,106 +240,112 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
       required List<int> keyBundle});
 }
 
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<PairingFrameChannelHandle>>
-abstract class PairingFrameChannelHandle implements RustOpaqueInterface {
-  /// Open the next frame from the peer. An error ends the channel.
-  Uint8List open({required List<int> ciphertext});
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<PairChannelHandle>>
+abstract class PairChannelHandle implements RustOpaqueInterface {
+  bool isTransferring();
 
-  /// Seal `plaintext` as the next frame we send.
-  Uint8List seal({required List<int> plaintext});
-}
+  static PairChannelHandle newDriver() =>
+      RustLib.instance.api.crateApiSimplePairChannelHandleNewDriver();
 
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<PairingSessionHandle>>
-abstract class PairingSessionHandle implements RustOpaqueInterface {
-  /// Existing device only: called once the user taps Approve. Creates
-  /// the ring (first pairing) or adds the joiner (subsequent pairings),
-  /// seeds the newcomer's KP pool, and emits the sealed `Admit` frame.
-  Future<List<PairingCommandDto>> approve(
+  Future<List<PairChannelCommandDto>> onFrame(
       {required MoatSessionHandle session,
-      required CredentialDto credential,
-      required List<int> keyBundle,
-      required List<int> ownStealthPubkey,
-      required List<SiblingInfoDto> knownSiblings,
-      Uint8List? existingRingId});
+      required RingDriverHandle ring,
+      required PairIdentityDto identity,
+      required List<SiblingStealthDto> siblingStealth,
+      required PlatformInt64 nowMs,
+      required List<int> data});
 
-  /// Either role: abort an in-flight pairing before it reaches a terminal
-  /// state, moving the session to `Failed`. Errors, without changing the
-  /// session's state, if it has already reached a terminal state.
-  void cancel();
+  /// The pair channel for `token` ended.
+  List<PairChannelCommandDto> onPairClosed(
+      {Uint8List? token, required String reason});
 
-  /// Construct a session for the existing (approving) device.
-  static PairingSessionHandle existingDevice(
-          {required List<int> secret, required List<int> token}) =>
-      RustLib.instance.api.crateApiSimplePairingSessionHandleExistingDevice(
-          secret: secret, token: token);
+  List<PairChannelCommandDto> onPairReady(
+      {required List<int> token, required String url});
 
-  /// `true` once this session has reached its terminal `Done` phase.
-  bool isDone();
-
-  /// Whether this is the new (joining) device's side of the pairing.
-  bool isNewDevice();
-
-  /// Construct a session for the new (joining) device.
-  static PairingSessionHandle newDevice(
-          {required List<int> secret, required List<int> token}) =>
-      RustLib.instance.api.crateApiSimplePairingSessionHandleNewDevice(
-          secret: secret, token: token);
-
-  /// Feed a sealed frame received over the pair channel. Dispatches on
-  /// role + phase; a decryption or ordering-violation error aborts the
-  /// session (returned as `Err`).
-  Future<List<PairingCommandDto>> onFrameReceived(
+  Future<List<PairChannelCommandDto>> onPaired(
       {required MoatSessionHandle session,
-      required CredentialDto ownCredential,
-      required List<int> ciphertext});
+      required RingDriverHandle ring,
+      required PairIdentityDto identity,
+      required List<SiblingStealthDto> siblingStealth,
+      required PlatformInt64 nowMs});
 
-  /// Existing device only: the peer's `Enroll`, once received, pending
-  /// the user's approval decision.
-  EnrollDto? pendingEnroll();
+  List<PairChannelCommandDto> onRelayConnected();
 
-  /// Existing device only: decline a pending `Enroll`, moving the session
-  /// to `Failed`. Errors, without changing the session's state, if there
-  /// is no pending `Enroll` to reject (including an already-terminal
-  /// session).
-  void reject();
+  List<PairChannelCommandDto> onRendezvousFailed({required String reason});
 
-  /// The ring this session ended up in, once known.
-  Uint8List? ringId();
+  /// A sibling's `ring.msg` payload. `sender_name` must come from the
+  /// sender's MLS leaf credential.
+  List<PairChannelCommandDto> onRingMsg(
+      {required List<int> payload,
+      required String senderName,
+      required List<int> ownDeviceId,
+      required PlatformInt64 nowMs});
 
-  /// New device: build and seal the `Enroll` frame once the pair channel
-  /// reaches `paired`.
-  Future<List<PairingCommandDto>> startEnroll(
+  List<PairChannelCommandDto> onRingPublishFailed(
+      {required List<int> tag, required String detail});
+
+  /// Existing device: approve the pending `Enroll`. A failure while
+  /// approving fails the pairing rather than returning `Err`.
+  Future<List<PairChannelCommandDto>> pairApprove(
       {required MoatSessionHandle session,
-      required CredentialDto credential,
-      required List<int> keyBundle,
-      required List<int> stealthScanPubkey,
-      required List<OfferedKpDto> convKps});
+      required RingDriverHandle ring,
+      required PairIdentityDto identity,
+      required List<SiblingStealthDto> siblingStealth,
+      required PlatformInt64 nowMs});
 
-  /// The pairing AEAD, for the history transfer that follows; `None`
-  /// until the session is done, and after the first call.
-  PairingFrameChannelHandle? transferChannel();
+  List<PairChannelCommandDto> pairCancel();
 
-  /// The history transfer this session handed on ended early, so the
-  /// pairing reports as failed. No-op unless the session is done.
-  void transferFailed({required String reason});
+  /// Existing device: enter a code, in its text or `moat-pair:` form.
+  List<PairChannelCommandDto> pairConfirm({required String code});
 
-  /// Render this session's current state for UI presentation — mirrors
-  /// `moat_core::PairingSession::ui_state`. The single source of truth
-  /// every render/dispatch site (`PairingService.state`, `/pair/status`)
-  /// reads instead of deriving its own.
-  PairingUiStateDto uiState();
+  /// New device: start a pairing; the code is what the screen shows.
+  PairNewDto pairNew();
+
+  List<PairChannelCommandDto> pairReject();
+
+  PairingUiStateDto pairingUiState();
+
+  SyncProgressDto? progress();
+
+  Future<List<PairChannelCommandDto>> provideHistory(
+      {required MoatSessionHandle session,
+      required RingDriverHandle ring,
+      required PairIdentityDto identity,
+      required List<SiblingStealthDto> siblingStealth,
+      required PlatformInt64 nowMs,
+      required List<int> token,
+      required List<ConvHistoryDto> history});
+
+  List<PairChannelCommandDto> syncAccept();
+
+  void syncDecline();
+
+  /// Offer this device's history to `target`.
+  Future<List<PairChannelCommandDto>> syncOffer(
+      {required MoatSessionHandle session,
+      required RingDriverHandle ring,
+      required PairIdentityDto identity,
+      required List<SiblingStealthDto> siblingStealth,
+      required PlatformInt64 nowMs,
+      required List<int> target});
+
+  /// Ask the user's other devices for history; `target` names one.
+  Future<List<PairChannelCommandDto>> syncRequest(
+      {required MoatSessionHandle session,
+      required RingDriverHandle ring,
+      required PairIdentityDto identity,
+      required List<SiblingStealthDto> siblingStealth,
+      required PlatformInt64 nowMs,
+      Uint8List? target});
+
+  SyncRequestUiStateDto syncRequestUiState();
+
+  /// Expire an unanswered sync request.
+  List<PairChannelCommandDto> tick({required PlatformInt64 nowMs});
 }
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<RingDriverHandle>>
 abstract class RingDriverHandle implements RustOpaqueInterface {
-  /// Allocate `count` fresh, monotonic KP sequence numbers from this
-  /// device's own owner-global counter — must go through here (not a
-  /// host-local counter) so seqs never collide with ones allocated
-  /// elsewhere for a different purpose (e.g. steady-state KP-lane
-  /// batches). Used by `PairingService.startEnroll` to build
-  /// `Enroll.conv_kps` without a separate FFI surface per caller.
-  Uint64List allocateKpSeqs({required BigInt count});
-
   /// Claim one unused key package from the local pool for `owner`, marking
   /// its seq consumed.  `None` means the pool is drained — the host should
   /// emit a `KpRequest` via [`Self::emit_kp_request_for`] and defer the add
@@ -453,14 +393,6 @@ abstract class RingDriverHandle implements RustOpaqueInterface {
       RustLib.instance.api
           .crateApiSimpleRingDriverHandleFromStateJson(json: json);
 
-  /// Seed `owner`'s consumer-side pool with a freshly-received batch.
-  /// Mirrors `moat-cli`'s `PairingCommandDto.seedKpPool` handling — the
-  /// existing device calls this with the newcomer's `Enroll.conv_kps` on
-  /// Approve, seeding the newcomer's pool directly instead of a
-  /// KpRequest/KpBatch round trip over the stealth lane.
-  void ingestKpBatch(
-      {required List<int> ownerDeviceId, required List<OfferedKpDto> kps});
-
   /// Create a new ring state with empty state.
   static RingDriverHandle newEmpty() =>
       RustLib.instance.api.crateApiSimpleRingDriverHandleNewEmpty();
@@ -493,119 +425,6 @@ abstract class RingDriverHandle implements RustOpaqueInterface {
 
   /// Serialise the current ring state as JSON.
   Future<String> toStateJson();
-}
-
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SyncRequestSessionHandle>>
-abstract class SyncRequestSessionHandle implements RustOpaqueInterface {
-  /// The user approved a sibling's request. Returns the token to
-  /// `pair_join` with; errors if no decision is outstanding.
-  Uint8List accept();
-
-  /// A sibling offered us history and we are joining its rendezvous.
-  /// No prompt: the offer already carries the one human decision, made
-  /// on the side that could judge.
-  static SyncRequestSessionHandle acceptOffer(
-          {required List<int> token,
-          required List<int> secret,
-          required PlatformInt64 nowMs}) =>
-      RustLib.instance.api.crateApiSimpleSyncRequestSessionHandleAcceptOffer(
-          token: token, secret: secret, nowMs: nowMs);
-
-  /// The user declined. Local only — nothing goes on the wire, so one
-  /// refusal among several prompted siblings doesn't cancel the request.
-  void decline();
-
-  /// Move an unanswered session to `Failed` once its rendezvous has
-  /// outlived the relay's token TTL. Returns `true` only on the call
-  /// that changed the state, so a host driving this from a periodic
-  /// tick has exactly one edge to react to.
-  bool expireIfDue({required PlatformInt64 nowMs});
-
-  /// Terminal failure. The first reason wins — a late teardown notice
-  /// never overwrites the failure that explains the outcome, nor a
-  /// completed transfer.
-  void fail({required SyncFailureDto reason});
-
-  /// `true` once the rendezvous token has outlived the relay's TTL. Only
-  /// the rendezvous is bounded; a session that reached the channel runs
-  /// to completion however long the transfer takes.
-  bool isExpired({required PlatformInt64 nowMs});
-
-  /// `true` once the session can no longer change state.
-  bool isTerminal();
-
-  /// The pair channel reached `paired`.
-  void onChannelUp();
-
-  /// The sync session running on this channel finished. `tally` comes
-  /// from that session; `device_name` is the peer as MLS named it on the
-  /// frames it sent.
-  void onComplete({required SyncTallyDto tally, String? deviceName});
-
-  /// A sibling's request arrived on the ring. `device_name` must come
-  /// from the sender's MLS leaf credential, not from the payload.
-  static SyncRequestSessionHandle received(
-          {required List<int> token,
-          required List<int> secret,
-          required String deviceName,
-          required PlatformInt64 nowMs}) =>
-      RustLib.instance.api.crateApiSimpleSyncRequestSessionHandleReceived(
-          token: token, secret: secret, deviceName: deviceName, nowMs: nowMs);
-
-  /// Start a request of our own. The caller publishes
-  /// `ring_msg_encode_sync_request(token, secret)` on the ring and
-  /// registers the same token with the relay via `pair_offer`.
-  static SyncRequestSessionHandle request(
-          {required List<int> token,
-          required List<int> secret,
-          required PlatformInt64 nowMs}) =>
-      RustLib.instance.api.crateApiSimpleSyncRequestSessionHandleRequest(
-          token: token, secret: secret, nowMs: nowMs);
-
-  /// The rendezvous token this session is bound to.
-  Uint8List token();
-
-  /// This session's end of the channel; `None` until the channel is up,
-  /// and after the first call.
-  PairingFrameChannelHandle? transferChannel();
-
-  /// Current projection. Computed fresh, never cached.
-  SyncRequestUiStateDto uiState();
-}
-
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SyncSessionHandle>>
-abstract class SyncSessionHandle implements RustOpaqueInterface {
-  /// Populate the plan for one conversation before calling `on_paired`.
-  Future<void> addConvPlan(
-      {required List<int> groupId,
-      required String convId,
-      required List<SyncMessageDto> ourMessages,
-      required bool expectingBatch});
-
-  /// `true` once the session has reached the `Done` phase.
-  bool isDone();
-
-  /// Create a new session in the `SendingHello` phase.
-  static SyncSessionHandle newSession() =>
-      RustLib.instance.api.crateApiSimpleSyncSessionHandleNewSession();
-
-  /// Feed a received and decrypted `SyncMsg` (JSON bytes) into the state machine.
-  Future<List<SyncOutputDto>> onMessage({required List<int> msgBytes});
-
-  /// Called when the pair WS reaches the `paired` state. `device_id` is
-  /// this device's, named to the peer in the `Hello`.
-  Future<List<SyncOutputDto>> onPaired(
-      {required List<ConvStateDto> ourConvs, required List<int> deviceId});
-
-  /// The device the peer named in its `Hello`, once that has arrived.
-  Uint8List? peerDeviceId();
-
-  /// How far the transfer has got, for a progress indicator.
-  SyncProgressDto progress();
-
-  /// What this side has received. Read at completion, where it becomes
-  /// the report the user sees.
-  SyncTallyDto tally();
 }
 
 class BlobEncryptResult {
@@ -646,45 +465,29 @@ class BlobEncryptResult {
           contentHash == other.contentHash;
 }
 
-@freezed
-sealed class ConvInventoryDto with _$ConvInventoryDto {
-  const ConvInventoryDto._();
-
-  /// Every rkey held, enumerated. The peer sends exactly the complement.
-  const factory ConvInventoryDto.complete({
-    required List<String> rkeys,
-  }) = ConvInventoryDto_Complete;
-
-  /// Too large for the Hello's byte budget, so only the span is given.
-  const factory ConvInventoryDto.range({
-    required String oldest,
-    required String newest,
-    required BigInt count,
-  }) = ConvInventoryDto_Range;
-
-  /// Nothing held at all.
-  const factory ConvInventoryDto.empty() = ConvInventoryDto_Empty;
-}
-
-class ConvStateDto {
+/// One conversation's settled messages, for a transfer's `Hello`.
+class ConvHistoryDto {
   final Uint8List groupId;
-  final ConvInventoryDto inventory;
+  final String convId;
+  final List<SyncMessageDto> messages;
 
-  const ConvStateDto({
+  const ConvHistoryDto({
     required this.groupId,
-    required this.inventory,
+    required this.convId,
+    required this.messages,
   });
 
   @override
-  int get hashCode => groupId.hashCode ^ inventory.hashCode;
+  int get hashCode => groupId.hashCode ^ convId.hashCode ^ messages.hashCode;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is ConvStateDto &&
+      other is ConvHistoryDto &&
           runtimeType == other.runtimeType &&
           groupId == other.groupId &&
-          inventory == other.inventory;
+          convId == other.convId &&
+          messages == other.messages;
 }
 
 /// Credential fields for a group member or key package.
@@ -840,39 +643,6 @@ class EncryptResultDto {
           tag == other.tag &&
           ciphertext == other.ciphertext &&
           messageId == other.messageId;
-}
-
-/// Sent by the new device once the pair channel is up. `credential` reuses
-/// [`CredentialDto`] rather than a new type.
-class EnrollDto {
-  final CredentialDto credential;
-  final Uint8List stealthScanPubkey;
-  final Uint8List ringKp;
-  final List<OfferedKpDto> convKps;
-
-  const EnrollDto({
-    required this.credential,
-    required this.stealthScanPubkey,
-    required this.ringKp,
-    required this.convKps,
-  });
-
-  @override
-  int get hashCode =>
-      credential.hashCode ^
-      stealthScanPubkey.hashCode ^
-      ringKp.hashCode ^
-      convKps.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is EnrollDto &&
-          runtimeType == other.runtimeType &&
-          credential == other.credential &&
-          stealthScanPubkey == other.stealthScanPubkey &&
-          ringKp == other.ringKp &&
-          convKps == other.convKps;
 }
 
 class EventDto {
@@ -1085,61 +855,129 @@ class OwnEventInputDto {
 }
 
 @freezed
-sealed class PairingCommandDto with _$PairingCommandDto {
-  const PairingCommandDto._();
+sealed class PairChannelCommandDto with _$PairChannelCommandDto {
+  const PairChannelCommandDto._();
 
-  const factory PairingCommandDto.sendFrame({
-    required Uint8List ciphertext,
-  }) = PairingCommandDto_SendFrame;
-  const factory PairingCommandDto.seedKpPool({
-    required Uint8List deviceId,
-    required List<OfferedKpDto> kps,
-  }) = PairingCommandDto_SeedKpPool;
-  const factory PairingCommandDto.publishRingCommit({
+  const factory PairChannelCommandDto.sendPairOffer({
+    required Uint8List token,
+  }) = PairChannelCommandDto_SendPairOffer;
+  const factory PairChannelCommandDto.sendPairJoin({
+    required Uint8List token,
+  }) = PairChannelCommandDto_SendPairJoin;
+  const factory PairChannelCommandDto.connectPair({
+    required String url,
+    required Uint8List token,
+  }) = PairChannelCommandDto_ConnectPair;
+  const factory PairChannelCommandDto.sendFrame({
+    required Uint8List data,
+  }) = PairChannelCommandDto_SendFrame;
+
+  /// Close the pair WS behind the frames already sent.
+  const factory PairChannelCommandDto.closePair() =
+      PairChannelCommandDto_ClosePair;
+
+  /// Tear the pair WS down now, and stop resending any unacknowledged
+  /// offer or join.
+  const factory PairChannelCommandDto.dropPair() =
+      PairChannelCommandDto_DropPair;
+
+  /// Publish to this device's repo and tell the relay; report a failure
+  /// through `on_ring_publish_failed`.
+  const factory PairChannelCommandDto.publishRingEvent({
     required Uint8List tag,
     required Uint8List ciphertext,
-  }) = PairingCommandDto_PublishRingCommit;
-  const factory PairingCommandDto.surfaceApprovalPrompt({
-    required String deviceName,
-    required String did,
-  }) = PairingCommandDto_SurfaceApprovalPrompt;
-  const factory PairingCommandDto.persistRing({
+  }) = PairChannelCommandDto_PublishRingEvent;
+
+  /// Load every conversation's settled history and hand it to
+  /// `provide_history` with this token.
+  const factory PairChannelCommandDto.loadHistory({
+    required Uint8List token,
+  }) = PairChannelCommandDto_LoadHistory;
+  const factory PairChannelCommandDto.storeMessages({
+    required String convId,
+    required List<SyncMessageDto> messages,
+  }) = PairChannelCommandDto_StoreMessages;
+  const factory PairChannelCommandDto.saveMlsState() =
+      PairChannelCommandDto_SaveMlsState;
+  const factory PairChannelCommandDto.saveRingState() =
+      PairChannelCommandDto_SaveRingState;
+  const factory PairChannelCommandDto.ringJoined({
     required Uint8List ringId,
-  }) = PairingCommandDto_PersistRing;
-  const factory PairingCommandDto.rosterReceived({
-    required List<SiblingInfoDto> roster,
-  }) = PairingCommandDto_RosterReceived;
-  const factory PairingCommandDto.startSync() = PairingCommandDto_StartSync;
+  }) = PairChannelCommandDto_RingJoined;
+  const factory PairChannelCommandDto.deviceAdmitted({
+    required Uint8List ringId,
+  }) = PairChannelCommandDto_DeviceAdmitted;
+  const factory PairChannelCommandDto.siblingStealthLearned({
+    required Uint8List deviceId,
+    required Uint8List scanPubkey,
+  }) = PairChannelCommandDto_SiblingStealthLearned;
+  const factory PairChannelCommandDto.transferComplete({
+    required SyncTallyDto tally,
+  }) = PairChannelCommandDto_TransferComplete;
+  const factory PairChannelCommandDto.transferFailed({
+    required String detail,
+    required bool duringPairing,
+  }) = PairChannelCommandDto_TransferFailed;
+  const factory PairChannelCommandDto.log({
+    required String line,
+  }) = PairChannelCommandDto_Log;
 }
 
-/// Decoded pairing code contents: rendezvous token + channel secret.
-class PairingPayloadDto {
-  final Uint8List token;
-  final Uint8List secret;
+/// This device's identity, for the driver steps that need its keys.
+class PairIdentityDto {
+  final CredentialDto credential;
+  final Uint8List keyBundle;
 
-  const PairingPayloadDto({
-    required this.token,
-    required this.secret,
+  /// 32-byte X25519 stealth scan public key.
+  final Uint8List stealthPubkey;
+
+  const PairIdentityDto({
+    required this.credential,
+    required this.keyBundle,
+    required this.stealthPubkey,
   });
 
   @override
-  int get hashCode => token.hashCode ^ secret.hashCode;
+  int get hashCode =>
+      credential.hashCode ^ keyBundle.hashCode ^ stealthPubkey.hashCode;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is PairingPayloadDto &&
+      other is PairIdentityDto &&
           runtimeType == other.runtimeType &&
-          token == other.token &&
-          secret == other.secret;
+          credential == other.credential &&
+          keyBundle == other.keyBundle &&
+          stealthPubkey == other.stealthPubkey;
+}
+
+/// `pair_new`'s code, and the commands that start its rendezvous.
+class PairNewDto {
+  final String code;
+  final List<PairChannelCommandDto> commands;
+
+  const PairNewDto({
+    required this.code,
+    required this.commands,
+  });
+
+  @override
+  int get hashCode => code.hashCode ^ commands.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PairNewDto &&
+          runtimeType == other.runtimeType &&
+          code == other.code &&
+          commands == other.commands;
 }
 
 @freezed
 sealed class PairingUiStateDto with _$PairingUiStateDto {
   const PairingUiStateDto._();
 
-  /// No pairing in flight. `PairingSessionHandle` itself never returns
-  /// this — see the doc on the core `Idle` variant.
+  /// No pairing in flight.
   const factory PairingUiStateDto.idle() = PairingUiStateDto_Idle;
 
   /// New device: code generated, waiting for the peer to enter it.
@@ -1212,26 +1050,6 @@ sealed class RingCommandDto with _$RingCommandDto {
       RingCommandDto_PollForNewDevices;
 }
 
-@freezed
-sealed class RingMsgDto with _$RingMsgDto {
-  const RingMsgDto._();
-
-  /// "I am missing history — open a sync channel with me at this token."
-  /// `target_device_id` names one sibling; `None` is a broadcast.
-  const factory RingMsgDto.syncRequest({
-    required Uint8List token,
-    required Uint8List secret,
-    Uint8List? targetDeviceId,
-  }) = RingMsgDto_SyncRequest;
-
-  /// "I have history you don't — join me." Always targeted.
-  const factory RingMsgDto.syncOffer({
-    required Uint8List token,
-    required Uint8List secret,
-    required Uint8List targetDeviceId,
-  }) = RingMsgDto_SyncOffer;
-}
-
 /// Information about the sender of a message, extracted from MLS credentials.
 class SenderInfoDto {
   final String did;
@@ -1259,33 +1077,6 @@ class SenderInfoDto {
           did == other.did &&
           deviceName == other.deviceName &&
           deviceId == other.deviceId;
-}
-
-/// One existing sibling's identity + stealth address, carried in
-/// `Admit.roster`.
-class SiblingInfoDto {
-  final Uint8List deviceId;
-  final String deviceName;
-  final Uint8List stealthPubkey;
-
-  const SiblingInfoDto({
-    required this.deviceId,
-    required this.deviceName,
-    required this.stealthPubkey,
-  });
-
-  @override
-  int get hashCode =>
-      deviceId.hashCode ^ deviceName.hashCode ^ stealthPubkey.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is SiblingInfoDto &&
-          runtimeType == other.runtimeType &&
-          deviceId == other.deviceId &&
-          deviceName == other.deviceName &&
-          stealthPubkey == other.stealthPubkey;
 }
 
 /// A sibling device's stealth address: the 32-byte X25519 scan pubkey plus the
@@ -1363,7 +1154,6 @@ class SyncMessageDto {
   final String senderDeviceName;
   final PlatformInt64 timestampMs;
   final String content;
-  final bool isOwn;
   final String? blobUri;
   final Uint8List? blobKey;
   final Uint8List? blobCiphertextHash;
@@ -1388,7 +1178,6 @@ class SyncMessageDto {
     required this.senderDeviceName,
     required this.timestampMs,
     required this.content,
-    required this.isOwn,
     this.blobUri,
     this.blobKey,
     this.blobCiphertextHash,
@@ -1409,7 +1198,6 @@ class SyncMessageDto {
       senderDeviceName.hashCode ^
       timestampMs.hashCode ^
       content.hashCode ^
-      isOwn.hashCode ^
       blobUri.hashCode ^
       blobKey.hashCode ^
       blobCiphertextHash.hashCode ^
@@ -1432,7 +1220,6 @@ class SyncMessageDto {
           senderDeviceName == other.senderDeviceName &&
           timestampMs == other.timestampMs &&
           content == other.content &&
-          isOwn == other.isOwn &&
           blobUri == other.blobUri &&
           blobKey == other.blobKey &&
           blobCiphertextHash == other.blobCiphertextHash &&
@@ -1443,22 +1230,6 @@ class SyncMessageDto {
           blobHeight == other.blobHeight &&
           blobThumbhash == other.blobThumbhash &&
           reactions == other.reactions;
-}
-
-@freezed
-sealed class SyncOutputDto with _$SyncOutputDto {
-  const SyncOutputDto._();
-
-  /// JSON-encoded `SyncMsg` ready to be sealed and sent on the pair WS.
-  const factory SyncOutputDto.send({
-    required Uint8List bytes,
-  }) = SyncOutputDto_Send;
-
-  /// Persist these messages for the conversation `conv_id` (hex group ID).
-  const factory SyncOutputDto.store({
-    required String convId,
-    required List<SyncMessageDto> messages,
-  }) = SyncOutputDto_Store;
 }
 
 @freezed
@@ -1501,8 +1272,7 @@ class SyncReactionDto {
 sealed class SyncRequestUiStateDto with _$SyncRequestUiStateDto {
   const SyncRequestUiStateDto._();
 
-  /// No sync request in flight. The handle itself never returns this;
-  /// a host wrapping an optional session reports it when there is none.
+  /// No sync request in flight.
   const factory SyncRequestUiStateDto.idle() = SyncRequestUiStateDto_Idle;
 
   /// Waiting on the rendezvous, in either role.

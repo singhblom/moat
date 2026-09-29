@@ -36,7 +36,6 @@ void main() {
         senderDeviceName: 'laptop',
         timestampMs: toPlatformInt64(0),
         content: 'content of $rkey',
-        isOwn: false,
         reactions: const [],
       );
 
@@ -154,7 +153,6 @@ void main() {
         senderDeviceName: 'phone',
         timestampMs: toPlatformInt64(0),
         content: 'hi',
-        isOwn: false,
         reactions: [
           const ffi.SyncReactionDto(emoji: '👍', senderDid: 'did:plc:bob'),
           const ffi.SyncReactionDto(emoji: '🎉', senderDid: 'did:plc:carol'),
@@ -183,7 +181,6 @@ void main() {
         senderDeviceName: 'phone',
         timestampMs: toPlatformInt64(0),
         content: 'photo',
-        isOwn: false,
         blobUri: 'at://did:plc:bob/bafyimage',
         blobKey: Uint8List.fromList(List.filled(32, 1)),
         blobCiphertextHash: Uint8List.fromList(List.filled(32, 2)),

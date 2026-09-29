@@ -3,14 +3,14 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:moat_dart_common/moat_dart_common.dart' as common;
-import '../services/pairing_manager.dart';
+import '../services/pair_channel_manager.dart';
 import '../widgets/common_listenable.dart';
 
 /// Existing device: enter a pairing code either by scanning the other
 /// device's QR code or by typing it in. Once confirmed, waits for the
 /// other device's `Enroll` — which triggers `main.dart`'s `state` listener
 /// to push `ApprovePairingScreen` on top of this one — and for the
-/// pairing to complete. Renders straight off [PairingService.state] via
+/// pairing to complete. Renders straight off [PairChannelService.pairingState] via
 /// [ValueListenableBuilder] rather than polling.
 ///
 /// Deliberately does *not* pop itself on `Done`: `Navigator.pop()` removes
@@ -42,11 +42,11 @@ class _EnterPairingCodeScreenState extends State<EnterPairingCodeScreen> {
   /// Abort a still-in-flight pairing when the user backs out of this
   /// screen after confirming a code but before it completes.
   void _cancelIfInFlight() {
-    final service = PairingManager.instance.service;
-    final uiState = service?.state.value;
+    final service = PairChannelManager.instance.service;
+    final uiState = service?.pairingState.value;
     if (uiState is common.PairingUiStateDto_AwaitingPeer ||
         uiState is common.PairingUiStateDto_AwaitingApproval) {
-      unawaited(service!.cancel().catchError((Object e) {
+      unawaited(service!.cancelPairing().catchError((Object e) {
         // Best-effort: the screen is already gone, nothing left to render.
       }));
     }
@@ -64,7 +64,7 @@ class _EnterPairingCodeScreenState extends State<EnterPairingCodeScreen> {
 
   Future<void> _confirm() async {
     if (!_formKey.currentState!.validate()) return;
-    final service = PairingManager.instance.service;
+    final service = PairChannelManager.instance.service;
     if (service == null) return;
 
     setState(() {
@@ -73,7 +73,7 @@ class _EnterPairingCodeScreenState extends State<EnterPairingCodeScreen> {
     });
 
     try {
-      await service.confirmCode(_codeController.text.trim());
+      await service.confirmPairingCode(_codeController.text.trim());
       if (!mounted) return;
       setState(() {
         _isLoading = false;
@@ -173,12 +173,12 @@ class _EnterPairingCodeScreenState extends State<EnterPairingCodeScreen> {
   }
 
   Widget _buildWaitingOrFailed() {
-    final service = PairingManager.instance.service;
+    final service = PairChannelManager.instance.service;
     if (service == null) {
       return const Center(child: CircularProgressIndicator());
     }
     return ValueListenableBuilder<common.PairingUiStateDto>(
-      valueListenable: service.state.asFlutter,
+      valueListenable: service.pairingState.asFlutter,
       builder: (context, uiState, _) {
         if (uiState is common.PairingUiStateDto_Failed) {
           return Column(

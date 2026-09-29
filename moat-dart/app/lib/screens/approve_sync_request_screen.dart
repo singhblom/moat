@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:moat_dart_common/moat_dart_common.dart' as common;
-import '../services/sync_request_manager.dart';
+import '../services/pair_channel_manager.dart';
 
 /// A sibling asked for message history. Pushed by a `state` listener in
 /// `main.dart` the moment the request arrives, mirroring `moat-cli`'s TUI
 /// switching to `Focus::SyncApprove` — the request can land while the user
 /// is anywhere in the app.
 ///
-/// The device name comes from [SyncRequestService.state]'s
+/// The device name comes from [PairChannelService.syncRequestState]'s
 /// `AwaitingApproval`, which the protocol takes from the requester's MLS
 /// leaf credential rather than from anything it declared about itself.
 class ApproveSyncRequestScreen extends StatefulWidget {
@@ -26,12 +26,12 @@ class _ApproveSyncRequestScreenState extends State<ApproveSyncRequestScreen> {
     super.initState();
     // The request expires on the relay's token TTL, and the pair channel
     // can drop — both move `state` without any button being pressed here.
-    SyncRequestManager.instance.service?.state.addListener(_onStateChange);
+    PairChannelManager.instance.service?.syncRequestState.addListener(_onStateChange);
   }
 
   @override
   void dispose() {
-    SyncRequestManager.instance.service?.state.removeListener(_onStateChange);
+    PairChannelManager.instance.service?.syncRequestState.removeListener(_onStateChange);
     super.dispose();
   }
 
@@ -40,22 +40,22 @@ class _ApproveSyncRequestScreenState extends State<ApproveSyncRequestScreen> {
   }
 
   Future<void> _respond(bool accept) async {
-    final service = SyncRequestManager.instance.service;
+    final service = PairChannelManager.instance.service;
     if (service == null) return;
 
     setState(() => _isLoading = true);
     try {
       if (accept) {
-        await service.accept();
+        await service.acceptSyncRequest();
       } else {
-        service.decline();
+        await service.declineSyncRequest();
       }
     } catch (_) {
       // `state` already carries the outcome, including any failure.
     }
     if (!mounted) return;
 
-    final uiState = service.state.value;
+    final uiState = service.syncRequestState.value;
     if (uiState is common.SyncRequestUiStateDto_Failed && accept) {
       // A genuine failure to start sending: stay and show why.
       setState(() => _isLoading = false);
@@ -70,7 +70,7 @@ class _ApproveSyncRequestScreenState extends State<ApproveSyncRequestScreen> {
   Widget build(BuildContext context) {
     // Read through `refresh()` so a prompt whose rendezvous token has died
     // stops offering to send: the join would have nothing to attach to.
-    final uiState = SyncRequestManager.instance.service?.refresh();
+    final uiState = PairChannelManager.instance.service?.refreshSyncRequest();
     final pending = uiState is common.SyncRequestUiStateDto_AwaitingApproval
         ? uiState
         : null;

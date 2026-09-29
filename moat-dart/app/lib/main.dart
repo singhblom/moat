@@ -8,8 +8,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart' hi
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:moat_dart_common/moat_dart_common.dart' hide DebugLog;
-import 'services/pairing_manager.dart';
-import 'services/sync_request_manager.dart';
+import 'services/pair_channel_manager.dart';
 import 'services/device_ring_manager.dart';
 import 'providers/auth_provider.dart';
 import 'providers/conversations_provider.dart';
@@ -25,11 +24,10 @@ import 'services/flutter_storage_backend.dart';
 import 'services/flutter_storage_factory.dart';
 import 'services/debug_log.dart';
 import 'services/push_service.dart';
-import 'services/sync_manager.dart';
 import 'widgets/sync_progress_view.dart';
 import 'firebase_options.dart';
 
-/// Lets the `PairingService.state` listener below push a screen from
+/// Lets the `PairChannelService.pairingState` listener below push a screen from
 /// outside the widget tree — mirrors `moat-cli`'s TUI switching to
 /// `Focus::PairApprove` the moment the session reaches `AwaitingApproval`,
 /// rather than the enter-code screen having to poll for it.
@@ -403,18 +401,17 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
 
       _pollingService = bundle.polling;
 
-      PairingManager.instance.init(bundle: bundle);
+      PairChannelManager.instance.init(bundle: bundle);
       DeviceRingManager.instance.init(bundle.ring);
-      SyncRequestManager.instance.init(bundle: bundle);
-      SyncManager.instance.init(bundle.sync);
+      final pairChannel = bundle.pairChannel;
 
       // `init()` just built a fresh service (and `state` notifier), so
       // listeners can't accumulate across login cycles. Listening globally
       // rather than per-screen is deliberate: an `Enroll` can arrive while
       // the user is anywhere in the app.
       var wasPaired = false;
-      PairingManager.instance.service!.state.addListener(() {
-        final uiState = PairingManager.instance.service?.state.value;
+      pairChannel.pairingState.addListener(() {
+        final uiState = pairChannel.pairingState.value;
         if (uiState is PairingUiStateDto_AwaitingApproval) {
           rootNavigatorKey.currentState?.push(
             MaterialPageRoute(builder: (_) => const ApprovePairingScreen()),
@@ -445,7 +442,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       });
 
       // A finished transfer can bring whole conversations with it.
-      final syncProgress = bundle.sync.progress;
+      final syncProgress = pairChannel.progress;
       var wasSyncing = false;
       syncProgress.addListener(() {
         final syncing = syncProgress.value != null;
@@ -457,8 +454,8 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
 
       // Same reasoning as the pairing listener above: a sibling's request
       // can arrive while the user is anywhere in the app.
-      SyncRequestManager.instance.service!.state.addListener(() {
-        final uiState = SyncRequestManager.instance.service?.state.value;
+      pairChannel.syncRequestState.addListener(() {
+        final uiState = pairChannel.syncRequestState.value;
         if (uiState is SyncRequestUiStateDto_AwaitingApproval) {
           rootNavigatorKey.currentState?.push(
             MaterialPageRoute(builder: (_) => const ApproveSyncRequestScreen()),
@@ -480,9 +477,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       _pushService = null;
       _pollingStarted = false;
       ConversationManager.instance.clear();
-      PairingManager.instance.clear();
-      SyncRequestManager.instance.clear();
-      SyncManager.instance.clear();
+      PairChannelManager.instance.clear();
       DeviceRingManager.instance.clear();
       DrawbridgeService.instance.reset();
       debugPrint('PollingService stopped, Drawbridge reset');

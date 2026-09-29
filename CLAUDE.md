@@ -66,6 +66,7 @@ Rust workspace + Dart/Flutter packages + Go service:
 - `MoatSession` - Main API for MLS operations with file-backed persistence
 - `Event` / `EventKind` - Unified event type (Message, Commit, Welcome, Checkpoint)
 - `KeyBundle` - Serialized key package with private keys
+- `PairChannelDriver` - Sole owner of the Drawbridge pair channel: pairing, sync requests/offers and the history transfer. Hosts feed it relay events and gestures and carry out the `PairChannelCommand`s it returns; they keep no pair-channel state of their own
 
 **moat-atproto:**
 - `MoatAtprotoClient` - Async client for PDS operations (login, publish/fetch events, key packages, stealth addresses)

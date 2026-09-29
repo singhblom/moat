@@ -3,14 +3,14 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:moat_dart_common/moat_dart_common.dart' as common;
 import 'package:qr_flutter/qr_flutter.dart';
-import '../services/pairing_manager.dart';
+import '../services/pair_channel_manager.dart';
 import '../widgets/common_listenable.dart';
 
 /// New device: requests a pairing code and displays it as a QR code (plus
 /// raw text as a manual-entry fallback), then waits for the existing
 /// device to enter it and approve.
 ///
-/// Renders off [PairingService.state] rather than polling. On `Done`,
+/// Renders off [PairChannelService.pairingState] rather than polling. On `Done`,
 /// says so and waits to be dismissed, like the TUI — the history that
 /// follows shows in the app-wide progress strip. On `Failed`, shows the
 /// reason and waits.
@@ -38,7 +38,7 @@ class _ShowPairingCodeScreenState extends State<ShowPairingCodeScreen> {
   }
 
   Future<void> _start() async {
-    final service = PairingManager.instance.service;
+    final service = PairChannelManager.instance.service;
     if (service == null) {
       setState(() {
         _starting = false;
@@ -47,7 +47,7 @@ class _ShowPairingCodeScreenState extends State<ShowPairingCodeScreen> {
       return;
     }
     try {
-      await service.startEnroll();
+      await service.startPairing();
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -63,10 +63,10 @@ class _ShowPairingCodeScreenState extends State<ShowPairingCodeScreen> {
   /// Abort a still-in-flight pairing when the user backs out — previously
   /// impossible, so a discarded QR left an attempt running invisibly.
   void _cancelIfInFlight() {
-    final service = PairingManager.instance.service;
-    final uiState = service?.state.value;
+    final service = PairChannelManager.instance.service;
+    final uiState = service?.pairingState.value;
     if (uiState is common.PairingUiStateDto_ShowingCode) {
-      unawaited(service!.cancel().catchError((Object e) {
+      unawaited(service!.cancelPairing().catchError((Object e) {
         // Best-effort: the screen is already gone, nothing left to render.
       }));
     }
@@ -98,12 +98,12 @@ class _ShowPairingCodeScreenState extends State<ShowPairingCodeScreen> {
     if (_startError != null) {
       return _ErrorMessage(message: _startError!);
     }
-    final service = PairingManager.instance.service;
+    final service = PairChannelManager.instance.service;
     if (_starting || service == null) {
       return const Center(child: CircularProgressIndicator());
     }
     return ValueListenableBuilder<common.PairingUiStateDto>(
-      valueListenable: service.state.asFlutter,
+      valueListenable: service.pairingState.asFlutter,
       builder: (context, uiState, _) => _buildForState(context, uiState),
     );
   }

@@ -5,11 +5,9 @@ import 'device_ring_service.dart';
 import 'document_backend.dart';
 import 'drawbridge_service.dart';
 import 'message_storage.dart';
-import 'pairing_service.dart';
+import 'pair_channel_service.dart';
 import 'polling_service.dart';
 import 'secure_storage.dart';
-import 'sync_request_service.dart';
-import 'sync_service.dart';
 import 'watch_list_service.dart';
 
 /// All post-login services that both the Flutter app and the headless
@@ -20,16 +18,12 @@ import 'watch_list_service.dart';
 /// handlers, app-specific ConversationManagers) on the returned services.
 class ServiceBundle {
   final DeviceRingService ring;
-  final SyncService sync;
-  final PairingService pairing;
-  final SyncRequestService syncRequest;
+  final PairChannelService pairChannel;
   final PollingService polling;
 
   ServiceBundle._({
     required this.ring,
-    required this.sync,
-    required this.pairing,
-    required this.syncRequest,
+    required this.pairChannel,
     required this.polling,
   });
 }
@@ -56,32 +50,17 @@ Future<ServiceBundle> createServiceBundle({
 }) async {
   final ring = DeviceRingService(
     auth: auth,
-    drawbridge: drawbridge,
     backend: docBackend,
   );
   await ring.init();
   ring.convsService = conversationsService;
 
-  final sync = SyncService(
+  final pairChannel = PairChannelService(
     auth: auth,
     drawbridge: drawbridge,
     ring: ring,
     conversationsService: conversationsService,
     messageStorage: messageStorage,
-  );
-
-  final pairing = PairingService(
-    auth: auth,
-    drawbridge: drawbridge,
-    ring: ring,
-    sync: sync,
-  );
-
-  final syncRequest = SyncRequestService(
-    auth: auth,
-    drawbridge: drawbridge,
-    ring: ring,
-    sync: sync,
   );
 
   final polling = PollingService(
@@ -91,21 +70,18 @@ Future<ServiceBundle> createServiceBundle({
     secureStorage: secureStorage,
     ringService: ring,
   );
-  polling.onRingMessage = syncRequest.onRingMessage;
-  polling.onPollTick = syncRequest.expireIfDue;
+  polling.onRingMessage = pairChannel.onRingMessage;
+  polling.onPollTick = pairChannel.expireIfDue;
 
   ConversationManager.instance.init(
     authService: auth,
     storage: messageStorage,
     ringService: ring,
-    syncService: sync,
   );
 
   return ServiceBundle._(
     ring: ring,
-    sync: sync,
-    pairing: pairing,
-    syncRequest: syncRequest,
+    pairChannel: pairChannel,
     polling: polling,
   );
 }

@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:moat_dart_common/moat_dart_common.dart' as common;
-import '../services/pairing_manager.dart';
+import '../services/pair_channel_manager.dart';
 
 /// Existing device: shown the moment an incoming `Enroll` needs a user
 /// decision — pushed by a `state` listener in `main.dart`, mirroring
 /// `moat-cli`'s TUI switching straight to `Focus::PairApprove` when
 /// `SurfaceApprovalPrompt` arrives.
 ///
-/// Device name/DID come from [PairingService.state]'s `AwaitingApproval`
+/// Device name/DID come from [PairChannelService.pairingState]'s `AwaitingApproval`
 /// rather than a cached copy. On success (or a plain reject) this unwinds
 /// past `EnterPairingCodeScreen` too — both belong to one attempt. On an
 /// approve *failure* it stays and renders `Failed { reason }`.
@@ -27,12 +27,12 @@ class _ApprovePairingScreenState extends State<ApprovePairingScreen> {
     // A background failure (e.g. the pair WS drops) can move `state` to
     // `Failed` without going through `_respond()` — rebuild so that's
     // reflected here too, not just from this screen's own button presses.
-    PairingManager.instance.service?.state.addListener(_onStateChange);
+    PairChannelManager.instance.service?.pairingState.addListener(_onStateChange);
   }
 
   @override
   void dispose() {
-    PairingManager.instance.service?.state.removeListener(_onStateChange);
+    PairChannelManager.instance.service?.pairingState.removeListener(_onStateChange);
     super.dispose();
   }
 
@@ -41,16 +41,16 @@ class _ApprovePairingScreenState extends State<ApprovePairingScreen> {
   }
 
   Future<void> _respond(bool approve) async {
-    final service = PairingManager.instance.service;
+    final service = PairChannelManager.instance.service;
     if (service == null) return;
 
     setState(() => _isLoading = true);
 
     try {
       if (approve) {
-        await service.approvePending();
+        await service.approvePairing();
       } else {
-        await service.rejectPending();
+        await service.rejectPairing();
       }
     } catch (_) {
       // `state` already reflects the outcome (including `Failed`, if the
@@ -58,7 +58,7 @@ class _ApprovePairingScreenState extends State<ApprovePairingScreen> {
     }
     if (!mounted) return;
 
-    final uiState = service.state.value;
+    final uiState = service.pairingState.value;
     if (uiState is common.PairingUiStateDto_Failed && approve) {
       // A genuine approve failure: stay put and show the reason.
       setState(() => _isLoading = false);
@@ -73,8 +73,8 @@ class _ApprovePairingScreenState extends State<ApprovePairingScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final service = PairingManager.instance.service;
-    final uiState = service?.state.value;
+    final service = PairChannelManager.instance.service;
+    final uiState = service?.pairingState.value;
     final pending =
         uiState is common.PairingUiStateDto_AwaitingApproval ? uiState : null;
     final failure =

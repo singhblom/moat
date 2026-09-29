@@ -15,7 +15,7 @@
 //!
 //! The runtime mix is a parameter (see [`run_with`]); the `_dr` and `_rd`
 //! cells are thin wrappers over it. `_dr` is the only coverage of
-//! `PairingService.dart`'s post-Done history sync as the *receiving* side
+//! the Dart host's post-pairing history sync as the *receiving* side
 //! against a non-empty conversation, `_rd` the only coverage of it as the
 //! *serving* side.
 

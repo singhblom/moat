@@ -25,7 +25,6 @@ fn msg(rkey: &str) -> SyncMessage {
         sender_device_name: "laptop".to_string(),
         timestamp_ms: 0,
         content: format!("content of {rkey}"),
-        is_own: true,
         blob_uri: None,
         blob_key: None,
         blob_ciphertext_hash: None,
@@ -92,9 +91,7 @@ fn a_donor_withholds_messages_the_peer_already_holds() {
     donor.add_conv_plan(
         g.clone(),
         hex::encode(&g),
-        vec![msg("r1"), msg("r2"), msg("r3"), msg("r4")],
-        false,
-    );
+        vec![msg("r1"), msg("r2"), msg("r3"), msg("r4")]);
     let _ = donor.on_paired(vec![state_with(&g, &["r1", "r2", "r3", "r4"])], [0; 16]);
 
     // Peer holds r1 and r2 already.
@@ -102,7 +99,7 @@ fn a_donor_withholds_messages_the_peer_already_holds() {
         SyncMsg::Hello { convs: vec![state_with(&g, &["r1", "r2"])], device_id: [0; 16] },
     ).unwrap();
     let outs = donor.on_message(
-        SyncMsg::BatchReq { group_id: g.clone(), from_rkey: None, to_rkey: None, cursor: None },
+        SyncMsg::BatchReq { group_id: g.clone(), cursor: None },
     ).unwrap();
 
     let batches = sent_batches(&outs);
@@ -124,9 +121,7 @@ fn a_donor_fills_a_hole_in_the_middle_of_the_peers_history() {
     donor.add_conv_plan(
         g.clone(),
         hex::encode(&g),
-        vec![msg("r1"), msg("r2"), msg("r3"), msg("r4"), msg("r5")],
-        false,
-    );
+        vec![msg("r1"), msg("r2"), msg("r3"), msg("r4"), msg("r5")]);
     let _ = donor.on_paired(vec![state_with(&g, &["r1", "r2", "r3", "r4", "r5"])], [0; 16]);
     let _ = donor.on_message(
         SyncMsg::Hello {
@@ -135,7 +130,7 @@ fn a_donor_fills_a_hole_in_the_middle_of_the_peers_history() {
         },
     ).unwrap();
     let outs = donor.on_message(
-        SyncMsg::BatchReq { group_id: g.clone(), from_rkey: None, to_rkey: None, cursor: None },
+        SyncMsg::BatchReq { group_id: g.clone(), cursor: None },
     ).unwrap();
 
     let batches = sent_batches(&outs);
@@ -149,13 +144,13 @@ fn a_donor_serves_outside_a_peers_declared_span() {
     let g = vec![3u8; 32];
 
     let mut donor = SyncSession::new();
-    donor.add_conv_plan(g.clone(), hex::encode(&g), vec![msg("r1"), msg("r2")], false);
+    donor.add_conv_plan(g.clone(), hex::encode(&g), vec![msg("r1"), msg("r2")]);
     let _ = donor.on_paired(vec![state_with(&g, &["r1", "r2"])], [0; 16]);
     let _ = donor.on_message(
         SyncMsg::Hello { convs: vec![state_with_range(&g, "r1", "r1", 1)], device_id: [0; 16] },
     ).unwrap();
     let outs = donor.on_message(
-        SyncMsg::BatchReq { group_id: g.clone(), from_rkey: None, to_rkey: None, cursor: None },
+        SyncMsg::BatchReq { group_id: g.clone(), cursor: None },
     ).unwrap();
 
     assert_eq!(
@@ -173,7 +168,7 @@ fn no_request_is_sent_when_the_peer_holds_nothing_new() {
     let g = vec![4u8; 32];
 
     let mut s = SyncSession::new();
-    s.add_conv_plan(g.clone(), hex::encode(&g), vec![msg("r1"), msg("r2")], false);
+    s.add_conv_plan(g.clone(), hex::encode(&g), vec![msg("r1"), msg("r2")]);
     let _ = s.on_paired(vec![state_with(&g, &["r1", "r2"])], [0; 16]);
 
     let outs = s.on_message(
@@ -191,7 +186,7 @@ fn two_identical_devices_complete_without_transferring_anything() {
     let g = vec![5u8; 32];
 
     let mut s = SyncSession::new();
-    s.add_conv_plan(g.clone(), hex::encode(&g), vec![msg("r1")], false);
+    s.add_conv_plan(g.clone(), hex::encode(&g), vec![msg("r1")]);
     let _ = s.on_paired(vec![state_with(&g, &["r1"])], [0; 16]);
     let outs = s.on_message(
         SyncMsg::Hello { convs: vec![state_with(&g, &["r1"])], device_id: [0; 16] },
@@ -210,7 +205,7 @@ fn a_request_is_sent_when_the_peer_holds_something_we_lack() {
     let g = vec![6u8; 32];
 
     let mut s = SyncSession::new();
-    s.add_conv_plan(g.clone(), hex::encode(&g), vec![msg("r1")], false);
+    s.add_conv_plan(g.clone(), hex::encode(&g), vec![msg("r1")]);
     let _ = s.on_paired(vec![state_with(&g, &["r1"])], [0; 16]);
 
     let outs = s.on_message(
@@ -228,7 +223,7 @@ fn a_conversation_the_peer_alone_knows_about_is_still_requested() {
     let theirs = vec![8u8; 32];
 
     let mut s = SyncSession::new();
-    s.add_conv_plan(ours.clone(), hex::encode(&ours), vec![msg("r1")], false);
+    s.add_conv_plan(ours.clone(), hex::encode(&ours), vec![msg("r1")]);
     let _ = s.on_paired(vec![state_with(&ours, &["r1"])], [0; 16]);
 
     let outs = s.on_message(
@@ -253,9 +248,7 @@ fn each_side_serves_the_other_in_the_same_session() {
     laptop.add_conv_plan(
         g.clone(),
         hex::encode(&g),
-        vec![msg("r1"), msg("r2"), msg("r3")],
-        false,
-    );
+        vec![msg("r1"), msg("r2"), msg("r3")]);
     let _ = laptop.on_paired(vec![state_with(&g, &["r1", "r2", "r3"])], [0; 16]);
 
     // Phone holds r3 and the newer r4, r5.
@@ -265,7 +258,7 @@ fn each_side_serves_the_other_in_the_same_session() {
     assert_eq!(batch_req_count(&outs), 1, "the laptop wants r4 and r5");
 
     let outs = laptop.on_message(
-        SyncMsg::BatchReq { group_id: g.clone(), from_rkey: None, to_rkey: None, cursor: None },
+        SyncMsg::BatchReq { group_id: g.clone(), cursor: None },
     ).unwrap();
     assert_eq!(
         batch_rkeys(sent_batches(&outs)[0]),
@@ -409,8 +402,8 @@ fn a_session_counts_the_messages_and_conversations_it_received() {
     let b = vec![2u8; 32];
 
     let mut s = SyncSession::new();
-    s.add_conv_plan(a.clone(), hex::encode(&a), vec![], true);
-    s.add_conv_plan(b.clone(), hex::encode(&b), vec![], true);
+    s.add_conv_plan(a.clone(), hex::encode(&a), vec![]);
+    s.add_conv_plan(b.clone(), hex::encode(&b), vec![]);
     let _ = s.on_paired(vec![], [0; 16]);
     let _ = s
         .on_message(SyncMsg::Hello {
@@ -450,7 +443,7 @@ fn a_session_counts_the_messages_and_conversations_it_received() {
 fn a_session_that_moves_nothing_reports_an_empty_tally() {
     let g = vec![7u8; 32];
     let mut s = SyncSession::new();
-    s.add_conv_plan(g.clone(), hex::encode(&g), vec![msg("r1")], false);
+    s.add_conv_plan(g.clone(), hex::encode(&g), vec![msg("r1")]);
     let _ = s.on_paired(vec![], [0; 16]);
     let _ = s
         .on_message(SyncMsg::Hello {

@@ -6,25 +6,9 @@
 //! `StoredMessage <-> SyncMessage` conversions which depend on
 //! `crate::keystore` and therefore can't live in moat-core.
 
-pub use moat_core::sync::{
-    decode_sync_msg, encode_sync_msg, ConvState, SyncMessage, SyncOutput, SyncReaction,
-    SyncSession,
-};
+pub use moat_core::sync::{SyncMessage, SyncReaction};
 
 use crate::keystore::{StoredMessage, StoredReaction};
-
-/// Which gesture opened a transfer, so its outcome reaches that gesture.
-pub enum TransferOrigin {
-    Pairing,
-    SyncRequest,
-}
-
-/// The history transfer running on the pair WS.
-pub struct SyncTransfer {
-    pub session: SyncSession,
-    pub channel: moat_core::PairingFrameChannel,
-    pub origin: TransferOrigin,
-}
 
 /// Convert a moat-cli `StoredMessage` into a wire-form `SyncMessage`.
 pub fn sync_message_from_stored(m: &StoredMessage) -> SyncMessage {
@@ -35,7 +19,6 @@ pub fn sync_message_from_stored(m: &StoredMessage) -> SyncMessage {
         sender_device_name: m.sender_device.clone().unwrap_or_default(),
         timestamp_ms: m.timestamp.timestamp_millis(),
         content: m.content.clone(),
-        is_own: m.is_own,
         blob_uri: m.blob_uri.clone(),
         blob_key: m.blob_key.clone(),
         blob_ciphertext_hash: m.blob_ciphertext_hash.clone(),
@@ -57,13 +40,14 @@ pub fn sync_message_from_stored(m: &StoredMessage) -> SyncMessage {
 }
 
 /// Convert a wire-form `SyncMessage` into a moat-cli `StoredMessage`.
-pub fn stored_from_sync_message(s: &SyncMessage) -> StoredMessage {
+/// `my_did` decides which messages are this user's own.
+pub fn stored_from_sync_message(s: &SyncMessage, my_did: Option<&str>) -> StoredMessage {
     StoredMessage {
         rkey: s.rkey.clone(),
         content: s.content.clone(),
         timestamp: chrono::DateTime::from_timestamp_millis(s.timestamp_ms)
             .unwrap_or_else(chrono::Utc::now),
-        is_own: s.is_own,
+        is_own: my_did == Some(s.sender_did.as_str()),
         message_id: s.message_id.clone(),
         sender_did: if s.sender_did.is_empty() { None } else { Some(s.sender_did.clone()) },
         sender_device: if s.sender_device_name.is_empty() {
@@ -135,7 +119,7 @@ mod tests {
     #[test]
     fn every_stored_field_survives_the_round_trip() {
         let stored = fully_populated();
-        let back = stored_from_sync_message(&sync_message_from_stored(&stored));
+        let back = stored_from_sync_message(&sync_message_from_stored(&stored), None);
 
         assert_eq!(back.rkey, stored.rkey);
         assert_eq!(back.content, stored.content);
@@ -179,7 +163,6 @@ mod tests {
             "sender_device_name",
             "timestamp_ms",
             "content",
-            "is_own",
             "blob_uri",
             "blob_key",
             "blob_ciphertext_hash",
@@ -208,7 +191,6 @@ mod tests {
             sender_device_name: String::new(),
             timestamp_ms: 0,
             content: "x".into(),
-            is_own: false,
             blob_uri: None,
             blob_key: None,
             blob_ciphertext_hash: None,
@@ -220,8 +202,15 @@ mod tests {
             blob_thumbhash: None,
             reactions: Vec::new(),
         };
-        let stored = stored_from_sync_message(&sync);
+        let stored = stored_from_sync_message(&sync, None);
         assert_eq!(stored.sender_did, None);
         assert_eq!(stored.sender_device, None);
+    }
+
+    #[test]
+    fn a_message_is_own_when_this_user_sent_it() {
+        let wire = sync_message_from_stored(&fully_populated());
+        assert!(stored_from_sync_message(&wire, Some("did:plc:bob")).is_own);
+        assert!(!stored_from_sync_message(&wire, Some("did:plc:alice")).is_own);
     }
 }

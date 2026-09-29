@@ -9,7 +9,6 @@ import 'device_ring_service.dart';
 import 'message_storage.dart';
 import 'send_queue.dart';
 import 'send_service.dart';
-import 'sync_service.dart';
 
 /// Global singleton managing [ConversationRepository] lifecycle.
 ///
@@ -23,29 +22,25 @@ class ConversationManager {
   MessageStorage? _storage;
   AuthService? _authService;
   DeviceRingService? _ringService;
-  SyncService? _syncService;
   Timer? _ringTickTimer;
 
   DeviceRingService get ringService => _ringService!;
-  SyncService get syncService => _syncService!;
 
   /// Call once after login, before any repository is created. Without
-  /// [authService] repositories have no send queue; without [ringService] and
-  /// [syncService] no ring tick runs.
+  /// [authService] repositories have no send queue; without [ringService]
+  /// no ring tick runs.
   void init({
     AuthService? authService,
     required MessageStorage storage,
     DeviceRingService? ringService,
-    SyncService? syncService,
     Duration ringTickInterval = const Duration(seconds: 30),
   }) {
     _authService = authService;
     _storage = storage;
     _ringService = ringService;
-    _syncService = syncService;
     _ringTickTimer?.cancel();
     _ringTickTimer = null;
-    if (ringService == null || syncService == null) return;
+    if (ringService == null) return;
     _ringTickTimer = Timer.periodic(ringTickInterval, (_) {
       ringService.tick().catchError((e) {
         moatLog('ConversationManager: ring tick failed: $e');

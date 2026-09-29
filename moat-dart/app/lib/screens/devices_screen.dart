@@ -2,7 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:moat_dart_common/moat_dart_common.dart' as common;
-import '../services/sync_request_manager.dart';
+import '../services/pair_channel_manager.dart';
 
 /// One linked device, as read from the ring's MLS leaf credentials.
 class _LinkedDevice {
@@ -48,13 +48,13 @@ class _DevicesScreenState extends State<DevicesScreen> {
   @override
   void initState() {
     super.initState();
-    SyncRequestManager.instance.service?.state.addListener(_onStateChange);
+    PairChannelManager.instance.service?.syncRequestState.addListener(_onStateChange);
     _loadDevices();
   }
 
   @override
   void dispose() {
-    SyncRequestManager.instance.service?.state.removeListener(_onStateChange);
+    PairChannelManager.instance.service?.syncRequestState.removeListener(_onStateChange);
     super.dispose();
   }
 
@@ -90,7 +90,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
       bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
   Future<void> _requestSync() async {
-    final service = SyncRequestManager.instance.service;
+    final service = PairChannelManager.instance.service;
     if (service == null) return;
     setState(() => _isBusy = true);
     try {
@@ -104,7 +104,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
   }
 
   Future<void> _offer(_LinkedDevice device) async {
-    final service = SyncRequestManager.instance.service;
+    final service = PairChannelManager.instance.service;
     if (service == null) return;
     setState(() => _isBusy = true);
     try {
@@ -131,7 +131,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
     final devices = _devices;
     // Read through `refresh()` so an expired request reads as failed the
     // moment this screen is looked at, not on the next poll tick.
-    final syncState = SyncRequestManager.instance.service?.refresh() ??
+    final syncState = PairChannelManager.instance.service?.refreshSyncRequest() ??
         const common.SyncRequestUiStateDto.idle();
 
     return Scaffold(

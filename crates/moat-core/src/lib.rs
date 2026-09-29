@@ -29,6 +29,7 @@ pub(crate) mod error;
 pub(crate) mod event;
 pub mod message;
 pub(crate) mod padding;
+pub mod pair_channel;
 pub mod pairing;
 pub(crate) mod stealth;
 pub(crate) mod storage;
@@ -78,7 +79,7 @@ pub use crate::tag::{
     TAG_EXPORT_SECRET_LABEL, TAG_EXPORT_SECRET_LEN, TAG_GAP_LIMIT,
 };
 pub use crate::sync::{
-    decode_sync_msg, encode_sync_msg, fit_hello_inventories, ConvInventory, ConvState,
+    decode_sync_msg, encode_sync_msg, fit_hello_inventories, ConvHistory, ConvInventory, ConvState,
     SyncMessage, SyncMsg, SyncOutput, SyncProgress, SyncReaction, SyncSession, SyncTally,
     HELLO_INVENTORY_BUDGET_BYTES,
 };
@@ -86,6 +87,7 @@ pub use crate::sync_request::{
     decode_ring_msg, encode_ring_msg, RingMsg, SyncFailure, SyncRequestSession,
     SyncRequestUiState, SYNC_REQUEST_TTL_MS,
 };
+pub use crate::pair_channel::{PairChannelCommand, PairChannelDriver, PairEnv, PairIdentity};
 pub use crate::pairing::{
     crockford_decode, crockford_encode, decode_pairing_msg, derive_pairing_keys,
     encode_pairing_msg, open_frame, seal_frame, Admit, Enroll,
