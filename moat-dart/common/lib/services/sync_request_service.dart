@@ -29,7 +29,7 @@ import 'sync_service.dart';
 /// whichever one the user approves joins the rendezvous.
 ///
 /// The transfer itself is not this service's job. Once the pair channel is
-/// up, [SyncService] runs the ordinary ring-MLS-encrypted session; this
+/// up, [SyncService] runs the ordinary session on the session's channel; this
 /// service only opens the rendezvous and tracks the state the UI renders.
 class SyncRequestService {
   final AuthService _auth;
@@ -109,9 +109,11 @@ class SyncRequestService {
     }
 
     final token = _randomBytes(16);
+    final secret = _randomBytes(16);
     final epoch = (await session.getGroupEpoch(groupId: ringId)) ?? BigInt.zero;
     final payload = await ffi.ringMsgEncodeSyncRequest(
       token: token,
+      secret: secret,
       targetDeviceId: targetDeviceId,
     );
     final encrypted = await session.encryptEvent(
@@ -128,6 +130,7 @@ class SyncRequestService {
 
     _session = ffi.SyncRequestSessionHandle.request(
       token: token,
+      secret: secret,
       nowMs: toPlatformInt64(DateTime.now().millisecondsSinceEpoch),
     );
     _syncState();
@@ -185,9 +188,11 @@ class SyncRequestService {
     }
 
     final token = _randomBytes(16);
+    final secret = _randomBytes(16);
     final epoch = (await session.getGroupEpoch(groupId: ringId)) ?? BigInt.zero;
     final payload = await ffi.ringMsgEncodeSyncOffer(
       token: token,
+      secret: secret,
       targetDeviceId: targetDeviceId,
     );
     final encrypted = await session.encryptEvent(
@@ -204,6 +209,7 @@ class SyncRequestService {
 
     _session = ffi.SyncRequestSessionHandle.request(
       token: token,
+      secret: secret,
       nowMs: toPlatformInt64(DateTime.now().millisecondsSinceEpoch),
     );
     _syncState();
@@ -250,7 +256,11 @@ class SyncRequestService {
     }
 
     switch (msg) {
-      case ffi.RingMsgDto_SyncRequest(:final token, :final targetDeviceId):
+      case ffi.RingMsgDto_SyncRequest(
+          :final token,
+          :final secret,
+          :final targetDeviceId
+        ):
         // A request naming another device is not ours to answer:
         // prompting would ask the user about someone else's business, and
         // two approvals would race for a rendezvous that admits two.
@@ -258,14 +268,18 @@ class SyncRequestService {
           moatLog('SyncRequestService: ignoring a request addressed elsewhere');
           return;
         }
-        await _onSyncRequest(token, deviceName);
+        await _onSyncRequest(token, secret, deviceName);
         return;
-      case ffi.RingMsgDto_SyncOffer(:final token, :final targetDeviceId):
+      case ffi.RingMsgDto_SyncOffer(
+          :final token,
+          :final secret,
+          :final targetDeviceId
+        ):
         if (!_isUs(targetDeviceId)) {
           moatLog('SyncRequestService: ignoring an offer addressed elsewhere');
           return;
         }
-        await _onSyncOffer(token, deviceName);
+        await _onSyncOffer(token, secret, deviceName);
         return;
     }
   }
@@ -289,7 +303,8 @@ class SyncRequestService {
   ///
   /// Still refused while something else is in flight — an offer must not
   /// supersede a decision the user is already looking at.
-  Future<void> _onSyncOffer(Uint8List token, String deviceName) async {
+  Future<void> _onSyncOffer(
+      Uint8List token, Uint8List secret, String deviceName) async {
     final nowMs = toPlatformInt64(DateTime.now().millisecondsSinceEpoch);
     final existing = _session;
     if (existing != null &&
@@ -302,13 +317,15 @@ class SyncRequestService {
     moatLog('SyncRequestService: accepting $deviceName\'s offer of history');
     _session = ffi.SyncRequestSessionHandle.acceptOffer(
       token: token,
+      secret: secret,
       nowMs: nowMs,
     );
     _syncState();
     _drawbridge.sendPairJoin(token);
   }
 
-  Future<void> _onSyncRequest(Uint8List token, String deviceName) async {
+  Future<void> _onSyncRequest(
+      Uint8List token, Uint8List secret, String deviceName) async {
 
     final nowMs = toPlatformInt64(DateTime.now().millisecondsSinceEpoch);
     // One sync session at a time. A live request of our own, or a prompt
@@ -325,6 +342,7 @@ class SyncRequestService {
     moatLog('SyncRequestService: $deviceName is asking for history');
     _session = ffi.SyncRequestSessionHandle.received(
       token: token,
+      secret: secret,
       deviceName: deviceName,
       nowMs: nowMs,
     );
@@ -354,15 +372,16 @@ class SyncRequestService {
     _syncState();
   }
 
-  void _handleChannelUp() {
+  ffi.PairingFrameChannelHandle? _handleChannelUp() {
     final session = _session;
-    if (session == null) return;
+    if (session == null) return null;
     try {
       session.onChannelUp();
     } catch (e) {
       moatLog('SyncRequestService: channel up on a finished request: $e');
     }
     _syncState();
+    return session.transferChannel();
   }
 
   void _handleComplete(ffi.SyncTallyDto tally, String? deviceName) {

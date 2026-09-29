@@ -25,12 +25,18 @@
 //! that ring application messages are epoch-bound — a device asleep past
 //! the ring's usable epoch window cannot use this lane, and its recourse
 //! is to pair again, which is a first-class affordance.
+//!
+//! The ring message also carries a fresh channel secret, so the transfer
+//! itself runs on the same [`PairingFrameChannel`] AEAD as a pairing and
+//! never touches ring MLS state.
 
 use serde::{Deserialize, Serialize};
 use serde_with::{base64::Base64, serde_as};
 
 use crate::device_ring::DeviceId;
-use crate::pairing::PAIRING_TOKEN_LEN;
+use crate::pairing::{
+    derive_pairing_keys, PairingFrameChannel, PairingRole, PAIRING_SECRET_LEN, PAIRING_TOKEN_LEN,
+};
 use crate::sync::SyncTally;
 use crate::{Error, Result};
 
@@ -63,7 +69,8 @@ pub enum RingMsg {
     SyncRequest {
         #[serde_as(as = "Base64")]
         token: [u8; PAIRING_TOKEN_LEN],
-        #[serde(default)]
+        #[serde_as(as = "Base64")]
+        secret: [u8; PAIRING_SECRET_LEN],
         #[serde_as(as = "Option<Base64>")]
         target_device_id: Option<DeviceId>,
     },
@@ -83,6 +90,8 @@ pub enum RingMsg {
     SyncOffer {
         #[serde_as(as = "Base64")]
         token: [u8; PAIRING_TOKEN_LEN],
+        #[serde_as(as = "Base64")]
+        secret: [u8; PAIRING_SECRET_LEN],
         #[serde_as(as = "Base64")]
         target_device_id: DeviceId,
     },
@@ -139,9 +148,9 @@ pub enum SyncRequestUiState {
     /// The counts are the point: with one donor per gesture, a sync that
     /// transferred nothing and one that transferred everything are
     /// otherwise indistinguishable, and only the first means "try a
-    /// different device". `device_name` is the peer read from its MLS
-    /// leaf credential on the frames it sent, so it names the device the
-    /// history actually came from rather than one the user assumed.
+    /// different device". `device_name` is the ring member the peer named
+    /// in its `Hello`, so it names the device the history actually came
+    /// from rather than one the user assumed.
     Complete {
         tally: SyncTally,
         device_name: Option<String>,
@@ -170,30 +179,31 @@ enum Phase {
 /// The sync-request gesture as a small state machine.
 ///
 /// Deliberately thinner than [`crate::PairingSession`]: there is no
-/// key exchange and no MLS work here. Once the channel is up the existing
-/// [`crate::SyncSession`] does all of the work, encrypted to the ring —
-/// both ends are already ring members, so unlike onboarding there is no
-/// need for a channel key derived from a user-carried secret.
-#[derive(Debug, Clone)]
+/// key exchange and no MLS work here. The secret arrived inside an
+/// MLS-encrypted ring message, so only ring members hold it; once the
+/// channel is up the existing [`crate::SyncSession`] runs on
+/// [`transfer_channel`](Self::transfer_channel).
+#[derive(Debug)]
 pub struct SyncRequestSession {
     phase: Phase,
     role: Role,
     token: [u8; PAIRING_TOKEN_LEN],
+    /// Taken once by [`transfer_channel`](Self::transfer_channel).
+    channel: Option<PairingFrameChannel>,
     /// When the request was published or received, for TTL comparison.
     started_at_ms: i64,
 }
 
 impl SyncRequestSession {
     /// Start a request of our own. The caller publishes
-    /// [`RingMsg::SyncRequest`] with this token on the ring and registers
-    /// the same token with the relay via `pair_offer`.
-    pub fn request(token: [u8; PAIRING_TOKEN_LEN], now_ms: i64) -> Self {
-        Self {
-            phase: Phase::AwaitingPeer,
-            role: Role::Requester,
-            token,
-            started_at_ms: now_ms,
-        }
+    /// [`RingMsg::SyncRequest`] with this token and secret on the ring, and
+    /// registers the same token with the relay via `pair_offer`.
+    pub fn request(
+        token: [u8; PAIRING_TOKEN_LEN],
+        secret: [u8; PAIRING_SECRET_LEN],
+        now_ms: i64,
+    ) -> Self {
+        Self::new(Phase::AwaitingPeer, Role::Requester, token, secret, now_ms)
     }
 
     /// A sibling offered us history and we are joining its rendezvous.
@@ -203,26 +213,47 @@ impl SyncRequestSession {
     /// ring member that can read everything it is about to send. A second
     /// prompt here would ask the user to approve receiving their own
     /// messages.
-    pub fn accept_offer(token: [u8; PAIRING_TOKEN_LEN], now_ms: i64) -> Self {
-        Self {
-            phase: Phase::AwaitingPeer,
-            role: Role::Responder,
-            token,
-            started_at_ms: now_ms,
-        }
+    pub fn accept_offer(
+        token: [u8; PAIRING_TOKEN_LEN],
+        secret: [u8; PAIRING_SECRET_LEN],
+        now_ms: i64,
+    ) -> Self {
+        Self::new(Phase::AwaitingPeer, Role::Responder, token, secret, now_ms)
     }
 
     /// A sibling's request arrived on the ring. `device_name` must come
     /// from the sender's MLS leaf credential, not from the payload.
     pub fn received(
         token: [u8; PAIRING_TOKEN_LEN],
+        secret: [u8; PAIRING_SECRET_LEN],
         device_name: String,
         now_ms: i64,
     ) -> Self {
+        Self::new(Phase::AwaitingApproval { device_name }, Role::Responder, token, secret, now_ms)
+    }
+
+    /// The side that published the ring message registered the rendezvous
+    /// with `pair_offer`, as a new device does when pairing, and takes
+    /// that role's keys.
+    fn new(
+        phase: Phase,
+        role: Role,
+        token: [u8; PAIRING_TOKEN_LEN],
+        secret: [u8; PAIRING_SECRET_LEN],
+        now_ms: i64,
+    ) -> Self {
+        let channel_role = match role {
+            Role::Requester => PairingRole::NewDevice,
+            Role::Responder => PairingRole::ExistingDevice,
+        };
         Self {
-            phase: Phase::AwaitingApproval { device_name },
-            role: Role::Responder,
+            phase,
+            role,
             token,
+            channel: Some(PairingFrameChannel::new(
+                &derive_pairing_keys(&secret, &token),
+                channel_role,
+            )),
             started_at_ms: now_ms,
         }
     }
@@ -281,6 +312,16 @@ impl SyncRequestSession {
         self.fail(SyncFailure::Declined);
     }
 
+    /// This session's end of the channel, for the transfer to run on.
+    /// `None` until the channel is up, and on every call after the first,
+    /// so the counters continue in exactly one place.
+    pub fn transfer_channel(&mut self) -> Option<PairingFrameChannel> {
+        if self.phase != Phase::Active {
+            return None;
+        }
+        self.channel.take()
+    }
+
     /// The pair channel reached `paired`.
     pub fn on_channel_up(&mut self) -> Result<()> {
         if self.is_terminal() {
@@ -294,10 +335,8 @@ impl SyncRequestSession {
 
     /// The [`crate::SyncSession`] running on this channel finished.
     ///
-    /// `tally` comes from that session; `device_name` is the peer as MLS
-    /// named it on the frames it sent, and is `None` only when no frame
-    /// carried a credential — a completed transfer always has at least
-    /// one, so in practice this is the pairing-time caller.
+    /// `tally` comes from that session; `device_name` is the ring member
+    /// the peer named in its `Hello`, `None` if it is not one we know.
     pub fn on_complete(&mut self, tally: SyncTally, device_name: Option<String>) {
         if !self.is_terminal() {
             self.phase = Phase::Complete { tally, device_name };

@@ -10,13 +10,12 @@ import 'device_ring_service.dart';
 import 'drawbridge_service.dart';
 import 'message_storage.dart';
 import 'paired_sync_builder.dart';
-import 'sync_channel.dart';
 
 /// Runs history transfers on the Drawbridge `/pair` WS, one at a time.
 ///
 /// Dart-side analogue of `App::start_sync_transfer` / `process_sync_outputs` /
 /// `process_sync_frame` in `crates/moat-cli/src/app.rs`. Drives the
-/// moat-core sync state machine over a [SyncChannel] and appends synced
+/// moat-core sync state machine over a pairing-AEAD channel and appends synced
 /// batches into [MessageStorage]. A sync between established devices starts
 /// here, on `pair_connected`; the transfer after a pairing is handed in by
 /// [PairingService] through [runTransfer].
@@ -32,10 +31,10 @@ class SyncService {
   /// Serialises everything that touches the pair channel — see [_enqueue].
   Future<void> _frameQueue = Future.value();
 
-  /// Lifecycle hooks for a sync between established devices — today
-  /// `SyncRequestService`, which needs them to keep its own projection
-  /// honest. The transfer itself stays entirely this service's business.
-  void Function()? onSessionStarted;
+  /// Lifecycle hooks for a sync between established devices, set by
+  /// `SyncRequestService`. [onSessionStarted] reports the channel up and
+  /// returns the channel the transfer runs on, or `null` if there is none.
+  ffi.PairingFrameChannelHandle? Function()? onSessionStarted;
 
   /// Called once the transfer finishes, with what it moved and the peer it
   /// moved from.
@@ -89,8 +88,7 @@ class SyncService {
   /// and the close for it arrive through [receiveFrame] / [receiveClose],
   /// since the pair callbacks stay with the caller until it ends.
   void runTransfer(
-    SyncChannel channel, {
-    required Uint8List ringId,
+    ffi.PairingFrameChannelHandle channel, {
     required Future<void> Function() onComplete,
     required Future<void> Function(String reason) onAbort,
   }) {
@@ -103,18 +101,18 @@ class SyncService {
     _transfer = t;
     _enqueue(() async {
       if (previous != null) await previous.onAbort('superseded');
-      await _start(t, ringId);
+      await _start(t);
     });
   }
 
-  void receiveFrame(SyncChannel channel, Uint8List frame) {
+  void receiveFrame(ffi.PairingFrameChannelHandle channel, Uint8List frame) {
     _enqueue(() async {
       final t = _transfer;
       if (t?.channel == channel) await _processFrame(t!, frame);
     });
   }
 
-  void receiveClose(SyncChannel channel, String reason) {
+  void receiveClose(ffi.PairingFrameChannelHandle channel, String reason) {
     _enqueue(() async {
       final t = _transfer;
       if (t?.channel == channel) await _abort(t!, reason);
@@ -122,7 +120,7 @@ class SyncService {
   }
 
   /// Drop [channel]'s transfer without telling whoever started it.
-  void cancelTransfer(SyncChannel channel) {
+  void cancelTransfer(ffi.PairingFrameChannelHandle channel) {
     if (_transfer?.channel == channel) _clear();
   }
 
@@ -183,13 +181,9 @@ class SyncService {
       moatLog('SyncService: pair_connected received but session already active');
       return;
     }
-    onSessionStarted?.call();
-
-    final session = _auth.moatSession;
-    final ringId = await _ring.ringGroupId();
-    final keyBundle = await _auth.secureStorage.loadKeyBundle();
-    if (session == null || ringId == null || keyBundle == null) {
-      moatLog('SyncService: cannot start — auth, ring or key bundle not ready');
+    final channel = onSessionStarted?.call();
+    if (channel == null) {
+      moatLog('SyncService: cannot start — no sync request holds the channel');
       onSessionAborted?.call('not ready to sync');
       _ring.clearPendingPair();
       await _drawbridge.clearPair();
@@ -197,9 +191,9 @@ class SyncService {
     }
 
     final t = _Transfer(
-      RingSyncChannel(session: session, ringId: ringId, keyBundle: keyBundle),
-      onComplete: (tally, deviceName) async {
-        onSessionComplete?.call(tally, deviceName);
+      channel,
+      onComplete: (tally, peerDeviceId) async {
+        onSessionComplete?.call(tally, await _ringMemberName(peerDeviceId));
         _ring.clearPendingPair();
         await _drawbridge.clearPair();
       },
@@ -209,10 +203,23 @@ class SyncService {
       },
     );
     _transfer = t;
-    await _start(t, ringId);
+    await _start(t);
   }
 
-  Future<void> _start(_Transfer t, Uint8List ringId) async {
+  /// The ring member with [deviceId], by the name its credential carries.
+  Future<String?> _ringMemberName(Uint8List? deviceId) async {
+    final session = _auth.moatSession;
+    final ringId = await _ring.ringGroupId();
+    if (session == null || ringId == null || deviceId == null) return null;
+    try {
+      return await session.memberDeviceName(groupId: ringId, deviceId: deviceId);
+    } catch (e) {
+      moatLog('SyncService: could not name the peer: $e');
+      return null;
+    }
+  }
+
+  Future<void> _start(_Transfer t) async {
     final session = _auth.moatSession;
     final did = _auth.did;
     if (session == null || did == null) {
@@ -220,14 +227,11 @@ class SyncService {
       return;
     }
     t.did = did;
-    final ringEpoch = (await session.getGroupEpoch(groupId: ringId)) ?? BigInt.zero;
-    if (!identical(_transfer, t)) return;
 
     final setup = await buildPairedSyncSession(
       session: session,
       convService: _convService,
       messageStorage: _messageStorage,
-      ringEpoch: ringEpoch,
     );
     if (!identical(_transfer, t)) return;
     t.session = setup.session;
@@ -240,14 +244,16 @@ class SyncService {
     final session = t.session;
     if (session == null) return;
 
-    final Uint8List? payload;
+    // A frame that fails to open ends the channel: its counter is the
+    // nonce, and the peer sealed the next one expecting it to advance.
+    final Uint8List payload;
     try {
-      payload = await t.channel.open(frame);
+      payload = t.channel.open(ciphertext: frame);
     } catch (e) {
       await _abort(t, 'frame failed to open: $e', closePair: true);
       return;
     }
-    if (payload == null || !identical(_transfer, t)) return;
+    if (!identical(_transfer, t)) return;
 
     final List<ffi.SyncOutputDto> outputs;
     try {
@@ -268,12 +274,7 @@ class SyncService {
       await output.when(
         send: (bytes) async {
           moatLog('SyncService: sending ${bytes.length}B to peer via pair WS');
-          try {
-            final frame = await t.channel.seal(bytes);
-            if (identical(_transfer, t)) _drawbridge.sendPairBinary(frame);
-          } catch (e) {
-            moatLog('SyncService: sealing a frame failed: $e');
-          }
+          _drawbridge.sendPairBinary(t.channel.seal(plaintext: bytes));
         },
         store: (convId, messages) async {
           await registerSyncedConversation(_convService, convId, messages, t.did);
@@ -296,7 +297,7 @@ class SyncService {
           'message(s) across ${tally.conversations} conversation(s), sent '
           '${tally.sentMessages} across ${tally.sentConversations}; closing pair WS');
       _transfer = null;
-      await t.onComplete(tally, t.channel.peerDeviceName);
+      await t.onComplete(tally, session.peerDeviceId());
       // Held through `onComplete`, whose follow-up work is still part of
       // what the user is waiting for.
       if (_transfer == null) _progress.value = null;
@@ -321,8 +322,8 @@ class SyncService {
 class _Transfer {
   _Transfer(this.channel, {required this.onComplete, required this.onAbort});
 
-  final SyncChannel channel;
-  final Future<void> Function(ffi.SyncTallyDto tally, String? deviceName) onComplete;
+  final ffi.PairingFrameChannelHandle channel;
+  final Future<void> Function(ffi.SyncTallyDto tally, Uint8List? peerDeviceId) onComplete;
   final Future<void> Function(String reason) onAbort;
 
   /// Set once setup has built it; frames before then wait in the queue.

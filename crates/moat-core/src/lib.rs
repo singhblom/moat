@@ -68,9 +68,7 @@ pub use crate::message::{
     ParsedMessagePayload, TextMessage, MEDIUM_TEXT_MAX_BYTES, SHORT_TEXT_MAX_BYTES,
 };
 pub use crate::blob::{blob_decrypt, blob_encrypt};
-pub use crate::padding::{
-    frame_unpadded, pad_to_bucket, unpad, Bucket, MAX_BUCKETED_PLAINTEXT,
-};
+pub use crate::padding::{pad_to_bucket, unpad, Bucket, MAX_BUCKETED_PLAINTEXT};
 pub use crate::stealth::{
     encrypt_for_stealth, generate_stealth_keypair, stealth_pubkey_from_privkey, try_decrypt_stealth,
 };
@@ -874,16 +872,7 @@ impl MoatSession {
             chains.insert(chain_key, event_hash);
         }
 
-        // Sync traffic rides the pair WebSocket and never becomes a PDS
-        // record, so there is no record length for bucketing to hide —
-        // and a bucket would cap at 4 KiB a frame the channel carries up
-        // to 1 MiB of. Everything else is destined for the PDS and pays
-        // for the rounding.
-        let padded = if event.kind == EventKind::SyncApp {
-            frame_unpadded(&event_bytes)
-        } else {
-            pad_to_bucket(&event_bytes)?
-        };
+        let padded = pad_to_bucket(&event_bytes)?;
 
         // Encrypt the message
         let ciphertext = group
@@ -1601,6 +1590,20 @@ impl MoatSession {
             .collect();
 
         Ok(members)
+    }
+
+    /// The device name of the member of `group_id` with `device_id`, if any.
+    pub fn member_device_name(
+        &self,
+        group_id: &[u8],
+        device_id: &[u8; 16],
+    ) -> Result<Option<String>> {
+        Ok(self
+            .get_group_members(group_id)?
+            .into_iter()
+            .filter_map(|(_, cred)| cred)
+            .find(|c| c.device_id() == device_id)
+            .map(|c| c.device_name().to_string()))
     }
 
     /// Get all DIDs currently in a group.

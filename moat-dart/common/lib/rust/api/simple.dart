@@ -67,11 +67,6 @@ Future<DrawbridgeChallengeSignature> signDrawbridgeChallenge(
 Uint8List padToBucket({required List<int> plaintext}) =>
     RustLib.instance.api.crateApiSimplePadToBucket(plaintext: plaintext);
 
-/// Frame plaintext with a length prefix but no bucket padding, for frames
-/// that never become PDS records. See `moat_core::frame_unpadded`.
-Uint8List frameUnpadded({required List<int> plaintext}) =>
-    RustLib.instance.api.crateApiSimpleFrameUnpadded(plaintext: plaintext);
-
 /// Remove padding and extract original plaintext.
 Uint8List unpad({required List<int> padded}) =>
     RustLib.instance.api.crateApiSimpleUnpad(padded: padded);
@@ -152,23 +147,21 @@ Future<PairingPayloadDto> pairingPayloadFromUri({required String uri}) =>
 /// Encode a `RingMsg::SyncRequest` for publication on the device ring as
 /// an `EventKindDto::RingMsg` event payload.
 Future<Uint8List> ringMsgEncodeSyncRequest(
-        {required List<int> token, Uint8List? targetDeviceId}) =>
+        {required List<int> token,
+        required List<int> secret,
+        Uint8List? targetDeviceId}) =>
     RustLib.instance.api.crateApiSimpleRingMsgEncodeSyncRequest(
-        token: token, targetDeviceId: targetDeviceId);
+        token: token, secret: secret, targetDeviceId: targetDeviceId);
 
 /// Build a `ring.msg` payload offering history to one sibling. Always
 /// targeted — the relay admits two attaches, so an untargeted offer would
 /// pick its recipient arbitrarily.
 Future<Uint8List> ringMsgEncodeSyncOffer(
-        {required List<int> token, required List<int> targetDeviceId}) =>
+        {required List<int> token,
+        required List<int> secret,
+        required List<int> targetDeviceId}) =>
     RustLib.instance.api.crateApiSimpleRingMsgEncodeSyncOffer(
-        token: token, targetDeviceId: targetDeviceId);
-
-/// Decode a `ring.msg` payload and return the sync request's rendezvous
-/// token. Errors on anything that is not a well-formed `RingMsg`.
-Future<Uint8List> ringMsgDecodeSyncRequest({required List<int> payload}) =>
-    RustLib.instance.api
-        .crateApiSimpleRingMsgDecodeSyncRequest(payload: payload);
+        token: token, secret: secret, targetDeviceId: targetDeviceId);
 
 /// Decode any `ring.msg` payload.
 Future<RingMsgDto> ringMsgDecode({required List<int> payload}) =>
@@ -219,13 +212,6 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
   Future<DecryptResultDto> decryptEvent(
       {required List<int> groupId, required List<int> ciphertext});
 
-  /// Decrypt an incoming `/pair` WS binary frame as a `SyncApp` event in the
-  /// ring group. Returns the inner payload bytes (`SyncMsg` JSON) alongside
-  /// the sending device as MLS named it, or an error if decrypt failed or
-  /// the event was not a `SyncApp`.
-  Future<SyncFrameDto> decryptSyncFrame(
-      {required List<int> ringGroupId, required List<int> ciphertext});
-
   /// Get the 16-byte device ID.
   Uint8List deviceId();
 
@@ -234,14 +220,6 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
       {required List<int> groupId,
       required List<int> keyBundle,
       required EventDto event});
-
-  /// Encrypt a `SyncApp` payload into the ring group, ready to be sent on the
-  /// `/pair` WebSocket. Returns just the ciphertext bytes; the Dart caller
-  /// never needs to construct an `EventDto` of an unsupported kind.
-  Future<Uint8List> encryptSyncApp(
-      {required List<int> ringGroupId,
-      required List<int> keyBundle,
-      required List<int> payload});
 
   /// The parked events, serialized for the host to persist.
   Uint8List exportParkedEvents();
@@ -297,6 +275,10 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
 
   /// Check if a DID already has a device in the group.
   bool isDidInGroup({required List<int> groupId, required String did});
+
+  /// The device name of the member of `group_id` with `device_id`, if any.
+  Future<String?> memberDeviceName(
+      {required List<int> groupId, required List<int> deviceId});
 
   /// Create a new session with empty state.
   static MoatSessionHandle newSession() =>
@@ -523,9 +505,11 @@ abstract class SyncRequestSessionHandle implements RustOpaqueInterface {
   /// No prompt: the offer already carries the one human decision, made
   /// on the side that could judge.
   static SyncRequestSessionHandle acceptOffer(
-          {required List<int> token, required PlatformInt64 nowMs}) =>
+          {required List<int> token,
+          required List<int> secret,
+          required PlatformInt64 nowMs}) =>
       RustLib.instance.api.crateApiSimpleSyncRequestSessionHandleAcceptOffer(
-          token: token, nowMs: nowMs);
+          token: token, secret: secret, nowMs: nowMs);
 
   /// The user declined. Local only — nothing goes on the wire, so one
   /// refusal among several prompted siblings doesn't cancel the request.
@@ -562,21 +546,28 @@ abstract class SyncRequestSessionHandle implements RustOpaqueInterface {
   /// from the sender's MLS leaf credential, not from the payload.
   static SyncRequestSessionHandle received(
           {required List<int> token,
+          required List<int> secret,
           required String deviceName,
           required PlatformInt64 nowMs}) =>
       RustLib.instance.api.crateApiSimpleSyncRequestSessionHandleReceived(
-          token: token, deviceName: deviceName, nowMs: nowMs);
+          token: token, secret: secret, deviceName: deviceName, nowMs: nowMs);
 
   /// Start a request of our own. The caller publishes
-  /// `ring_msg_encode_sync_request(token)` on the ring and registers the
-  /// same token with the relay via `pair_offer`.
+  /// `ring_msg_encode_sync_request(token, secret)` on the ring and
+  /// registers the same token with the relay via `pair_offer`.
   static SyncRequestSessionHandle request(
-          {required List<int> token, required PlatformInt64 nowMs}) =>
+          {required List<int> token,
+          required List<int> secret,
+          required PlatformInt64 nowMs}) =>
       RustLib.instance.api.crateApiSimpleSyncRequestSessionHandleRequest(
-          token: token, nowMs: nowMs);
+          token: token, secret: secret, nowMs: nowMs);
 
   /// The rendezvous token this session is bound to.
   Uint8List token();
+
+  /// This session's end of the channel; `None` until the channel is up,
+  /// and after the first call.
+  PairingFrameChannelHandle? transferChannel();
 
   /// Current projection. Computed fresh, never cached.
   SyncRequestUiStateDto uiState();
@@ -601,9 +592,13 @@ abstract class SyncSessionHandle implements RustOpaqueInterface {
   /// Feed a received and decrypted `SyncMsg` (JSON bytes) into the state machine.
   Future<List<SyncOutputDto>> onMessage({required List<int> msgBytes});
 
-  /// Called when the pair WS reaches the `paired` state.
+  /// Called when the pair WS reaches the `paired` state. `device_id` is
+  /// this device's, named to the peer in the `Hello`.
   Future<List<SyncOutputDto>> onPaired(
-      {required List<ConvStateDto> ourConvs, required BigInt ringEpoch});
+      {required List<ConvStateDto> ourConvs, required List<int> deviceId});
+
+  /// The device the peer named in its `Hello`, once that has arrived.
+  Uint8List? peerDeviceId();
 
   /// How far the transfer has got, for a progress indicator.
   SyncProgressDto progress();
@@ -930,7 +925,6 @@ enum EventKindDto {
   welcome,
   checkpoint,
   reaction,
-  syncApp,
   ringMsg,
   unknown,
   ;
@@ -1226,12 +1220,14 @@ sealed class RingMsgDto with _$RingMsgDto {
   /// `target_device_id` names one sibling; `None` is a broadcast.
   const factory RingMsgDto.syncRequest({
     required Uint8List token,
+    required Uint8List secret,
     Uint8List? targetDeviceId,
   }) = RingMsgDto_SyncRequest;
 
   /// "I have history you don't — join me." Always targeted.
   const factory RingMsgDto.syncOffer({
     required Uint8List token,
+    required Uint8List secret,
     required Uint8List targetDeviceId,
   }) = RingMsgDto_SyncOffer;
 }
@@ -1360,34 +1356,6 @@ sealed class SyncFailureDto with _$SyncFailureDto {
   }) = SyncFailureDto_PublishFailed;
 }
 
-/// A decrypted pair-WS sync frame: the `SyncMsg` bytes plus the device
-/// that sent them.
-///
-/// The name comes from the MLS leaf credential, which is authenticated,
-/// where a field in the payload would not be. It is what lets a finished
-/// sync say *which* sibling the history came from — or, when nothing
-/// moved, which one had no more than you.
-class SyncFrameDto {
-  final Uint8List payload;
-  final String? senderDeviceName;
-
-  const SyncFrameDto({
-    required this.payload,
-    this.senderDeviceName,
-  });
-
-  @override
-  int get hashCode => payload.hashCode ^ senderDeviceName.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is SyncFrameDto &&
-          runtimeType == other.runtimeType &&
-          payload == other.payload &&
-          senderDeviceName == other.senderDeviceName;
-}
-
 class SyncMessageDto {
   final String rkey;
   final Uint8List? messageId;
@@ -1481,7 +1449,7 @@ class SyncMessageDto {
 sealed class SyncOutputDto with _$SyncOutputDto {
   const SyncOutputDto._();
 
-  /// JSON-encoded `SyncMsg` ready to be encrypted via ring MLS and sent on the pair WS.
+  /// JSON-encoded `SyncMsg` ready to be sealed and sent on the pair WS.
   const factory SyncOutputDto.send({
     required Uint8List bytes,
   }) = SyncOutputDto_Send;

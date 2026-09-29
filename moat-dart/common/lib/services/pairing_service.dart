@@ -8,7 +8,6 @@ import 'auth_service.dart';
 import 'debug_log.dart';
 import 'device_ring_service.dart';
 import 'drawbridge_service.dart';
-import 'sync_channel.dart';
 import 'sync_service.dart';
 
 /// URI scheme prefix for the QR form of a pairing code — matches
@@ -64,7 +63,7 @@ class PairingService {
 
   /// The post-Done history transfer [SyncService] is running for us, if
   /// any. While set, pair-channel frames and the close are forwarded to it.
-  PairingSyncChannel? _transfer;
+  ffi.PairingFrameChannelHandle? _transfer;
 
   /// Serializes pair-WS frame processing. Unlike `moat-cli`'s single
   /// event-loop actor (which handles one `BgEvent` at a time by
@@ -536,23 +535,15 @@ class PairingService {
   }
 
   // ── Post-Done history transfer, under the pairing AEAD ──────────────────
-  //
-  // Per qr-pairing.md §3.2 the pairing AEAD keeps running for the whole
-  // session rather than re-keying to ring MLS: the new device has no
-  // ring-MLS traffic history to fall back on for this exchange.
 
   void _startPairingSyncSession() {
-    // `startSync` only follows a done session, which has both.
-    final session = _session;
-    final ringId = session?.ringId();
-    final handle = session?.transferChannel();
-    if (ringId == null || handle == null) return;
+    // `startSync` only follows a done session, which has a channel.
+    final channel = _session?.transferChannel();
+    if (channel == null) return;
 
-    final channel = PairingSyncChannel(handle);
     _transfer = channel;
     _sync.runTransfer(
       channel,
-      ringId: ringId,
       onComplete: () async {
         if (_transfer != channel) return;
         moatLog('PairingService: pairing-sync complete — closing pair WS');

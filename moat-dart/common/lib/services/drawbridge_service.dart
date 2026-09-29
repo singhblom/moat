@@ -402,7 +402,7 @@ class DrawbridgeService {
     onPairFrame?.call(bytes);
   }
 
-  /// Send a binary frame on the pair WS (encrypted ring-MLS ciphertext).
+  /// Send a binary frame on the pair WS.
   void sendPairBinary(Uint8List data) {
     final channel = _pairChannel;
     if (channel == null || !_pairAttached) {

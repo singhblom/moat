@@ -4,11 +4,9 @@
 //! produces [`SyncOutput`] values describing what the caller should do (send
 //! a frame, store messages, mark the session done). No I/O or async here.
 //!
-//! Wire format: each [`SyncMsg`] is JSON-encoded and sent as a raw binary
-//! frame on the pair WS, sealed by whichever channel carries the transfer:
-//! the ring MLS group between established devices (`encrypt_event` with
-//! `EventKind::SyncApp`, padded to a bucket size), or the pairing AEAD
-//! ([`crate::PairingFrameChannel`]) for the transfer that follows a pairing.
+//! Wire format: each [`SyncMsg`] is JSON-encoded and sent as a binary frame
+//! on the pair WS, sealed by a [`crate::PairingFrameChannel`] — the pairing
+//! session's, or one keyed from the secret in a [`crate::RingMsg`].
 //!
 //! The wire type [`SyncMessage`] is the canonical message representation
 //! transferred during sync. Hosts (moat-cli, moat-dart) adapt it to/from
@@ -19,6 +17,7 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 use serde_with::{base64::Base64, serde_as};
 
+use crate::device_ring::DeviceId;
 use crate::{Error, Result};
 
 // ── Wire types ────────────────────────────────────────────────────────────────
@@ -208,10 +207,12 @@ pub struct SyncMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SyncMsg {
-    /// Initial handshake: each side sends its conversation state.
+    /// Initial handshake: each side sends its conversation state, and
+    /// names itself so the peer can report where history came from.
     Hello {
         convs: Vec<ConvState>,
-        ring_epoch: u64,
+        #[serde_as(as = "Base64")]
+        device_id: DeviceId,
     },
     /// Batch request.
     BatchReq {
@@ -374,6 +375,7 @@ pub struct SyncSession {
     sent_convs: HashSet<String>,
     sent_fin: bool,
     received_fin: bool,
+    peer_device_id: Option<DeviceId>,
 }
 
 impl Default for SyncSession {
@@ -397,6 +399,7 @@ impl SyncSession {
             sent_convs: HashSet::new(),
             sent_fin: false,
             received_fin: false,
+            peer_device_id: None,
         }
     }
 
@@ -426,7 +429,7 @@ impl SyncSession {
 
     /// Called when the pair WS reaches the `paired` state. Returns the Hello
     /// frame to send.
-    pub fn on_paired(&mut self, our_convs: Vec<ConvState>, ring_epoch: u64) -> Vec<SyncOutput> {
+    pub fn on_paired(&mut self, our_convs: Vec<ConvState>, device_id: DeviceId) -> Vec<SyncOutput> {
         for conv in &our_convs {
             if let ConvInventory::Range { oldest, newest, .. } = &conv.inventory {
                 if let Some(plan) = self.plans.iter_mut().find(|p| p.group_id == conv.group_id) {
@@ -435,7 +438,7 @@ impl SyncSession {
             }
         }
         self.phase = Phase::WaitingHello;
-        vec![SyncOutput::Send(SyncMsg::Hello { convs: our_convs, ring_epoch })]
+        vec![SyncOutput::Send(SyncMsg::Hello { convs: our_convs, device_id })]
     }
 
     /// Feed a received and decrypted [`SyncMsg`] into the state machine.
@@ -453,7 +456,10 @@ impl SyncSession {
     /// before flushing whatever follows.
     pub fn on_message(&mut self, msg: SyncMsg) -> Result<Vec<SyncOutput>> {
         match msg {
-            SyncMsg::Hello { convs: peer_convs, .. } => Ok(self.handle_hello(peer_convs)),
+            SyncMsg::Hello { convs: peer_convs, device_id } => {
+                self.peer_device_id = Some(device_id);
+                Ok(self.handle_hello(peer_convs))
+            }
             SyncMsg::BatchReq { group_id, from_rkey, to_rkey, cursor } => {
                 Ok(self.handle_batch_req(group_id, from_rkey, to_rkey, cursor))
             }
@@ -467,6 +473,11 @@ impl SyncSession {
                 Ok(Vec::new())
             }
         }
+    }
+
+    /// The device the peer named in its `Hello`, once that has arrived.
+    pub fn peer_device_id(&self) -> Option<&DeviceId> {
+        self.peer_device_id.as_ref()
     }
 
     /// `true` once the session has reached the `Done` phase.
@@ -797,9 +808,9 @@ mod tests {
 
     #[test]
     fn encode_decode_roundtrip_hello() {
-        let msg = SyncMsg::Hello { convs: vec![], ring_epoch: 42 };
+        let msg = SyncMsg::Hello { convs: vec![], device_id: [42; 16] };
         let decoded = decode_sync_msg(&encode_sync_msg(&msg)).unwrap();
-        assert!(matches!(decoded, SyncMsg::Hello { ring_epoch: 42, .. }));
+        assert!(matches!(decoded, SyncMsg::Hello { device_id, .. } if device_id == [42; 16]));
     }
 
     #[test]
@@ -832,11 +843,11 @@ mod tests {
     #[test]
     fn on_paired_emits_hello() {
         let mut s = SyncSession::new();
-        let outs = s.on_paired(vec![], 7);
+        let outs = s.on_paired(vec![], [7; 16]);
         assert_eq!(outs.len(), 1);
         assert!(matches!(
             &outs[0],
-            SyncOutput::Send(SyncMsg::Hello { ring_epoch: 7, .. })
+            SyncOutput::Send(SyncMsg::Hello { device_id, .. }) if *device_id == [7; 16]
         ));
     }
 
@@ -849,12 +860,12 @@ mod tests {
         let mut s = SyncSession::new();
         s.add_conv_plan(g1.clone(), hex::encode(&g1), vec![], true);
         s.add_conv_plan(g2.clone(), hex::encode(&g2), vec![], true);
-        let _ = s.on_paired(vec![], 0);
+        let _ = s.on_paired(vec![], [0; 16]);
 
         // Receive peer's Hello — they have history for both.
         let outs = s.on_message(SyncMsg::Hello {
                 convs: vec![full_state(&g1), full_state(&g2)],
-                ring_epoch: 0,
+                device_id: [0; 16],
             }).unwrap();
         let req_count = outs
             .iter()
@@ -907,10 +918,12 @@ mod tests {
             vec![empty_msg("r1", "a"), empty_msg("r2", "b")],
             false,
         );
-        let _ = s.on_paired(vec![full_state(&g)], 0);
+        let _ = s.on_paired(vec![full_state(&g)], [0; 16]);
 
         // Peer's Hello (they have nothing).
-        let outs = s.on_message(SyncMsg::Hello { convs: vec![empty_state(&g)], ring_epoch: 0 }).unwrap();
+        let outs = s
+            .on_message(SyncMsg::Hello { convs: vec![empty_state(&g)], device_id: [0; 16] })
+            .unwrap();
         // We do NOT send BatchReq (peer has nothing), and expecting nothing
         // we confirm that straight away.
         assert!(!outs.iter().any(|o| matches!(o, SyncOutput::Send(SyncMsg::BatchReq { .. }))));
@@ -961,8 +974,10 @@ mod tests {
         let g = vec![7u8; 32];
         let mut s = SyncSession::new();
         s.add_conv_plan(g.clone(), hex::encode(&g), vec![empty_msg("r1", "x")], false);
-        let _ = s.on_paired(vec![], 0);
-        let _ = s.on_message(SyncMsg::Hello { convs: vec![empty_state(&g)], ring_epoch: 0 }).unwrap();
+        let _ = s.on_paired(vec![], [0; 16]);
+        let _ = s
+            .on_message(SyncMsg::Hello { convs: vec![empty_state(&g)], device_id: [0; 16] })
+            .unwrap();
         let _ = s.on_message(SyncMsg::Fin).unwrap();
         assert!(s.is_done());
         assert_eq!(s.tally().sent_messages, 0);
@@ -975,12 +990,12 @@ mod tests {
         let g = vec![8u8; 32];
         let mut s = SyncSession::new();
         s.add_conv_plan(g.clone(), hex::encode(&g), vec![empty_msg("a1", "x")], true);
-        let _ = s.on_paired(vec![], 0);
+        let _ = s.on_paired(vec![], [0; 16]);
         let peer = ConvState {
             group_id: g.clone(),
             inventory: ConvInventory::Complete { rkeys: vec!["b1".to_string()] },
         };
-        let outs = s.on_message(SyncMsg::Hello { convs: vec![peer], ring_epoch: 0 }).unwrap();
+        let outs = s.on_message(SyncMsg::Hello { convs: vec![peer], device_id: [0; 16] }).unwrap();
         assert!(!outs.iter().any(|o| matches!(o, SyncOutput::Send(SyncMsg::Fin))));
 
         let _ = s.on_message(SyncMsg::BatchReq {
@@ -1022,8 +1037,8 @@ mod tests {
         b_convs: Vec<ConvState>,
         mut after_each: impl FnMut(&SyncSession, &SyncSession),
     ) {
-        let mut to_b = sends(a.on_paired(a_convs, 0));
-        let mut to_a = sends(b.on_paired(b_convs, 0));
+        let mut to_b = sends(a.on_paired(a_convs, [0; 16]));
+        let mut to_a = sends(b.on_paired(b_convs, [0; 16]));
         after_each(a, b);
         while !(to_a.is_empty() && to_b.is_empty()) {
             for m in std::mem::take(&mut to_a) {
@@ -1083,14 +1098,14 @@ mod tests {
         let g = vec![7u8; 32];
         let mut s = SyncSession::new();
         s.add_conv_plan(g.clone(), hex::encode(&g), Vec::new(), true);
-        let _ = s.on_paired(vec![empty_state(&g)], 0);
+        let _ = s.on_paired(vec![empty_state(&g)], [0; 16]);
         let _ = s
             .on_message(SyncMsg::Hello {
                 convs: vec![ConvState {
                     group_id: g.clone(),
                     inventory: ConvInventory::of(vec!["r1".to_string()]),
                 }],
-                ring_epoch: 0,
+                device_id: [0; 16],
             })
             .unwrap();
         assert_eq!(s.progress(), SyncProgress::Starting);
@@ -1163,8 +1178,10 @@ mod tests {
             .map(|i| empty_msg(&format!("r{i}"), "x"))
             .collect();
         s.add_conv_plan(g.clone(), hex::encode(&g), our_msgs, false);
-        let _ = s.on_paired(vec![full_state(&g)], 0);
-        let _ = s.on_message(SyncMsg::Hello { convs: vec![empty_state(&g)], ring_epoch: 0 }).unwrap();
+        let _ = s.on_paired(vec![full_state(&g)], [0; 16]);
+        let _ = s
+            .on_message(SyncMsg::Hello { convs: vec![empty_state(&g)], device_id: [0; 16] })
+            .unwrap();
 
         // First BatchReq: cursor=None → returns 50, next_cursor=Some("50").
         let outs = s.on_message(SyncMsg::BatchReq {
@@ -1209,8 +1226,10 @@ mod tests {
     fn unknown_peer_conv_auto_added() {
         let g = vec![5u8; 32];
         let mut s = SyncSession::new();
-        let _ = s.on_paired(vec![], 0);
-        let outs = s.on_message(SyncMsg::Hello { convs: vec![full_state(&g)], ring_epoch: 0 }).unwrap();
+        let _ = s.on_paired(vec![], [0; 16]);
+        let outs = s
+            .on_message(SyncMsg::Hello { convs: vec![full_state(&g)], device_id: [0; 16] })
+            .unwrap();
         let batch_req = outs.iter().any(|o| matches!(
             o,
             SyncOutput::Send(SyncMsg::BatchReq { group_id, .. }) if *group_id == g
@@ -1224,7 +1243,7 @@ mod tests {
     fn batch_req_unknown_group_replies_done() {
         let g = vec![6u8; 32];
         let mut s = SyncSession::new();
-        let _ = s.on_paired(vec![], 0);
+        let _ = s.on_paired(vec![], [0; 16]);
         let outs = s.on_message(SyncMsg::BatchReq {
                 group_id: g.clone(),
                 from_rkey: None,

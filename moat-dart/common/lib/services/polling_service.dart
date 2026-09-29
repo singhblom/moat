@@ -544,7 +544,6 @@ class PollingService {
 
         case EventKindDto.welcome:
         case EventKindDto.checkpoint:
-        case EventKindDto.syncApp:
         // Ring application traffic never appears in a user conversation —
         // it is handled in `_processRingEvent`.
         case EventKindDto.ringMsg:

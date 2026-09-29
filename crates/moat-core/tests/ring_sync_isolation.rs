@@ -5,20 +5,22 @@
 
 mod conversation_sim;
 use conversation_sim::ConversationSim;
-use moat_core::Event;
+use moat_core::{Event, PairingFrameChannel, SyncRequestSession};
 
 const A: usize = 0;
 const C: usize = 2;
 
-/// Seal one sync frame from `sender` the way a ring-channel transfer does,
-/// without publishing it.
-fn seal_sync_frame(sim: &ConversationSim, sender: usize) {
-    let p = &sim.participants[sender];
-    let epoch = p.session.get_group_epoch(&sim.group_id).unwrap().unwrap();
-    let ev = Event::sync_app(sim.group_id.clone(), epoch, b"{}".to_vec());
-    p.session
-        .encrypt_event(&sim.group_id, &p.key_bundle, &ev)
-        .unwrap();
+/// A's end of a requested-sync transfer with B.
+fn sync_channel() -> PairingFrameChannel {
+    let mut session = SyncRequestSession::request([1; 16], [2; 16], 0);
+    session.on_channel_up().unwrap();
+    session.transfer_channel().unwrap()
+}
+
+/// Seal one sync frame the way a requested-sync transfer does, without
+/// publishing it.
+fn seal_sync_frame(channel: &mut PairingFrameChannel) {
+    channel.seal(b"{}");
 }
 
 fn publish_ring_msg(sim: &ConversationSim, sender: usize) -> moat_core::EncryptResult {
@@ -31,16 +33,16 @@ fn publish_ring_msg(sim: &ConversationSim, sender: usize) -> moat_core::EncryptR
 }
 
 #[test]
-#[ignore = "B1: passes once history sync stops sealing frames with MLS (S1)"]
 fn sync_frames_leave_the_next_ring_tag_in_the_siblings_window() {
     let sim = ConversationSim::new(&["A", "B", "C"]);
+    let mut channel = sync_channel();
     let c_tags = sim.participants[C]
         .session
         .populate_candidate_tags(&sim.group_id, &[])
         .unwrap();
 
     for _ in 0..12 {
-        seal_sync_frame(&sim, A);
+        seal_sync_frame(&mut channel);
     }
     let published = publish_ring_msg(&sim, A);
 
@@ -48,9 +50,9 @@ fn sync_frames_leave_the_next_ring_tag_in_the_siblings_window() {
 }
 
 #[test]
-#[ignore = "B1: passes once history sync stops sealing frames with MLS (S1)"]
 fn sync_frames_leave_the_hash_chain_intact() {
     let sim = ConversationSim::new(&["A", "B", "C"]);
+    let mut channel = sync_channel();
     // C needs a link from A to check the next one against.
     let first = publish_ring_msg(&sim, A);
     sim.participants[C]
@@ -59,7 +61,7 @@ fn sync_frames_leave_the_hash_chain_intact() {
         .unwrap();
 
     for _ in 0..12 {
-        seal_sync_frame(&sim, A);
+        seal_sync_frame(&mut channel);
     }
     let published = publish_ring_msg(&sim, A);
     let outcome = sim.participants[C]
@@ -77,12 +79,12 @@ fn sync_frames_leave_the_hash_chain_intact() {
 /// OpenMLS refuses a message more than 1000 generations ahead of the last
 /// one the receiver saw from that sender.
 #[test]
-#[ignore = "B1: passes once history sync stops sealing frames with MLS (S1)"]
 fn a_long_sync_leaves_the_next_ring_msg_decryptable() {
     let sim = ConversationSim::new(&["A", "B", "C"]);
+    let mut channel = sync_channel();
 
     for _ in 0..1100 {
-        seal_sync_frame(&sim, A);
+        seal_sync_frame(&mut channel);
     }
     let published = publish_ring_msg(&sim, A);
 

@@ -302,13 +302,13 @@ impl std::fmt::Debug for PairingFrameChannel {
 
 /// Which end of the pairing channel a device holds.
 #[derive(Debug, Clone, Copy)]
-enum PairingRole {
+pub(crate) enum PairingRole {
     NewDevice,
     ExistingDevice,
 }
 
 impl PairingFrameChannel {
-    fn new(keys: &PairingChannelKeys, role: PairingRole) -> Self {
+    pub(crate) fn new(keys: &PairingChannelKeys, role: PairingRole) -> Self {
         let (send_key, recv_key) = match role {
             PairingRole::NewDevice => (keys.k_new_to_old, keys.k_old_to_new),
             PairingRole::ExistingDevice => (keys.k_old_to_new, keys.k_new_to_old),
@@ -451,8 +451,8 @@ pub enum PairingCommand {
     RosterReceived { roster: Vec<SiblingInfo> },
     /// Both sides, once Enroll/Admit has completed: hand the open channel
     /// to `SyncSession` for history sync. The pairing AEAD keeps running
-    /// underneath for the whole session rather than re-keying to ring MLS,
-    /// through [`PairingSession::transfer_channel`]. Always the last
+    /// underneath for the whole session, through
+    /// [`PairingSession::transfer_channel`]. Always the last
     /// command of its batch.
     StartSync,
 }
@@ -932,10 +932,9 @@ impl PairingSession {
         &self.rendezvous_token
     }
 
-    /// Hand the pairing AEAD on to the history transfer, which keeps it
-    /// rather than re-keying to ring MLS. `None` before the session is
-    /// done, and on every call after the first, so the counters continue
-    /// in exactly one place.
+    /// Hand the pairing AEAD on to the history transfer. `None` before the
+    /// session is done, and on every call after the first, so the counters
+    /// continue in exactly one place.
     pub fn transfer_channel(&mut self) -> Option<PairingFrameChannel> {
         if !self.is_done() {
             return None;

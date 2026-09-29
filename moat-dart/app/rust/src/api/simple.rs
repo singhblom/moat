@@ -145,6 +145,22 @@ impl MoatSessionHandle {
             .map_err(|e| e.to_string())
     }
 
+    /// The device name of the member of `group_id` with `device_id`, if any.
+    pub fn member_device_name(
+        &self,
+        group_id: Vec<u8>,
+        device_id: Vec<u8>,
+    ) -> Result<Option<String>, String> {
+        let device_id: moat_core::DeviceId = device_id
+            .try_into()
+            .map_err(|_| "device_id must be 16 bytes".to_string())?;
+        self.inner
+            .lock()
+            .unwrap()
+            .member_device_name(&group_id, &device_id)
+            .map_err(|e| e.to_string())
+    }
+
     /// Get the DIDs of all members in a group (deduplicated).
     pub fn get_group_dids(&self, group_id: Vec<u8>) -> Result<Vec<String>, String> {
         self.inner
@@ -275,55 +291,6 @@ impl MoatSessionHandle {
             .encrypt_event(&group_id, &key_bundle, &core_event)
             .map(EncryptResultDto::from)
             .map_err(|e| e.to_string())
-    }
-
-    /// Encrypt a `SyncApp` payload into the ring group, ready to be sent on the
-    /// `/pair` WebSocket. Returns just the ciphertext bytes; the Dart caller
-    /// never needs to construct an `EventDto` of an unsupported kind.
-    pub fn encrypt_sync_app(
-        &self,
-        ring_group_id: Vec<u8>,
-        key_bundle: Vec<u8>,
-        payload: Vec<u8>,
-    ) -> Result<Vec<u8>, String> {
-        let session = self.inner.lock().unwrap();
-        let epoch = session
-            .get_group_epoch(&ring_group_id)
-            .map_err(|e| e.to_string())?
-            .unwrap_or(0);
-        let event = moat_core::Event::sync_app(ring_group_id.clone(), epoch, payload);
-        session
-            .encrypt_event(&ring_group_id, &key_bundle, &event)
-            .map(|r| r.ciphertext)
-            .map_err(|e| e.to_string())
-    }
-
-    /// Decrypt an incoming `/pair` WS binary frame as a `SyncApp` event in the
-    /// ring group. Returns the inner payload bytes (`SyncMsg` JSON) alongside
-    /// the sending device as MLS named it, or an error if decrypt failed or
-    /// the event was not a `SyncApp`.
-    pub fn decrypt_sync_frame(
-        &self,
-        ring_group_id: Vec<u8>,
-        ciphertext: Vec<u8>,
-    ) -> Result<SyncFrameDto, String> {
-        let outcome = self
-            .inner
-            .lock()
-            .unwrap()
-            .decrypt_event(&ring_group_id, &ciphertext)
-            .map_err(|e| e.to_string())?;
-        let result = outcome.into_result();
-        if !matches!(result.event.kind, moat_core::EventKind::SyncApp) {
-            return Err(format!(
-                "expected SyncApp event on pair WS, got {:?}",
-                result.event.kind
-            ));
-        }
-        Ok(SyncFrameDto {
-            payload: result.event.payload,
-            sender_device_name: result.sender.map(|s| s.device_name),
-        })
     }
 
     /// Decrypt a ciphertext for a group. Returns decrypt result with any warnings.
@@ -518,7 +485,6 @@ pub enum EventKindDto {
     Welcome,
     Checkpoint,
     Reaction,
-    SyncApp,
     RingMsg,
     Unknown,
 }
@@ -565,7 +531,6 @@ impl EventDto {
                 event.message_id = self.message_id;
                 event
             }
-            EventKindDto::SyncApp => Event::sync_app(self.group_id, self.epoch, self.payload),
             EventKindDto::RingMsg => Event::ring_msg(self.group_id, self.epoch, self.payload),
             EventKindDto::Unknown => {
                 panic!("cannot convert Unknown event to core Event")
@@ -581,7 +546,6 @@ impl EventDto {
                 EventKind::Control(ControlKind::Welcome) => EventKindDto::Welcome,
                 EventKind::Control(ControlKind::Checkpoint) => EventKindDto::Checkpoint,
                 EventKind::Modifier(ModifierKind::Reaction) => EventKindDto::Reaction,
-                EventKind::SyncApp => EventKindDto::SyncApp,
                 EventKind::RingMsg => EventKindDto::RingMsg,
                 EventKind::Modifier(_)
                 | EventKind::Control(_)
@@ -719,13 +683,6 @@ pub struct DrawbridgeChallengeSignature {
 #[frb(sync)]
 pub fn pad_to_bucket(plaintext: Vec<u8>) -> Result<Vec<u8>, String> {
     moat_core::pad_to_bucket(&plaintext).map_err(|e| e.to_string())
-}
-
-/// Frame plaintext with a length prefix but no bucket padding, for frames
-/// that never become PDS records. See `moat_core::frame_unpadded`.
-#[frb(sync)]
-pub fn frame_unpadded(plaintext: Vec<u8>) -> Vec<u8> {
-    moat_core::frame_unpadded(&plaintext)
 }
 
 /// Remove padding and extract original plaintext.
@@ -1410,20 +1367,31 @@ impl SyncSessionHandle {
         self.inner.lock().unwrap().add_conv_plan(group_id, conv_id, messages, expecting_batch);
     }
 
-    /// Called when the pair WS reaches the `paired` state.
+    /// Called when the pair WS reaches the `paired` state. `device_id` is
+    /// this device's, named to the peer in the `Hello`.
     pub fn on_paired(
         &self,
         our_convs: Vec<ConvStateDto>,
-        ring_epoch: u64,
-    ) -> Vec<SyncOutputDto> {
+        device_id: Vec<u8>,
+    ) -> Result<Vec<SyncOutputDto>, String> {
+        let device_id: moat_core::DeviceId = device_id
+            .try_into()
+            .map_err(|_| "device_id must be 16 bytes".to_string())?;
         let convs: Vec<ConvState> = our_convs.into_iter().map(ConvState::from).collect();
-        self.inner
+        Ok(self
+            .inner
             .lock()
             .unwrap()
-            .on_paired(convs, ring_epoch)
+            .on_paired(convs, device_id)
             .into_iter()
             .map(SyncOutputDto::from)
-            .collect()
+            .collect())
+    }
+
+    /// The device the peer named in its `Hello`, once that has arrived.
+    #[frb(sync)]
+    pub fn peer_device_id(&self) -> Option<Vec<u8>> {
+        self.inner.lock().unwrap().peer_device_id().map(|d| d.to_vec())
     }
 
     /// Feed a received and decrypted `SyncMsg` (JSON bytes) into the state machine.
@@ -1637,7 +1605,7 @@ impl From<ConvState> for ConvStateDto {
 }
 
 pub enum SyncOutputDto {
-    /// JSON-encoded `SyncMsg` ready to be encrypted via ring MLS and sent on the pair WS.
+    /// JSON-encoded `SyncMsg` ready to be sealed and sent on the pair WS.
     Send { bytes: Vec<u8> },
     /// Persist these messages for the conversation `conv_id` (hex group ID).
     Store { conv_id: String, messages: Vec<SyncMessageDto> },
@@ -1844,11 +1812,10 @@ fn credential_from_dto(dto: CredentialDto) -> Result<MoatCredential, String> {
 /// an `EventKindDto::RingMsg` event payload.
 pub fn ring_msg_encode_sync_request(
     token: Vec<u8>,
+    secret: Vec<u8>,
     target_device_id: Option<Vec<u8>>,
 ) -> Result<Vec<u8>, String> {
-    let token: [u8; moat_core::PAIRING_TOKEN_LEN] = token
-        .try_into()
-        .map_err(|_| "token must be 16 bytes".to_string())?;
+    let moat_core::PairingPayload { token, secret } = payload_to_core(token, secret)?;
     let target_device_id = match target_device_id {
         Some(id) => Some(
             <moat_core::DeviceId>::try_from(id.as_slice())
@@ -1858,6 +1825,7 @@ pub fn ring_msg_encode_sync_request(
     };
     Ok(moat_core::encode_ring_msg(&moat_core::RingMsg::SyncRequest {
         token,
+        secret,
         target_device_id,
     }))
 }
@@ -1867,28 +1835,19 @@ pub fn ring_msg_encode_sync_request(
 /// pick its recipient arbitrarily.
 pub fn ring_msg_encode_sync_offer(
     token: Vec<u8>,
+    secret: Vec<u8>,
     target_device_id: Vec<u8>,
 ) -> Result<Vec<u8>, String> {
-    let token: [u8; moat_core::PAIRING_TOKEN_LEN] = token
-        .try_into()
-        .map_err(|_| "token must be 16 bytes".to_string())?;
+    let moat_core::PairingPayload { token, secret } = payload_to_core(token, secret)?;
     let target_device_id = <moat_core::DeviceId>::try_from(
         target_device_id.as_slice(),
     )
     .map_err(|_| "device_id must be 16 bytes".to_string())?;
     Ok(moat_core::encode_ring_msg(&moat_core::RingMsg::SyncOffer {
         token,
+        secret,
         target_device_id,
     }))
-}
-
-/// Decode a `ring.msg` payload and return the sync request's rendezvous
-/// token. Errors on anything that is not a well-formed `RingMsg`.
-pub fn ring_msg_decode_sync_request(payload: Vec<u8>) -> Result<Vec<u8>, String> {
-    match moat_core::decode_ring_msg(&payload).map_err(|e| e.to_string())? {
-        moat_core::RingMsg::SyncRequest { token, .. } => Ok(token.to_vec()),
-        other => Err(format!("not a sync request: {other:?}")),
-    }
 }
 
 /// A decoded `ring.msg` payload.
@@ -1897,11 +1856,13 @@ pub enum RingMsgDto {
     /// `target_device_id` names one sibling; `None` is a broadcast.
     SyncRequest {
         token: Vec<u8>,
+        secret: Vec<u8>,
         target_device_id: Option<Vec<u8>>,
     },
     /// "I have history you don't — join me." Always targeted.
     SyncOffer {
         token: Vec<u8>,
+        secret: Vec<u8>,
         target_device_id: Vec<u8>,
     },
 }
@@ -1909,16 +1870,20 @@ pub enum RingMsgDto {
 /// Decode any `ring.msg` payload.
 pub fn ring_msg_decode(payload: Vec<u8>) -> Result<RingMsgDto, String> {
     match moat_core::decode_ring_msg(&payload).map_err(|e| e.to_string())? {
-        moat_core::RingMsg::SyncRequest { token, target_device_id } => {
+        moat_core::RingMsg::SyncRequest { token, secret, target_device_id } => {
             Ok(RingMsgDto::SyncRequest {
                 token: token.to_vec(),
+                secret: secret.to_vec(),
                 target_device_id: target_device_id.map(|t| t.to_vec()),
             })
         }
-        moat_core::RingMsg::SyncOffer { token, target_device_id } => Ok(RingMsgDto::SyncOffer {
-            token: token.to_vec(),
-            target_device_id: target_device_id.to_vec(),
-        }),
+        moat_core::RingMsg::SyncOffer { token, secret, target_device_id } => {
+            Ok(RingMsgDto::SyncOffer {
+                token: token.to_vec(),
+                secret: secret.to_vec(),
+                target_device_id: target_device_id.to_vec(),
+            })
+        }
     }
 }
 
@@ -1989,18 +1954,6 @@ impl From<moat_core::SyncFailure> for SyncFailureDto {
             F::PublishFailed { detail } => SyncFailureDto::PublishFailed { detail },
         }
     }
-}
-
-/// A decrypted pair-WS sync frame: the `SyncMsg` bytes plus the device
-/// that sent them.
-///
-/// The name comes from the MLS leaf credential, which is authenticated,
-/// where a field in the payload would not be. It is what lets a finished
-/// sync say *which* sibling the history came from — or, when nothing
-/// moved, which one had no more than you.
-pub struct SyncFrameDto {
-    pub payload: Vec<u8>,
-    pub sender_device_name: Option<String>,
 }
 
 /// What a finished sync moved in each direction. See `moat_core::SyncTally`.
@@ -2083,15 +2036,17 @@ pub struct SyncRequestSessionHandle {
 
 impl SyncRequestSessionHandle {
     /// Start a request of our own. The caller publishes
-    /// `ring_msg_encode_sync_request(token)` on the ring and registers the
-    /// same token with the relay via `pair_offer`.
+    /// `ring_msg_encode_sync_request(token, secret)` on the ring and
+    /// registers the same token with the relay via `pair_offer`.
     #[frb(sync)]
-    pub fn request(token: Vec<u8>, now_ms: i64) -> Result<SyncRequestSessionHandle, String> {
-        let token: [u8; moat_core::PAIRING_TOKEN_LEN] = token
-            .try_into()
-            .map_err(|_| "token must be 16 bytes".to_string())?;
+    pub fn request(
+        token: Vec<u8>,
+        secret: Vec<u8>,
+        now_ms: i64,
+    ) -> Result<SyncRequestSessionHandle, String> {
+        let moat_core::PairingPayload { token, secret } = payload_to_core(token, secret)?;
         Ok(SyncRequestSessionHandle {
-            inner: Mutex::new(moat_core::SyncRequestSession::request(token, now_ms)),
+            inner: Mutex::new(moat_core::SyncRequestSession::request(token, secret, now_ms)),
         })
     }
 
@@ -2101,13 +2056,12 @@ impl SyncRequestSessionHandle {
     #[frb(sync)]
     pub fn accept_offer(
         token: Vec<u8>,
+        secret: Vec<u8>,
         now_ms: i64,
     ) -> Result<SyncRequestSessionHandle, String> {
-        let token: [u8; moat_core::PAIRING_TOKEN_LEN] = token
-            .try_into()
-            .map_err(|_| "token must be 16 bytes".to_string())?;
+        let moat_core::PairingPayload { token, secret } = payload_to_core(token, secret)?;
         Ok(SyncRequestSessionHandle {
-            inner: Mutex::new(moat_core::SyncRequestSession::accept_offer(token, now_ms)),
+            inner: Mutex::new(moat_core::SyncRequestSession::accept_offer(token, secret, now_ms)),
         })
     }
 
@@ -2116,15 +2070,15 @@ impl SyncRequestSessionHandle {
     #[frb(sync)]
     pub fn received(
         token: Vec<u8>,
+        secret: Vec<u8>,
         device_name: String,
         now_ms: i64,
     ) -> Result<SyncRequestSessionHandle, String> {
-        let token: [u8; moat_core::PAIRING_TOKEN_LEN] = token
-            .try_into()
-            .map_err(|_| "token must be 16 bytes".to_string())?;
+        let moat_core::PairingPayload { token, secret } = payload_to_core(token, secret)?;
         Ok(SyncRequestSessionHandle {
             inner: Mutex::new(moat_core::SyncRequestSession::received(
                 token,
+                secret,
                 device_name,
                 now_ms,
             )),
@@ -2135,6 +2089,14 @@ impl SyncRequestSessionHandle {
     #[frb(sync)]
     pub fn token(&self) -> Vec<u8> {
         self.inner.lock().unwrap().token().to_vec()
+    }
+
+    /// This session's end of the channel; `None` until the channel is up,
+    /// and after the first call.
+    #[frb(sync)]
+    pub fn transfer_channel(&self) -> Option<PairingFrameChannelHandle> {
+        let channel = self.inner.lock().unwrap().transfer_channel()?;
+        Some(PairingFrameChannelHandle { inner: Mutex::new(channel) })
     }
 
     /// Current projection. Computed fresh, never cached.
@@ -2763,16 +2725,6 @@ mod tests {
         assert!(pad_to_bucket(vec![0x42; 20_000]).is_err());
     }
 
-    /// Pair-WS frames use the unbucketed framing, which has no ceiling and
-    /// stays readable by the same `unpad`.
-    #[test]
-    fn test_frame_unpadded_roundtrip() {
-        let plaintext = vec![0x42; 20_000];
-        let framed = frame_unpadded(plaintext.clone());
-        assert_eq!(framed.len(), plaintext.len() + 4);
-        assert_eq!(unpad(framed), plaintext);
-    }
-
     #[test]
     fn test_event_dto_conversions() {
         for kind in [
@@ -2979,13 +2931,16 @@ mod ring_sync_ffi_tests {
     #[test]
     fn sync_session_on_paired_emits_send() {
         let s = SyncSessionHandle::new_session();
-        let outs = s.on_paired(vec![], 7);
+        let outs = s.on_paired(vec![], vec![7; 16]).unwrap();
         assert_eq!(outs.len(), 1);
         match &outs[0] {
             SyncOutputDto::Send { bytes } => {
                 // Decode round-trip: must be a valid SyncMsg::Hello.
                 let msg = decode_sync_msg(bytes).unwrap();
-                assert!(matches!(msg, moat_core::sync::SyncMsg::Hello { ring_epoch: 7, .. }));
+                assert!(matches!(
+                    msg,
+                    moat_core::sync::SyncMsg::Hello { device_id, .. } if device_id == [7; 16]
+                ));
             }
             _ => panic!("expected Send"),
         }

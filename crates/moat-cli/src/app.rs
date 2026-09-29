@@ -493,8 +493,7 @@ pub(crate) enum BgEvent {
         url: String,
         token: Vec<u8>,
     },
-    /// Send binary data on the pair WS (ring-MLS ciphertext, or pairing AEAD
-    /// ciphertext while a `PairingSession` is driving onboarding).
+    /// Send a pairing-AEAD frame on the pair WS.
     DrawbridgeSendPairBinary {
         data: Vec<u8>,
     },
@@ -3964,6 +3963,7 @@ impl App {
                             match moat_core::decode_ring_msg(&decrypted.event.payload) {
                                 Ok(RingMsg::SyncRequest {
                                     token,
+                                    secret,
                                     target_device_id,
                                 }) => {
                                     // A request naming someone else is
@@ -3975,16 +3975,16 @@ impl App {
                                     let for_us = target_device_id
                                         .is_none_or(|t| &t == self.mls.device_id());
                                     if for_us {
-                                        self.on_sync_request_received(token, sender_name);
+                                        self.on_sync_request_received(token, secret, sender_name);
                                     } else {
                                         self.debug_log.log(
                                             "sync: ignoring a request addressed to another device",
                                         );
                                     }
                                 }
-                                Ok(RingMsg::SyncOffer { token, target_device_id }) => {
+                                Ok(RingMsg::SyncOffer { token, secret, target_device_id }) => {
                                     if &target_device_id == self.mls.device_id() {
-                                        self.on_sync_offer_received(token, sender_name);
+                                        self.on_sync_offer_received(token, secret, sender_name);
                                     } else {
                                         self.debug_log.log(
                                             "sync: ignoring an offer addressed to another device",
@@ -5792,13 +5792,12 @@ impl App {
 
     // ── History sync ───────────────────────────────────────────────────────────
 
-    /// Start a transfer between established devices once the pair WS
-    /// reports `PairConnected`.
+    /// Start a requested or offered transfer once the pair WS reports
+    /// `PairConnected`.
     fn start_sync_session(&mut self) {
-        let ring_id = self.ring_driver.ring_id().map(<[u8]>::to_vec);
-        let key_bundle = self.keys.load_identity_key().ok();
-        let (Some(ring_id), Some(key_bundle)) = (ring_id, key_bundle) else {
-            self.debug_log.log("sync: cannot start — ring or key bundle not ready");
+        let channel = self.sync_request.as_mut().and_then(|r| r.transfer_channel());
+        let Some(channel) = channel else {
+            self.debug_log.log("sync: cannot start — no sync request holds the channel");
             self.drawbridge.clear_pair();
             self.pending_pair_token = None;
             if let Some(req) = self.sync_request.as_mut() {
@@ -5808,31 +5807,27 @@ impl App {
             }
             return;
         };
-        let channel = crate::sync::SyncChannel::Ring { ring_id: ring_id.clone(), key_bundle };
-        self.start_sync_transfer(channel, &ring_id);
+        self.start_sync_transfer(channel, crate::sync::TransferOrigin::SyncRequest);
     }
 
-    /// Start a transfer under the *pairing* AEAD — the
-    /// `PairingCommand::StartSync` handoff from a `PairingSession` that just
-    /// finished Enroll/Admit. Per qr-pairing.md §3.2 this continues the
-    /// pairing channel rather than re-keying to ring MLS: the new device has
-    /// no ring-MLS traffic history to fall back on for this exchange.
+    /// Start a transfer on the channel of a `PairingSession` that just
+    /// finished Enroll/Admit — the `PairingCommand::StartSync` handoff.
     fn start_pairing_sync_session(&mut self) {
-        // `StartSync` only follows a done session, which has both.
-        let Some(session) = self.pairing_session.as_mut() else { return };
-        let (Some(ring_id), Some(channel)) =
-            (session.ring_id().map(<[u8]>::to_vec), session.transfer_channel())
+        // `StartSync` only follows a done session, which has a channel.
+        let Some(channel) = self.pairing_session.as_mut().and_then(|s| s.transfer_channel())
         else {
             return;
         };
-        self.start_sync_transfer(crate::sync::SyncChannel::Pairing(channel), &ring_id);
+        self.start_sync_transfer(channel, crate::sync::TransferOrigin::Pairing);
     }
 
-    fn start_sync_transfer(&mut self, channel: crate::sync::SyncChannel, ring_id: &[u8]) {
-        let ring_epoch = self.mls.get_group_epoch(ring_id).ok().flatten().unwrap_or(0);
-        let (session, outputs) = self.build_paired_sync_session(ring_epoch);
-        self.sync_transfer =
-            Some(crate::sync::SyncTransfer { session, channel, peer_name: None });
+    fn start_sync_transfer(
+        &mut self,
+        channel: moat_core::PairingFrameChannel,
+        origin: crate::sync::TransferOrigin,
+    ) {
+        let (session, outputs) = self.build_paired_sync_session();
+        self.sync_transfer = Some(crate::sync::SyncTransfer { session, channel, origin });
         self.process_sync_outputs(outputs);
     }
 
@@ -5840,7 +5835,6 @@ impl App {
     /// local keystore/digest state.
     fn build_paired_sync_session(
         &self,
-        ring_epoch: u64,
     ) -> (crate::sync::SyncSession, Vec<crate::sync::SyncOutput>) {
         use crate::sync::ConvState;
 
@@ -5893,7 +5887,7 @@ impl App {
         // budget has to be spent across the whole message.
         moat_core::fit_hello_inventories(&mut our_convs);
 
-        let outputs = session.on_paired(our_convs, ring_epoch);
+        let outputs = session.on_paired(our_convs, *self.mls.device_id());
         (session, outputs)
     }
 
@@ -5969,14 +5963,14 @@ impl App {
 
     /// Process `SyncOutput` actions from the state machine.
     fn process_sync_outputs(&mut self, outputs: Vec<crate::sync::SyncOutput>) {
-        use crate::sync::{SyncChannel, SyncOutput};
+        use crate::sync::{SyncOutput, TransferOrigin};
 
         for output in outputs {
             match output {
                 SyncOutput::Send(msg) => {
-                    if let Some(data) = self.seal_sync_msg(&msg) {
-                        let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairBinary { data });
-                    }
+                    let Some(transfer) = self.sync_transfer.as_mut() else { continue };
+                    let data = transfer.channel.seal(&crate::sync::encode_sync_msg(&msg));
+                    let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairBinary { data });
                 }
                 SyncOutput::Store { conv_id, messages } => {
                     self.register_synced_conversation(&conv_id, &messages);
@@ -6020,68 +6014,19 @@ impl App {
         ));
         // Queued behind the final sends, which a direct close would drop.
         let _ = self.bg_tx.send(BgEvent::DrawbridgeClosePair);
-        if let SyncChannel::Ring { .. } = transfer.channel {
+        if let TransferOrigin::SyncRequest = transfer.origin {
             self.pending_pair_token = None;
+            let peer_name = self.ring_member_name(transfer.session.peer_device_id());
             if let Some(session) = self.sync_request.as_mut() {
-                session.on_complete(tally, transfer.peer_name);
+                session.on_complete(tally, peer_name);
             }
         }
     }
 
-    /// Seal an outgoing sync message under the running transfer's channel.
-    fn seal_sync_msg(&mut self, msg: &crate::sync::SyncMsg) -> Option<Vec<u8>> {
-        let payload = crate::sync::encode_sync_msg(msg);
-        let transfer = self.sync_transfer.as_mut()?;
-        match &mut transfer.channel {
-            crate::sync::SyncChannel::Ring { ring_id, key_bundle } => {
-                let epoch = self.mls.get_group_epoch(ring_id).ok().flatten().unwrap_or(0);
-                let event = Event::sync_app(ring_id.clone(), epoch, payload);
-                let sealed = self.mls.encrypt_event(ring_id, key_bundle, &event).ok();
-                let _ = self.save_mls_state();
-                sealed.map(|e| e.ciphertext)
-            }
-            crate::sync::SyncChannel::Pairing(channel) => Some(channel.seal(&payload)),
-        }
-    }
-
-    /// Open a pair WS frame under the running transfer's channel: `Ok(None)`
-    /// for a frame to skip, `Err` when the channel cannot continue past it.
-    fn open_sync_frame(&mut self, data: &[u8]) -> std::result::Result<Option<Vec<u8>>, String> {
-        use moat_core::EventKind;
-
-        let Some(transfer) = self.sync_transfer.as_mut() else {
-            self.debug_log.log("sync: frame received but no active session");
-            return Ok(None);
-        };
-        match &mut transfer.channel {
-            crate::sync::SyncChannel::Ring { ring_id, .. } => {
-                let outcome = match self.mls.decrypt_event(ring_id, data) {
-                    Ok(o) => o,
-                    Err(e) => {
-                        self.debug_log.log(&format!("sync: decrypt_event failed: {e}"));
-                        return Ok(None);
-                    }
-                };
-                let decrypted = outcome.into_result();
-                // A pair channel has exactly one peer, so the latest
-                // frame's sender is the peer; every frame carries one.
-                if let Some(sender) = decrypted.sender.as_ref() {
-                    transfer.peer_name = Some(sender.device_name.clone());
-                }
-                let _ = self.save_mls_state();
-                if !matches!(decrypted.event.kind, EventKind::SyncApp) {
-                    self.debug_log.log("sync: unexpected event kind on pair WS");
-                    return Ok(None);
-                }
-                Ok(Some(decrypted.event.payload))
-            }
-            // A frame that fails to open ends the channel: its counter is
-            // the nonce, and the peer sealed the next one expecting it to
-            // advance.
-            crate::sync::SyncChannel::Pairing(channel) => {
-                channel.open(data).map(Some).map_err(|e| e.to_string())
-            }
-        }
+    /// The ring member with `device_id`, by the name its credential carries.
+    fn ring_member_name(&self, device_id: Option<&moat_core::DeviceId>) -> Option<String> {
+        let ring_id = self.ring_driver.ring_id()?;
+        self.mls.member_device_name(ring_id, device_id?).ok().flatten()
     }
 
     /// End the running transfer early and close its channel.
@@ -6089,18 +6034,18 @@ impl App {
         self.debug_log.log(&format!("sync: {detail}"));
         let Some(transfer) = self.sync_transfer.take() else { return };
         self.drawbridge.clear_pair();
-        self.report_transfer_failure(transfer.channel, detail);
+        self.report_transfer_failure(transfer.origin, detail);
     }
 
     /// Tell whichever gesture opened a transfer that it ended early.
-    fn report_transfer_failure(&mut self, channel: crate::sync::SyncChannel, detail: String) {
-        match channel {
-            crate::sync::SyncChannel::Ring { .. } => {
+    fn report_transfer_failure(&mut self, origin: crate::sync::TransferOrigin, detail: String) {
+        match origin {
+            crate::sync::TransferOrigin::SyncRequest => {
                 if let Some(req) = self.sync_request.as_mut() {
                     req.fail(moat_core::SyncFailure::ChannelClosed { detail });
                 }
             }
-            crate::sync::SyncChannel::Pairing(_) => {
+            crate::sync::TransferOrigin::Pairing => {
                 if let Some(session) = self.pairing_session.as_mut() {
                     session.transfer_failed(&detail);
                 }
@@ -6165,7 +6110,7 @@ impl App {
         self.pending_pair_token = None;
         // A transfer cut short must say so.
         if let Some(transfer) = self.sync_transfer.take() {
-            self.report_transfer_failure(transfer.channel, reason);
+            self.report_transfer_failure(transfer.origin, reason);
             return;
         }
         // `fail` is a no-op once the request completed, which is the
@@ -6189,9 +6134,14 @@ impl App {
         if self.client.is_none() {
             return;
         }
-        let payload = match self.open_sync_frame(&data) {
-            Ok(Some(p)) => p,
-            Ok(None) => return,
+        let Some(transfer) = self.sync_transfer.as_mut() else {
+            self.debug_log.log("sync: frame received but no active session");
+            return;
+        };
+        // A frame that fails to open ends the channel: its counter is the
+        // nonce, and the peer sealed the next one expecting it to advance.
+        let payload = match transfer.channel.open(&data) {
+            Ok(p) => p,
             Err(e) => {
                 self.abort_sync_transfer(format!("frame failed to open: {e}"));
                 return;
@@ -6291,13 +6241,18 @@ impl App {
 
         use rand::RngCore;
         let mut token = [0u8; moat_core::PAIRING_TOKEN_LEN];
+        let mut secret = [0u8; moat_core::PAIRING_SECRET_LEN];
         rand::thread_rng().fill_bytes(&mut token);
+        rand::thread_rng().fill_bytes(&mut secret);
 
         // Seal the request to the ring first: if this fails there is no
         // point registering a rendezvous nobody will ever be told about.
         let epoch = self.mls.get_group_epoch(&ring_id).ok().flatten().unwrap_or(0);
-        let payload =
-            moat_core::encode_ring_msg(&RingMsg::SyncRequest { token, target_device_id });
+        let payload = moat_core::encode_ring_msg(&RingMsg::SyncRequest {
+            token,
+            secret,
+            target_device_id,
+        });
         let event = Event::ring_msg(ring_id.clone(), epoch, payload);
         let encrypted = self
             .mls
@@ -6308,6 +6263,7 @@ impl App {
         self.reset_pair_channel(&token);
         self.sync_request = Some(SyncRequestSession::request(
             token,
+            secret,
             chrono::Utc::now().timestamp_millis(),
         ));
 
@@ -6346,13 +6302,16 @@ impl App {
 
         use rand::RngCore;
         let mut token = [0u8; moat_core::PAIRING_TOKEN_LEN];
+        let mut secret = [0u8; moat_core::PAIRING_SECRET_LEN];
         rand::thread_rng().fill_bytes(&mut token);
+        rand::thread_rng().fill_bytes(&mut secret);
 
         // Seal to the ring first: there is no point registering a
         // rendezvous nobody will be told about.
         let epoch = self.mls.get_group_epoch(&ring_id).ok().flatten().unwrap_or(0);
         let payload = moat_core::encode_ring_msg(&RingMsg::SyncOffer {
             token,
+            secret,
             target_device_id,
         });
         let event = Event::ring_msg(ring_id.clone(), epoch, payload);
@@ -6365,6 +6324,7 @@ impl App {
         self.reset_pair_channel(&token);
         self.sync_request = Some(SyncRequestSession::request(
             token,
+            secret,
             chrono::Utc::now().timestamp_millis(),
         ));
 
@@ -6417,7 +6377,7 @@ impl App {
     /// `device_name` comes from the sender's MLS leaf credential, which is
     /// why this lane is the ring and not the stealth one: the prompt names
     /// an authenticated device rather than a self-declared payload field.
-    fn on_sync_request_received(&mut self, token: [u8; 16], device_name: String) {
+    fn on_sync_request_received(&mut self, token: [u8; 16], secret: [u8; 16], device_name: String) {
         let now_ms = chrono::Utc::now().timestamp_millis();
 
         // One sync session at a time. A live request of our own, or a
@@ -6438,7 +6398,7 @@ impl App {
 
         self.debug_log
             .log(&format!("sync: {device_name} is asking for history"));
-        self.sync_request = Some(SyncRequestSession::received(token, device_name, now_ms));
+        self.sync_request = Some(SyncRequestSession::received(token, secret, device_name, now_ms));
         self.overlay = Overlay::SyncApprove;
     }
 
@@ -6452,7 +6412,7 @@ impl App {
     ///
     /// Still refused while something else is in flight: an offer must not
     /// supersede a decision the user is already looking at.
-    fn on_sync_offer_received(&mut self, token: [u8; 16], device_name: String) {
+    fn on_sync_offer_received(&mut self, token: [u8; 16], secret: [u8; 16], device_name: String) {
         let now_ms = chrono::Utc::now().timestamp_millis();
 
         if let Some(existing) = self.sync_request.as_ref() {
@@ -6471,7 +6431,7 @@ impl App {
         self.debug_log
             .log(&format!("sync: accepting {device_name}'s offer of history"));
         self.reset_pair_channel(&token);
-        self.sync_request = Some(SyncRequestSession::accept_offer(token, now_ms));
+        self.sync_request = Some(SyncRequestSession::accept_offer(token, secret, now_ms));
 
         let _ = self
             .bg_tx

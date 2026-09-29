@@ -8,8 +8,8 @@
 //! ran on cannot be reopened: the pairing secret is ephemeral by design.
 //!
 //! So the user asks. D2 publishes a `RingMsg::SyncRequest` on the device
-//! ring; D1's user approves; the transfer runs over an ordinary
-//! ring-encrypted `SyncSession`. The scenario asserts both halves — that
+//! ring; D1's user approves; an ordinary `SyncSession` runs on the channel
+//! keyed from the request's secret. The scenario asserts both halves — that
 //! the history really is missing beforehand (otherwise the test would
 //! pass for the wrong reason, on history that arrived some other way),
 //! and that it is complete afterwards.
@@ -490,12 +490,11 @@ pub async fn run_with_idle(
         completion.conversations, 1,
         "one conversation was transferred; got {completion:?}"
     );
-    // The donor is named from its MLS leaf credential rather than from
-    // anything the payload claimed, which is what makes the name worth
-    // acting on. Asserted as "present and non-empty" rather than by
-    // value: both devices here derive the same hostname-based default
-    // name, so no value assertion could tell the donor from the
-    // requester. That the name is the *sender's* is covered where it is
+    // The donor is named as the ring member with the device id from its
+    // `Hello`, so the name is one the ring already knows. Asserted as
+    // "present and non-empty" rather than by value: both devices here
+    // derive the same hostname-based default name, so no value assertion
+    // could tell the donor from the requester. That the name is the *sender's* is covered where it is
     // distinguishable — d1's `awaiting_approval` above carries d2's.
     let name = completion
         .device_name

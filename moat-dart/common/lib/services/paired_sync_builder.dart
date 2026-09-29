@@ -25,7 +25,6 @@ Future<PairedSyncSetup> buildPairedSyncSession({
   required ffi.MoatSessionHandle session,
   required ConversationsService convService,
   required MessageStorage messageStorage,
-  required BigInt ringEpoch,
 }) async {
   final conversations = convService.conversations;
   final syncSession = ffi.SyncSessionHandle.newSession();
@@ -46,7 +45,8 @@ Future<PairedSyncSetup> buildPairedSyncSession({
   // that closes the connection rather than truncating — so the inventory
   // budget has to be spent across the whole message, not per conversation.
   final fitted = await ffi.fitHelloInventories(convs: convStates);
-  final outputs = await syncSession.onPaired(ourConvs: fitted, ringEpoch: ringEpoch);
+  final outputs =
+      await syncSession.onPaired(ourConvs: fitted, deviceId: session.deviceId());
   return PairedSyncSetup(session: syncSession, outputs: outputs);
 }
 

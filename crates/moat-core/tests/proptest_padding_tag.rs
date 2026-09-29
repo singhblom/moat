@@ -1,4 +1,4 @@
-use moat_core::{derive_event_tag, frame_unpadded, pad_to_bucket, unpad, Bucket};
+use moat_core::{derive_event_tag, pad_to_bucket, unpad, Bucket};
 use proptest::prelude::*;
 
 proptest! {
@@ -49,17 +49,6 @@ proptest! {
     ) {
         let data = vec![0x42; len];
         prop_assert!(pad_to_bucket(&data).is_err());
-    }
-
-    /// Unbucketed framing has no such ceiling — that is the whole reason
-    /// pair-WS frames use it — and stays readable by the same `unpad`.
-    #[test]
-    fn unpadded_framing_has_no_ceiling(
-        data in proptest::collection::vec(any::<u8>(), 0..40_000)
-    ) {
-        let framed = frame_unpadded(&data);
-        prop_assert_eq!(framed.len(), data.len() + 4);
-        prop_assert_eq!(unpad(&framed), data);
     }
 
     // --- Tag derivation properties ---

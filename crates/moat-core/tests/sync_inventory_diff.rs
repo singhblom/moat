@@ -95,11 +95,11 @@ fn a_donor_withholds_messages_the_peer_already_holds() {
         vec![msg("r1"), msg("r2"), msg("r3"), msg("r4")],
         false,
     );
-    let _ = donor.on_paired(vec![state_with(&g, &["r1", "r2", "r3", "r4"])], 0);
+    let _ = donor.on_paired(vec![state_with(&g, &["r1", "r2", "r3", "r4"])], [0; 16]);
 
     // Peer holds r1 and r2 already.
     let _ = donor.on_message(
-        SyncMsg::Hello { convs: vec![state_with(&g, &["r1", "r2"])], ring_epoch: 0 },
+        SyncMsg::Hello { convs: vec![state_with(&g, &["r1", "r2"])], device_id: [0; 16] },
     ).unwrap();
     let outs = donor.on_message(
         SyncMsg::BatchReq { group_id: g.clone(), from_rkey: None, to_rkey: None, cursor: None },
@@ -127,11 +127,11 @@ fn a_donor_fills_a_hole_in_the_middle_of_the_peers_history() {
         vec![msg("r1"), msg("r2"), msg("r3"), msg("r4"), msg("r5")],
         false,
     );
-    let _ = donor.on_paired(vec![state_with(&g, &["r1", "r2", "r3", "r4", "r5"])], 0);
+    let _ = donor.on_paired(vec![state_with(&g, &["r1", "r2", "r3", "r4", "r5"])], [0; 16]);
     let _ = donor.on_message(
         SyncMsg::Hello {
             convs: vec![state_with(&g, &["r1", "r2", "r4", "r5"])],
-            ring_epoch: 0,
+            device_id: [0; 16],
         },
     ).unwrap();
     let outs = donor.on_message(
@@ -150,9 +150,9 @@ fn a_donor_serves_outside_a_peers_declared_span() {
 
     let mut donor = SyncSession::new();
     donor.add_conv_plan(g.clone(), hex::encode(&g), vec![msg("r1"), msg("r2")], false);
-    let _ = donor.on_paired(vec![state_with(&g, &["r1", "r2"])], 0);
+    let _ = donor.on_paired(vec![state_with(&g, &["r1", "r2"])], [0; 16]);
     let _ = donor.on_message(
-        SyncMsg::Hello { convs: vec![state_with_range(&g, "r1", "r1", 1)], ring_epoch: 0 },
+        SyncMsg::Hello { convs: vec![state_with_range(&g, "r1", "r1", 1)], device_id: [0; 16] },
     ).unwrap();
     let outs = donor.on_message(
         SyncMsg::BatchReq { group_id: g.clone(), from_rkey: None, to_rkey: None, cursor: None },
@@ -174,10 +174,10 @@ fn no_request_is_sent_when_the_peer_holds_nothing_new() {
 
     let mut s = SyncSession::new();
     s.add_conv_plan(g.clone(), hex::encode(&g), vec![msg("r1"), msg("r2")], false);
-    let _ = s.on_paired(vec![state_with(&g, &["r1", "r2"])], 0);
+    let _ = s.on_paired(vec![state_with(&g, &["r1", "r2"])], [0; 16]);
 
     let outs = s.on_message(
-        SyncMsg::Hello { convs: vec![state_with(&g, &["r1", "r2"])], ring_epoch: 0 },
+        SyncMsg::Hello { convs: vec![state_with(&g, &["r1", "r2"])], device_id: [0; 16] },
     ).unwrap();
     assert_eq!(
         batch_req_count(&outs),
@@ -192,9 +192,9 @@ fn two_identical_devices_complete_without_transferring_anything() {
 
     let mut s = SyncSession::new();
     s.add_conv_plan(g.clone(), hex::encode(&g), vec![msg("r1")], false);
-    let _ = s.on_paired(vec![state_with(&g, &["r1"])], 0);
+    let _ = s.on_paired(vec![state_with(&g, &["r1"])], [0; 16]);
     let outs = s.on_message(
-        SyncMsg::Hello { convs: vec![state_with(&g, &["r1"])], ring_epoch: 0 },
+        SyncMsg::Hello { convs: vec![state_with(&g, &["r1"])], device_id: [0; 16] },
     ).unwrap();
 
     assert!(
@@ -211,10 +211,10 @@ fn a_request_is_sent_when_the_peer_holds_something_we_lack() {
 
     let mut s = SyncSession::new();
     s.add_conv_plan(g.clone(), hex::encode(&g), vec![msg("r1")], false);
-    let _ = s.on_paired(vec![state_with(&g, &["r1"])], 0);
+    let _ = s.on_paired(vec![state_with(&g, &["r1"])], [0; 16]);
 
     let outs = s.on_message(
-        SyncMsg::Hello { convs: vec![state_with(&g, &["r1", "r2"])], ring_epoch: 0 },
+        SyncMsg::Hello { convs: vec![state_with(&g, &["r1", "r2"])], device_id: [0; 16] },
     ).unwrap();
     assert_eq!(batch_req_count(&outs), 1, "r2 is missing locally, so ask for it");
 }
@@ -229,12 +229,12 @@ fn a_conversation_the_peer_alone_knows_about_is_still_requested() {
 
     let mut s = SyncSession::new();
     s.add_conv_plan(ours.clone(), hex::encode(&ours), vec![msg("r1")], false);
-    let _ = s.on_paired(vec![state_with(&ours, &["r1"])], 0);
+    let _ = s.on_paired(vec![state_with(&ours, &["r1"])], [0; 16]);
 
     let outs = s.on_message(
         SyncMsg::Hello {
             convs: vec![state_with(&ours, &["r1"]), state_with(&theirs, &["r9"])],
-            ring_epoch: 0,
+            device_id: [0; 16],
         },
     ).unwrap();
     assert_eq!(batch_req_count(&outs), 1, "the unknown conversation must be requested");
@@ -256,11 +256,11 @@ fn each_side_serves_the_other_in_the_same_session() {
         vec![msg("r1"), msg("r2"), msg("r3")],
         false,
     );
-    let _ = laptop.on_paired(vec![state_with(&g, &["r1", "r2", "r3"])], 0);
+    let _ = laptop.on_paired(vec![state_with(&g, &["r1", "r2", "r3"])], [0; 16]);
 
     // Phone holds r3 and the newer r4, r5.
     let outs = laptop.on_message(
-        SyncMsg::Hello { convs: vec![state_with(&g, &["r3", "r4", "r5"])], ring_epoch: 0 },
+        SyncMsg::Hello { convs: vec![state_with(&g, &["r3", "r4", "r5"])], device_id: [0; 16] },
     ).unwrap();
     assert_eq!(batch_req_count(&outs), 1, "the laptop wants r4 and r5");
 
@@ -284,12 +284,12 @@ fn a_session_with_no_conversations_does_not_declare_itself_complete() {
     let g = vec![1u8; 32];
 
     let mut s = SyncSession::new();
-    let outs = s.on_paired(vec![], 0);
+    let outs = s.on_paired(vec![], [0; 16]);
     assert!(!s.is_done());
     assert_eq!(outs.len(), 1, "just the Hello");
 
     let outs = s.on_message(
-        SyncMsg::Hello { convs: vec![state_with(&g, &["r1"])], ring_epoch: 0 },
+        SyncMsg::Hello { convs: vec![state_with(&g, &["r1"])], device_id: [0; 16] },
     ).unwrap();
     assert!(
         !s.is_done(),
@@ -411,11 +411,11 @@ fn a_session_counts_the_messages_and_conversations_it_received() {
     let mut s = SyncSession::new();
     s.add_conv_plan(a.clone(), hex::encode(&a), vec![], true);
     s.add_conv_plan(b.clone(), hex::encode(&b), vec![], true);
-    let _ = s.on_paired(vec![], 0);
+    let _ = s.on_paired(vec![], [0; 16]);
     let _ = s
         .on_message(SyncMsg::Hello {
             convs: vec![state_with(&a, &["r1", "r2"]), state_with(&b, &["r9"])],
-            ring_epoch: 0,
+            device_id: [0; 16],
         })
         .unwrap();
 
@@ -451,11 +451,11 @@ fn a_session_that_moves_nothing_reports_an_empty_tally() {
     let g = vec![7u8; 32];
     let mut s = SyncSession::new();
     s.add_conv_plan(g.clone(), hex::encode(&g), vec![msg("r1")], false);
-    let _ = s.on_paired(vec![], 0);
+    let _ = s.on_paired(vec![], [0; 16]);
     let _ = s
         .on_message(SyncMsg::Hello {
             convs: vec![state_with(&g, &["r1"])],
-            ring_epoch: 0,
+            device_id: [0; 16],
         })
         .unwrap();
     let _ = s.on_message(SyncMsg::Fin).unwrap();
@@ -467,54 +467,7 @@ fn a_session_that_moves_nothing_reports_an_empty_tally() {
 
 // ── The Hello frame against the wire that carries it ─────────────────────────
 
-/// A `Hello` has to survive `encrypt_event`, and for a long time it did
-/// not: sync frames were bucket-padded like PDS records, and bucketing
-/// rounds *up*, so anything over the largest bucket underflowed the
-/// padding arithmetic — a panic in debug builds, a near-`usize::MAX`
-/// allocation in release ones.
-///
-/// The ceiling that put a device into was about 150 rkeys *across all
-/// conversations combined*, while `HELLO_INVENTORY_BUDGET_BYTES` claimed
-/// 512 KiB. Every device with a few hundred messages died on requested
-/// sync, and the downgrade ladder never ran, because it only starts
-/// shedding precision at the budget.
-///
-/// Pair-WS frames are no longer bucketed, so the budget is now the real
-/// limit. This test holds that: an inventory far past the old ceiling
-/// encrypts, and comes back byte-identical.
-#[test]
-fn a_hello_far_past_the_old_bucket_ceiling_survives_the_wire() {
-    let session = MoatSession::new();
-    let credential = moat_core::MoatCredential::new("did:plc:alice", "laptop", [1u8; 16]);
-    let (_kp, key_bundle) = session.generate_key_package(&credential).unwrap();
-    let group_id = session.create_group(&credential, &key_bundle).unwrap();
-
-    // Well past any single bucket.
-    let rkeys: Vec<String> = (0..10_000).map(|i| format!("3lkzq7xk2p{i:05}")).collect();
-    let convs = vec![ConvState {
-        group_id: group_id.clone(),
-        inventory: ConvInventory::Complete { rkeys: rkeys.clone() },
-    }];
-    let payload = moat_core::encode_sync_msg(&SyncMsg::Hello {
-        convs,
-        ring_epoch: 7,
-    });
-    assert!(
-        payload.len() > 4 * moat_core::MAX_BUCKETED_PLAINTEXT,
-        "the fixture must be well past the bucket ceiling to be testing anything"
-    );
-
-    let event = moat_core::Event::sync_app(group_id.clone(), 7, payload.clone());
-    let encrypted = session
-        .encrypt_event(&group_id, &key_bundle, &event)
-        .expect("a large Hello must encrypt, not die inside the padder");
-    assert!(!encrypted.ciphertext.is_empty());
-}
-
-/// The same event kind published to the PDS still pays for a bucket, and
-/// still has a ceiling — that is the whole point of the split. A ring
-/// message is a real record, so an oversized one is an error rather than
-/// something quietly emitted at its true length.
+/// A PDS record has no bucket to round an oversized payload up to.
 #[test]
 fn a_pds_bound_event_still_refuses_to_exceed_its_bucket() {
     let session = MoatSession::new();

@@ -8,13 +8,6 @@
 //! rather than producing a frame of some other size. Oversized content
 //! belongs in an external blob with only the reference in the event, the
 //! shape `message.long_text` and `message.image` already use.
-//!
-//! Not every frame needs a bucket. Padding hides a record's length from
-//! whoever can see the PDS; a frame that never reaches the PDS — sync
-//! traffic on the pair WebSocket, whose sizes the relay observes
-//! regardless — has nothing to hide there, and pays a bucket's rounding
-//! for it. [`frame_unpadded`] gives those the same length-prefix framing
-//! without the bucket, so [`unpad`] reads both.
 
 use rand::Rng;
 
@@ -99,20 +92,6 @@ pub fn pad_to_bucket(plaintext: &[u8]) -> Result<Vec<u8>> {
     }
 
     Ok(result)
-}
-
-/// Frame plaintext with the length prefix but no bucket padding.
-///
-/// For frames that never become PDS records — sync traffic on the pair
-/// WebSocket. There is no record length for an observer to measure, so a
-/// bucket buys nothing, and the rounding would cap the frame at 4 KiB on
-/// a channel that carries 1 MiB. The output stays [`unpad`]-compatible,
-/// so the receiving side needs no way to tell the two framings apart.
-pub fn frame_unpadded(plaintext: &[u8]) -> Vec<u8> {
-    let mut result = Vec::with_capacity(4 + plaintext.len());
-    result.extend_from_slice(&(plaintext.len() as u32).to_be_bytes());
-    result.extend_from_slice(plaintext);
-    result
 }
 
 /// Remove padding and extract original plaintext.
@@ -224,25 +203,6 @@ mod tests {
             matches!(err, crate::Error::PayloadTooLarge(_)),
             "expected PayloadTooLarge, got {err:?}"
         );
-    }
-
-    #[test]
-    fn unpadded_framing_round_trips_and_keeps_its_size() {
-        // Well past every bucket, which is the point: pair-WS frames are
-        // not bounded by the bucket ladder.
-        let plaintext = vec![0x42; 40_000];
-        let framed = frame_unpadded(&plaintext);
-        assert_eq!(framed.len(), plaintext.len() + 4);
-        assert_eq!(unpad(&framed), plaintext);
-    }
-
-    /// `unpad` is the only reader for both framings, so it must not need
-    /// to tell them apart.
-    #[test]
-    fn unpad_reads_both_framings() {
-        let plaintext = b"same bytes, two framings";
-        assert_eq!(unpad(&pad_to_bucket(plaintext).unwrap()), plaintext);
-        assert_eq!(unpad(&frame_unpadded(plaintext)), plaintext);
     }
 
     #[test]

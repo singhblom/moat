@@ -366,9 +366,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   SyncFailureDto dco_decode_sync_failure_dto(dynamic raw);
 
   @protected
-  SyncFrameDto dco_decode_sync_frame_dto(dynamic raw);
-
-  @protected
   SyncMessageDto dco_decode_sync_message_dto(dynamic raw);
 
   @protected
@@ -764,9 +761,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SyncFailureDto sse_decode_sync_failure_dto(SseDeserializer deserializer);
-
-  @protected
-  SyncFrameDto sse_decode_sync_frame_dto(SseDeserializer deserializer);
 
   @protected
   SyncMessageDto sse_decode_sync_message_dto(SseDeserializer deserializer);
@@ -1179,9 +1173,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_sync_failure_dto(
       SyncFailureDto self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_sync_frame_dto(SyncFrameDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_sync_message_dto(

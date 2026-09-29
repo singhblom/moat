@@ -17,9 +17,6 @@ pub enum EventKind {
     Control(ControlKind),
     Message(MessageKind),
     Modifier(ModifierKind),
-    /// Sync protocol message sent over the device ring, transmitted as binary
-    /// frames on the pair WebSocket. The payload is a padded JSON `SyncMsg`.
-    SyncApp,
     /// Steady-state same-user coordination message addressed to a specific
     /// sibling device. The payload is a JSON-encoded [`crate::CoordMsg`]
     /// (`KpBatch` / `KpRequest` / `UserConvWelcome`); the sender's device id
@@ -73,7 +70,6 @@ impl EventKind {
             EventKind::Control(kind) => kind.as_str_with_domain("control"),
             EventKind::Message(kind) => kind.as_str_with_domain("message"),
             EventKind::Modifier(kind) => kind.as_str_with_domain("modifier"),
-            EventKind::SyncApp => "sync.app".to_string(),
             EventKind::SiblingMsg => "sibling.msg".to_string(),
             EventKind::RingMsg => "ring.msg".to_string(),
             EventKind::Unknown(s) => s.clone(),
@@ -308,20 +304,6 @@ impl Event {
         }
     }
 
-    /// Create a sync-app message event for the device ring, transmitted on the pair WS.
-    pub fn sync_app(group_id: Vec<u8>, epoch: u64, payload: Vec<u8>) -> Self {
-        Self {
-            kind: EventKind::SyncApp,
-            group_id,
-            epoch,
-            payload,
-            message_id: None,
-            prev_event_hash: None,
-            epoch_fingerprint: None,
-            sender_device_id: None,
-        }
-    }
-
     /// Create a device-ring application event carrying a JSON-encoded
     /// [`crate::RingMsg`]. MLS-framed like any group message, so `group_id`
     /// is the ring and `epoch` the ring's current epoch; the sender is
@@ -545,7 +527,6 @@ impl<'de> Deserialize<'de> for EventKind {
                 "control" => EventKind::Control(ControlKind::from_variant(variant)),
                 "message" => EventKind::Message(MessageKind::from_variant(variant)),
                 "modifier" => EventKind::Modifier(ModifierKind::from_variant(variant)),
-                "sync" => EventKind::SyncApp,
                 "sibling" if variant == "msg" => EventKind::SiblingMsg,
                 "ring" if variant == "msg" => EventKind::RingMsg,
                 _ => EventKind::Unknown(raw),

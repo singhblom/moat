@@ -402,7 +402,7 @@ impl DrawbridgeManager {
         Ok(())
     }
 
-    /// Send a binary frame on the pair WS (ring-MLS ciphertext).
+    /// Send a binary frame on the pair WS.
     pub async fn send_pair_binary(&mut self, data: Vec<u8>) -> Result<(), String> {
         let writer = self.pair_writer.as_mut().ok_or("no pair WS connected")?;
         writer

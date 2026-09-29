@@ -3804,25 +3804,36 @@ abstract class RingCommandDto_PollForNewDevices extends RingCommandDto {
 /// @nodoc
 mixin _$RingMsgDto {
   Uint8List get token => throw _privateConstructorUsedError;
+  Uint8List get secret => throw _privateConstructorUsedError;
   Uint8List? get targetDeviceId => throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List token, Uint8List? targetDeviceId)
+    required TResult Function(
+            Uint8List token, Uint8List secret, Uint8List? targetDeviceId)
         syncRequest,
-    required TResult Function(Uint8List token, Uint8List targetDeviceId)
+    required TResult Function(
+            Uint8List token, Uint8List secret, Uint8List targetDeviceId)
         syncOffer,
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List token, Uint8List? targetDeviceId)? syncRequest,
-    TResult? Function(Uint8List token, Uint8List targetDeviceId)? syncOffer,
+    TResult? Function(
+            Uint8List token, Uint8List secret, Uint8List? targetDeviceId)?
+        syncRequest,
+    TResult? Function(
+            Uint8List token, Uint8List secret, Uint8List targetDeviceId)?
+        syncOffer,
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List token, Uint8List? targetDeviceId)? syncRequest,
-    TResult Function(Uint8List token, Uint8List targetDeviceId)? syncOffer,
+    TResult Function(
+            Uint8List token, Uint8List secret, Uint8List? targetDeviceId)?
+        syncRequest,
+    TResult Function(
+            Uint8List token, Uint8List secret, Uint8List targetDeviceId)?
+        syncOffer,
     required TResult orElse(),
   }) =>
       throw _privateConstructorUsedError;
@@ -3859,7 +3870,7 @@ abstract class $RingMsgDtoCopyWith<$Res> {
           RingMsgDto value, $Res Function(RingMsgDto) then) =
       _$RingMsgDtoCopyWithImpl<$Res, RingMsgDto>;
   @useResult
-  $Res call({Uint8List token, Uint8List targetDeviceId});
+  $Res call({Uint8List token, Uint8List secret, Uint8List targetDeviceId});
 }
 
 /// @nodoc
@@ -3878,12 +3889,17 @@ class _$RingMsgDtoCopyWithImpl<$Res, $Val extends RingMsgDto>
   @override
   $Res call({
     Object? token = null,
+    Object? secret = null,
     Object? targetDeviceId = null,
   }) {
     return _then(_value.copyWith(
       token: null == token
           ? _value.token
           : token // ignore: cast_nullable_to_non_nullable
+              as Uint8List,
+      secret: null == secret
+          ? _value.secret
+          : secret // ignore: cast_nullable_to_non_nullable
               as Uint8List,
       targetDeviceId: null == targetDeviceId
           ? _value.targetDeviceId!
@@ -3902,7 +3918,7 @@ abstract class _$$RingMsgDto_SyncRequestImplCopyWith<$Res>
       __$$RingMsgDto_SyncRequestImplCopyWithImpl<$Res>;
   @override
   @useResult
-  $Res call({Uint8List token, Uint8List? targetDeviceId});
+  $Res call({Uint8List token, Uint8List secret, Uint8List? targetDeviceId});
 }
 
 /// @nodoc
@@ -3920,12 +3936,17 @@ class __$$RingMsgDto_SyncRequestImplCopyWithImpl<$Res>
   @override
   $Res call({
     Object? token = null,
+    Object? secret = null,
     Object? targetDeviceId = freezed,
   }) {
     return _then(_$RingMsgDto_SyncRequestImpl(
       token: null == token
           ? _value.token
           : token // ignore: cast_nullable_to_non_nullable
+              as Uint8List,
+      secret: null == secret
+          ? _value.secret
+          : secret // ignore: cast_nullable_to_non_nullable
               as Uint8List,
       targetDeviceId: freezed == targetDeviceId
           ? _value.targetDeviceId
@@ -3938,17 +3959,20 @@ class __$$RingMsgDto_SyncRequestImplCopyWithImpl<$Res>
 /// @nodoc
 
 class _$RingMsgDto_SyncRequestImpl extends RingMsgDto_SyncRequest {
-  const _$RingMsgDto_SyncRequestImpl({required this.token, this.targetDeviceId})
+  const _$RingMsgDto_SyncRequestImpl(
+      {required this.token, required this.secret, this.targetDeviceId})
       : super._();
 
   @override
   final Uint8List token;
   @override
+  final Uint8List secret;
+  @override
   final Uint8List? targetDeviceId;
 
   @override
   String toString() {
-    return 'RingMsgDto.syncRequest(token: $token, targetDeviceId: $targetDeviceId)';
+    return 'RingMsgDto.syncRequest(token: $token, secret: $secret, targetDeviceId: $targetDeviceId)';
   }
 
   @override
@@ -3957,6 +3981,7 @@ class _$RingMsgDto_SyncRequestImpl extends RingMsgDto_SyncRequest {
         (other.runtimeType == runtimeType &&
             other is _$RingMsgDto_SyncRequestImpl &&
             const DeepCollectionEquality().equals(other.token, token) &&
+            const DeepCollectionEquality().equals(other.secret, secret) &&
             const DeepCollectionEquality()
                 .equals(other.targetDeviceId, targetDeviceId));
   }
@@ -3965,6 +3990,7 @@ class _$RingMsgDto_SyncRequestImpl extends RingMsgDto_SyncRequest {
   int get hashCode => Object.hash(
       runtimeType,
       const DeepCollectionEquality().hash(token),
+      const DeepCollectionEquality().hash(secret),
       const DeepCollectionEquality().hash(targetDeviceId));
 
   /// Create a copy of RingMsgDto
@@ -3979,32 +4005,42 @@ class _$RingMsgDto_SyncRequestImpl extends RingMsgDto_SyncRequest {
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List token, Uint8List? targetDeviceId)
+    required TResult Function(
+            Uint8List token, Uint8List secret, Uint8List? targetDeviceId)
         syncRequest,
-    required TResult Function(Uint8List token, Uint8List targetDeviceId)
+    required TResult Function(
+            Uint8List token, Uint8List secret, Uint8List targetDeviceId)
         syncOffer,
   }) {
-    return syncRequest(token, targetDeviceId);
+    return syncRequest(token, secret, targetDeviceId);
   }
 
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List token, Uint8List? targetDeviceId)? syncRequest,
-    TResult? Function(Uint8List token, Uint8List targetDeviceId)? syncOffer,
+    TResult? Function(
+            Uint8List token, Uint8List secret, Uint8List? targetDeviceId)?
+        syncRequest,
+    TResult? Function(
+            Uint8List token, Uint8List secret, Uint8List targetDeviceId)?
+        syncOffer,
   }) {
-    return syncRequest?.call(token, targetDeviceId);
+    return syncRequest?.call(token, secret, targetDeviceId);
   }
 
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List token, Uint8List? targetDeviceId)? syncRequest,
-    TResult Function(Uint8List token, Uint8List targetDeviceId)? syncOffer,
+    TResult Function(
+            Uint8List token, Uint8List secret, Uint8List? targetDeviceId)?
+        syncRequest,
+    TResult Function(
+            Uint8List token, Uint8List secret, Uint8List targetDeviceId)?
+        syncOffer,
     required TResult orElse(),
   }) {
     if (syncRequest != null) {
-      return syncRequest(token, targetDeviceId);
+      return syncRequest(token, secret, targetDeviceId);
     }
     return orElse();
   }
@@ -4044,11 +4080,14 @@ class _$RingMsgDto_SyncRequestImpl extends RingMsgDto_SyncRequest {
 abstract class RingMsgDto_SyncRequest extends RingMsgDto {
   const factory RingMsgDto_SyncRequest(
       {required final Uint8List token,
+      required final Uint8List secret,
       final Uint8List? targetDeviceId}) = _$RingMsgDto_SyncRequestImpl;
   const RingMsgDto_SyncRequest._() : super._();
 
   @override
   Uint8List get token;
+  @override
+  Uint8List get secret;
   @override
   Uint8List? get targetDeviceId;
 
@@ -4068,7 +4107,7 @@ abstract class _$$RingMsgDto_SyncOfferImplCopyWith<$Res>
       __$$RingMsgDto_SyncOfferImplCopyWithImpl<$Res>;
   @override
   @useResult
-  $Res call({Uint8List token, Uint8List targetDeviceId});
+  $Res call({Uint8List token, Uint8List secret, Uint8List targetDeviceId});
 }
 
 /// @nodoc
@@ -4085,12 +4124,17 @@ class __$$RingMsgDto_SyncOfferImplCopyWithImpl<$Res>
   @override
   $Res call({
     Object? token = null,
+    Object? secret = null,
     Object? targetDeviceId = null,
   }) {
     return _then(_$RingMsgDto_SyncOfferImpl(
       token: null == token
           ? _value.token
           : token // ignore: cast_nullable_to_non_nullable
+              as Uint8List,
+      secret: null == secret
+          ? _value.secret
+          : secret // ignore: cast_nullable_to_non_nullable
               as Uint8List,
       targetDeviceId: null == targetDeviceId
           ? _value.targetDeviceId
@@ -4104,17 +4148,19 @@ class __$$RingMsgDto_SyncOfferImplCopyWithImpl<$Res>
 
 class _$RingMsgDto_SyncOfferImpl extends RingMsgDto_SyncOffer {
   const _$RingMsgDto_SyncOfferImpl(
-      {required this.token, required this.targetDeviceId})
+      {required this.token, required this.secret, required this.targetDeviceId})
       : super._();
 
   @override
   final Uint8List token;
   @override
+  final Uint8List secret;
+  @override
   final Uint8List targetDeviceId;
 
   @override
   String toString() {
-    return 'RingMsgDto.syncOffer(token: $token, targetDeviceId: $targetDeviceId)';
+    return 'RingMsgDto.syncOffer(token: $token, secret: $secret, targetDeviceId: $targetDeviceId)';
   }
 
   @override
@@ -4123,6 +4169,7 @@ class _$RingMsgDto_SyncOfferImpl extends RingMsgDto_SyncOffer {
         (other.runtimeType == runtimeType &&
             other is _$RingMsgDto_SyncOfferImpl &&
             const DeepCollectionEquality().equals(other.token, token) &&
+            const DeepCollectionEquality().equals(other.secret, secret) &&
             const DeepCollectionEquality()
                 .equals(other.targetDeviceId, targetDeviceId));
   }
@@ -4131,6 +4178,7 @@ class _$RingMsgDto_SyncOfferImpl extends RingMsgDto_SyncOffer {
   int get hashCode => Object.hash(
       runtimeType,
       const DeepCollectionEquality().hash(token),
+      const DeepCollectionEquality().hash(secret),
       const DeepCollectionEquality().hash(targetDeviceId));
 
   /// Create a copy of RingMsgDto
@@ -4146,32 +4194,42 @@ class _$RingMsgDto_SyncOfferImpl extends RingMsgDto_SyncOffer {
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List token, Uint8List? targetDeviceId)
+    required TResult Function(
+            Uint8List token, Uint8List secret, Uint8List? targetDeviceId)
         syncRequest,
-    required TResult Function(Uint8List token, Uint8List targetDeviceId)
+    required TResult Function(
+            Uint8List token, Uint8List secret, Uint8List targetDeviceId)
         syncOffer,
   }) {
-    return syncOffer(token, targetDeviceId);
+    return syncOffer(token, secret, targetDeviceId);
   }
 
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List token, Uint8List? targetDeviceId)? syncRequest,
-    TResult? Function(Uint8List token, Uint8List targetDeviceId)? syncOffer,
+    TResult? Function(
+            Uint8List token, Uint8List secret, Uint8List? targetDeviceId)?
+        syncRequest,
+    TResult? Function(
+            Uint8List token, Uint8List secret, Uint8List targetDeviceId)?
+        syncOffer,
   }) {
-    return syncOffer?.call(token, targetDeviceId);
+    return syncOffer?.call(token, secret, targetDeviceId);
   }
 
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List token, Uint8List? targetDeviceId)? syncRequest,
-    TResult Function(Uint8List token, Uint8List targetDeviceId)? syncOffer,
+    TResult Function(
+            Uint8List token, Uint8List secret, Uint8List? targetDeviceId)?
+        syncRequest,
+    TResult Function(
+            Uint8List token, Uint8List secret, Uint8List targetDeviceId)?
+        syncOffer,
     required TResult orElse(),
   }) {
     if (syncOffer != null) {
-      return syncOffer(token, targetDeviceId);
+      return syncOffer(token, secret, targetDeviceId);
     }
     return orElse();
   }
@@ -4211,11 +4269,14 @@ class _$RingMsgDto_SyncOfferImpl extends RingMsgDto_SyncOffer {
 abstract class RingMsgDto_SyncOffer extends RingMsgDto {
   const factory RingMsgDto_SyncOffer(
       {required final Uint8List token,
+      required final Uint8List secret,
       required final Uint8List targetDeviceId}) = _$RingMsgDto_SyncOfferImpl;
   const RingMsgDto_SyncOffer._() : super._();
 
   @override
   Uint8List get token;
+  @override
+  Uint8List get secret;
   @override
   Uint8List get targetDeviceId;
 

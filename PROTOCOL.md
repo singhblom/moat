@@ -218,9 +218,8 @@ Every event’s `kind` is now namespaced as `<domain>.<variant>`:
 | `control.*` | `control.commit`, `control.welcome`, `control.checkpoint` | MLS state management and coordination; payload is TLS-serialized bytes. No `message_id` is present. |
 | `message.*` | `message.short_text`, `message.medium_text`, `message.long_text`, `message.image` | User-visible content plus optional previews/external blobs. Each carries a 16-byte `message_id`. |
 | `modifier.*` | `modifier.reaction` (more to follow) | Small toggles or annotations that reference an existing `message_id`. |
-| `sync.app` | — | History-sync frames over the Drawbridge pair WebSocket, encrypted to the device ring. |
 | `sibling.msg` | — | Steady-state same-user coordination addressed to one sibling. Payload is `CoordMsg` JSON (`kp_batch` / `kp_request` / `user_conv_welcome`); the sender's device id travels in `Event.sender_device_id`. Stealth-encrypted, not MLS-framed. `group_id` empty, `epoch` 0. |
-| `ring.msg` | — | Same-user coordination broadcast to *every* sibling at once, as an MLS application message on the device ring and published to the PDS under a ring tag. Payload is `RingMsg` JSON (`sync_request`). The sender is authenticated by its MLS leaf credential, not declared in the payload. |
+| `ring.msg` | — | Same-user coordination broadcast to *every* sibling at once, as an MLS application message on the device ring and published to the PDS under a ring tag. Payload is `RingMsg` JSON (`sync_request` / `sync_offer`). The sender is authenticated by its MLS leaf credential, not declared in the payload. |
 
 The two same-user lanes differ deliberately. `sibling.msg` is unicast, stealth-addressed, epoch-free and order-insensitive, which is what key-package traffic needs because it peaks exactly when ring epochs churn. `ring.msg` is the opposite trade: one publish reaches every sibling and MLS authenticates the sender, at the cost of being epoch-bound like any group message — so it carries only traffic that a device far enough behind may simply miss.
 
@@ -280,12 +279,8 @@ is an external blob with only the reference in the event — the shape
 `message.long_text` and `message.image` already take.
 
 Padding answers a question about *PDS records*: how long is the record an
-observer can see. Frames that never become records do not inherit it.
-Sync traffic on the pair WebSocket (`EventKind::SyncApp`) is framed with
-the same 4-byte length prefix but no bucket, since the relay observes those
-frame sizes either way and a 4 KB ceiling would cap a channel that carries
-1 MiB. The length prefix is what both framings share, so the receiving side
-unpads both without needing to tell them apart.
+observer can see. History-sync frames never become records and are not
+padded; they are sealed by the [pairing channel AEAD](#channel-crypto).
 
 ### Blob Retention & Forward Secrecy
 
@@ -455,11 +450,11 @@ Exceeding the byte cap closes both pair WSes and delivers `pair_closed{reason:"b
 
 #### Security and Privacy
 
-- **Tokens are capabilities**: a 32-byte random token is issued only over an authenticated main WS and is valid for two attaches within 5 minutes. The relay does not verify that both sides share the same DID — that trust comes from the MLS device ring session layered on top.
-- **Content opacity**: the relay sees only opaque binary frames after `pair_attach`. Onboarding traffic is sealed under the pairing channel AEAD (see [Channel crypto](#channel-crypto)); traffic between already-established devices is encrypted as MLS application messages inside the device ring. Either way the relay holds no key.
+- **Tokens are capabilities**: a 16-byte random token is issued only over an authenticated main WS and is valid for two attaches within 5 minutes. The relay does not verify that both sides share the same DID — that trust comes from the channel AEAD layered on top, keyed from a secret the relay never sees.
+- **Content opacity**: the relay sees only opaque binary frames after `pair_attach`, all sealed under the pairing channel AEAD (see [Channel crypto](#channel-crypto)). The relay holds no key.
 - **Tokens are never logged**: attach tokens are treated as credentials and omitted from relay logs at all severity levels.
 - **Byte metrics are aggregated**: per-session byte counts are tracked internally for cap enforcement but exposed only as relay-wide totals in `/metrics`, never per-session.
-- **TLS + end-to-end**: Drawbridge TLS protects against network observers; the pairing AEAD (onboarding) or the device ring MLS session (established devices) provides end-to-end confidentiality against the relay operator.
+- **TLS + end-to-end**: Drawbridge TLS protects against network observers; the pairing AEAD provides end-to-end confidentiality against the relay operator.
 - **Challenge binding**: the main-WS auth challenge is signed over the relay URL *as the client dialled it*. The relay reconstructs that string from `RELAY_PUBLIC_URL`, then proxy headers, then the request's own `Host` header — never a fixed relay-wide default, which would reject any client reaching the relay by another address.
 
 ## Multi-device
@@ -528,7 +523,7 @@ k_old_to_new = HKDF-SHA256(ikm = secret, salt = token, info = "moat-pair-v1 o2n"
 
 Frames are AES-128-GCM. The 12-byte nonce is four zero bytes followed by a 64-bit big-endian counter, maintained per direction; a counter value is never reused under the same key. Each side seals with its own direction's key and opens with the peer's, so a reflected frame fails to open. The receiver advances its counter only on a successful open, so a rejected frame does not desynchronise a legitimate retry.
 
-The channel is **not** re-keyed to ring MLS once the exchange completes: the same AEAD carries the history sync that follows, continuing the same counter sequences. A newly-onboarded device has no ring-MLS traffic history to fall back on, and mixing two wire formats on one socket is the failure this avoids.
+The same AEAD carries the history sync that follows the exchange, continuing the same counter sequences. A [requested or offered sync](#requested-sync) between established devices runs on the same channel, keyed from a fresh secret carried in the ring message instead of a code.
 
 #### Session protocol
 
@@ -586,9 +581,10 @@ Recovering that is an explicit gesture, shaped like pairing. There is no
 election, no liveness detector, and no policy guessing which sibling holds
 the deepest history: the person holding the devices decides.
 
-1. The device that wants history mints a 16-byte rendezvous token,
-   registers it with the relay (`pair_offer`), and publishes
-   `RingMsg::SyncRequest { token, target_device_id }` as a `ring.msg`
+1. The device that wants history mints a 16-byte rendezvous token and a
+   16-byte channel secret, registers the token with the relay
+   (`pair_offer`), and publishes
+   `RingMsg::SyncRequest { token, secret, target_device_id }` as a `ring.msg`
    event on the device ring. Siblings watch the ring's tags with
    Drawbridge, so an online one sees it at once rather than on its next
    poll. `target_device_id` names one sibling when the user has picked a
@@ -597,11 +593,20 @@ the deepest history: the person holding the devices decides.
    business.
 2. Every sibling that decrypts it prompts its user, naming the requesting
    device **from its MLS leaf credential** — the payload carries only the
-   token. **No host auto-accepts**, matching pairing's rule.
-3. Whichever sibling the user approves calls `pair_join` with the token
-   and both ends run the ordinary history-sync session (below), encrypted
-   to the ring: both are already members, so unlike onboarding there is no
-   user-carried secret to derive a channel key from.
+   token and secret. **No host auto-accepts**, matching pairing's rule.
+3. Whichever sibling the user approves calls `pair_join` with the token.
+   Both ends derive the [channel keys](#channel-crypto) from the secret and
+   token — the side that published the ring message takes the new
+   device's keys, the side that joined the existing device's — and run the
+   ordinary history-sync session (below) on that channel.
+
+The secret travels inside an MLS-encrypted ring message, so every ring
+member can read it; they are all the user's own devices, the trust the ring
+already assumes. Keeping the transfer off ring MLS matters beyond
+simplicity: every ring event a device encrypts advances its tag counter,
+hash chain and sender ratchet, and sync frames never reach the PDS, so
+sealing them with MLS would push the device's next published ring event
+out of its siblings' [scanning window](#recipient-side).
 
 Declining is local and sends nothing. With several siblings prompted, one
 refusal must not cancel the request — the requester keeps waiting for
@@ -654,7 +659,7 @@ recourse is to pair again, which is a first-class affordance.
 A request asks the user to walk to the device that holds the history and
 approve there. That is the wrong way round whenever the device already in
 their hands is the one with the history.
-`RingMsg::SyncOffer { token, target_device_id }` is the mirror: the user
+`RingMsg::SyncOffer { token, secret, target_device_id }` is the mirror: the user
 picks another device to send to, the holder opens the rendezvous, and the
 recipient joins it.
 
@@ -688,7 +693,8 @@ the user is already looking at.
 ### History Sync
 
 Both onboarding sync and requested sync run the same session. Each side
-opens with a `Hello` declaring, per conversation, the rkeys it holds; each
+opens with a `Hello` naming its device id and declaring, per conversation,
+the rkeys it holds; each
 then sends the peer exactly the complement. Both directions run in the one
 session, so a laptop with deep old history and a phone with a recent week
 converge on the union without either being designated donor.
@@ -754,9 +760,9 @@ it delivered rather than reading as "nothing new". This is not
 decoration. With one donor per gesture, "nothing new — that device didn't
 have more than you" is the outcome that tells the user to go and approve on
 a *different* sibling, and without counts it is indistinguishable from a
-transfer that moved everything. The donor is named from its MLS leaf
-credential on the frames it sent, so the name is authenticated rather than
-claimed. The counts are of what the peer *delivered*: the inventory diff
+transfer that moved everything. The donor is named as the ring member
+with the device id from its `Hello`; only ring members hold the channel
+secret, so the claim comes from one of the user's own devices. The counts are of what the peer *delivered*: the inventory diff
 means it sent only the complement, so this matches what was stored except
 where a `range` inventory forced it to serve across a span whose interior
 it could not see.
