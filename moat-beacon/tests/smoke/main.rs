@@ -14,8 +14,9 @@ const R: ParticipantKind = ParticipantKind::RustCli;
 const D: ParticipantKind = ParticipantKind::DartServer;
 
 macro_rules! scenario_tests {
-    ($($name:ident => $run:expr,)*) => {
+    ($($(#[$attr:meta])* $name:ident => $run:expr,)*) => {
         $(
+            $(#[$attr])*
             #[test]
             fn $name() {
                 moat_beacon::parallel::run_world(WORLDS, $run);
@@ -39,6 +40,10 @@ scenario_tests! {
     sender_exceeds_tag_window_converges => sender_exceeds_tag_window::run(true),
     sender_exceeds_tag_window_d_converges => sender_exceeds_tag_window::run_dart_recipient(true),
     staggered_device_pairing_converges => staggered_device_pairing::run(true),
+    #[ignore = "B2: passes once one driver owns the pair channel (S2)"]
+    sync_request_after_cancelled_pairing_prompts => sync_request_after_cancelled_pairing::run_with(R, "r", true),
+    #[ignore = "B2: passes once one driver owns the pair channel (S2)"]
+    sync_request_after_cancelled_pairing_d_prompts => sync_request_after_cancelled_pairing::run_with(D, "d", true),
     sync_request_after_idle_converges => sync_request_history::run_after_idle(true),
     sync_request_after_idle_dd_converges => sync_request_history::run_after_idle_dd(true),
     sync_request_delivers_missing_history => sync_request_history::run(true),

@@ -37,6 +37,7 @@ pub mod sender_exceeds_tag_window;
 pub mod staggered_device_pairing;
 pub mod sync_history_before_membership;
 pub mod sync_offer_history;
+pub mod sync_request_after_cancelled_pairing;
 pub mod sync_request_history;
 pub mod three_device_pairing;
 pub mod three_device_pairing_history_sync;
@@ -1009,6 +1010,20 @@ pub static SCENARIOS: &[Scenario] = &[
         name: "pairing-cancelled",
         description: "New device backs out while showing its code — terminal failure, no ring",
         run_fn: pairing_cancelled::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "sync-request-after-cancelled-pairing",
+        description: "D1 ignores D2's sync request mid-pairing, then prompts for the next one once the pairing is cancelled",
+        run_fn: sync_request_after_cancelled_pairing::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "sync-request-after-cancelled-pairing-d",
+        description: "Same as sync-request-after-cancelled-pairing, both devices Dart",
+        run_fn: sync_request_after_cancelled_pairing::run_d_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
