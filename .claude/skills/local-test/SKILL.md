@@ -1,6 +1,6 @@
 ---
 name: local-test
-description: Stand up a local Moat test environment (Postern PDS, Drawbridge, moat-cli and Flutter participants) and drive it for manual or exploratory testing. Use this whenever the user wants to try Moat by hand, reproduce a bug outside the test suite, test pairing or history sync end to end, generate conversation history at scale, check how something looks or reads in the TUI or the Flutter app, or asks to "run the app locally", "set up a test env", "seed some messages", or "let me try this myself".
+description: Stand up a local Moat test environment (Postern PDS, Drawbridge, moat-cli and Flutter participants) and drive it for manual or exploratory testing. Use this whenever the user wants to try Moat by hand, reproduce a bug outside the test suite, test pairing or history sync end to end, generate conversation history at scale, check how something looks or reads in the TUI or the Flutter app, or asks to "run the app locally", "set up a test env", "seed some messages", or "let me try this myself". Also use it to run the test suites or the verification gate, so that a failure keeps its panic message.
 ---
 
 # Local test environment
@@ -117,6 +117,41 @@ list.
 
 Record findings somewhere durable as you go. A finding that only exists in a
 terminal scrollback is lost when the session ends.
+
+## Running the suites: keep the full log
+
+Run tests so that a failure leaves its panic message behind. Failures that
+pass on rerun are common here (a Beacon world that does not come up, a
+timeout under load), and the message of that first failure is all there is
+to diagnose them from. A Beacon test that dies in `world setup` names only
+the line that called `.expect(..)`; the cause is in the message after it.
+
+**Never filter test output down to its result lines.** Piping `cargo test`
+through `grep "test result|FAILED"` drops every panic message.
+
+```bash
+# One suite: full log kept, failing tests and panic messages printed
+.claude/skills/local-test/scripts/run-tests.sh beacon-smoke \
+  cargo test -p moat-beacon --test smoke --no-fail-fast
+
+# Every suite, repeated (default 5): per-step logs and a summary that has
+# each failure's panic messages beside its FAIL line
+.claude/skills/local-test/scripts/verification-gate.sh
+
+# Any log you already have
+.claude/skills/local-test/scripts/failure-summary.sh path/to/log
+```
+
+Both scripts keep the log (`/tmp/moat-test-logs/`, and the gate's own
+`/tmp/moat-gate-<time>/`) and set `RUST_BACKTRACE=1`. Use `--no-fail-fast`
+so one failing test binary does not hide the rest. If you must run a command
+by hand, redirect it to a file (`> log 2>&1`) and read the file; do not
+filter it on the way.
+
+For a Beacon failure, the participants' own logs are in `/tmp/moat-beacon/`
+(`<handle>-<timestamp>.log`), and the panic message usually quotes the
+tail of the one that stalled. When a failure does not reproduce, say so and
+report the captured message rather than guessing at a cause.
 
 ## Cleaning up
 
