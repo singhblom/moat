@@ -19,6 +19,7 @@ cargo test -p moat-beacon    # Run integration tests (spins up real moat-cli pro
 env BEACON_PARALLEL=4 cargo test -p moat-beacon --test proptest three_party_push  # ~4× faster when run alone
 env BEACON_WORLDS=3 cargo test -p moat-beacon --test smoke   # smoke runs 2 TestWorlds at once by default
 cargo run -p moat-cli        # Run the TUI (default, no subcommand)
+env $(cat config/release.env) cargo build --release   # Release builds need MOAT_DRAWBRIDGE_URL (compile error without)
 
 # Flutter tests
 cd moat-flutter && flutter test          # Run Dart unit tests (52 tests)
@@ -124,6 +125,9 @@ flutter_rust_bridge_codegen build-web \
 
 flutter build web            # Production web build
 flutter build apk            # Android APK
+# Release builds need the relay, or they fail to compile:
+flutter build apk --dart-define-from-file=../../config/release.json
+# Debug builds run without one (poll only); add --dart-define=MOAT_DRAWBRIDGE_URL=ws://... for a local relay
 ```
 
 ### Web Platform Architecture

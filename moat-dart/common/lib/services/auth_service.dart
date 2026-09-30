@@ -121,34 +121,24 @@ class AuthService {
 
   /// Connect to Drawbridge and publish own relay URL.
   ///
-  /// URL resolution order:
-  ///   1. [drawbridgeUrl] `"disabled"` → skip entirely
-  ///   2. [drawbridgeUrl] non-null → explicit override
-  ///   3. PDS-advertised via `com.atproto.server.describeServer`
-  ///   4. [defaultDrawbridgeUrl] — hardcoded fallback
+  /// The relay is [drawbridgeUrl] if given, else [buildDrawbridgeUrl]. With
+  /// neither, the host polls only.
   ///
   /// Safe to call multiple times — DrawbridgeService is idempotent.
   Future<void> _initDrawbridge() async {
-    if (drawbridgeUrl == "disabled" ||_did == null) return;
+    if (_did == null) return;
+
+    final url = drawbridgeUrl ?? buildDrawbridgeUrl;
+    if (url.isEmpty) {
+      moatLog('AuthService: no drawbridge relay configured, push delivery is off');
+      return;
+    }
 
     final session = _atprotoClient.session;
     if (session == null) return;
 
     final keyBundle = await _secureStorage.loadKeyBundle();
     if (keyBundle == null) return;
-
-    final pdsAdvertised = drawbridgeUrl == null
-        ? await _atprotoClient.describeServerDrawbridgeUrl(session.pdsUrl)
-        : null;
-    final url = drawbridgeUrl ?? pdsAdvertised ?? defaultDrawbridgeUrl;
-
-    if (drawbridgeUrl != null) {
-      moatLog('AuthService: Using explicit drawbridge override: $url');
-    } else if (pdsAdvertised != null) {
-      moatLog('AuthService: Using PDS-advertised drawbridge: $url');
-    } else {
-      moatLog('AuthService: Using default drawbridge: $url');
-    }
 
     DrawbridgeService.instance.init(did: _did!, keyBundle: keyBundle);
     unawaited(DrawbridgeService.instance.connectOwn(url));

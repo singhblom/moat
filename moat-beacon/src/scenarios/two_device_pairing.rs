@@ -93,9 +93,7 @@ pub async fn run_with(
     //
     // Live pairing rendezvous (`pair_offer`/`pair_join`) needs a real
     // Drawbridge relay — without a label here, `TestWorld` doesn't spawn
-    // one and moat-cli falls back to the hardcoded default relay
-    // (`DEFAULT_DRAWBRIDGE_URL`), which is a real deployed instance, not a
-    // test double.
+    // one and the participants have no relay at all.
     vlog!("[setup] starting TestWorld with one account (alice) + drawbridge...");
     let mut world = TestWorld::new_with_kinds_and_drawbridge(
         &[("alice", "alice")],

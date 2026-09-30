@@ -12,7 +12,6 @@
 use crate::app::BgEvent;
 use crate::keystore::hex;
 use futures_util::{SinkExt, StreamExt};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -61,13 +60,6 @@ struct OwnDrawbridge {
     url: String,
 }
 
-/// Persisted Drawbridge state (stored in drawbridge.json).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct DrawbridgeState {
-    /// Our own Drawbridge URL (set via --drawbridge-url)
-    pub own_url: Option<String>,
-}
-
 /// Cached Drawbridge configuration for a conversation partner.
 #[derive(Debug, Clone)]
 pub struct CachedDrawbridgeConfig {
@@ -104,13 +96,6 @@ impl DrawbridgeManager {
             pair_writer: None,
             pair_token: None,
             pair_read_task: None,
-        }
-    }
-
-    /// Export current state for persistence.
-    pub fn export_state(&self, own_url: &Option<String>) -> DrawbridgeState {
-        DrawbridgeState {
-            own_url: own_url.clone(),
         }
     }
 
@@ -669,24 +654,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_drawbridge_state_roundtrip() {
-        let state = DrawbridgeState {
-            own_url: Some("wss://relay.example.com/ws".to_string()),
-        };
-
-        let json = serde_json::to_string_pretty(&state).unwrap();
-        let parsed: DrawbridgeState = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(parsed.own_url, state.own_url);
-    }
-
-    #[test]
-    fn test_drawbridge_state_default() {
-        let state = DrawbridgeState::default();
-        assert!(state.own_url.is_none());
-    }
-
-    #[test]
     fn a_manager_with_no_connection_is_connected_to_nothing() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let mgr = DrawbridgeManager::new(tx);
@@ -717,19 +684,5 @@ mod tests {
         let encoded = base64_encode(data);
         let decoded = base64_decode(&encoded).unwrap();
         assert_eq!(decoded, data);
-    }
-
-    /// Verify old DrawbridgeState format (with own_tickets + partner_hints)
-    /// deserializes into the new format without error.
-    #[test]
-    fn test_drawbridge_state_backward_compat() {
-        let old_json = r#"{
-            "own_url": "wss://relay.example.com/ws",
-            "own_tickets": {"group_abc": "ticket_123"},
-            "partner_hints": [{"url": "wss://other.com/ws", "device_id_hex": "aa", "ticket_hex": "bb", "partner_did": "did:plc:x", "group_id_hex": "cc"}]
-        }"#;
-        // serde ignores unknown fields by default
-        let parsed: DrawbridgeState = serde_json::from_str(old_json).unwrap();
-        assert_eq!(parsed.own_url, Some("wss://relay.example.com/ws".to_string()));
     }
 }

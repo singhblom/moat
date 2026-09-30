@@ -12,4 +12,13 @@ pub use error::{Error, Result};
 pub use records::{BlobRef, DrawbridgeConfigRecord, DrawbridgeEntry, EventRecord, KeyPackageRecord, StealthAddressRecord};
 
 pub const DEFAULT_PDS_URL: &str = "https://bsky.social";
-pub const DEFAULT_DRAWBRIDGE_URL: &str = "wss://moat-drawbridge.fly.dev/ws";
+
+/// Drawbridge relay this binary was built for, from `MOAT_DRAWBRIDGE_URL`.
+/// `None` means no relay: the host polls only.
+pub const BUILD_DRAWBRIDGE_URL: Option<&str> = option_env!("MOAT_DRAWBRIDGE_URL");
+
+#[cfg(not(debug_assertions))]
+const _: () = assert!(
+    BUILD_DRAWBRIDGE_URL.is_some(),
+    "release builds need MOAT_DRAWBRIDGE_URL (see config/release.env)"
+);

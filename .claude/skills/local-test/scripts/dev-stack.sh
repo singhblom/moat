@@ -26,8 +26,7 @@ start() {
   (cd "$ROOT/moat-drawbridge" && go build -o "$RUN_DIR/drawbridge" ./...)
 
   echo "Starting Postern on :${POSTERN_PORT}..."
-  DRAWBRIDGE_URL="ws://127.0.0.1:$RELAY_PORT/ws" \
-    "$ROOT/target/debug/dev_server" "$POSTERN_PORT" > "$RUN_DIR/postern.log" 2>&1 &
+  "$ROOT/target/debug/dev_server" "$POSTERN_PORT" > "$RUN_DIR/postern.log" 2>&1 &
   echo $! > "$RUN_DIR/postern.pid"
 
   # describeServer is the readiness signal: it is the endpoint clients hit first.
@@ -51,7 +50,7 @@ start() {
 Stack up.
 
   Postern      http://127.0.0.1:$POSTERN_PORT   (emulator: http://10.0.2.2:$POSTERN_PORT)
-  Drawbridge   ws://127.0.0.1:$RELAY_PORT/ws    (advertised via describeServer)
+  Drawbridge   ws://127.0.0.1:$RELAY_PORT/ws    (pass to devices with --drawbridge-url)
   Logs         $RUN_DIR/{postern,drawbridge}.log
 
 '$0 --help' for how to drive devices against it.
@@ -70,7 +69,7 @@ Local manual-testing stack: Postern (PDS) + Drawbridge (relay).
 
 Services
   Postern      http://127.0.0.1:$POSTERN_PORT   (emulator: http://10.0.2.2:$POSTERN_PORT)
-  Drawbridge   ws://127.0.0.1:$RELAY_PORT/ws    (advertised via describeServer)
+  Drawbridge   ws://127.0.0.1:$RELAY_PORT/ws    (pass to devices with --drawbridge-url)
   Logs         $RUN_DIR/{postern,drawbridge}.log
   PID files    $RUN_DIR/{postern,drawbridge}.pid
 
@@ -83,13 +82,14 @@ they hold separate keys, and delete them between passes for a clean slate:
   rm -rf /tmp/moat-alice /tmp/moat-bob1 /tmp/moat-bob2
 
 Start a device (TUI):
-  cargo run -p moat-cli -- -s /tmp/moat-alice --pds-url http://127.0.0.1:$POSTERN_PORT
+  cargo run -p moat-cli -- -s /tmp/moat-alice --pds-url http://127.0.0.1:$POSTERN_PORT \\
+    --drawbridge-url ws://127.0.0.1:$RELAY_PORT/ws
 
 Start a device (headless HTTP API) — one port per device:
   cargo run -p moat-cli -- -s /tmp/moat-alice --pds-url http://127.0.0.1:$POSTERN_PORT \\
-    --http 127.0.0.1:9101
+    --drawbridge-url ws://127.0.0.1:$RELAY_PORT/ws --http 127.0.0.1:9101
   cargo run -p moat-cli -- -s /tmp/moat-bob1  --pds-url http://127.0.0.1:$POSTERN_PORT \\
-    --http 127.0.0.1:9102
+    --drawbridge-url ws://127.0.0.1:$RELAY_PORT/ws --http 127.0.0.1:9102
 
   HTTP devices start logged out; log in explicitly (any password):
     curl -s -X POST http://127.0.0.1:9101/login \\

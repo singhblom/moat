@@ -300,23 +300,9 @@ A Drawbridge is a WebSocket relay that provides real-time push notifications for
 
 ### Selecting a Drawbridge URL
 
-Clients resolve their own Drawbridge URL in priority order:
+An app binary carries the relay it was built for, set at build time (`MOAT_DRAWBRIDGE_URL`, as a Cargo environment variable or a Dart define). There is no discovery: the PDS is not asked, and there is no hardcoded fallback. A build with no relay does not connect to one and polls only. Release builds fail to compile without a relay.
 
-1. **PDS-advertised URL** — after login, the client calls `com.atproto.server.describeServer` on the user's PDS. If the response includes a `services['social.moat.drawbridge']['endpoint']` entry, that URL is used. This lets PDS operators bundle a default Drawbridge for their users with no configuration required on the client side.
-2. **Client default** — if the PDS does not advertise a Drawbridge, the client falls back to its own hardcoded default (e.g. `wss://moat-drawbridge.fly.dev/ws`).
-
-Example `describeServer` response advertising a Drawbridge:
-
-```json
-{
-  "services": {
-    "social.moat.drawbridge": {
-      "type": "DrawbridgeService",
-      "endpoint": "wss://drawbridge.example.com/ws"
-    }
-  }
-}
-```
+The relay is tied to the binary because push delivery only works when the relay holds the APNs/FCM credentials for the signed app it notifies. Headless hosts (the CLI and the Dart server) also accept a `--drawbridge-url` override; they have no push, so the tie does not apply to them.
 
 ### Drawbridge Configuration Record
 

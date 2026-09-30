@@ -104,6 +104,9 @@ pub struct TestWorld {
     /// Only present when Drawbridge is enabled.
     pub db_verify_proxy: Option<ProxyHandle>,
     participants: HashMap<String, ParticipantProcess>,
+    /// WS endpoint of the first relay, given to devices added with
+    /// [`TestWorld::spawn_nth_device`].
+    default_relay: Option<String>,
     /// Path to the `moat` CLI binary; reused when restarting participants.
     moat_cli_bin: PathBuf,
     /// Path to the compiled Dart server binary; reused when restarting participants.
@@ -239,16 +242,20 @@ impl TestWorld {
         let db = self.drawbridges.first().expect("no drawbridge in this TestWorld");
         let url = format!("{}/health", db.http_url);
         let deadline = std::time::Instant::now() + timeout;
+        let mut last = None;
         loop {
             if let Ok(resp) = reqwest::get(&url).await {
                 if let Ok(body) = resp.json::<serde_json::Value>().await {
-                    if body["connections"].as_u64().map(|c| c as usize) == Some(n) {
+                    last = body["connections"].as_u64().map(|c| c as usize);
+                    if last == Some(n) {
                         return;
                     }
                 }
             }
             if std::time::Instant::now() >= deadline {
-                panic!("Drawbridge connection count did not reach {n} within {timeout:?}");
+                panic!(
+                    "Drawbridge connection count did not reach {n} within {timeout:?} (last: {last:?})"
+                );
             }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
@@ -356,11 +363,6 @@ impl TestWorld {
                 .map(|(_, label)| label.map(|l| label_to_ws[l].clone()))
                 .collect();
 
-            // Advertise the first relay, the one `drawbridges.first()` inspects.
-            if let Some(label) = unique_labels.first() {
-                postern.set_drawbridge_url(&label_to_ws[label]);
-            }
-
             (dbs, Some(db_verify), endpoints)
         } else {
             let endpoints: Vec<Option<String>> = participants.iter().map(|_| None).collect();
@@ -409,7 +411,10 @@ impl TestWorld {
                 "--http".to_string(),
                 http_addr.clone(),
             ];
-            let _ = drawbridge_ws; // URL is discovered via describeServer; no CLI flag needed
+            if let Some(ws) = drawbridge_ws {
+                args.push("--drawbridge-url".to_string());
+                args.push(ws.to_string());
+            }
             if *kind == ParticipantKind::DartServer {
                 if let Some(ref lib) = dart_lib_path {
                     args.push("--lib-path".to_string());
@@ -521,6 +526,7 @@ impl TestWorld {
             drawbridges,
             db_verify_proxy,
             participants: HashMap::new(),
+            default_relay: drawbridge_ws_endpoints.iter().flatten().next().cloned(),
             moat_cli_bin,
             dart_server_bin,
             rust_lib_path: dart_lib_path,
@@ -648,6 +654,10 @@ impl TestWorld {
             "--http".to_string(),
             http_addr.clone(),
         ];
+        if let Some(ref relay) = self.default_relay {
+            args.push("--drawbridge-url".to_string());
+            args.push(relay.clone());
+        }
 
         let bin = match kind {
             ParticipantKind::RustCli => self.moat_cli_bin.clone(),

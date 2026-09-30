@@ -9,8 +9,9 @@ import 'debug_log.dart';
 /// No dart:ui dependency — VoidCallback defined here.
 typedef VoidCallback = void Function();
 
-/// Default Drawbridge relay URL.
-const defaultDrawbridgeUrl = 'wss://moat-drawbridge.fly.dev/ws';
+/// Drawbridge relay this build was made for, from
+/// `--dart-define=MOAT_DRAWBRIDGE_URL=...`. Empty means no relay.
+const buildDrawbridgeUrl = String.fromEnvironment('MOAT_DRAWBRIDGE_URL');
 
 /// Event received from own Drawbridge relay via WebSocket.
 class DrawbridgeNewEvent {

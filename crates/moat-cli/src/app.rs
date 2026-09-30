@@ -779,11 +779,13 @@ impl App {
 
         let (bg_tx, bg_rx) = mpsc::unbounded_channel();
 
-        // Load Drawbridge state, preferring CLI flag > credentials.txt > persisted state
-        let drawbridge_state = keys.load_drawbridge_state().unwrap_or_default();
+        // Drawbridge relay: CLI flag > credentials.txt > build-time relay
         let resolved_drawbridge_url = drawbridge_url
             .or(credentials_txt_drawbridge)
-            .or(drawbridge_state.own_url.clone());
+            .or(moat_atproto::BUILD_DRAWBRIDGE_URL.map(str::to_string));
+        if resolved_drawbridge_url.is_none() {
+            debug_log.log("drawbridge: no relay configured, push delivery is off");
+        }
 
         let drawbridge = DrawbridgeManager::new(bg_tx.clone());
 
@@ -2210,7 +2212,6 @@ impl App {
                     Ok(()) => {
                         self.debug_log
                             .log(&format!("drawbridge: connected to own relay at {}", url));
-                        self.save_drawbridge_state();
 
                         // Register all current tags on our own relay
                         self.send_all_watched_tags().await;
@@ -2934,15 +2935,6 @@ impl App {
                 }
             }
         });
-    }
-
-    /// Save Drawbridge state to disk.
-    fn save_drawbridge_state(&self) {
-        let state = self.drawbridge.export_state(&self.drawbridge_url);
-        if let Err(e) = self.keys.store_drawbridge_state(&state) {
-            self.debug_log
-                .log(&format!("drawbridge: failed to save state: {}", e));
-        }
     }
 
     /// Collect all watched tags and send to own Drawbridge.
@@ -4081,37 +4073,14 @@ impl App {
             self.resolve_conversation_handle(&conv);
         }
 
-        // Connect to own Drawbridge.
-        //
-        // URL resolution order:
-        //   1. Explicit --drawbridge-url override
-        //   2. PDS-advertised via com.atproto.server.describeServer
-        //   3. Hardcoded default (wss://moat-drawbridge.fly.dev/ws)
-        {
-            let url = if let Some(ref explicit) = self.drawbridge_url {
-                Some(explicit.clone())
-            } else if let Some(client) = &self.client {
-                client
-                    .describe_server_drawbridge_url(&self.pds_url.clone().unwrap_or_else(|| {
-                        moat_atproto::DEFAULT_PDS_URL.to_string()
-                    }))
-                    .await
-                    .or_else(|| Some(moat_atproto::DEFAULT_DRAWBRIDGE_URL.to_string()))
-            } else {
-                Some(moat_atproto::DEFAULT_DRAWBRIDGE_URL.to_string())
-            };
-
-            if let Some(url) = url {
-                // Persist the resolved URL so auto-login on restart can connect
-                // without repeating the describeServer discovery.
-                self.drawbridge_url = Some(url.clone());
-                if let Ok(sig_key) = self.keys.load_identity_key() {
-                    let _ = self.bg_tx.send(BgEvent::DrawbridgeConnectOwn {
-                        url,
-                        did: did.clone(),
-                        signature_key: sig_key,
-                    });
-                }
+        // Connect to own Drawbridge, if this build or run has one.
+        if let Some(url) = self.drawbridge_url.clone() {
+            if let Ok(sig_key) = self.keys.load_identity_key() {
+                let _ = self.bg_tx.send(BgEvent::DrawbridgeConnectOwn {
+                    url,
+                    did: did.clone(),
+                    signature_key: sig_key,
+                });
             }
         }
 

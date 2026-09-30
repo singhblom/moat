@@ -31,6 +31,7 @@ ROOT = os.path.abspath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), *[os.pardir] * 4))
 RUN_DIR = "/tmp/moat-dev-stack"
 PDS = "http://127.0.0.1:4000"
+RELAY = "ws://127.0.0.1:8080/ws"
 
 WORDS = """the quick brown fox jumps over a lazy dog while we talk about
 protocol design lunch plans the weather deployment timing test fixtures
@@ -78,7 +79,8 @@ class Device:
         log = open(f"{RUN_DIR}/{self.name}.log", "w")
         self.proc = subprocess.Popen(
             [f"{ROOT}/target/debug/moat", "-s", self.state_dir,
-             "--pds-url", self.pds, "--http", f"127.0.0.1:{self.port}"],
+             "--pds-url", self.pds, "--drawbridge-url", RELAY,
+             "--http", f"127.0.0.1:{self.port}"],
             stdout=log, stderr=subprocess.STDOUT,
         )
         wait_for(lambda: req("GET", f"{self.base}/status") is not None,
@@ -348,7 +350,7 @@ Devices left running:
   bob    http://127.0.0.1:{args.bob_port}   /tmp/moat-bob1
 
 Pair a third device against this history and watch sync at scale:
-  cargo run -p moat-cli -- -s /tmp/moat-bob2 --pds-url {args.pds}
+  cargo run -p moat-cli -- -s /tmp/moat-bob2 --pds-url {args.pds} --drawbridge-url {RELAY}
   (press 'p', then paste the code into Bob's Devices popup on :{args.bob_port}
    via POST /pair/confirm, then POST /pair/approve)""")
 

@@ -194,15 +194,18 @@ TextTheme _applyFonts(TextTheme base) {
   );
 }
 
-// Dev-only overrides for pointing the app at a local Postern/Drawbridge
-// instead of real bsky.social — e.g. for testing pairing in an Android
-// emulator (see `crates/moat-postern/src/bin/dev_server.rs`). Empty by
-// default, so a normal `flutter run` is unaffected. Set via:
-//   flutter run \
-//     --dart-define=MOAT_PDS_URL=http://10.0.2.2:4000 \
-//     --dart-define=MOAT_DRAWBRIDGE_URL=ws://10.0.2.2:8081/ws
+// Dev-only PDS override for pointing the app at a local Postern instead of
+// real bsky.social — e.g. for testing pairing in an Android emulator (see
+// `crates/moat-postern/src/bin/dev_server.rs`). Empty by default. Set via:
+//   flutter run --dart-define=MOAT_PDS_URL=http://10.0.2.2:4000
 const _devPdsUrl = String.fromEnvironment('MOAT_PDS_URL');
-const _devDrawbridgeUrl = String.fromEnvironment('MOAT_DRAWBRIDGE_URL');
+
+// A release build without a relay has no push, so fail its compile. Build
+// with `--dart-define-from-file=config/release.json`.
+const _isRelease = bool.fromEnvironment('dart.vm.product');
+// ignore: unused_element
+const _requireRelayInRelease =
+    _isRelease && buildDrawbridgeUrl == '' ? 1 ~/ 0 : 0;
 
 class MoatApp extends StatelessWidget {
   final DocumentBackend docBackend;
@@ -223,7 +226,6 @@ class MoatApp extends StatelessWidget {
     final authService = AuthService(
       atprotoClient: atprotoClient,
       secureStorage: secureStorage,
-      drawbridgeUrl: _devDrawbridgeUrl.isEmpty ? null : _devDrawbridgeUrl,
     );
     final authProvider = AuthProvider(service: authService)..init();
 

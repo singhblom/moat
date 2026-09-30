@@ -34,8 +34,7 @@ mechanical half rather than handing them a forty-step checklist.
 .claude/skills/local-test/scripts/dev-stack.sh up
 ```
 
-Postern on `:4000`, Drawbridge on `:8080` with the relay advertised via
-`describeServer`. Accounts `alice.postern.test` and `bob.postern.test`, any
+Postern on `:4000`, Drawbridge on `:8080` (`ws://127.0.0.1:8080/ws`). Accounts `alice.postern.test` and `bob.postern.test`, any
 password — Postern does not validate one. `down` stops it, `logs` tails both,
 `--help` prints the full API crib sheet.
 
@@ -53,15 +52,16 @@ Each device needs its own storage dir, or they share keys and behave as one.
 
 ```bash
 # TUI — what a human looks at
-cargo run -p moat-cli -- -s /tmp/moat-alice --pds-url http://127.0.0.1:4000
+cargo run -p moat-cli -- -s /tmp/moat-alice --pds-url http://127.0.0.1:4000 \
+  --drawbridge-url ws://127.0.0.1:8080/ws
 
 # headless — what an agent drives
 cargo run -p moat-cli -- -s /tmp/moat-alice --pds-url http://127.0.0.1:4000 \
-  --http 127.0.0.1:9101
+  --drawbridge-url ws://127.0.0.1:8080/ws --http 127.0.0.1:9101
 ```
 
-HTTP devices start logged out; log in explicitly. `--drawbridge-url` overrides
-relay discovery if needed. For Flutter and Android specifics see
+HTTP devices start logged out; log in explicitly. Without `--drawbridge-url` a
+device has no relay and polls only. For Flutter and Android specifics see
 `references/flutter.md`.
 
 ## 3. Generate history

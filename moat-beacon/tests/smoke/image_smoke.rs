@@ -60,11 +60,20 @@ async fn run_image_round_trip(alice_kind: ParticipantKind, bob_kind: Participant
         .expect("alice start conversation");
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    let stats = bob.poll().await.expect("bob welcome poll");
-    assert!(
-        stats.new_conversations > 0,
-        "Bob should receive Welcome (got {stats:?})"
-    );
+    // A push-triggered poll may take the Welcome before this one does, so
+    // wait for the conversation rather than for this poll's count.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        bob.poll().await.expect("bob welcome poll");
+        if !bob.list_conversations().await.expect("bob conversations").is_empty() {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "Bob should receive Welcome"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
 
     // Alice sends a PNG image.
     let png = make_test_png();
@@ -73,28 +82,21 @@ async fn run_image_round_trip(alice_kind: ParticipantKind, bob_kind: Participant
         .await
         .expect("alice send image");
 
-    // The blob upload and event publish finish asynchronously; poll until
-    // the message lands.
+    // The blob upload and event publish finish asynchronously; wait until the
+    // message shows, whichever poll takes it.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    loop {
-        let stats = bob.poll().await.expect("bob image poll");
-        if stats.new_messages > 0 {
-            break;
+    let img_msg = loop {
+        bob.poll().await.expect("bob image poll");
+        let bob_msgs = bob.get_messages(&group_id).await.expect("bob get messages");
+        if let Some(m) = bob_msgs.into_iter().find(|m| m.content.starts_with("[image")) {
+            break m;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "Bob should receive image message (last poll {stats:?})"
+            "Bob should receive an image message with '[image' content preview"
         );
         tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-
-    // Verify Bob's message list contains an image message with attachment metadata.
-    let bob_msgs = bob.get_messages(&group_id).await.expect("bob get messages");
-
-    let img_msg = bob_msgs
-        .iter()
-        .find(|m| m.content.starts_with("[image"))
-        .expect("Bob should have a message with '[image' content preview");
+    };
 
     let attachment = img_msg
         .attachment
