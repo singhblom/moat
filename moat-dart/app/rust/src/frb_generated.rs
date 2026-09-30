@@ -1885,7 +1885,6 @@ fn wire__crate__api__simple__PairChannelHandle_on_ring_msg_impl(
             >>::sse_decode(&mut deserializer);
             let api_payload = <Vec<u8>>::sse_decode(&mut deserializer);
             let api_sender_name = <String>::sse_decode(&mut deserializer);
-            let api_sender_drawbridge_url = <String>::sse_decode(&mut deserializer);
             let api_own_device_id = <Vec<u8>>::sse_decode(&mut deserializer);
             let api_now_ms = <i64>::sse_decode(&mut deserializer);
             deserializer.end();
@@ -1908,7 +1907,6 @@ fn wire__crate__api__simple__PairChannelHandle_on_ring_msg_impl(
                     &*api_that_guard,
                     api_payload,
                     api_sender_name,
-                    api_sender_drawbridge_url,
                     api_own_device_id,
                     api_now_ms,
                 )?;

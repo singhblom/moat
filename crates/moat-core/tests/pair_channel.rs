@@ -416,10 +416,7 @@ impl World {
         let sender = decrypted.sender.unwrap().device_name;
         let own = *self.devices[to].mls.device_id();
         let now = self.now_ms;
-        let drawbridge_url = self.devices[from].drawbridge_url;
-        let cmds = self.devices[to]
-            .driver
-            .on_ring_msg(msg, sender, drawbridge(drawbridge_url), &own, now);
+        let cmds = self.devices[to].driver.on_ring_msg(msg, sender, &own, now);
         self.apply(to, cmds);
         self.run();
     }

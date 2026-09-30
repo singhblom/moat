@@ -2,13 +2,16 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use crate::{Error, Result};
 
 /// A Drawbridge URL in normal form: `ws://` or `wss://`, a lowercase host
 /// without the scheme's default port, and a path. [`parse`](Self::parse) is
-/// the only way to make one, so two values are equal exactly when they name
-/// the same Drawbridge.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// the only way to make one, deserializing included, so two values are
+/// equal exactly when they name the same Drawbridge.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct DrawbridgeUrl(String);
 
 impl DrawbridgeUrl {
@@ -41,6 +44,20 @@ impl DrawbridgeUrl {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl TryFrom<String> for DrawbridgeUrl {
+    type Error = Error;
+
+    fn try_from(url: String) -> Result<Self> {
+        Self::parse(&url)
+    }
+}
+
+impl From<DrawbridgeUrl> for String {
+    fn from(url: DrawbridgeUrl) -> Self {
+        url.0
     }
 }
 

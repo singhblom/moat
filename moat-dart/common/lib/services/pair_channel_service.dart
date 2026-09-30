@@ -211,31 +211,14 @@ class PairChannelService {
 
   /// A sibling's `ring.msg`. [deviceName] must come from the sender's MLS
   /// leaf credential, not from the payload.
-  Future<void> onRingMessage(Uint8List payload, String deviceName, Uint8List deviceId) =>
+  Future<void> onRingMessage(Uint8List payload, String deviceName, Uint8List _) =>
       _run(() async {
         final session = _auth.moatSession;
-        final did = _auth.did;
-        if (session == null || did == null) return;
-        // A sibling's rendezvous is on its own Drawbridge, which its
-        // `drawbridgeConfig` record names.
-        final String? drawbridgeUrl;
-        try {
-          drawbridgeUrl = await _auth.atprotoClient
-              .fetchDrawbridgeUrlForDevice(did, _bytesToHex(deviceId));
-        } catch (e) {
-          moatLog('PairChannelService: reading $deviceName\'s Drawbridge failed: $e');
-          return;
-        }
-        if (drawbridgeUrl == null) {
-          moatLog('PairChannelService: ignoring a ring message from $deviceName: '
-              'no Drawbridge record for that device');
-          return;
-        }
+        if (session == null) return;
         try {
           await _apply(_driver.onRingMsg(
             payload: payload,
             senderName: deviceName,
-            senderDrawbridgeUrl: drawbridgeUrl,
             ownDeviceId: session.deviceId(),
             nowMs: _now(),
           ));
@@ -384,9 +367,6 @@ class PairChannelService {
       }
     });
   }
-
-  static String _bytesToHex(Uint8List bytes) =>
-      bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
   Future<void> _publishRingEvent(Uint8List tag, Uint8List ciphertext) async {
     try {

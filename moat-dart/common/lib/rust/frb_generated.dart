@@ -229,7 +229,6 @@ abstract class RustLibApi extends BaseApi {
       {required PairChannelHandle that,
       required List<int> payload,
       required String senderName,
-      required String senderDrawbridgeUrl,
       required List<int> ownDeviceId,
       required PlatformInt64 nowMs});
 
@@ -1492,7 +1491,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       {required PairChannelHandle that,
       required List<int> payload,
       required String senderName,
-      required String senderDrawbridgeUrl,
       required List<int> ownDeviceId,
       required PlatformInt64 nowMs}) {
     return handler.executeSync(SyncTask(
@@ -1502,7 +1500,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that, serializer);
         sse_encode_list_prim_u_8_loose(payload, serializer);
         sse_encode_String(senderName, serializer);
-        sse_encode_String(senderDrawbridgeUrl, serializer);
         sse_encode_list_prim_u_8_loose(ownDeviceId, serializer);
         sse_encode_i_64(nowMs, serializer);
         return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 36)!;
@@ -1512,14 +1509,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeErrorData: sse_decode_String,
       ),
       constMeta: kCrateApiSimplePairChannelHandleOnRingMsgConstMeta,
-      argValues: [
-        that,
-        payload,
-        senderName,
-        senderDrawbridgeUrl,
-        ownDeviceId,
-        nowMs
-      ],
+      argValues: [that, payload, senderName, ownDeviceId, nowMs],
       apiImpl: this,
     ));
   }
@@ -1527,14 +1517,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiSimplePairChannelHandleOnRingMsgConstMeta =>
       const TaskConstMeta(
         debugName: "PairChannelHandle_on_ring_msg",
-        argNames: [
-          "that",
-          "payload",
-          "senderName",
-          "senderDrawbridgeUrl",
-          "ownDeviceId",
-          "nowMs"
-        ],
+        argNames: ["that", "payload", "senderName", "ownDeviceId", "nowMs"],
       );
 
   @override
@@ -6128,19 +6111,16 @@ class PairChannelHandleImpl extends RustOpaque implements PairChannelHandle {
           that: this, session: session, ring: ring, nowMs: nowMs, token: token);
 
   /// A sibling's `ring.msg` payload. `sender_name` must come from the
-  /// sender's MLS leaf credential, `sender_drawbridge_url` from the sender's
-  /// `drawbridgeConfig` record.
+  /// sender's MLS leaf credential.
   List<PairChannelCommandDto> onRingMsg(
           {required List<int> payload,
           required String senderName,
-          required String senderDrawbridgeUrl,
           required List<int> ownDeviceId,
           required PlatformInt64 nowMs}) =>
       RustLib.instance.api.crateApiSimplePairChannelHandleOnRingMsg(
           that: this,
           payload: payload,
           senderName: senderName,
-          senderDrawbridgeUrl: senderDrawbridgeUrl,
           ownDeviceId: ownDeviceId,
           nowMs: nowMs);
 

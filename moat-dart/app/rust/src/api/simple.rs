@@ -1834,26 +1834,18 @@ impl PairChannelHandle {
     }
 
     /// A sibling's `ring.msg` payload. `sender_name` must come from the
-    /// sender's MLS leaf credential, `sender_drawbridge_url` from the sender's
-    /// `drawbridgeConfig` record.
+    /// sender's MLS leaf credential.
     #[frb(sync)]
     pub fn on_ring_msg(
         &self,
         payload: Vec<u8>,
         sender_name: String,
-        sender_drawbridge_url: String,
         own_device_id: Vec<u8>,
         now_ms: i64,
     ) -> Result<Vec<PairChannelCommandDto>, String> {
         let msg = moat_core::decode_ring_msg(&payload).map_err(|e| e.to_string())?;
         let own = device_id_from(&own_device_id)?;
-        let sender_drawbridge_url = drawbridge_url_from(&sender_drawbridge_url)?;
-        Ok(commands_dto(
-            self.inner
-                .lock()
-                .unwrap()
-                .on_ring_msg(msg, sender_name, sender_drawbridge_url, &own, now_ms),
-        ))
+        Ok(commands_dto(self.inner.lock().unwrap().on_ring_msg(msg, sender_name, &own, now_ms)))
     }
 
     #[frb(sync)]

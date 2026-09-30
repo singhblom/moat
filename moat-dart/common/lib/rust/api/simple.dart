@@ -289,12 +289,10 @@ abstract class PairChannelHandle implements RustOpaqueInterface {
       required List<int> token});
 
   /// A sibling's `ring.msg` payload. `sender_name` must come from the
-  /// sender's MLS leaf credential, `sender_drawbridge_url` from the sender's
-  /// `drawbridgeConfig` record.
+  /// sender's MLS leaf credential.
   List<PairChannelCommandDto> onRingMsg(
       {required List<int> payload,
       required String senderName,
-      required String senderDrawbridgeUrl,
       required List<int> ownDeviceId,
       required PlatformInt64 nowMs});
 

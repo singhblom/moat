@@ -9,8 +9,12 @@ fn requested() -> SyncRequestSession {
     SyncRequestSession::request(TOKEN, SECRET, T0)
 }
 
+fn drawbridge() -> DrawbridgeUrl {
+    DrawbridgeUrl::parse("wss://drawbridge.example.com/ws").unwrap()
+}
+
 fn received() -> SyncRequestSession {
-    SyncRequestSession::received(TOKEN, SECRET, "laptop".into(), T0)
+    SyncRequestSession::received(TOKEN, SECRET, "laptop".into(), drawbridge(), T0)
 }
 
 fn failed(reason: SyncFailure) -> SyncRequestUiState {
@@ -51,20 +55,40 @@ fn ring_msgs_roundtrip() {
             token: TOKEN,
             secret: SECRET,
             target_device_id: None,
+            drawbridge_url: drawbridge(),
         },
         RingMsg::SyncRequest {
             token: TOKEN,
             secret: SECRET,
             target_device_id: Some([9; 16]),
+            drawbridge_url: drawbridge(),
         },
         RingMsg::SyncOffer {
             token: TOKEN,
             secret: SECRET,
             target_device_id: [3; 16],
+            drawbridge_url: drawbridge(),
         },
     ] {
         assert_eq!(decode_ring_msg(&encode_ring_msg(&msg)).unwrap(), msg);
     }
+}
+
+/// A ring message names its Drawbridge in normal form; one that names
+/// something else does not decode, so no host has to check it.
+#[test]
+fn a_ring_msg_naming_no_usable_drawbridge_is_rejected() {
+    let msg = RingMsg::SyncRequest {
+        token: TOKEN,
+        secret: SECRET,
+        target_device_id: None,
+        drawbridge_url: drawbridge(),
+    };
+    let json = String::from_utf8(encode_ring_msg(&msg)).unwrap();
+    let bad = json.replace("wss://drawbridge.example.com/ws", "https://drawbridge.example.com");
+    assert!(decode_ring_msg(bad.as_bytes()).is_err());
+    let missing = json.replace(r#","drawbridge_url":"wss://drawbridge.example.com/ws""#, "");
+    assert!(decode_ring_msg(missing.as_bytes()).is_err());
 }
 
 /// A 15-byte token must not truncate or pad into a valid message.
@@ -89,7 +113,7 @@ fn a_declined_request_cannot_be_accepted() {
 #[test]
 fn accepting_twice_is_refused() {
     let mut session = received();
-    session.accept().unwrap();
+    assert_eq!(session.accept().unwrap(), (TOKEN, drawbridge()));
     assert!(session.accept().is_err());
 }
 

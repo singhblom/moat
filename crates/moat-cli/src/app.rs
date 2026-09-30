@@ -476,13 +476,6 @@ pub(crate) enum BgEvent {
     /// The pair channel has been idle for its grace period: close the
     /// rendezvous connection unless a new rendezvous needs it.
     RendezvousIdle,
-    /// A sibling's ring message, with the relay found for its sender.
-    RingMsgResolved {
-        msg: moat_core::RingMsg,
-        sender_name: String,
-        /// `None` when the sender's record could not be read.
-        drawbridge_url: Option<DrawbridgeUrl>,
-    },
     /// Existing device, right after admitting a new one: fan the newcomer
     /// into every pre-existing user conversation now rather than on the
     /// next ring tick.
@@ -550,7 +543,6 @@ impl BgEvent {
             | BgEvent::PairPending
             | BgEvent::RendezvousDisconnected { .. }
             | BgEvent::RendezvousIdle
-            | BgEvent::RingMsgResolved { .. }
             | BgEvent::PairReady { .. }
             | BgEvent::PairClosed { .. }
             | BgEvent::PairCloseOverdue { .. }
@@ -2076,19 +2068,6 @@ impl App {
                 if !live.is_some_and(|url| self.drawbridge.has_rendezvous_connection(url)) {
                     self.drawbridge.close_rendezvous();
                 }
-            }
-
-            BgEvent::RingMsgResolved { msg, sender_name, drawbridge_url } => {
-                let Some(drawbridge_url) = drawbridge_url else {
-                    self.debug_log.log(&format!(
-                        "sync: ignoring a ring message from {sender_name}: no usable Drawbridge record for that device"
-                    ));
-                    return;
-                };
-                let own = *self.mls.device_id();
-                let now_ms = chrono::Utc::now().timestamp_millis();
-                let cmds = self.pair_channel.on_ring_msg(msg, sender_name, drawbridge_url, &own, now_ms);
-                self.apply_pair_commands(cmds);
             }
 
             BgEvent::PairClosed { session_token, reason, via_drawbridge } => {
@@ -3875,26 +3854,12 @@ impl App {
                         } else {
                             match moat_core::decode_ring_msg(&decrypted.event.payload) {
                                 Ok(msg) => {
-                                    // A sibling's rendezvous is on its own relay, which
-                                    // its `drawbridgeConfig` record names.
-                                    let sender_device = decrypted.sender.as_ref().map(|s| hex::encode(&s.device_id));
-                                    if let (Some(client), Some(device_hex)) = (self.client.clone(), sender_device) {
-                                        let did = my_did.to_string();
-                                        let tx = self.bg_tx.clone();
-                                        tokio::spawn(async move {
-                                            let drawbridge_url = client
-                                                .fetch_drawbridge_url_for_device(&did, &device_hex)
-                                                .await
-                                                .ok()
-                                                .flatten()
-                                                .and_then(|url| DrawbridgeUrl::parse(&url).ok());
-                                            let _ = tx.send(BgEvent::RingMsgResolved {
-                                                msg,
-                                                sender_name,
-                                                drawbridge_url,
-                                            });
-                                        });
-                                    }
+                                    let own = *self.mls.device_id();
+                                    let now_ms = chrono::Utc::now().timestamp_millis();
+                                    let cmds = self
+                                        .pair_channel
+                                        .on_ring_msg(msg, sender_name, &own, now_ms);
+                                    self.apply_pair_commands(cmds);
                                 }
                                 Err(e) => self
                                     .debug_log

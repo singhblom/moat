@@ -488,7 +488,7 @@ The code itself carries **no DID and no Drawbridge URL**. Both devices already k
 Devices of one user may sit on different Drawbridges, and a device cannot choose another (its Drawbridge is built into the app). So every rendezvous happens on one named Drawbridge: **the one the device that opened it sits on**. The other device goes there, whichever Drawbridge is its own.
 
 - **Pairing.** The new device shows the code and opens the rendezvous, so its Drawbridge is the one named. The QR form carries it: `moat-pair:<code>?drawbridge=<percent-encoded url>`. For manual entry the new device shows its Drawbridge URL above the code, and the existing device types both. The URL field starts out as the existing device's own Drawbridge: devices from one distribution share one, so the common case needs only the code. The URL in a `moat-pair:` URI wins over a typed one.
-- **Sync.** A `sync_request` or `sync_offer` names no Drawbridge. The sender's is the one in the `social.moat.drawbridgeConfig` record whose rkey is the sender's device id, which the MLS leaf credential of the ring message already establishes. The receiving device reads that record from its own PDS repo before it prompts or joins; a message from a device with no record is ignored.
+- **Sync.** A `sync_request` or `sync_offer` names the sender's Drawbridge in its `drawbridge_url`: the Drawbridge the sender registered the token with, known for certain only there. The field is encrypted and authenticated with the rest of the ring message, and a message whose `drawbridge_url` is missing or not a Drawbridge URL does not decode. The `drawbridgeConfig` records are not consulted: they say where a user's devices listen, for fan-out, not where a given rendezvous is.
 - **Form.** A Drawbridge URL is written `ws://` or `wss://`, a lowercase host without the scheme's default port, and a path; it has no user info, query or fragment. A bare host is read as `wss://<host>/ws` and a URL with no path as `<url>/ws`. Every Drawbridge URL a device dials, signs, publishes or compares is in this form, read so from configuration, typing, a QR code or a record, so two spellings of one Drawbridge are equal strings.
 - **Unreachable.** A device that cannot open an authenticated main WS to the named Drawbridge fails the pairing or sync, naming the Drawbridge and why (a sync fails with `drawbridge_unreachable`); the user can start again, with the URL corrected if it was typed. A rendezvous connection that drops after authenticating is reopened once, and failing to reopen it fails the same way. A device waiting on its own Drawbridge does not fail: its own connection reconnects on its own schedule and resends.
 
@@ -582,7 +582,7 @@ the deepest history: the person holding the devices decides.
 1. The device that wants history mints a 16-byte rendezvous token and a
    16-byte channel secret, registers the token with its own Drawbridge
    (`pair_offer`), and publishes
-   `RingMsg::SyncRequest { token, secret, target_device_id }` as a `ring.msg`
+   `RingMsg::SyncRequest { token, secret, target_device_id, drawbridge_url }` as a `ring.msg`
    event on the device ring. Siblings watch the ring's tags with
    Drawbridge, so an online one sees it at once rather than on its next
    poll. `target_device_id` names one sibling when the user has picked a
@@ -591,7 +591,7 @@ the deepest history: the person holding the devices decides.
    business.
 2. Every sibling that decrypts it prompts its user, naming the requesting
    device **from its MLS leaf credential** — the payload carries only the
-   token and secret. **No host auto-accepts**, matching pairing's rule.
+   token, the secret and the Drawbridge. **No host auto-accepts**, matching pairing's rule.
 3. Whichever sibling the user approves calls `pair_join` with the token,
    on the requester's Drawbridge (see [Named Drawbridge](#named-drawbridge)).
    Both ends derive the [channel keys](#channel-crypto) from the secret and
@@ -658,7 +658,7 @@ recourse is to pair again, which is a first-class affordance.
 A request asks the user to walk to the device that holds the history and
 approve there. That is the wrong way round whenever the device already in
 their hands is the one with the history.
-`RingMsg::SyncOffer { token, secret, target_device_id }` is the mirror: the user
+`RingMsg::SyncOffer { token, secret, target_device_id, drawbridge_url }` is the mirror: the user
 picks another device to send to, the holder opens the rendezvous, and the
 recipient joins it.
 

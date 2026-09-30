@@ -183,8 +183,6 @@ pub struct PairChannelDriver {
     transfer: Option<Transfer>,
     /// Tag of our own published sync request or offer.
     published_tag: Option<[u8; 16]>,
-    /// The Drawbridge of the sibling whose request awaits a decision.
-    requester_drawbridge_url: Option<DrawbridgeUrl>,
 }
 
 impl PairChannelDriver {
@@ -395,8 +393,8 @@ impl PairChannelDriver {
 
     /// Ask the user's other devices for history. `target` names one
     /// sibling; `None` asks them all. `key_bundle` seals the request to the
-    /// ring. `drawbridge_url` is this device's Drawbridge, where the rendezvous happens;
-    /// siblings find it from this device's `drawbridgeConfig` record.
+    /// ring. `drawbridge_url` is this device's Drawbridge, where the rendezvous
+    /// happens; the ring message names it.
     pub fn sync_request(
         &mut self,
         env: &mut PairEnv<'_>,
@@ -410,6 +408,7 @@ impl PairChannelDriver {
             token,
             secret,
             target_device_id: target,
+            drawbridge_url: drawbridge_url.clone(),
         };
         let publish = seal_ring_msg(env, key_bundle, &msg)?;
         let mut cmds = self.supersede();
@@ -438,6 +437,7 @@ impl PairChannelDriver {
             token,
             secret,
             target_device_id: target,
+            drawbridge_url: drawbridge_url.clone(),
         };
         let publish = seal_ring_msg(env, key_bundle, &msg)?;
         let mut cmds = self.supersede();
@@ -452,10 +452,7 @@ impl PairChannelDriver {
             .sync_request
             .as_mut()
             .ok_or_else(|| Error::SyncRequestProtocol("no sync request to accept".to_string()))?;
-        let token = session.accept()?;
-        let drawbridge_url = self.requester_drawbridge_url.take().ok_or_else(|| {
-            Error::SyncRequestProtocol("the requesting device's Drawbridge is unknown".to_string())
-        })?;
+        let (token, drawbridge_url) = session.accept()?;
         let mut cmds = Vec::new();
         self.drop_channel(&mut cmds);
         self.pairing = None;
@@ -477,14 +474,11 @@ impl PairChannelDriver {
     // ── Ring messages ────────────────────────────────────────────────────────
 
     /// A sibling's `ring.msg`. `sender_name` must come from the sender's
-    /// MLS leaf credential, and `sender_drawbridge_url` from the sender's
-    /// `drawbridgeConfig` record, whose rkey is the sender's device id. A
-    /// host that cannot find or read that record drops the message instead.
+    /// MLS leaf credential.
     pub fn on_ring_msg(
         &mut self,
         msg: RingMsg,
         sender_name: String,
-        sender_drawbridge_url: DrawbridgeUrl,
         own_device_id: &DeviceId,
         now_ms: i64,
     ) -> Vec<PairChannelCommand> {
@@ -493,6 +487,7 @@ impl PairChannelDriver {
                 token,
                 secret,
                 target_device_id,
+                drawbridge_url,
             } => {
                 if target_device_id.is_some_and(|t| &t != own_device_id) {
                     return vec![Cmd::Log(
@@ -508,9 +503,9 @@ impl PairChannelDriver {
                     token,
                     secret,
                     sender_name.clone(),
+                    drawbridge_url,
                     now_ms,
                 ));
-                self.requester_drawbridge_url = Some(sender_drawbridge_url);
                 vec![Cmd::Log(format!(
                     "sync: {sender_name} is asking for history"
                 ))]
@@ -519,6 +514,7 @@ impl PairChannelDriver {
                 token,
                 secret,
                 target_device_id,
+                drawbridge_url,
             } => {
                 if &target_device_id != own_device_id {
                     return vec![Cmd::Log(
@@ -534,7 +530,7 @@ impl PairChannelDriver {
                 let mut cmds = vec![Cmd::Log(format!(
                     "sync: accepting {sender_name}'s offer of history"
                 ))];
-                self.open_rendezvous(sender_drawbridge_url, token, false, Owner::SyncRequest, &mut cmds);
+                self.open_rendezvous(drawbridge_url, token, false, Owner::SyncRequest, &mut cmds);
                 cmds
             }
         }
@@ -830,7 +826,6 @@ impl PairChannelDriver {
         self.drop_channel(&mut cmds);
         self.pairing = None;
         self.sync_request = None;
-        self.requester_drawbridge_url = None;
         cmds
     }
 
