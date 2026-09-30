@@ -32,6 +32,11 @@ type PairConn struct {
 	conn *websocket.Conn
 	send chan []byte
 	rate rateBucket
+
+	// sendLock orders enqueue against closeSend, so a frame is never sent on a
+	// closed channel.
+	sendLock   sync.Mutex
+	sendClosed bool
 }
 
 // rateBucket is a simple per-second token bucket for rate limiting.
@@ -63,10 +68,10 @@ type PairSession struct {
 	Offerer   *Client // main-WS client that sent pair_offer
 	Joiner    *Client // main-WS client that sent pair_join; nil until joined
 
-	mu          sync.Mutex
+	pairLock    sync.Mutex
 	A           *PairConn // first pair-WS attacher
 	B           *PairConn // second pair-WS attacher
-	attachCount int       // 0, 1, or 2; protected by mu
+	attachCount int       // 0, 1, or 2; protected by pairLock
 	peerForA    chan *PairConn // buffered(1); B sends itself; nil signals termination
 
 	BytesAB atomic.Int64 // bytes forwarded A→B
@@ -77,7 +82,7 @@ type PairSession struct {
 
 // PairRegistry manages active pairing sessions keyed by token.
 type PairRegistry struct {
-	mu       sync.Mutex
+	pairLock sync.Mutex
 	sessions map[string]*PairSession
 
 	// Override limits for testing (zero means use package defaults).
@@ -112,8 +117,8 @@ func (pr *PairRegistry) effectiveConnBPS() int64 {
 
 // Offer registers a new pairing session for the given token and offerer.
 func (pr *PairRegistry) Offer(c *Client, token string) error {
-	pr.mu.Lock()
-	defer pr.mu.Unlock()
+	pr.pairLock.Lock()
+	defer pr.pairLock.Unlock()
 	if _, exists := pr.sessions[token]; exists {
 		return errDuplicateToken
 	}
@@ -130,14 +135,14 @@ func (pr *PairRegistry) Offer(c *Client, token string) error {
 
 // Join records the joining client for the session identified by token.
 func (pr *PairRegistry) Join(c *Client, token string) (*PairSession, error) {
-	pr.mu.Lock()
-	defer pr.mu.Unlock()
+	pr.pairLock.Lock()
+	defer pr.pairLock.Unlock()
 	sess, ok := pr.sessions[token]
 	if !ok {
 		return nil, errTokenNotFound
 	}
-	sess.mu.Lock()
-	defer sess.mu.Unlock()
+	sess.pairLock.Lock()
+	defer sess.pairLock.Unlock()
 	if sess.Joiner != nil {
 		return nil, errAlreadyJoined
 	}
@@ -151,20 +156,20 @@ func (pr *PairRegistry) Join(c *Client, token string) (*PairSession, error) {
 // the session TTL expires. The second caller (n==2) stores itself as B, signals
 // A via peerForA, and returns A as its peer. Both return (peer, sess, nil).
 func (pr *PairRegistry) Attach(pc *PairConn, token string) (*PairConn, *PairSession, error) {
-	pr.mu.Lock()
+	pr.pairLock.Lock()
 	sess, ok := pr.sessions[token]
 	if !ok {
-		pr.mu.Unlock()
+		pr.pairLock.Unlock()
 		return nil, nil, errTokenNotFound
 	}
 
-	sess.mu.Lock()
+	sess.pairLock.Lock()
 	sess.attachCount++
 	n := sess.attachCount
 	if n > 2 {
 		sess.attachCount--
-		sess.mu.Unlock()
-		pr.mu.Unlock()
+		sess.pairLock.Unlock()
+		pr.pairLock.Unlock()
 		return nil, nil, errAlreadyAttached
 	}
 
@@ -172,8 +177,8 @@ func (pr *PairRegistry) Attach(pc *PairConn, token string) (*PairConn, *PairSess
 		sess.A = pc
 		peerCh := sess.peerForA
 		remaining := pairSessionTTL - time.Since(sess.CreatedAt)
-		sess.mu.Unlock()
-		pr.mu.Unlock()
+		sess.pairLock.Unlock()
+		pr.pairLock.Unlock()
 
 		select {
 		case peer, ok := <-peerCh:
@@ -191,47 +196,61 @@ func (pr *PairRegistry) Attach(pc *PairConn, token string) (*PairConn, *PairSess
 	sess.B = pc
 	peerA := sess.A
 	peerCh := sess.peerForA
-	sess.mu.Unlock()
-	pr.mu.Unlock()
+	sess.pairLock.Unlock()
+	pr.pairLock.Unlock()
 
 	peerCh <- pc // buffered(1), will not block
 	return peerA, sess, nil
 }
 
-// terminateSession removes a session from the registry by token and terminates it.
-// Safe to call multiple times; only the first call has effect.
-func (pr *PairRegistry) terminateSession(token, reason string) {
-	pr.mu.Lock()
+// terminateSession removes a session from the registry by token and terminates
+// it. Safe to call multiple times; only the first call has effect. See
+// terminate for drain.
+func (pr *PairRegistry) terminateSession(token, reason string, drain bool) {
+	pr.pairLock.Lock()
 	sess, ok := pr.sessions[token]
 	if !ok {
-		pr.mu.Unlock()
+		pr.pairLock.Unlock()
 		return
 	}
 	delete(pr.sessions, token)
-	pr.mu.Unlock()
-	pr.terminate(sess, reason)
+	pr.pairLock.Unlock()
+	pr.terminate(sess, reason, drain)
 }
 
 // onMainWSDisconnect cancels pending pairing sessions where c is the offerer or
 // joiner and the pair WS has not yet been established.
+//
+// Skips fully-attached sessions (attachCount == 2): bulk transfer runs on
+// the separate /pair socket precisely so a main-WS blip can't abort a
+// minutes-long history sync. A peer that really left still gets cleaned up
+// when its /pair socket closes (servePairWS → terminateSession), with
+// cleanupExpired as the TTL backstop.
 func (pr *PairRegistry) onMainWSDisconnect(c *Client) {
-	pr.mu.Lock()
+	pr.pairLock.Lock()
 	var victims []*PairSession
 	for token, sess := range pr.sessions {
-		if sess.Offerer == c || sess.Joiner == c {
-			delete(pr.sessions, token)
-			victims = append(victims, sess)
+		if sess.Offerer != c && sess.Joiner != c {
+			continue
 		}
+		sess.pairLock.Lock()
+		fullyAttached := sess.attachCount == 2
+		sess.pairLock.Unlock()
+		if fullyAttached {
+			continue
+		}
+		delete(pr.sessions, token)
+		victims = append(victims, sess)
 	}
-	pr.mu.Unlock()
+	pr.pairLock.Unlock()
 	for _, sess := range victims {
-		pr.terminate(sess, "peer_gone")
+		pr.terminate(sess, "peer_gone", false)
 	}
 }
 
 // cleanupExpired removes sessions that have exceeded pairSessionTTL.
 func (pr *PairRegistry) cleanupExpired() {
-	pr.mu.Lock()
+	pr.pairLock.Lock()
 	var expired []*PairSession
 	now := time.Now()
 	for token, sess := range pr.sessions {
@@ -240,14 +259,18 @@ func (pr *PairRegistry) cleanupExpired() {
 			expired = append(expired, sess)
 		}
 	}
-	pr.mu.Unlock()
+	pr.pairLock.Unlock()
 	for _, sess := range expired {
 		pr.metricTimeouts.Add(1)
-		pr.terminate(sess, "ttl_expired")
+		pr.terminate(sess, "ttl_expired", false)
 	}
 }
 
-func (pr *PairRegistry) terminate(sess *PairSession, reason string) {
+// terminate closes a session exactly once. With drain, each pair socket is
+// closed by its write pump after the frames already queued for it are written
+// — the last frame before a close is often the one that confirms a transfer;
+// without, sockets are closed at once.
+func (pr *PairRegistry) terminate(sess *PairSession, reason string, drain bool) {
 	if !sess.closed.CompareAndSwap(false, true) {
 		return
 	}
@@ -255,11 +278,11 @@ func (pr *PairRegistry) terminate(sess *PairSession, reason string) {
 	pr.metricBytes.Add(sess.BytesAB.Load() + sess.BytesBA.Load())
 
 	// Signal any goroutine blocked in Attach waiting for a peer.
-	sess.mu.Lock()
+	sess.pairLock.Lock()
 	n := sess.attachCount
 	peerCh := sess.peerForA
 	a, b := sess.A, sess.B
-	sess.mu.Unlock()
+	sess.pairLock.Unlock()
 
 	if n < 2 {
 		select {
@@ -269,7 +292,7 @@ func (pr *PairRegistry) terminate(sess *PairSession, reason string) {
 	}
 
 	// Notify main-WS clients.
-	msg := PairClosedMsg{Type: "pair_closed", Reason: reason}
+	msg := PairClosedMsg{Type: "pair_closed", SessionToken: sess.Token, Reason: reason}
 	if sess.Offerer != nil {
 		sess.Offerer.sendMsg(msg)
 	}
@@ -278,24 +301,43 @@ func (pr *PairRegistry) terminate(sess *PairSession, reason string) {
 	}
 
 	// Stop pair-WS write pumps and close underlying connections.
-	if a != nil {
-		closePairSend(a.send)
-		a.conn.Close()
-	}
-	if b != nil {
-		closePairSend(b.send)
-		b.conn.Close()
+	for _, pc := range []*PairConn{a, b} {
+		if pc == nil {
+			continue
+		}
+		pc.closeSend()
+		if !drain {
+			pc.conn.Close()
+		}
 	}
 }
 
-// closePairSend closes ch exactly once, ignoring any double-close panic.
-func closePairSend(ch chan []byte) {
-	defer func() { recover() }()
-	close(ch)
+// enqueue queues data for the pair socket, dropping it if the buffer is full
+// or the session has ended.
+func (pc *PairConn) enqueue(data []byte) {
+	pc.sendLock.Lock()
+	defer pc.sendLock.Unlock()
+	if pc.sendClosed {
+		return
+	}
+	select {
+	case pc.send <- data:
+	default:
+	}
+}
+
+// closeSend ends the outbound queue; the write pump drains it and exits.
+func (pc *PairConn) closeSend() {
+	pc.sendLock.Lock()
+	defer pc.sendLock.Unlock()
+	if !pc.sendClosed {
+		pc.sendClosed = true
+		close(pc.send)
+	}
 }
 
 // runPairWritePump drains pc.send and writes each payload as a binary WebSocket
-// frame. Exits when the send channel is closed.
+// frame. When the send channel is closed it ends the socket with a normal close.
 func runPairWritePump(pc *PairConn) {
 	defer pc.conn.Close()
 	for data := range pc.send {
@@ -304,13 +346,16 @@ func runPairWritePump(pc *PairConn) {
 			return
 		}
 	}
+	pc.conn.SetWriteDeadline(time.Now().Add(writeWait))
+	pc.conn.WriteMessage(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 }
 
-// runPairForwarder reads binary frames from pc and forwards them to peerSend.
+// runPairForwarder reads binary frames from pc and forwards them to peer.
 // direction: 0 = A→B (updates sess.BytesAB), 1 = B→A (updates sess.BytesBA).
 // onByteCap is called when the per-connection rate limit or per-session byte cap
 // is exceeded; the caller is then responsible for terminating the session.
-func runPairForwarder(pc *PairConn, peerSend chan []byte, sess *PairSession, reg *PairRegistry, direction int, onByteCap func()) {
+func runPairForwarder(pc *PairConn, peer *PairConn, sess *PairSession, reg *PairRegistry, direction int, onByteCap func()) {
 	defer pc.conn.Close()
 	pc.conn.SetReadLimit(maxPairFrameSize)
 
@@ -342,10 +387,6 @@ func runPairForwarder(pc *PairConn, peerSend chan []byte, sess *PairSession, reg
 			return
 		}
 
-		select {
-		case peerSend <- data:
-		default:
-			// Peer send buffer full — drop the frame.
-		}
+		peer.enqueue(data)
 	}
 }

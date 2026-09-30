@@ -18,33 +18,41 @@ use crate::invariants::{ScenarioState, SentMessage};
 use crate::world::TestWorld;
 
 pub mod dart_push_latency;
-pub mod dart_two_device_bootstrap;
-pub mod dart_two_device_history_sync;
 pub mod fcm_dispatch;
-pub mod mixed_two_device_bootstrap;
-pub mod mixed_two_device_history_sync;
+pub mod lost_device_pairing;
 pub mod multi_device_chat;
 pub mod dart_three_party_chat;
 pub mod dart_two_party_chat;
 pub mod mixed_push_latency;
 pub mod mixed_three_party_chat;
 pub mod mixed_two_party_chat;
+pub mod pairing_cancelled;
+pub mod pairing_rejected;
+pub mod pairing_retry_after_abandoned;
+pub mod post_fan_out_delivery;
 pub mod push_latency;
 pub mod push_latency_restart;
 pub mod same_drawbridge_local;
-pub mod three_device_bootstrap;
-pub mod three_device_history_sync;
-pub mod three_device_staggered;
+pub mod sender_exceeds_tag_window;
+pub mod staggered_device_pairing;
+pub mod sync_history_before_membership;
+pub mod sync_offer_history;
+pub mod sync_request_after_cancelled_pairing;
+pub mod sync_request_history;
+pub mod three_device_pairing;
+pub mod three_device_pairing_history_sync;
 pub mod three_party_chat;
 pub mod three_party_push;
 pub mod three_party_restart;
-pub mod two_device_bootstrap;
-pub mod two_device_history_sync;
+pub mod three_party_smoke;
+pub mod two_device_pairing;
 pub mod two_party_chat;
 pub mod two_party_fanout;
 pub mod two_party_push;
 pub mod two_party_push_restart;
 pub mod two_party_restart;
+pub mod two_party_smoke;
+pub mod watched_before_welcome;
 
 // ── Verbose logging ───────────────────────────────────────────────────────────
 
@@ -583,6 +591,67 @@ pub async fn ensure_all_online_n(world: &mut TestWorld, env: &NPartyEnv<'_>) {
     }
 }
 
+/// Existing device only: wait for `client`'s pairing state to reach
+/// `awaiting_approval` — the state a peer's `Enroll` puts it in, where a
+/// real user would be looking at the approve/reject prompt.
+///
+/// Bounded so a peer that never sends `Enroll` fails the test instead of
+/// hanging it.
+pub async fn wait_for_awaiting_approval(client: &MoatCliClient, timeout: std::time::Duration) {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let status = client.pair_status().await.expect("pair_status");
+        if matches!(status, crate::client::PairingUiState::AwaitingApproval { .. }) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "pairing never reached awaiting_approval within {timeout:?} \
+             (status={status:?}); this must fail the test, not hang it",
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
+
+/// Existing device only: wait for `awaiting_approval`, then approve — the
+/// explicit step that replaces the deleted `event_broadcast.is_some()`
+/// auto-approve fork in `moat-cli` (and the `autoApprove` flag it mirrored
+/// in `moat_dart_server`; see pairing-ui-state.md §B/§D). No host
+/// auto-approves an incoming `Enroll` anymore, in any mode, so every
+/// pairing scenario must perform this step itself once it has confirmed a
+/// code.
+pub async fn wait_for_awaiting_approval_and_approve(
+    client: &MoatCliClient,
+    timeout: std::time::Duration,
+) {
+    wait_for_awaiting_approval(client, timeout).await;
+    client.pair_approve().await.expect("pair_approve");
+}
+
+/// Wait for `client`'s pairing state to reach the terminal `failed` phase,
+/// returning the reason. Bounded so a session that silently stalls in a
+/// non-terminal state fails the test instead of hanging it — the whole
+/// point of retaining `Failed { reason }` on the session is that a failed
+/// pairing is distinguishable from a slow one.
+pub async fn wait_for_pair_failed(
+    client: &MoatCliClient,
+    timeout: std::time::Duration,
+) -> String {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let status = client.pair_status().await.expect("pair_status");
+        if let crate::client::PairingUiState::Failed { reason } = status {
+            return reason;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "pairing never reached a terminal failed state within {timeout:?} \
+             (status={status:?}); this must fail the test, not hang it",
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
+
 /// Format an action for human-readable display.
 pub fn format_action(action: &Action) -> String {
     match action {
@@ -749,173 +818,219 @@ pub static SCENARIOS: &[Scenario] = &[
         seed_fn: actions_from_seed_3p,
     },
     Scenario {
-        name: "two-device-bootstrap",
-        description: "One user, two devices — device ring bootstrap via coord groups",
-        run_fn: two_device_bootstrap::run_boxed,
+        name: "two-device-pairing",
+        description: "One user, two devices (Rust + Rust) — live QR/text pairing",
+        run_fn: two_device_pairing::run_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
-        name: "two-device-history-sync",
-        description: "One user, two devices — ring bootstrap then backward history sync",
-        run_fn: two_device_history_sync::run_boxed,
+        name: "two-device-pairing-dd",
+        description: "One user, two devices (Dart + Dart) — live QR/text pairing",
+        run_fn: two_device_pairing::run_dd_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
-        name: "dart-two-device-bootstrap",
-        description: "Dart: one user, two Dart devices — ring bootstrap parity test",
-        run_fn: dart_two_device_bootstrap::run_boxed,
+        name: "two-device-pairing-rd",
+        description: "One user, two devices (new=Rust, existing=Dart) — live QR/text pairing",
+        run_fn: two_device_pairing::run_rd_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
-        name: "dart-two-device-history-sync",
-        description: "Dart: one user, two Dart devices — ring bootstrap then history sync",
-        run_fn: dart_two_device_history_sync::run_boxed,
+        name: "two-device-pairing-dr",
+        description: "One user, two devices (new=Dart, existing=Rust) — live QR/text pairing",
+        run_fn: two_device_pairing::run_dr_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
-        name: "mixed-two-device-bootstrap",
-        description: "Mixed: Rust D1 + Dart D2 ring bootstrap cross-runtime parity",
-        run_fn: mixed_two_device_bootstrap::run_boxed,
+        name: "three-device-pairing",
+        description: "One user, three devices — D1 pairs D2 then D3 into the same ring",
+        run_fn: three_device_pairing::run_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
-        name: "mixed-two-device-bootstrap-dart-first",
-        description: "Mixed: Dart D1 + Rust D2 ring bootstrap cross-runtime parity",
-        run_fn: mixed_two_device_bootstrap::run_dart_first_boxed,
+        name: "three-device-pairing-history-sync",
+        description: "D1 has pre-existing history with Bob; D2 then D3 pair in and must sync it",
+        run_fn: three_device_pairing_history_sync::run_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
-        name: "mixed-two-device-history-sync-rd",
-        description: "Mixed: Rust D1 + Dart D2 ring bootstrap then history sync",
-        run_fn: mixed_two_device_history_sync::run_rd_boxed,
+        name: "three-device-pairing-history-sync-dr",
+        description: "Same as three-device-pairing-history-sync, but D2/D3 (new devices) run Dart, D1 stays Rust",
+        run_fn: three_device_pairing_history_sync::run_dr_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
-        name: "mixed-two-device-history-sync-dr",
-        description: "Mixed: Dart D1 + Rust D2 ring bootstrap then history sync",
-        run_fn: mixed_two_device_history_sync::run_dr_boxed,
-        gen_fn: || vec![],
-        seed_fn: |_| Ok(vec![]),
-    },
-    // ── Three-device bootstrap (all 8 runtime combos) ─────────────────────────
-    Scenario {
-        name: "three-device-bootstrap-rrr",
-        description: "Three Rust devices — ring bootstrap with late D3 join",
-        run_fn: three_device_bootstrap::run_rrr_boxed,
+        name: "three-device-pairing-history-sync-rd",
+        description: "Same as three-device-pairing-history-sync, but D1 (the history donor) runs Dart, D2/D3 stay Rust",
+        run_fn: three_device_pairing_history_sync::run_rd_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
-        name: "three-device-bootstrap-rrd",
-        description: "Rust D1+D2, Dart D3 — ring bootstrap with late D3 join",
-        run_fn: three_device_bootstrap::run_rrd_boxed,
+        name: "post-fan-out-delivery",
+        description: "D1 and Bob converse, D2 pairs in; every direction must deliver after D1's fan-out commit",
+        run_fn: post_fan_out_delivery::run_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
-        name: "three-device-bootstrap-rdr",
-        description: "Rust D1+D3, Dart D2 — ring bootstrap with late D3 join",
-        run_fn: three_device_bootstrap::run_rdr_boxed,
+        name: "post-fan-out-delivery-dr",
+        description: "Same as post-fan-out-delivery, but D2 (new device) runs Dart, D1 stays Rust",
+        run_fn: post_fan_out_delivery::run_dr_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
-        name: "three-device-bootstrap-drr",
-        description: "Dart D1, Rust D2+D3 — ring bootstrap with late D3 join",
-        run_fn: three_device_bootstrap::run_drr_boxed,
+        name: "post-fan-out-delivery-rd",
+        description: "Same as post-fan-out-delivery, but D1 (existing device) runs Dart, D2 runs Rust",
+        run_fn: post_fan_out_delivery::run_rd_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
-        name: "three-device-bootstrap-rdd",
-        description: "Rust D1, Dart D2+D3 — ring bootstrap with late D3 join",
-        run_fn: three_device_bootstrap::run_rdd_boxed,
+        name: "watched-before-welcome",
+        description: "Carol reads Alice's post-Add message from a watch before holding Bob's Welcome; she must still get it",
+        run_fn: watched_before_welcome::run_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
-        name: "three-device-bootstrap-drd",
-        description: "Dart D1+D3, Rust D2 — ring bootstrap with late D3 join",
-        run_fn: three_device_bootstrap::run_drd_boxed,
+        name: "watched-before-welcome-d",
+        description: "Same as watched-before-welcome, but Carol (the joiner) runs Dart",
+        run_fn: watched_before_welcome::run_dart_joiner_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
-        name: "three-device-bootstrap-ddr",
-        description: "Dart D1+D2, Rust D3 — ring bootstrap with late D3 join",
-        run_fn: three_device_bootstrap::run_ddr_boxed,
+        name: "sender-exceeds-tag-window",
+        description: "Alice sends Bob (Rust) several tag windows of messages; all must arrive by poll, after Bob restarts, then by push alone",
+        run_fn: sender_exceeds_tag_window::run_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
-        name: "three-device-bootstrap-ddd",
-        description: "Three Dart devices — ring bootstrap with late D3 join",
-        run_fn: three_device_bootstrap::run_ddd_boxed,
-        gen_fn: || vec![],
-        seed_fn: |_| Ok(vec![]),
-    },
-    // ── Three-device history sync (4 key runtime combos) ─────────────────────
-    Scenario {
-        name: "three-device-history-sync-rrr",
-        description: "Three Rust devices — D1 sends history, D2 syncs, D3 syncs from D1",
-        run_fn: three_device_history_sync::run_rrr_boxed,
+        name: "sender-exceeds-tag-window-d",
+        description: "Same as sender-exceeds-tag-window with a Dart recipient, poll path and restart only",
+        run_fn: sender_exceeds_tag_window::run_dart_recipient_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
-        name: "three-device-history-sync-ddd",
-        description: "Three Dart devices — D1 sends history, D2 syncs, D3 syncs from D1",
-        run_fn: three_device_history_sync::run_ddd_boxed,
+        name: "sync-request-after-idle",
+        description: "sync-request-history after the ring sat idle for more than a tag window of ticks (all Rust)",
+        run_fn: sync_request_history::run_after_idle_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
-        name: "three-device-history-sync-drr",
-        description: "Dart D1 (offerer), Rust D2+D3 — history sync cross-runtime",
-        run_fn: three_device_history_sync::run_drr_boxed,
+        name: "sync-request-after-idle-dd",
+        description: "Same as sync-request-after-idle, both of Alice's devices on Dart",
+        run_fn: sync_request_history::run_after_idle_dd_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
-        name: "three-device-history-sync-rrd",
-        description: "Rust D1+D2, Dart D3 (late joiner) — history sync cross-runtime",
-        run_fn: three_device_history_sync::run_rrd_boxed,
-        gen_fn: || vec![],
-        seed_fn: |_| Ok(vec![]),
-    },
-    // ── Three-device staggered arrival (4 key runtime combos) ────────────────
-    Scenario {
-        name: "three-device-staggered-rrr",
-        description: "Three Rust devices — D2 joins + sends, D3 must sync both messages",
-        run_fn: three_device_staggered::run_rrr_boxed,
+        name: "staggered-device-pairing",
+        description: "D2 is offline while D1 pairs D3; D2 must catch up on its own",
+        run_fn: staggered_device_pairing::run_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
-        name: "three-device-staggered-ddd",
-        description: "Three Dart devices — D2 joins + sends, D3 must sync both messages",
-        run_fn: three_device_staggered::run_ddd_boxed,
+        name: "sync-offer-history",
+        description: "D1 sees D2 has no history and offers it; D2 joins without being prompted",
+        run_fn: sync_offer_history::run_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
-        name: "three-device-staggered-drr",
-        description: "Dart D1 (offerer), Rust D2+D3 — staggered arrival cross-runtime",
-        run_fn: three_device_staggered::run_drr_boxed,
+        name: "sync-offer-history-dr",
+        description: "Same as sync-offer-history, but the offering device is Dart",
+        run_fn: sync_offer_history::run_dr_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },
     Scenario {
-        name: "three-device-staggered-rrd",
-        description: "Rust D1+D2, Dart D3 — staggered arrival cross-runtime",
-        run_fn: three_device_staggered::run_rrd_boxed,
+        name: "sync-history-before-membership",
+        description: "D2 is served history for a conversation it has not been added to yet",
+        run_fn: sync_history_before_membership::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "sync-request-history",
+        description: "D2 sleeps through a conversation, is fanned in with no history, and asks D1 for it",
+        run_fn: sync_request_history::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "sync-request-history-dd",
+        description: "Same as sync-request-history, but both devices Dart",
+        run_fn: sync_request_history::run_dd_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "sync-request-history-rd",
+        description: "Same as sync-request-history, but Dart requester, Rust donor",
+        run_fn: sync_request_history::run_rd_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "sync-request-history-dr",
+        description: "Same as sync-request-history, but Rust requester, Dart donor",
+        run_fn: sync_request_history::run_dr_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "lost-device-pairing",
+        description: "D1 is permanently lost after pairing D2; D2 alone pairs D3 and history survives",
+        run_fn: lost_device_pairing::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "pairing-rejected",
+        description: "Existing device declines the Enroll — both sides fail, no ring is created",
+        run_fn: pairing_rejected::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "pairing-cancelled",
+        description: "New device backs out while showing its code — terminal failure, no ring",
+        run_fn: pairing_cancelled::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "sync-request-after-cancelled-pairing",
+        description: "D1 ignores D2's sync request mid-pairing, then prompts for the next one once the pairing is cancelled",
+        run_fn: sync_request_after_cancelled_pairing::run_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "sync-request-after-cancelled-pairing-d",
+        description: "Same as sync-request-after-cancelled-pairing, both devices Dart",
+        run_fn: sync_request_after_cancelled_pairing::run_d_boxed,
+        gen_fn: || vec![],
+        seed_fn: |_| Ok(vec![]),
+    },
+    Scenario {
+        name: "pairing-retry-after-abandoned",
+        description: "A pairing abandoned at the approval prompt must not poison a fresh retry",
+        run_fn: pairing_retry_after_abandoned::run_boxed,
         gen_fn: || vec![],
         seed_fn: |_| Ok(vec![]),
     },

@@ -1,9 +1,9 @@
 //! Multi-device random-action scenario.
 //!
-//! Alice has two devices (D1, D2) that bootstrap a device ring and then
-//! receive a random sequence of actions. Bob is a fixed second user present
-//! to provide a real user conversation. The scenario ends with a convergence
-//! drain and invariant checks.
+//! Alice has two devices (D1, D2) that form a device ring via live pairing
+//! (`qr-pairing.md`) and then receive a random sequence of actions. Bob is
+//! a fixed second user present to provide a real user conversation. The
+//! scenario ends with a convergence drain and invariant checks.
 //!
 //! Parametrised over d1_kind × d2_kind so the same logic covers all four
 //! runtime cells (RR, RD, DR, DD).
@@ -79,27 +79,26 @@ pub async fn run(
     d2.login("alice.postern.test", "any-password").await.expect("d2 login");
     tokio::time::sleep(Duration::from_millis(800)).await;
 
-    // Ring bootstrap.
-    for i in 0..6 {
-        vlog!("[bootstrap {i}]");
-        d1.ring_tick().await.expect("d1 ring_tick");
-        d2.ring_tick().await.expect("d2 ring_tick");
-        d1.poll().await.expect("d1 poll");
-        d2.poll().await.expect("d2 poll");
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    // Ring bootstrap: live pairing (`qr-pairing.md`), not the deleted
+    // ring_tick()-driven agreement machinery. `ring_tick` no longer forms a
+    // ring by itself — §4.1's async bootstrap/election machinery is gone —
+    // only the pairing exchange (`PairingSession`, via `/pair/*`) creates
+    // one; `ring_tick` is left doing only its retained job, the
+    // steady-state KP-lane fan-out (see the `poll_for_new_devices` cycles
+    // just below).
+    vlog!("[bootstrap] pairing d1 <- d2...");
+    crate::scenarios::three_device_pairing::pair_devices(&d1, &d2, verbose).await;
 
     {
-        let s1 = d1.ring_status().await.expect("d1 ring_status post-bootstrap");
-        let s2 = d2.ring_status().await.expect("d2 ring_status post-bootstrap");
+        let s1 = d1.ring_status().await.expect("d1 ring_status post-pairing");
+        let s2 = d2.ring_status().await.expect("d2 ring_status post-pairing");
         assert!(
             s1.ring_group_id.is_some(),
-            "d1 must have a ring after bootstrap (coord_count={})",
-            s1.coord_group_count
+            "d1 must have a ring after pairing"
         );
         assert_eq!(
             s1.ring_group_id, s2.ring_group_id,
-            "ring must match after bootstrap"
+            "ring must match after pairing"
         );
     }
 
@@ -145,17 +144,33 @@ pub async fn run(
                 }
                 let text = TEXT_VOCAB[text_idx % TEXT_VOCAB.len()];
                 let client = if d == 0 { &d1 } else { &d2 };
-                if client.send_message(&group_id, text).await.is_ok() {
-                    let message_id = client
-                        .get_messages(&group_id)
-                        .await
-                        .unwrap_or_default()
-                        .into_iter()
-                        .rev()
-                        .find(|m| m.is_own && m.content.contains(text))
-                        .and_then(|m| m.message_id);
-                    sent.push(SentMsg { message_id });
-                }
+                // Deliberately not swallowed: by construction, every device
+                // reachable here (`online[d]` true) already passed the
+                // pre-loop assertion that it's a member of `group_id`, and
+                // GoOffline/ComeOnline preserve local storage across a
+                // restart (no re-discovery needed) — so there is no
+                // legitimate, expected reason left for a send to fail once
+                // the random-action loop has started. An earlier version of
+                // this arm used `if ... .is_ok() { record it }`, which
+                // silently hid exactly this: device 1 (D2) sending in a
+                // conversation it was fanned into via same-user fan-out
+                // always fails with a signing-key mismatch (see
+                // `fanned-in-device-signing-key-bug.md`) — masked here for
+                // an unknown period until `three_device_staggered_rrr`
+                // happened to hard-assert on the same path.
+                client
+                    .send_message(&group_id, text)
+                    .await
+                    .unwrap_or_else(|e| panic!("device {d} send_message failed: {e}"));
+                let message_id = client
+                    .get_messages(&group_id)
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .rev()
+                    .find(|m| m.is_own && m.content.contains(text))
+                    .and_then(|m| m.message_id);
+                sent.push(SentMsg { message_id });
             }
             MultiDeviceAction::Poll { device } => {
                 if online[*device] {

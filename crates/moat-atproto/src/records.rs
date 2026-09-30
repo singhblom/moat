@@ -118,7 +118,7 @@ pub struct EventData {
     pub blob: Option<BlobRef>,
 }
 
-/// Stealth address record stored on PDS (v2: multi-device)
+/// Stealth address record stored on PDS (v3: multi-device + device_id)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StealthAddressRecord {
@@ -126,7 +126,7 @@ pub struct StealthAddressRecord {
     #[serde(skip)]
     pub rkey: String,
 
-    /// Schema version (must be 2)
+    /// Schema version (must be 3)
     pub v: u32,
 
     /// X25519 public key for stealth address derivation (32 bytes)
@@ -136,11 +136,16 @@ pub struct StealthAddressRecord {
     /// Human-readable device name
     pub device_name: String,
 
+    /// Stable 16-byte device identifier (matches MoatCredential.device_id).
+    /// Required field — no pre-v3 records to support.
+    #[serde(with = "base64_tag")]
+    pub device_id: [u8; 16],
+
     /// Creation time
     pub created_at: DateTime<Utc>,
 }
 
-/// Record data for creating a new stealth address (v2: multi-device)
+/// Record data for creating a new stealth address (v3: multi-device + device_id)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StealthAddressData {
@@ -148,6 +153,8 @@ pub struct StealthAddressData {
     #[serde(with = "base64_pubkey")]
     pub scan_pubkey: [u8; 32],
     pub device_name: String,
+    #[serde(with = "base64_tag")]
+    pub device_id: [u8; 16],
     pub created_at: DateTime<Utc>,
 }
 
@@ -332,22 +339,41 @@ mod tests {
     #[test]
     fn test_stealth_address_unpadded_base64() {
         // 32 bytes encodes to 43 base64 chars without padding (bsky.social strips the '=')
-        let json = r#"{"v":2,"scanPubkey":{"$bytes":"FtKnvfUoIJCdfrcKbtFL9JHrUdQbnt0X7euvw0fZUTs"},"deviceName":"CLI (Mac)","createdAt":"2026-03-01T21:31:58Z"}"#;
+        let json = r#"{"v":3,"scanPubkey":{"$bytes":"FtKnvfUoIJCdfrcKbtFL9JHrUdQbnt0X7euvw0fZUTs"},"deviceName":"CLI (Mac)","deviceId":{"$bytes":"AQIDBAUGBwgJCgsMDQ4PEA"},"createdAt":"2026-03-01T21:31:58Z"}"#;
         let record: StealthAddressData = serde_json::from_str(json)
             .expect("should deserialize unpadded base64 from bsky.social");
         assert_eq!(record.device_name, "CLI (Mac)");
         assert_eq!(record.scan_pubkey.len(), 32);
+        assert_eq!(record.device_id, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    }
+
+    #[test]
+    fn test_stealth_address_v2_without_device_id_rejected() {
+        // v2 was a development-only version; no production data exists.
+        // A record without `deviceId` must fail to parse, since silently
+        // defaulting device_id to zeros would produce colliding ids across
+        // every legacy record — strictly worse than a parse error.
+        let json = r#"{"v":2,"scanPubkey":{"$bytes":"FtKnvfUoIJCdfrcKbtFL9JHrUdQbnt0X7euvw0fZUTs"},"deviceName":"Legacy","createdAt":"2026-03-01T21:31:58Z"}"#;
+        let result: Result<StealthAddressData, _> = serde_json::from_str(json);
+        assert!(
+            result.is_err(),
+            "v2 record without deviceId must fail to parse"
+        );
     }
 
     #[test]
     fn test_stealth_address_data_serialization() {
         let data = StealthAddressData {
-            v: 2,
+            v: 3,
             scan_pubkey: [
                 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
                 24, 25, 26, 27, 28, 29, 30, 31, 32,
             ],
             device_name: "Test Device".to_string(),
+            device_id: [
+                0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+                0x1e, 0x1f,
+            ],
             created_at: Utc::now(),
         };
 
@@ -357,12 +383,17 @@ mod tests {
         assert_eq!(parsed.v, data.v);
         assert_eq!(parsed.scan_pubkey, data.scan_pubkey);
         assert_eq!(parsed.device_name, data.device_name);
+        assert_eq!(parsed.device_id, data.device_id);
 
         // Verify ATProto IPLD bytes format: {"$bytes": "<base64>"}
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert!(
             value["scanPubkey"]["$bytes"].is_string(),
             "scanPubkey must serialize as {{\"$bytes\": \"...\"}} per ATProto spec"
+        );
+        assert!(
+            value["deviceId"]["$bytes"].is_string(),
+            "deviceId must serialize as {{\"$bytes\": \"...\"}} per ATProto spec"
         );
     }
 

@@ -99,7 +99,7 @@ fn test_tag_changes_with_group() {
 #[test]
 fn test_padding_small_message() {
     let plaintext = b"Hello, world!";
-    let padded = pad_to_bucket(plaintext);
+    let padded = pad_to_bucket(plaintext).unwrap();
 
     assert_eq!(padded.len(), 512);
     assert_eq!(unpad(&padded), plaintext);
@@ -108,7 +108,7 @@ fn test_padding_small_message() {
 #[test]
 fn test_padding_medium_message() {
     let plaintext = vec![0x42; 600];
-    let padded = pad_to_bucket(&plaintext);
+    let padded = pad_to_bucket(&plaintext).unwrap();
 
     assert_eq!(padded.len(), 1024);
     assert_eq!(unpad(&padded), plaintext);
@@ -117,7 +117,7 @@ fn test_padding_medium_message() {
 #[test]
 fn test_padding_large_message() {
     let plaintext = vec![0x42; 2000];
-    let padded = pad_to_bucket(&plaintext);
+    let padded = pad_to_bucket(&plaintext).unwrap();
 
     assert_eq!(padded.len(), 4096);
     assert_eq!(unpad(&padded), plaintext);
@@ -133,7 +133,7 @@ fn test_padding_preserves_content() {
     ];
 
     for msg in messages {
-        let padded = pad_to_bucket(&msg);
+        let padded = pad_to_bucket(&msg).unwrap();
         let recovered = unpad(&padded);
         assert_eq!(recovered, msg, "Padding round-trip should preserve content");
     }
@@ -240,7 +240,7 @@ fn test_event_serialization_with_padding() {
     let event_bytes = event.to_bytes().unwrap();
 
     // Pad (message_id adds ~24 bytes of JSON, so this may land in small or standard bucket)
-    let padded = pad_to_bucket(&event_bytes);
+    let padded = pad_to_bucket(&event_bytes).unwrap();
     assert!(
         padded.len() == 512 || padded.len() == 1024,
         "Should fit in small or standard bucket"
@@ -432,37 +432,12 @@ fn test_state_version_header() {
     // Check magic bytes
     assert_eq!(&state[0..4], b"MOAT");
 
-    // Check version (little-endian u16 = 5)
-    assert_eq!(state[4], 5);
+    // Check version (little-endian u16 = 4)
+    assert_eq!(state[4], 4);
     assert_eq!(state[5], 0);
 
     // Header is at least 22 bytes (4 magic + 2 version + 16 device_id)
     assert!(state.len() >= 22);
-}
-
-#[test]
-fn test_v5_state_roundtrip_digest_watermark_range() {
-    let session = MoatSession::new();
-    let credential = MoatCredential::new("did:plc:alice", "Laptop", [1u8; 16]);
-    let (_, key_bundle) = session.generate_key_package(&credential).unwrap();
-    let group_id = session.create_group(&credential, &key_bundle).unwrap();
-
-    // Append a few messages.
-    let m1 = [0xAAu8; 16];
-    let m2 = [0xBBu8; 16];
-    session.append_to_digest(&group_id, "rkey001", &m1).unwrap();
-    session.append_to_digest(&group_id, "rkey002", &m2).unwrap();
-    session.set_watermark(&group_id, "rkey001").unwrap();
-
-    let state = session.export_state().unwrap();
-    let restored = MoatSession::from_state(&state).unwrap();
-
-    assert_eq!(restored.digest_tip(&group_id), session.digest_tip(&group_id));
-    assert_eq!(restored.watermark(&group_id), Some("rkey001".to_string()));
-    assert_eq!(
-        restored.range(&group_id),
-        Some(("rkey001".to_string(), "rkey002".to_string()))
-    );
 }
 
 #[test]
@@ -995,7 +970,7 @@ fn test_reaction_fits_in_small_or_standard_padding_bucket() {
     let reaction = Event::reaction(b"group-id".to_vec(), 0, &target_id, "👍");
 
     let event_bytes = reaction.to_bytes().unwrap();
-    let padded = pad_to_bucket(&event_bytes);
+    let padded = pad_to_bucket(&event_bytes).unwrap();
     assert!(
         padded.len() <= 1024,
         "Reactions should fit in small or standard bucket, got {}",
@@ -1119,6 +1094,63 @@ fn test_external_blob_uri_validation() {
 }
 
 // --- Unknown event deserialization ---
+
+// --- Sender identity cross-check (Phase D follow-up) ---
+
+#[test]
+fn test_validate_sender_identity_agrees_silent() {
+    use crate::event::{SenderInfo, TranscriptWarning};
+    let mut event = Event::message_from_bytes(b"group".to_vec(), 0, b"hi");
+    event.sender_device_id = Some([7u8; 16].to_vec());
+    let cred = MoatCredential::new("did:plc:alice", "phone", [7u8; 16]);
+    let sender = SenderInfo::from_credential(&cred);
+    let mut warnings: Vec<TranscriptWarning> = Vec::new();
+    MoatSession::validate_sender_identity(b"group", &event, Some(&sender), &mut warnings);
+    assert!(warnings.is_empty(), "matching ids must not warn");
+}
+
+#[test]
+fn test_validate_sender_identity_mismatch_warns() {
+    use crate::event::{SenderInfo, TranscriptWarning};
+    let mut event = Event::message_from_bytes(b"group".to_vec(), 0, b"hi");
+    event.sender_device_id = Some([7u8; 16].to_vec());
+    // Credential claims a different device id.
+    let cred = MoatCredential::new("did:plc:alice", "phone", [9u8; 16]);
+    let sender = SenderInfo::from_credential(&cred);
+    let mut warnings: Vec<TranscriptWarning> = Vec::new();
+    MoatSession::validate_sender_identity(b"group", &event, Some(&sender), &mut warnings);
+    assert_eq!(warnings.len(), 1);
+    match &warnings[0] {
+        TranscriptWarning::SenderIdentityMismatch {
+            payload_device_id,
+            credential_device_id,
+            ..
+        } => {
+            assert_eq!(payload_device_id, &[7u8; 16].to_vec());
+            assert_eq!(credential_device_id, &[9u8; 16].to_vec());
+        }
+        other => panic!("wrong variant: {other:?}"),
+    }
+}
+
+#[test]
+fn test_validate_sender_identity_skips_when_either_side_missing() {
+    use crate::event::{SenderInfo, TranscriptWarning};
+    // Payload has no sender_device_id (legacy event).
+    let event_no_payload_id = Event::message_from_bytes(b"group".to_vec(), 0, b"hi");
+    let cred = MoatCredential::new("did:plc:alice", "phone", [9u8; 16]);
+    let sender = SenderInfo::from_credential(&cred);
+    let mut warnings: Vec<TranscriptWarning> = Vec::new();
+    MoatSession::validate_sender_identity(b"group", &event_no_payload_id, Some(&sender), &mut warnings);
+    assert!(warnings.is_empty());
+
+    // No credential.
+    let mut event = Event::message_from_bytes(b"group".to_vec(), 0, b"hi");
+    event.sender_device_id = Some([7u8; 16].to_vec());
+    let mut warnings: Vec<TranscriptWarning> = Vec::new();
+    MoatSession::validate_sender_identity(b"group", &event, None, &mut warnings);
+    assert!(warnings.is_empty());
+}
 
 #[test]
 fn test_unknown_event_kind_roundtrip() {
@@ -1296,3 +1328,18 @@ fn test_long_text_message_with_external_blob() {
     }
 }
 
+/// A PDS record has no bucket to round an oversized payload up to.
+#[test]
+fn an_event_larger_than_the_largest_bucket_is_refused() {
+    let session = MoatSession::new();
+    let credential = MoatCredential::new("did:plc:alice", "laptop", [1u8; 16]);
+    let (_kp, key_bundle) = session.generate_key_package(&credential).unwrap();
+    let group_id = session.create_group(&credential, &key_bundle).unwrap();
+
+    let event = Event::ring_msg(group_id.clone(), 7, vec![0x42; 20_000]);
+    match session.encrypt_event(&group_id, &key_bundle, &event) {
+        Err(Error::PayloadTooLarge(_)) => {}
+        Err(other) => panic!("expected PayloadTooLarge, got {other:?}"),
+        Ok(_) => panic!("an oversized PDS record has no bucket to round up to"),
+    }
+}

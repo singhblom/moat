@@ -25,14 +25,17 @@
 pub mod blob;
 pub(crate) mod credential;
 pub(crate) mod device_ring;
-pub mod digest;
 pub(crate) mod error;
 pub(crate) mod event;
 pub mod message;
 pub(crate) mod padding;
+pub(crate) mod pair_channel;
+pub(crate) mod pairing;
 pub(crate) mod stealth;
 pub(crate) mod storage;
-pub mod sync;
+pub(crate) mod sync;
+pub(crate) mod sync_request;
+pub mod inbox;
 pub(crate) mod tag;
 
 pub mod api;
@@ -45,18 +48,17 @@ use openmls_traits::OpenMlsProvider;
 use serde::{Deserialize as SerdeDeserialize, Serialize as SerdeSerialize};
 use serde_with::{base64::Base64, serde_as};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::sync::RwLock;
 
 // Disambiguate from openmls::prelude::* and make accessible as moat_core::X
 pub use crate::credential::MoatCredential;
 pub use crate::error::{Error, ErrorCode, Result};
+pub use crate::inbox::{Inbox, InboxEvent, MAX_PARKED_AGE_MS, MAX_PARKED_EVENTS};
 pub use crate::device_ring::{
-    classify_group_kind, decode_coord_msg, decode_welcome_envelope, encode_coord_msg,
-    encode_welcome_envelope, reconcile_rings, AddedBy, CoordGroupResult, CoordMsg, DeviceId,
-    DeviceRingState, GroupKind, InvariantViolation, KeyPackageInput, OwnEventInput, PeerState,
-    ReconcileDecision, RingCommand, RingEvent, RingLink, RingMembership, StepEnv, SyncStatus,
-    TickInputs,
+    summarize_ring_commands, CoordMsg, DeviceId,
+    DeviceRingState, GroupKind, KeyPackageInput, OfferedKp, OwnEventInput, RingCommand,
+    RingMembership, SiblingStealth, StepEnv, TickInputs, KP_POOL_TARGET,
 };
 pub use crate::event::{
     ControlKind, DecryptOutcome, Event, EventKind, MessageKind, ModifierKind, ReactionPayload,
@@ -67,18 +69,21 @@ pub use crate::message::{
     ParsedMessagePayload, TextMessage, MEDIUM_TEXT_MAX_BYTES, SHORT_TEXT_MAX_BYTES,
 };
 pub use crate::blob::{blob_decrypt, blob_encrypt};
-pub use crate::padding::{pad_to_bucket, unpad, Bucket};
-pub use crate::stealth::{encrypt_for_stealth, generate_stealth_keypair, try_decrypt_stealth};
+pub use crate::padding::{pad_to_bucket, unpad, Bucket, MAX_BUCKETED_PLAINTEXT};
+pub use crate::stealth::{
+    encrypt_for_stealth, generate_stealth_keypair, stealth_pubkey_from_privkey, try_decrypt_stealth,
+};
 pub(crate) use crate::storage::MoatProvider;
 pub use crate::tag::{
     derive_event_tag, generate_candidate_tags, prior_epoch_gap_limit, MAX_PRIOR_EPOCHS,
     TAG_EXPORT_SECRET_LABEL, TAG_EXPORT_SECRET_LEN, TAG_GAP_LIMIT,
 };
-pub use crate::digest::{diff_anchors, DigestAnchor, DiffRange};
-pub use crate::sync::{
-    decode_sync_msg, encode_sync_msg, AnchorDto, ConvState, SyncDirection, SyncMessage, SyncMsg,
-    SyncOutput, SyncSession,
+pub use crate::sync::{ConvHistory, SyncMessage, SyncProgress, SyncReaction, SyncTally};
+pub use crate::sync_request::{
+    decode_ring_msg, RingMsg, SyncFailure, SyncRequestUiState, SYNC_REQUEST_TTL_MS,
 };
+pub use crate::pair_channel::{PairChannelCommand, PairChannelDriver, PairEnv, PairIdentity};
+pub use crate::pairing::{PairingUiState, PAIRING_TOKEN_LEN};
 
 /// The ciphersuite used by Moat
 pub const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
@@ -106,6 +111,7 @@ pub struct WelcomeResult {
     pub new_group_state: Vec<u8>,
     pub welcome: Vec<u8>,
     pub commit: Vec<u8>,
+    pub commit_tag: [u8; 16],
     pub group_id: Vec<u8>,
 }
 
@@ -114,7 +120,6 @@ pub struct EncryptResult {
     pub new_group_state: Vec<u8>,
     pub tag: [u8; 16],
     pub ciphertext: Vec<u8>,
-    /// The message_id assigned to the event (16 bytes for Message/Reaction, None otherwise)
     pub message_id: Option<Vec<u8>>,
 }
 
@@ -129,10 +134,16 @@ pub struct DecryptResult {
 
 /// Result of removing a member from a group
 pub struct RemoveResult {
-    /// The commit message to broadcast to other members
     pub commit: Vec<u8>,
-    /// The group ID
+    pub commit_tag: [u8; 16],
     pub group_id: Vec<u8>,
+}
+
+/// A commit this device created and has already applied to its own state.
+struct LocalCommit {
+    commit: Vec<u8>,
+    commit_tag: [u8; 16],
+    welcome: Option<Vec<u8>>,
 }
 
 
@@ -140,7 +151,7 @@ pub struct RemoveResult {
 const STATE_MAGIC: &[u8; 4] = b"MOAT";
 
 /// Current state format version.
-const STATE_VERSION: u16 = 5;
+const STATE_VERSION: u16 = 4;
 
 /// Size of the state header: 4 (magic) + 2 (version) + 16 (device_id) = 22 bytes.
 const STATE_HEADER_SIZE: usize = 4 + 2 + 16;
@@ -168,6 +179,9 @@ struct TagMetadata {
     sender_did: String,
     device_id: [u8; 16],
     counter: u64,
+    /// Whether `counter` is in the current epoch. Prior-epoch matches never
+    /// move the current scanning window.
+    current_epoch: bool,
 }
 
 /// Return type for the `deserialize_*_rest` helpers: parsed value plus the
@@ -221,11 +235,11 @@ pub enum PendingOperation {
 /// Read-only methods (`export_state`, `get_group_epoch`, `has_pending_changes`,
 /// `device_id`) are safe to call concurrently.
 ///
-/// # State format (v5)
+/// # State format (v4)
 ///
 /// The exported state has the following layout:
 /// - `b"MOAT"` (4 bytes) — magic identifier
-/// - Version (2 bytes, little-endian u16) — currently `5`
+/// - Version (2 bytes, little-endian u16) — currently `4`
 /// - Device ID (16 bytes) — random, generated once per device
 /// - MLS state length (8 bytes, little-endian u64)
 /// - MLS state (variable) — raw storage data
@@ -292,15 +306,8 @@ pub struct MoatSession {
     /// Used by `populate_candidate_tags` to generate candidate tags with decaying
     /// gap limits for prior epochs, catching messages stranded across epoch boundaries.
     prior_export_secrets: RwLock<HashMap<Vec<u8>, VecDeque<Vec<u8>>>>,
-    /// Running SHA-256 digest chain per conversation (keyed by group_id).
-    conversation_digests: RwLock<HashMap<Vec<u8>, crate::digest::DigestState>>,
-    /// Oldest synced rkey per conversation.  Persisted as the sync watermark.
-    watermarks: RwLock<HashMap<Vec<u8>, String>>,
-    /// (oldest_rkey, newest_rkey) held locally per conversation.
-    inbox_ranges: RwLock<HashMap<Vec<u8>, (String, String)>>,
-    /// Groups whose next `append_to_digest` call should force an anchor (epoch boundary).
-    /// Transient — not persisted.
-    digest_epoch_boundaries: RwLock<HashSet<Vec<u8>>>,
+    /// See [`inbox`]. The host persists it via `export_parked_events`.
+    inbox: RwLock<Inbox>,
 }
 
 impl Default for MoatSession {
@@ -315,6 +322,23 @@ impl MoatSession {
         use rand::RngCore;
         let mut device_id = [0u8; 16];
         rand::thread_rng().fill_bytes(&mut device_id);
+        Self::with_device_id(device_id)
+    }
+
+    /// Create a session with a caller-supplied device ID.
+    ///
+    /// For deterministic simulations. `device_id` decides leaf ordering,
+    /// every `smallest device_id` tiebreak, and which device is elected to
+    /// perform an add — so with a random id each run of a scenario is a
+    /// different draw, and a single failure or success says very little. That
+    /// is not academic: it invalidated a Mode-2 "reproduction" (see
+    /// `ring-inversion.md`), and it applies to every offline / lost-device
+    /// scenario, which is exactly where reproducibility matters most.
+    ///
+    /// Callers should sweep a range of ids rather than pin one, so a scenario
+    /// is exercised across every ordering rather than whichever the machine
+    /// happened to pick.
+    pub fn with_device_id(device_id: [u8; 16]) -> Self {
         Self {
             provider: MoatProvider::new(),
             device_id,
@@ -324,10 +348,7 @@ impl MoatSession {
             tag_metadata: RwLock::new(HashMap::new()),
             pending_ops: RwLock::new(HashMap::new()),
             prior_export_secrets: RwLock::new(HashMap::new()),
-            conversation_digests: RwLock::new(HashMap::new()),
-            watermarks: RwLock::new(HashMap::new()),
-            inbox_ranges: RwLock::new(HashMap::new()),
-            digest_epoch_boundaries: RwLock::new(HashSet::new()),
+            inbox: RwLock::new(Inbox::new()),
         }
     }
 
@@ -350,7 +371,7 @@ impl MoatSession {
                     "v{version} state not supported; re-initialize session"
                 )))
             }
-            3..=5 => {}
+            3 | 4 => {}
             _ => {
                 return Err(Error::Deserialization(format!(
                     "unsupported state version: {version}"
@@ -389,26 +410,8 @@ impl MoatSession {
         let (seen_counters, rest) = Self::deserialize_seen_counters_rest(rest)?;
 
         // v4: Parse prior export secrets (absent in v3)
-        let (prior_export_secrets, rest) = if version >= 4 && !rest.is_empty() {
-            let (secrets, remaining) = Self::deserialize_prior_export_secrets_rest(rest)?;
-            (secrets, remaining)
-        } else {
-            (HashMap::new(), rest)
-        };
-
-        // v5: Parse digest / watermark / inbox_range tables (absent in v3/v4)
-        let (conversation_digests, rest) = if version >= 5 && !rest.is_empty() {
-            Self::deserialize_conversation_digests(rest)?
-        } else {
-            (HashMap::new(), rest)
-        };
-        let (watermarks, rest) = if version >= 5 && !rest.is_empty() {
-            Self::deserialize_watermarks(rest)?
-        } else {
-            (HashMap::new(), rest)
-        };
-        let inbox_ranges = if version >= 5 && !rest.is_empty() {
-            Self::deserialize_inbox_ranges(rest)?
+        let prior_export_secrets = if version >= 4 && !rest.is_empty() {
+            Self::deserialize_prior_export_secrets_rest(rest)?.0
         } else {
             HashMap::new()
         };
@@ -422,10 +425,7 @@ impl MoatSession {
             tag_metadata: RwLock::new(HashMap::new()),
             pending_ops: RwLock::new(HashMap::new()),
             prior_export_secrets: RwLock::new(prior_export_secrets),
-            conversation_digests: RwLock::new(conversation_digests),
-            watermarks: RwLock::new(watermarks),
-            inbox_ranges: RwLock::new(inbox_ranges),
-            digest_epoch_boundaries: RwLock::new(HashSet::new()),
+            inbox: RwLock::new(Inbox::new()),
         })
     }
 
@@ -445,9 +445,6 @@ impl MoatSession {
         let tag_counter_bytes = self.serialize_tag_counters();
         let seen_counter_bytes = self.serialize_seen_counters();
         let prior_secrets_bytes = self.serialize_prior_export_secrets();
-        let digest_bytes = self.serialize_conversation_digests();
-        let watermark_bytes = self.serialize_watermarks();
-        let inbox_range_bytes = self.serialize_inbox_ranges();
 
         let mut buf = Vec::with_capacity(
             STATE_HEADER_SIZE
@@ -456,10 +453,7 @@ impl MoatSession {
                 + hash_chain_bytes.len()
                 + tag_counter_bytes.len()
                 + seen_counter_bytes.len()
-                + prior_secrets_bytes.len()
-                + digest_bytes.len()
-                + watermark_bytes.len()
-                + inbox_range_bytes.len(),
+                + prior_secrets_bytes.len(),
         );
         buf.extend_from_slice(STATE_MAGIC);
         buf.extend_from_slice(&STATE_VERSION.to_le_bytes());
@@ -475,10 +469,6 @@ impl MoatSession {
         buf.extend_from_slice(&seen_counter_bytes);
         // v4: Prior export secrets for multi-epoch tag retention
         buf.extend_from_slice(&prior_secrets_bytes);
-        // v5: Conversation digests, watermarks, inbox ranges
-        buf.extend_from_slice(&digest_bytes);
-        buf.extend_from_slice(&watermark_bytes);
-        buf.extend_from_slice(&inbox_range_bytes);
         Ok(buf)
     }
 
@@ -488,37 +478,6 @@ impl MoatSession {
     /// session is first created, and persisted through `export_state()`/`from_state()`.
     pub fn device_id(&self) -> &[u8; 16] {
         &self.device_id
-    }
-
-    /// Create a new device ring MLS group with a random 32-byte group ID.
-    ///
-    /// The ring is created with only the caller as its initial member; siblings
-    /// are added later via [`add_device`]. Returns the raw group ID bytes.
-    pub fn create_device_ring(
-        &self,
-        credential: &MoatCredential,
-        key_bundle: &[u8],
-    ) -> Result<Vec<u8>> {
-        self.create_group(credential, key_bundle)
-    }
-
-    /// Create a pairwise device coordination group between this device and a sibling.
-    ///
-    /// Creates an MLS group, immediately adds the sibling via their key package,
-    /// and returns the group ID, commit, and welcome for the sibling.
-    pub fn create_device_coord_group(
-        &self,
-        credential: &MoatCredential,
-        key_bundle: &[u8],
-        sibling_key_package: &[u8],
-    ) -> Result<crate::device_ring::CoordGroupResult> {
-        let group_id = self.create_group(credential, key_bundle)?;
-        let welcome_result = self.add_member(&group_id, key_bundle, sibling_key_package)?;
-        Ok(crate::device_ring::CoordGroupResult {
-            group_id,
-            commit: welcome_result.commit,
-            welcome: welcome_result.welcome,
-        })
     }
 
     /// Check if there are unsaved changes.
@@ -621,6 +580,37 @@ impl MoatSession {
     /// so the member can be re-invited to a group.
     ///
     /// Returns the new key package bytes (suitable for publishing to the PDS).
+    /// How many of our published key packages still have a usable init key.
+    ///
+    /// A key package is single-use: OpenMLS deletes the private init key the
+    /// moment a Welcome built against it is processed, so this count is
+    /// exactly how many outstanding invitations to us could still succeed.
+    /// When it reaches zero we are **un-invitable** — every package left on
+    /// the PDS is spent, and nothing on the wire distinguishes those from
+    /// live ones, so peers keep building Welcomes we cannot process.
+    ///
+    /// Drives proactive replenishment; see `KP_SELF_POOL_TARGET`.
+    /// Whether we still hold the private init key for this key package.
+    ///
+    /// The pool on the PDS accumulates and never deletes, so a published
+    /// package tells you nothing about whether it is still usable. This is the
+    /// only way to tell a live one from a spent one, and it works only for our
+    /// own packages — which is the point: it lets a device count how many
+    /// outstanding invitations to it could actually succeed, by intersecting
+    /// what is published with what it can still open.
+    pub fn holds_init_key(&self, key_package_bytes: &[u8]) -> bool {
+        let Ok(kp_in) = KeyPackageIn::tls_deserialize_exact(key_package_bytes) else {
+            return false;
+        };
+        let Ok(kp) = kp_in.validate(self.provider.crypto(), ProtocolVersion::Mls10) else {
+            return false;
+        };
+        let Ok(hash_ref) = kp.hash_ref(self.provider.crypto()) else {
+            return false;
+        };
+        self.provider.storage().contains_key_package(&hash_ref)
+    }
+
     pub fn replenish_key_package(
         &self,
         credential: &MoatCredential,
@@ -747,74 +737,41 @@ impl MoatSession {
 
     /// Add a member to an existing group.
     ///
-    /// Returns (commit_bytes, welcome_bytes) to send to the new member.
+    /// Returns the commit with the tag to publish it under, and the Welcome
+    /// for the new member.
     pub fn add_member(
         &self,
         group_id: &[u8],
         key_bundle: &[u8],
         new_member_key_package: &[u8],
     ) -> Result<WelcomeResult> {
-        // Load the group
-        let mut group = self
-            .load_group(group_id)?
-            .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
-
-        // Deserialize our key bundle to get signature keys
-        let bundle: KeyBundle = serde_json::from_slice(key_bundle)
-            .map_err(|e| Error::Deserialization(e.to_string()))?;
-        let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
-            .map_err(|e| Error::Deserialization(e.to_string()))?;
-
-        // Deserialize the new member's key package
-        let new_key_package = KeyPackageIn::tls_deserialize_exact(new_member_key_package)
-            .map_err(|e| Error::Deserialization(e.to_string()))?;
-
-        // Validate the key package
-        let validated_key_package = new_key_package
+        let validated_key_package = KeyPackageIn::tls_deserialize_exact(new_member_key_package)
+            .map_err(|e| Error::Deserialization(e.to_string()))?
             .validate(self.provider.crypto(), ProtocolVersion::Mls10)
             .map_err(|e| Error::KeyPackageValidation(e.to_string()))?;
 
-        // Save current export secret before epoch advances
-        self.save_prior_export_secret(&group, group_id);
-
-        // Add the member
-        let (commit, welcome, _group_info) = group
-            .add_members(&self.provider, &signature_keys, &[validated_key_package])
-            .map_err(|e| Error::AddMember(e.to_string()))?;
-
-        // Track pending operation for conflict recovery
-        {
-            let mut ops = self.pending_ops.write().unwrap();
-            ops.insert(
-                group_id.to_vec(),
-                PendingOperation::AddMember {
-                    key_bundle: key_bundle.to_vec(),
-                    new_member_key_package: new_member_key_package.to_vec(),
-                },
-            );
-        }
-
-        // Merge the pending commit
-        group
-            .merge_pending_commit(&self.provider)
-            .map_err(|e| Error::MergeCommit(e.to_string()))?;
-
-        // Clear pending op on success
-        self.pending_ops.write().unwrap().remove(group_id);
-
-        // Serialize results
-        let commit_bytes = commit
-            .tls_serialize_detached()
-            .map_err(|e| Error::Serialization(e.to_string()))?;
-
-        let welcome_bytes = welcome
-            .tls_serialize_detached()
-            .map_err(|e| Error::Serialization(e.to_string()))?;
+        let local = self.commit_locally(
+            group_id,
+            key_bundle,
+            PendingOperation::AddMember {
+                key_bundle: key_bundle.to_vec(),
+                new_member_key_package: new_member_key_package.to_vec(),
+            },
+            |group, provider, signature_keys| {
+                let (commit, welcome, _group_info) = group
+                    .add_members(provider, signature_keys, &[validated_key_package])
+                    .map_err(|e| Error::AddMember(e.to_string()))?;
+                Ok((commit, Some(welcome)))
+            },
+        )?;
 
         Ok(WelcomeResult {
             new_group_state: Vec::new(), // No longer needed - state is in provider
-            welcome: welcome_bytes,
-            commit: commit_bytes,
+            welcome: local
+                .welcome
+                .ok_or_else(|| Error::AddMember("Add commit produced no Welcome".to_string()))?,
+            commit: local.commit,
+            commit_tag: local.commit_tag,
             group_id: group_id.to_vec(),
         })
     }
@@ -846,15 +803,7 @@ impl MoatSession {
 
         let group_id = group.group_id().as_slice().to_vec();
 
-        // Clear any stale seen counters / tag metadata for this group
-        {
-            let mut seen = self.seen_counters.write().unwrap();
-            seen.retain(|(gid, _, _), _| gid != &group_id);
-        }
-        {
-            let mut metadata = self.tag_metadata.write().unwrap();
-            metadata.retain(|_, m| m.group_id != group_id);
-        }
+        self.reset_scan_state(&group_id);
 
         Ok(group_id)
     }
@@ -914,7 +863,7 @@ impl MoatSession {
             chains.insert(chain_key, event_hash);
         }
 
-        let padded = pad_to_bucket(&event_bytes);
+        let padded = pad_to_bucket(&event_bytes)?;
 
         // Encrypt the message
         let ciphertext = group
@@ -926,27 +875,7 @@ impl MoatSession {
             .tls_serialize_detached()
             .map_err(|e| Error::Serialization(e.to_string()))?;
 
-        // Derive per-event tag using counter-based HD scheme
-        let epoch = group.epoch().as_u64();
-        let export_secret = self.derive_tag_export_secret(&group)?;
-        let counter_key = (group_id.to_vec(), epoch);
-
-        // Pre-increment counter for crash safety
-        let counter = {
-            let mut counters = self.tag_counters.write().unwrap();
-            let counter = counters.entry(counter_key).or_insert(0);
-            let current = *counter;
-            *counter = current + 1;
-            current
-        };
-
-        let tag = tag::derive_event_tag(
-            &export_secret,
-            group_id,
-            &sender_did,
-            &self.device_id,
-            counter,
-        )?;
+        let tag = self.next_tag_in(&group, group_id, &sender_did)?;
 
         Ok(EncryptResult {
             new_group_state: Vec::new(), // State is managed by provider
@@ -983,9 +912,7 @@ impl MoatSession {
         // Process the message with structured error classification
         let processed = match group.process_message(&self.provider, protocol_message) {
             Ok(msg) => msg,
-            Err(e) => {
-                return Err(Self::classify_process_error(e, group_id));
-            }
+            Err(e) => return Err(Self::classify_process_error(e, group_id)),
         };
 
         // Extract sender info from the credential
@@ -1002,6 +929,7 @@ impl MoatSession {
 
                 // Validate transcript integrity
                 let mut warnings = Vec::new();
+                Self::validate_sender_identity(group_id, &event, sender.as_ref(), &mut warnings);
                 self.validate_hash_chain(group_id, &event, &event_bytes, &mut warnings);
                 self.validate_epoch_fingerprint(group_id, &event, &group, &mut warnings);
 
@@ -1030,18 +958,7 @@ impl MoatSession {
                 // Get the new epoch after merging
                 let new_epoch = group.epoch().as_u64();
 
-                // Clear seen counters and tag metadata for this group — the export
-                // secret changes with the epoch, so old counter values are meaningless.
-                // Senders also reset their counters per epoch, so recipients must
-                // start scanning from 0 in the new epoch.
-                {
-                    let mut seen = self.seen_counters.write().unwrap();
-                    seen.retain(|(gid, _, _), _| gid != group_id);
-                }
-                {
-                    let mut metadata = self.tag_metadata.write().unwrap();
-                    metadata.retain(|_, m| m.group_id != group_id);
-                }
+                self.reset_scan_state(group_id);
 
                 // Return a commit event to signal the epoch has advanced
                 let event = Event::commit(group_id.to_vec(), new_epoch, Vec::new());
@@ -1167,6 +1084,36 @@ impl MoatSession {
     }
 
     /// Validate the hash chain for a received event.
+    /// Verify that the device_id embedded in the encrypted payload
+    /// (`Event.sender_device_id`) matches the device_id extracted from
+    /// the MLS credential of the message sender ([`SenderInfo::device_id`]).
+    /// Divergence is a transcript-integrity warning — both sources should
+    /// always agree.  Silently skipped when either side is unavailable
+    /// (legacy events without `sender_device_id`, or a credential that
+    /// failed to parse).
+    fn validate_sender_identity(
+        group_id: &[u8],
+        event: &Event,
+        sender: Option<&SenderInfo>,
+        warnings: &mut Vec<TranscriptWarning>,
+    ) {
+        let payload_id = match &event.sender_device_id {
+            Some(id) if id.len() == 16 => id,
+            _ => return,
+        };
+        let cred_id = match sender {
+            Some(s) => &s.device_id[..],
+            None => return,
+        };
+        if payload_id.as_slice() != cred_id {
+            warnings.push(TranscriptWarning::SenderIdentityMismatch {
+                group_id: group_id.to_vec(),
+                payload_device_id: payload_id.clone(),
+                credential_device_id: cred_id.to_vec(),
+            });
+        }
+    }
+
     fn validate_hash_chain(
         &self,
         group_id: &[u8],
@@ -1506,258 +1453,6 @@ impl MoatSession {
         Ok((map, &data[offset..]))
     }
 
-    // ── v5 digest / watermark / inbox_range serialization ──────────────────
-
-    fn serialize_conversation_digests(&self) -> Vec<u8> {
-        let digests = self.conversation_digests.read().unwrap();
-        let mut buf = Vec::new();
-        buf.extend_from_slice(&(digests.len() as u64).to_le_bytes());
-        for (group_id, state) in digests.iter() {
-            buf.extend_from_slice(&(group_id.len() as u32).to_le_bytes());
-            buf.extend_from_slice(group_id);
-            buf.extend_from_slice(&state.tip);
-            buf.extend_from_slice(&state.append_count.to_le_bytes());
-            buf.extend_from_slice(&(state.anchors.len() as u32).to_le_bytes());
-            for anchor in &state.anchors {
-                let rkey_bytes = anchor.rkey.as_bytes();
-                buf.extend_from_slice(&(rkey_bytes.len() as u16).to_le_bytes());
-                buf.extend_from_slice(rkey_bytes);
-                buf.extend_from_slice(&anchor.digest);
-            }
-        }
-        buf
-    }
-
-    fn deserialize_conversation_digests(
-        data: &[u8],
-    ) -> ParseRest<'_, HashMap<Vec<u8>, crate::digest::DigestState>> {
-        if data.len() < 8 {
-            return Ok((HashMap::new(), data));
-        }
-        let count = u64::from_le_bytes(data[..8].try_into().unwrap()) as usize;
-        let mut offset = 8;
-        let mut map = HashMap::with_capacity(count);
-        for _ in 0..count {
-            if offset + 4 > data.len() {
-                return Err(Error::Deserialization("digest table truncated".into()));
-            }
-            let gid_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
-            offset += 4;
-            if offset + gid_len + 32 + 8 + 4 > data.len() {
-                return Err(Error::Deserialization("digest table truncated".into()));
-            }
-            let group_id = data[offset..offset + gid_len].to_vec();
-            offset += gid_len;
-            let mut tip = [0u8; 32];
-            tip.copy_from_slice(&data[offset..offset + 32]);
-            offset += 32;
-            let append_count = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap());
-            offset += 8;
-            let anchor_count = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
-            offset += 4;
-            let mut anchors = Vec::with_capacity(anchor_count);
-            for _ in 0..anchor_count {
-                if offset + 2 > data.len() {
-                    return Err(Error::Deserialization("digest anchor truncated".into()));
-                }
-                let rkey_len = u16::from_le_bytes(data[offset..offset + 2].try_into().unwrap()) as usize;
-                offset += 2;
-                if offset + rkey_len + 32 > data.len() {
-                    return Err(Error::Deserialization("digest anchor truncated".into()));
-                }
-                let rkey = String::from_utf8(data[offset..offset + rkey_len].to_vec())
-                    .map_err(|_| Error::Deserialization("invalid UTF-8 in digest anchor rkey".into()))?;
-                offset += rkey_len;
-                let mut digest = [0u8; 32];
-                digest.copy_from_slice(&data[offset..offset + 32]);
-                offset += 32;
-                anchors.push(crate::digest::DigestAnchor { rkey, digest });
-            }
-            map.insert(group_id, crate::digest::DigestState {
-                tip,
-                anchors,
-                append_count,
-                epoch_boundary_pending: false,
-            });
-        }
-        Ok((map, &data[offset..]))
-    }
-
-    fn serialize_watermarks(&self) -> Vec<u8> {
-        let watermarks = self.watermarks.read().unwrap();
-        let mut buf = Vec::new();
-        buf.extend_from_slice(&(watermarks.len() as u64).to_le_bytes());
-        for (group_id, rkey) in watermarks.iter() {
-            buf.extend_from_slice(&(group_id.len() as u32).to_le_bytes());
-            buf.extend_from_slice(group_id);
-            let rkey_bytes = rkey.as_bytes();
-            buf.extend_from_slice(&(rkey_bytes.len() as u16).to_le_bytes());
-            buf.extend_from_slice(rkey_bytes);
-        }
-        buf
-    }
-
-    fn deserialize_watermarks(data: &[u8]) -> ParseRest<'_, HashMap<Vec<u8>, String>> {
-        if data.len() < 8 {
-            return Ok((HashMap::new(), data));
-        }
-        let count = u64::from_le_bytes(data[..8].try_into().unwrap()) as usize;
-        let mut offset = 8;
-        let mut map = HashMap::with_capacity(count);
-        for _ in 0..count {
-            if offset + 4 > data.len() {
-                return Err(Error::Deserialization("watermark table truncated".into()));
-            }
-            let gid_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
-            offset += 4;
-            if offset + gid_len + 2 > data.len() {
-                return Err(Error::Deserialization("watermark table truncated".into()));
-            }
-            let group_id = data[offset..offset + gid_len].to_vec();
-            offset += gid_len;
-            let rkey_len = u16::from_le_bytes(data[offset..offset + 2].try_into().unwrap()) as usize;
-            offset += 2;
-            if offset + rkey_len > data.len() {
-                return Err(Error::Deserialization("watermark rkey truncated".into()));
-            }
-            let rkey = String::from_utf8(data[offset..offset + rkey_len].to_vec())
-                .map_err(|_| Error::Deserialization("invalid UTF-8 in watermark rkey".into()))?;
-            offset += rkey_len;
-            map.insert(group_id, rkey);
-        }
-        Ok((map, &data[offset..]))
-    }
-
-    fn serialize_inbox_ranges(&self) -> Vec<u8> {
-        let ranges = self.inbox_ranges.read().unwrap();
-        let mut buf = Vec::new();
-        buf.extend_from_slice(&(ranges.len() as u64).to_le_bytes());
-        for (group_id, (oldest, newest)) in ranges.iter() {
-            buf.extend_from_slice(&(group_id.len() as u32).to_le_bytes());
-            buf.extend_from_slice(group_id);
-            let oldest_bytes = oldest.as_bytes();
-            buf.extend_from_slice(&(oldest_bytes.len() as u16).to_le_bytes());
-            buf.extend_from_slice(oldest_bytes);
-            let newest_bytes = newest.as_bytes();
-            buf.extend_from_slice(&(newest_bytes.len() as u16).to_le_bytes());
-            buf.extend_from_slice(newest_bytes);
-        }
-        buf
-    }
-
-    fn deserialize_inbox_ranges(data: &[u8]) -> Result<HashMap<Vec<u8>, (String, String)>> {
-        if data.len() < 8 {
-            return Ok(HashMap::new());
-        }
-        let count = u64::from_le_bytes(data[..8].try_into().unwrap()) as usize;
-        let mut offset = 8;
-        let mut map = HashMap::with_capacity(count);
-        for _ in 0..count {
-            if offset + 4 > data.len() {
-                return Err(Error::Deserialization("inbox_range table truncated".into()));
-            }
-            let gid_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
-            offset += 4;
-            if offset + gid_len + 2 > data.len() {
-                return Err(Error::Deserialization("inbox_range table truncated".into()));
-            }
-            let group_id = data[offset..offset + gid_len].to_vec();
-            offset += gid_len;
-
-            let oldest_len = u16::from_le_bytes(data[offset..offset + 2].try_into().unwrap()) as usize;
-            offset += 2;
-            if offset + oldest_len + 2 > data.len() {
-                return Err(Error::Deserialization("inbox_range oldest_rkey truncated".into()));
-            }
-            let oldest = String::from_utf8(data[offset..offset + oldest_len].to_vec())
-                .map_err(|_| Error::Deserialization("invalid UTF-8 in inbox_range".into()))?;
-            offset += oldest_len;
-
-            let newest_len = u16::from_le_bytes(data[offset..offset + 2].try_into().unwrap()) as usize;
-            offset += 2;
-            if offset + newest_len > data.len() {
-                return Err(Error::Deserialization("inbox_range newest_rkey truncated".into()));
-            }
-            let newest = String::from_utf8(data[offset..offset + newest_len].to_vec())
-                .map_err(|_| Error::Deserialization("invalid UTF-8 in inbox_range".into()))?;
-            offset += newest_len;
-
-            map.insert(group_id, (oldest, newest));
-        }
-        Ok(map)
-    }
-
-    // ── v5 public API ────────────────────────────────────────────────────────
-
-    /// Append a user-visible message to the running digest for a conversation.
-    ///
-    /// Only call for events whose kind starts with `message.` (user-visible content).
-    /// Control and modifier events are excluded from the digest.
-    ///
-    /// `digest_n = SHA256(digest_{n-1} || rkey || message_id)`
-    pub fn append_to_digest(&self, group_id: &[u8], rkey: &str, message_id: &[u8; 16]) -> Result<()> {
-        let should_anchor = {
-            let mut digests = self.conversation_digests.write().unwrap();
-            let state = digests.entry(group_id.to_vec()).or_default();
-            // Transfer any pending epoch boundary flag.
-            if self.digest_epoch_boundaries.read().unwrap().contains(group_id) {
-                state.epoch_boundary_pending = true;
-                self.digest_epoch_boundaries.write().unwrap().remove(group_id);
-            }
-            state.append(rkey, message_id)
-        };
-        // Update inbox range.
-        {
-            let mut ranges = self.inbox_ranges.write().unwrap();
-            let entry = ranges.entry(group_id.to_vec()).or_insert_with(|| (rkey.to_string(), rkey.to_string()));
-            if rkey < entry.0.as_str() {
-                entry.0 = rkey.to_string();
-            }
-            if rkey > entry.1.as_str() {
-                entry.1 = rkey.to_string();
-            }
-        }
-        let _ = should_anchor; // anchor is stored inside DigestState
-        Ok(())
-    }
-
-    /// Return the current digest tip for a conversation, or `None` if no messages yet.
-    pub fn digest_tip(&self, group_id: &[u8]) -> Option<[u8; 32]> {
-        self.conversation_digests.read().unwrap().get(group_id).map(|s| s.tip)
-    }
-
-    /// Return all stored digest anchors for a conversation.
-    pub fn digest_anchors(&self, group_id: &[u8]) -> Vec<DigestAnchor> {
-        self.conversation_digests.read().unwrap()
-            .get(group_id)
-            .map(|s| s.anchors.clone())
-            .unwrap_or_default()
-    }
-
-    /// Return the (oldest_rkey, newest_rkey) range held locally for a conversation.
-    pub fn range(&self, group_id: &[u8]) -> Option<(String, String)> {
-        self.inbox_ranges.read().unwrap().get(group_id).cloned()
-    }
-
-    /// Return the oldest synced rkey (watermark) for a conversation.
-    pub fn watermark(&self, group_id: &[u8]) -> Option<String> {
-        self.watermarks.read().unwrap().get(group_id).cloned()
-    }
-
-    /// Set the sync watermark (oldest synced rkey) for a conversation.
-    pub fn set_watermark(&self, group_id: &[u8], rkey: &str) -> Result<()> {
-        self.watermarks.write().unwrap().insert(group_id.to_vec(), rkey.to_string());
-        Ok(())
-    }
-
-    /// Signal that an epoch boundary has occurred for `group_id`.
-    ///
-    /// The next call to `append_to_digest` for this group will unconditionally
-    /// save a digest anchor, regardless of whether the stride threshold is met.
-    pub fn mark_digest_epoch_boundary(&self, group_id: &[u8]) {
-        self.digest_epoch_boundaries.write().unwrap().insert(group_id.to_vec());
-    }
-
     /// Save the current epoch's export secret to the prior secrets ring buffer.
     ///
     /// Call this **before** an epoch-advancing operation (add_member, remove_member,
@@ -1888,6 +1583,20 @@ impl MoatSession {
         Ok(members)
     }
 
+    /// The device name of the member of `group_id` with `device_id`, if any.
+    pub fn member_device_name(
+        &self,
+        group_id: &[u8],
+        device_id: &[u8; 16],
+    ) -> Result<Option<String>> {
+        Ok(self
+            .get_group_members(group_id)?
+            .into_iter()
+            .filter_map(|(_, cred)| cred)
+            .find(|c| c.device_id() == device_id)
+            .map(|c| c.device_name().to_string()))
+    }
+
     /// Get all DIDs currently in a group.
     ///
     /// Returns a deduplicated list of DIDs (a single DID may have multiple devices).
@@ -1914,25 +1623,25 @@ impl MoatSession {
 
     /// Derive the next tag for a group event and advance the counter.
     ///
-    /// Use this for events that bypass `encrypt_event` (e.g., raw commits from
-    /// `add_member`/`add_device`/`remove_member`). The tag is derived using the
-    /// pre-advance epoch (the commit is the last event of the old epoch).
+    /// Commits created by `add_member`, `add_device`, `remove_member`,
+    /// `kick_user` and `leave_group` already carry the tag to publish them
+    /// under; this is for anything else that bypasses `encrypt_event`.
     ///
     /// Returns the derived tag.
     pub fn derive_next_tag(&self, group_id: &[u8], key_bundle: &[u8]) -> Result<[u8; 16]> {
         let group = self
             .load_group(group_id)?
             .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
+        let signature_keys = Self::parse_signature_keys(key_bundle)?;
+        let sender_did = self.extract_own_did(&group, &signature_keys.to_public_vec())?;
+        self.next_tag_in(&group, group_id, &sender_did)
+    }
 
-        let bundle: KeyBundle = serde_json::from_slice(key_bundle)
-            .map_err(|e| Error::Deserialization(e.to_string()))?;
-        let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
-            .map_err(|e| Error::Deserialization(e.to_string()))?;
-        let our_pubkey = signature_keys.to_public_vec();
-        let sender_did = self.extract_own_did(&group, &our_pubkey)?;
-
+    /// Derive this device's next outgoing tag in `group`'s current epoch and
+    /// advance the counter.
+    fn next_tag_in(&self, group: &MlsGroup, group_id: &[u8], sender_did: &str) -> Result<[u8; 16]> {
         let epoch = group.epoch().as_u64();
-        let export_secret = self.derive_tag_export_secret(&group)?;
+        let export_secret = self.derive_tag_export_secret(group)?;
         let counter_key = (group_id.to_vec(), epoch);
 
         let counter = {
@@ -1946,10 +1655,92 @@ impl MoatSession {
         tag::derive_event_tag(
             &export_secret,
             group_id,
-            &sender_did,
+            sender_did,
             &self.device_id,
             counter,
         )
+    }
+
+    fn parse_signature_keys(key_bundle: &[u8]) -> Result<SignatureKeyPair> {
+        let bundle: KeyBundle = serde_json::from_slice(key_bundle)
+            .map_err(|e| Error::Deserialization(e.to_string()))?;
+        SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
+            .map_err(|e| Error::Deserialization(e.to_string()))
+    }
+
+    /// Create a commit with `build` and apply it to this device's own state.
+    ///
+    /// Every epoch change this device makes itself goes through here, so the
+    /// bookkeeping owed to an epoch change happens in one place: the commit's
+    /// tag is derived in the epoch being left, where the other members are
+    /// still scanning; that epoch's export secret is kept for tags of
+    /// messages stranded there; and scanning restarts for the epoch entered,
+    /// exactly as when a commit arrives from someone else. `pending` is held
+    /// until the merge succeeds, for conflict recovery.
+    fn commit_locally(
+        &self,
+        group_id: &[u8],
+        key_bundle: &[u8],
+        pending: PendingOperation,
+        build: impl FnOnce(
+            &mut MlsGroup,
+            &MoatProvider,
+            &SignatureKeyPair,
+        ) -> Result<(MlsMessageOut, Option<MlsMessageOut>)>,
+    ) -> Result<LocalCommit> {
+        let mut group = self
+            .load_group(group_id)?
+            .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
+        let signature_keys = Self::parse_signature_keys(key_bundle)?;
+        let sender_did = self.extract_own_did(&group, &signature_keys.to_public_vec())?;
+
+        let commit_tag = self.next_tag_in(&group, group_id, &sender_did)?;
+        self.save_prior_export_secret(&group, group_id);
+
+        let (commit, welcome) = build(&mut group, &self.provider, &signature_keys)?;
+
+        self.pending_ops
+            .write()
+            .unwrap()
+            .insert(group_id.to_vec(), pending);
+
+        group
+            .merge_pending_commit(&self.provider)
+            .map_err(|e| Error::MergeCommit(e.to_string()))?;
+
+        self.pending_ops.write().unwrap().remove(group_id);
+        self.reset_scan_state(group_id);
+
+        let commit = commit
+            .tls_serialize_detached()
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+        let welcome = welcome
+            .map(|w| w.tls_serialize_detached())
+            .transpose()
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+
+        Ok(LocalCommit {
+            commit_tag,
+            commit,
+            welcome,
+        })
+    }
+
+    /// Forget the recipient-side scanning state for `group_id`.
+    ///
+    /// The export secret changes with the epoch, and senders restart their
+    /// tag counters in every epoch, so both the seen counters and the tag
+    /// metadata derived from them are meaningless afterwards: scanning must
+    /// start again from counter 0.
+    fn reset_scan_state(&self, group_id: &[u8]) {
+        self.seen_counters
+            .write()
+            .unwrap()
+            .retain(|(gid, _, _), _| gid != group_id);
+        self.tag_metadata
+            .write()
+            .unwrap()
+            .retain(|_, m| m.group_id != group_id);
     }
 
     /// Generate candidate tags for recipient scanning.
@@ -1995,7 +1786,11 @@ impl MoatSession {
     /// advance the seen counter when a tag is matched.
     ///
     /// Returns a flat list of all candidate tags.
-    pub fn populate_candidate_tags(&self, group_id: &[u8]) -> Result<Vec<[u8; 16]>> {
+    pub fn populate_candidate_tags(
+        &self,
+        group_id: &[u8],
+        extra_members: &[(&str, &[u8; 16])],
+    ) -> Result<Vec<[u8; 16]>> {
         let group = self
             .load_group(group_id)?
             .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
@@ -2006,19 +1801,27 @@ impl MoatSession {
         let mut all_tags = Vec::new();
         let mut metadata = self.tag_metadata.write().unwrap();
 
-        // Current epoch: use seen_counters for the scanning window
+        // Collect (did, device_id) from MLS membership + extras
+        let mut member_pairs: Vec<(&str, &[u8; 16])> = Vec::new();
         for (_leaf_idx, cred) in &members {
-            let cred = match cred {
-                Some(c) => c,
-                None => continue,
-            };
-            let device_id = cred.device_id();
-            let key = (group_id.to_vec(), cred.did().to_string(), *device_id);
+            if let Some(c) = cred {
+                member_pairs.push((c.did(), c.device_id()));
+            }
+        }
+        for &(did, device_id) in extra_members {
+            if !member_pairs.iter().any(|(d, _)| *d == did) {
+                member_pairs.push((did, device_id));
+            }
+        }
+
+        // Current epoch: use seen_counters for the scanning window
+        for &(did, device_id) in &member_pairs {
+            let key = (group_id.to_vec(), did.to_string(), *device_id);
             let from_counter = seen.get(&key).map_or(0, |&c| c + 1);
             let tags = tag::generate_candidate_tags(
                 &export_secret,
                 group_id,
-                cred.did(),
+                did,
                 device_id,
                 from_counter,
                 tag::TAG_GAP_LIMIT,
@@ -2028,9 +1831,10 @@ impl MoatSession {
                     t,
                     TagMetadata {
                         group_id: group_id.to_vec(),
-                        sender_did: cred.did().to_string(),
+                        sender_did: did.to_string(),
                         device_id: *device_id,
                         counter,
+                        current_epoch: true,
                     },
                 );
                 all_tags.push(t);
@@ -2046,18 +1850,13 @@ impl MoatSession {
                 if gap == 0 {
                     break;
                 }
-                for (_leaf_idx, cred) in &members {
-                    let cred = match cred {
-                        Some(c) => c,
-                        None => continue,
-                    };
-                    let device_id = cred.device_id();
+                for &(did, device_id) in &member_pairs {
                     let tags = tag::generate_candidate_tags(
                         prior_secret,
                         group_id,
-                        cred.did(),
+                        did,
                         device_id,
-                        0, // always scan from counter 0 for old epochs
+                        0,
                         gap,
                     )?;
                     for (t, counter) in tags {
@@ -2065,9 +1864,10 @@ impl MoatSession {
                             t,
                             TagMetadata {
                                 group_id: group_id.to_vec(),
-                                sender_did: cred.did().to_string(),
+                                sender_did: did.to_string(),
                                 device_id: *device_id,
                                 counter,
+                                current_epoch: false,
                             },
                         );
                         all_tags.push(t);
@@ -2076,7 +1876,53 @@ impl MoatSession {
             }
         }
 
+        self.inbox.write().unwrap().wake(all_tags.iter());
         Ok(all_tags)
+    }
+
+    // ── Inbox ───────────────────────────────────────────────────────────────
+
+    /// Queue a fetched event. Returns false if it is already held.
+    pub fn inbox_push(&self, event: InboxEvent) -> bool {
+        self.inbox.write().unwrap().push(event)
+    }
+
+    /// The ready event with the lowest rkey.
+    pub fn inbox_pop_ready(&self) -> Option<InboxEvent> {
+        self.inbox.write().unwrap().pop_ready()
+    }
+
+    /// Park an event until its tag is generated.
+    pub fn inbox_park(&self, event: InboxEvent, now_ms: i64) {
+        self.inbox.write().unwrap().park(event, now_ms)
+    }
+
+    /// Drop events parked longer than [`MAX_PARKED_AGE_MS`]. Returns how many.
+    pub fn inbox_expire(&self, now_ms: i64) -> usize {
+        self.inbox.write().unwrap().expire(now_ms)
+    }
+
+    pub fn inbox_parked_len(&self) -> usize {
+        self.inbox.read().unwrap().parked_len()
+    }
+
+    /// The parked events, serialized for the host to persist.
+    pub fn export_parked_events(&self) -> Vec<u8> {
+        self.inbox.read().unwrap().export_parked()
+    }
+
+    /// Restore events from [`Self::export_parked_events`]. Returns the count.
+    pub fn import_parked_events(&self, bytes: &[u8]) -> Result<usize> {
+        self.inbox.write().unwrap().import_parked(bytes)
+    }
+
+    /// The group a candidate tag belongs to, if it is one.
+    pub fn group_for_tag(&self, tag: &[u8; 16]) -> Option<Vec<u8>> {
+        self.tag_metadata
+            .read()
+            .unwrap()
+            .get(tag)
+            .map(|m| m.group_id.clone())
     }
 
     /// Mark a tag as seen, advancing the seen counter for the corresponding sender.
@@ -2092,6 +1938,10 @@ impl MoatSession {
         };
         drop(meta);
 
+        if !entry.current_epoch {
+            return true;
+        }
+
         let key = (entry.group_id, entry.sender_did, entry.device_id);
         let counter = entry.counter;
         let mut seen = self.seen_counters.write().unwrap();
@@ -2102,109 +1952,77 @@ impl MoatSession {
         true
     }
 
-    /// Scan ahead with a wider window to try matching an unknown tag.
+    /// Mark a matched tag as seen and slide its sender's scanning window.
     ///
-    /// When `populate_candidate_tags` misses because the sender's counter advanced
-    /// beyond the gap limit, this method scans a much larger range (up to `scan_limit`)
-    /// for all devices in the given group. Returns the matching tag metadata if found,
-    /// and updates `tag_metadata` and `seen_counters` accordingly.
-    pub fn try_scan_ahead_tag(
-        &self,
-        group_id: &[u8],
-        target_tag: &[u8; 16],
-        scan_limit: u64,
-    ) -> Result<bool> {
-        let group = self
-            .load_group(group_id)?
-            .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
-        let export_secret = self.derive_tag_export_secret(&group)?;
-        let members = self.get_group_members(group_id)?;
-        let seen = self.seen_counters.read().unwrap();
+    /// Returns the newly covered candidate tags, for the host's tag map and
+    /// watch list. Empty if nothing new is covered.
+    pub fn advance_scan_window(&self, tag: &[u8; 16]) -> Vec<[u8; 16]> {
+        let entry = match self.tag_metadata.read().unwrap().get(tag) {
+            Some(e) if e.current_epoch => e.clone(),
+            _ => return Vec::new(),
+        };
 
-        // Try current epoch first
-        for (_leaf_idx, cred) in &members {
-            let cred = match cred {
-                Some(c) => c,
-                None => continue,
-            };
-            let device_id = cred.device_id();
-            let key = (group_id.to_vec(), cred.did().to_string(), *device_id);
-            let from_counter = seen.get(&key).map_or(0, |&c| c + 1);
+        let key = (entry.group_id.clone(), entry.sender_did.clone(), entry.device_id);
+        let previous = {
+            let mut seen = self.seen_counters.write().unwrap();
+            let previous = seen.get(&key).copied();
+            if previous.is_some_and(|p| entry.counter <= p) {
+                return Vec::new();
+            }
+            seen.insert(key, entry.counter);
+            previous
+        };
 
-            let tags = tag::generate_candidate_tags(
-                &export_secret,
-                group_id,
-                cred.did(),
-                device_id,
-                from_counter,
-                scan_limit,
-            )?;
-            for (t, counter) in tags {
-                if &t == target_tag {
-                    let mut metadata = self.tag_metadata.write().unwrap();
+        // The window covered [previous + 1, previous + 1 + GAP) — [0, GAP)
+        // with nothing seen — and now covers [counter + 1, counter + 1 + GAP).
+        let covered_until = previous.map_or(0, |p| p + 1) + tag::TAG_GAP_LIMIT;
+        let window_end = entry.counter + 1 + tag::TAG_GAP_LIMIT;
+        let from = covered_until.max(entry.counter + 1);
+        if from >= window_end {
+            return Vec::new();
+        }
+
+        let generated = self
+            .load_group(&entry.group_id)
+            .ok()
+            .flatten()
+            .and_then(|group| self.derive_tag_export_secret(&group).ok())
+            .and_then(|secret| {
+                tag::generate_candidate_tags(
+                    &secret,
+                    &entry.group_id,
+                    &entry.sender_did,
+                    &entry.device_id,
+                    from,
+                    window_end - from,
+                )
+                .ok()
+            });
+        let Some(generated) = generated else {
+            return Vec::new();
+        };
+
+        let added: Vec<[u8; 16]> = {
+            let mut metadata = self.tag_metadata.write().unwrap();
+            generated
+                .into_iter()
+                .map(|(t, counter)| {
                     metadata.insert(
                         t,
                         TagMetadata {
-                            group_id: group_id.to_vec(),
-                            sender_did: cred.did().to_string(),
-                            device_id: *device_id,
+                            group_id: entry.group_id.clone(),
+                            sender_did: entry.sender_did.clone(),
+                            device_id: entry.device_id,
                             counter,
+                            current_epoch: true,
                         },
                     );
-                    drop(metadata);
-                    drop(seen);
-                    let mut seen_w = self.seen_counters.write().unwrap();
-                    let current = seen_w.entry(key).or_insert(0);
-                    if counter >= *current {
-                        *current = counter;
-                    }
-                    return Ok(true);
-                }
-            }
-        }
-
-        // Try prior epoch secrets
-        let prior_secrets = self.prior_export_secrets.read().unwrap();
-        if let Some(deque) = prior_secrets.get(group_id) {
-            for prior_secret in deque.iter() {
-                for (_leaf_idx, cred) in &members {
-                    let cred = match cred {
-                        Some(c) => c,
-                        None => continue,
-                    };
-                    let device_id = cred.device_id();
-                    let tags = tag::generate_candidate_tags(
-                        prior_secret,
-                        group_id,
-                        cred.did(),
-                        device_id,
-                        0,
-                        scan_limit,
-                    )?;
-                    for (t, counter) in tags {
-                        if &t == target_tag {
-                            let mut metadata = self.tag_metadata.write().unwrap();
-                            metadata.insert(
-                                t,
-                                TagMetadata {
-                                    group_id: group_id.to_vec(),
-                                    sender_did: cred.did().to_string(),
-                                    device_id: *device_id,
-                                    counter,
-                                },
-                            );
-                            drop(metadata);
-                            drop(seen);
-                            // Don't advance seen_counters for old-epoch matches
-                            // (they use epoch-specific counters, not the current epoch's)
-                            return Ok(true);
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(false)
+                    t
+                })
+                .collect()
+        };
+        self.inbox.write().unwrap().wake(added.iter());
+        added
     }
 
     /// Add a new device (key package) to a group for an existing member's DID.
@@ -2257,52 +2075,24 @@ impl MoatSession {
         key_bundle: &[u8],
         leaf_index: u32,
     ) -> Result<RemoveResult> {
-        // Load the group
-        let mut group = self
-            .load_group(group_id)?
-            .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
-
-        // Deserialize our key bundle to get signature keys
-        let bundle: KeyBundle = serde_json::from_slice(key_bundle)
-            .map_err(|e| Error::Deserialization(e.to_string()))?;
-        let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
-            .map_err(|e| Error::Deserialization(e.to_string()))?;
-
-        // Save current export secret before epoch advances
-        self.save_prior_export_secret(&group, group_id);
-
-        // Create the remove proposal
-        let leaf_node_index = LeafNodeIndex::new(leaf_index);
-        let (commit, _welcome, _group_info) = group
-            .remove_members(&self.provider, &signature_keys, &[leaf_node_index])
-            .map_err(|e| Error::RemoveMember(e.to_string()))?;
-
-        // Track pending operation
-        {
-            let mut ops = self.pending_ops.write().unwrap();
-            ops.insert(
-                group_id.to_vec(),
-                PendingOperation::RemoveMember {
-                    key_bundle: key_bundle.to_vec(),
-                    leaf_index,
-                },
-            );
-        }
-
-        // Merge the pending commit
-        group
-            .merge_pending_commit(&self.provider)
-            .map_err(|e| Error::MergeCommit(e.to_string()))?;
-
-        self.pending_ops.write().unwrap().remove(group_id);
-
-        // Serialize the commit
-        let commit_bytes = commit
-            .tls_serialize_detached()
-            .map_err(|e| Error::Serialization(e.to_string()))?;
+        let local = self.commit_locally(
+            group_id,
+            key_bundle,
+            PendingOperation::RemoveMember {
+                key_bundle: key_bundle.to_vec(),
+                leaf_index,
+            },
+            |group, provider, signature_keys| {
+                let (commit, _welcome, _group_info) = group
+                    .remove_members(provider, signature_keys, &[LeafNodeIndex::new(leaf_index)])
+                    .map_err(|e| Error::RemoveMember(e.to_string()))?;
+                Ok((commit, None))
+            },
+        )?;
 
         Ok(RemoveResult {
-            commit: commit_bytes,
+            commit: local.commit,
+            commit_tag: local.commit_tag,
             group_id: group_id.to_vec(),
         })
     }
@@ -2331,57 +2121,29 @@ impl MoatSession {
             )));
         }
 
-        // Load the group
-        let mut group = self
-            .load_group(group_id)?
-            .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
-
-        // Deserialize our key bundle to get signature keys
-        let bundle: KeyBundle = serde_json::from_slice(key_bundle)
-            .map_err(|e| Error::Deserialization(e.to_string()))?;
-        let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
-            .map_err(|e| Error::Deserialization(e.to_string()))?;
-
-        // Create leaf node indices
         let leaf_node_indices: Vec<LeafNodeIndex> = leaf_indices
             .iter()
             .map(|&idx| LeafNodeIndex::new(idx))
             .collect();
 
-        // Save current export secret before epoch advances
-        self.save_prior_export_secret(&group, group_id);
-
-        // Remove all members with this DID
-        let (commit, _welcome, _group_info) = group
-            .remove_members(&self.provider, &signature_keys, &leaf_node_indices)
-            .map_err(|e| Error::RemoveMember(e.to_string()))?;
-
-        // Track pending operation
-        {
-            let mut ops = self.pending_ops.write().unwrap();
-            ops.insert(
-                group_id.to_vec(),
-                PendingOperation::KickUser {
-                    key_bundle: key_bundle.to_vec(),
-                    did: did_to_kick.to_string(),
-                },
-            );
-        }
-
-        // Merge the pending commit
-        group
-            .merge_pending_commit(&self.provider)
-            .map_err(|e| Error::MergeCommit(e.to_string()))?;
-
-        self.pending_ops.write().unwrap().remove(group_id);
-
-        // Serialize the commit
-        let commit_bytes = commit
-            .tls_serialize_detached()
-            .map_err(|e| Error::Serialization(e.to_string()))?;
+        let local = self.commit_locally(
+            group_id,
+            key_bundle,
+            PendingOperation::KickUser {
+                key_bundle: key_bundle.to_vec(),
+                did: did_to_kick.to_string(),
+            },
+            |group, provider, signature_keys| {
+                let (commit, _welcome, _group_info) = group
+                    .remove_members(provider, signature_keys, &leaf_node_indices)
+                    .map_err(|e| Error::RemoveMember(e.to_string()))?;
+                Ok((commit, None))
+            },
+        )?;
 
         Ok(RemoveResult {
-            commit: commit_bytes,
+            commit: local.commit,
+            commit_tag: local.commit_tag,
             group_id: group_id.to_vec(),
         })
     }
@@ -2443,55 +2205,29 @@ impl MoatSession {
     /// Returns the commit message to broadcast. After calling this, the caller
     /// will no longer be able to decrypt messages in this group.
     pub fn leave_group(&self, group_id: &[u8], key_bundle: &[u8]) -> Result<RemoveResult> {
-        // Load the group
-        let mut group = self
-            .load_group(group_id)?
-            .ok_or_else(|| Error::GroupLoad("Group not found".to_string()))?;
-
-        // Deserialize our key bundle to get signature keys
-        let bundle: KeyBundle = serde_json::from_slice(key_bundle)
-            .map_err(|e| Error::Deserialization(e.to_string()))?;
-        let signature_keys = SignatureKeyPair::tls_deserialize_exact(&bundle.signature_key)
-            .map_err(|e| Error::Deserialization(e.to_string()))?;
-
-        // Find our own leaf index
-        let our_pubkey = signature_keys.to_public_vec();
-        let members: Vec<_> = group.members().collect();
-        let our_leaf = members
-            .iter()
-            .find(|m| m.signature_key == our_pubkey)
-            .ok_or_else(|| Error::RemoveMember("Cannot find self in group".to_string()))?;
-
-        // Create remove proposal for ourselves
-        let (commit, _welcome, _group_info) = group
-            .remove_members(&self.provider, &signature_keys, &[our_leaf.index])
-            .map_err(|e| Error::RemoveMember(e.to_string()))?;
-
-        // Track pending operation
-        {
-            let mut ops = self.pending_ops.write().unwrap();
-            ops.insert(
-                group_id.to_vec(),
-                PendingOperation::LeaveGroup {
-                    key_bundle: key_bundle.to_vec(),
-                },
-            );
-        }
-
-        // Merge the pending commit
-        group
-            .merge_pending_commit(&self.provider)
-            .map_err(|e| Error::MergeCommit(e.to_string()))?;
-
-        self.pending_ops.write().unwrap().remove(group_id);
-
-        // Serialize the commit
-        let commit_bytes = commit
-            .tls_serialize_detached()
-            .map_err(|e| Error::Serialization(e.to_string()))?;
+        let local = self.commit_locally(
+            group_id,
+            key_bundle,
+            PendingOperation::LeaveGroup {
+                key_bundle: key_bundle.to_vec(),
+            },
+            |group, provider, signature_keys| {
+                let our_pubkey = signature_keys.to_public_vec();
+                let our_leaf = group
+                    .members()
+                    .find(|m| m.signature_key == our_pubkey)
+                    .map(|m| m.index)
+                    .ok_or_else(|| Error::RemoveMember("Cannot find self in group".to_string()))?;
+                let (commit, _welcome, _group_info) = group
+                    .remove_members(provider, signature_keys, &[our_leaf])
+                    .map_err(|e| Error::RemoveMember(e.to_string()))?;
+                Ok((commit, None))
+            },
+        )?;
 
         Ok(RemoveResult {
-            commit: commit_bytes,
+            commit: local.commit,
+            commit_tag: local.commit_tag,
             group_id: group_id.to_vec(),
         })
     }

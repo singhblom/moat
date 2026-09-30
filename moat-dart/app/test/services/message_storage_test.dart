@@ -30,7 +30,6 @@ void main() {
     String content = 'Hello!',
     DateTime? timestamp,
     bool isOwn = false,
-    int epoch = 0,
     MessageStatus status = MessageStatus.sent,
   }) {
     return Message(
@@ -40,7 +39,6 @@ void main() {
       content: content,
       timestamp: timestamp ?? DateTime.utc(2025, 1, 15, 12, 0, 0),
       isOwn: isOwn,
-      epoch: epoch,
       status: status,
     );
   }

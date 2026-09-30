@@ -138,10 +138,15 @@ class KeyPackageRecord {
 class StealthAddressRecord {
   final Uint8List scanPubkey;
   final String deviceName;
+  /// Stable 16-byte device identifier. Pre-v3 records lacked this field;
+  /// it is decoded as all-zero bytes there so callers can still ingest
+  /// the record. New records always carry a real `deviceId`.
+  final Uint8List deviceId;
 
   StealthAddressRecord({
     required this.scanPubkey,
     required this.deviceName,
+    required this.deviceId,
   });
 }
 
@@ -375,18 +380,26 @@ class AtprotoClient {
     return records;
   }
 
-  Future<String> publishStealthAddress(Uint8List scanPubkey, String deviceName) async {
+  Future<String> publishStealthAddress(
+    Uint8List scanPubkey,
+    String deviceName,
+    Uint8List deviceId,
+  ) async {
     _requireSession();
 
     if (scanPubkey.length != 32) {
       throw AtprotoException('Stealth public key must be 32 bytes');
     }
+    if (deviceId.length != 16) {
+      throw AtprotoException('Device id must be 16 bytes');
+    }
 
     final now = DateTime.now().toUtc();
     final record = {
-      'v': 2,
+      'v': 3,
       'scanPubkey': {r'$bytes': base64Encode(scanPubkey)},
       'deviceName': deviceName,
+      'deviceId': {r'$bytes': base64Encode(deviceId)},
       'createdAt': now.toIso8601String(),
     };
 
@@ -475,12 +488,14 @@ class AtprotoClient {
     for (final item in items) {
       final value = item['value'] as Map<String, dynamic>;
       final v = value['v'] as int?;
-      if (v == 2) {
+      if (v == 3) {
         final scanPubkey = _decodeBytesField(value['scanPubkey']);
         final deviceName = value['deviceName'] as String? ?? 'Unknown';
+        final deviceId = _decodeBytesField(value['deviceId']);
         records.add(StealthAddressRecord(
           scanPubkey: scanPubkey,
           deviceName: deviceName,
+          deviceId: deviceId,
         ));
       }
     }
@@ -526,6 +541,30 @@ class AtprotoClient {
     );
 
     return response['uri'] as String;
+  }
+
+  /// Delete one of our own event records, given its `at://` URI.
+  ///
+  /// Used to retire a superseded record — a history summary replaced by a
+  /// newer one. Deleting the *record* is also what releases its blob: the
+  /// PDS garbage-collects a blob once nothing references it, so there is
+  /// no separate blob-delete call to make.
+  ///
+  /// Mirrors `MoatAtprotoClient::delete_event` in `crates/moat-atproto`.
+  Future<void> deleteEvent(String uri) async {
+    _requireSession();
+    final rkey = uri.split('/').last;
+    if (rkey.isEmpty) {
+      throw AtprotoException('no rkey in record URI: $uri');
+    }
+    await _authedPost(
+      '${_session!.pdsUrl}/xrpc/com.atproto.repo.deleteRecord',
+      body: {
+        'repo': _session!.did,
+        'collection': eventNsid,
+        'rkey': rkey,
+      },
+    );
   }
 
   Future<List<EventRecord>> fetchEvents(String did, {String? afterRkey}) async {

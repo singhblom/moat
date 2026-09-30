@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:web_socket_channel/status.dart' as ws_status;
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../rust/api/simple.dart' as ffi;
 import 'debug_log.dart';
@@ -57,14 +58,20 @@ class DrawbridgeService {
   /// Called when the relay matches a pair token and emits `pair_ready`.
   void Function(DrawbridgePairReady)? onPairReady;
 
-  /// Called once the /pair WS reports `paired`.
-  void Function()? onPairConnected;
+  /// Called once the /pair WS for `token` reports `paired`.
+  void Function(Uint8List token)? onPairConnected;
 
-  /// Called for every binary frame received on /pair after `paired`.
-  void Function(Uint8List)? onPairFrame;
+  /// Called for every binary frame received on the /pair WS for `token`
+  /// after `paired`.
+  void Function(Uint8List token, Uint8List data)? onPairFrame;
 
-  /// Called when the /pair WS disconnects (cleanly or with an error).
-  void Function(String reason)? onPairClosed;
+  /// Called when the /pair WS for `token` fails to connect or disconnects
+  /// (cleanly or with an error).
+  void Function(Uint8List token, String reason)? onPairClosed;
+
+  /// Called each time the own relay (re)authenticates, so an offer or
+  /// join it has not acknowledged can be resent.
+  void Function()? onAuthenticated;
 
   WebSocketChannel? _pairChannel;
   StreamSubscription? _pairSubscription;
@@ -76,6 +83,7 @@ class DrawbridgeService {
   Timer? _reconnectTimer;
   int _reconnectAttempts = 0;
   static const _maxReconnectDelay = Duration(seconds: 60);
+
 
   /// Tags currently registered on own relay.
   final Set<String> _watchedTagHexes = {};
@@ -152,6 +160,7 @@ class DrawbridgeService {
           _ownAuthenticated = true;
           _sendWatchedTags();
           _sendPushRegistration();
+          onAuthenticated?.call();
         case 'new_event':
           _handleNewEvent(msg);
         case 'pair_pending':
@@ -160,7 +169,14 @@ class DrawbridgeService {
         case 'pair_ready':
           _handlePairReady(msg);
         case 'error':
+          // Any error on the main WS is treated as connection-fatal, same
+          // as `moat-cli`'s client — forces a reconnect cycle so a
+          // rendezvous message lost to the pair_offer/pair_join race (the
+          // relay doesn't close the socket for this error, it just replies
+          // in-band) gets resent once reconnected.
           moatLog('DrawbridgeService: Own relay error: ${msg['message']}');
+          _ownAuthenticated = false;
+          _scheduleReconnect();
         default:
           moatLog('DrawbridgeService: Unknown own message type: $type');
       }
@@ -247,6 +263,7 @@ class DrawbridgeService {
       return;
     }
     moatLog('DrawbridgeService: pair_ready url=$pairUrl');
+    // Rendezvous succeeded — no more resend-on-reconnect needed.
     onPairReady?.call(DrawbridgePairReady(pairUrl: pairUrl, token: token));
   }
 
@@ -288,7 +305,7 @@ class DrawbridgeService {
       channel = WebSocketChannel.connect(Uri.parse(url));
       await channel.ready;
     } catch (e) {
-      onPairClosed?.call('connect failed: $e');
+      onPairClosed?.call(token, 'connect failed: $e');
       return;
     }
 
@@ -301,24 +318,24 @@ class DrawbridgeService {
     }));
 
     _pairSubscription = channel.stream.listen(
-      (data) => _handlePairMessage(data),
+      (data) => _handlePairMessage(token, data),
       onError: (error) {
         moatLog('DrawbridgeService: pair WS error: $error');
         _pairAttached = false;
         _pairChannel = null;
-        onPairClosed?.call('error: $error');
+        onPairClosed?.call(token, 'error: $error');
       },
       onDone: () {
         moatLog('DrawbridgeService: pair WS closed');
         final wasAttached = _pairAttached;
         _pairAttached = false;
         _pairChannel = null;
-        onPairClosed?.call(wasAttached ? 'remote closed' : 'closed before paired');
+        onPairClosed?.call(token, wasAttached ? 'remote closed' : 'closed before paired');
       },
     );
   }
 
-  void _handlePairMessage(dynamic data) {
+  void _handlePairMessage(Uint8List token, dynamic data) {
     if (data is String) {
       try {
         final msg = jsonDecode(data) as Map<String, dynamic>;
@@ -327,7 +344,7 @@ class DrawbridgeService {
           case 'paired':
             _pairAttached = true;
             moatLog('DrawbridgeService: pair WS paired');
-            onPairConnected?.call();
+            onPairConnected?.call(token);
           case 'error':
             final m = msg['message'];
             moatLog('DrawbridgeService: pair_attach error: $m');
@@ -353,10 +370,10 @@ class DrawbridgeService {
       moatLog('DrawbridgeService: pair frame unexpected type ${data.runtimeType}');
       return;
     }
-    onPairFrame?.call(bytes);
+    onPairFrame?.call(token, bytes);
   }
 
-  /// Send a binary frame on the pair WS (encrypted ring-MLS ciphertext).
+  /// Send a binary frame on the pair WS.
   void sendPairBinary(Uint8List data) {
     final channel = _pairChannel;
     if (channel == null || !_pairAttached) {
@@ -374,12 +391,25 @@ class DrawbridgeService {
     await _disconnectPair();
   }
 
+  /// Close with a close handshake, after everything already added to the
+  /// sink. The subscription is silenced first so our own close does not
+  /// report back through [onPairClosed].
   Future<void> _disconnectPair() async {
     _pairAttached = false;
-    await _pairSubscription?.cancel();
+    final subscription = _pairSubscription;
+    final channel = _pairChannel;
     _pairSubscription = null;
-    await _pairChannel?.sink.close();
     _pairChannel = null;
+    subscription?.onDone(null);
+    subscription?.onError((Object _) {});
+    try {
+      await channel?.sink
+          .close(ws_status.normalClosure)
+          .timeout(const Duration(seconds: 5));
+    } catch (e) {
+      moatLog('DrawbridgeService: pair WS close: $e');
+    }
+    await subscription?.cancel();
   }
 
   // -- Tag watching ----------------------------------------------------------

@@ -172,6 +172,43 @@ func TestPairing_MultipleFrames(t *testing.T) {
 	}
 }
 
+// A side that sends and then closes at once must not lose its last frames:
+// the final frame before a close is typically what confirms a transfer.
+func TestPairing_CloseAfterSendDeliversEverything(t *testing.T) {
+	env := newTestEnv(t)
+	alice := env.connect("did:plc:alice")
+	bob := env.connect("did:plc:bob")
+	token := "c105ed00" + fmt.Sprintf("%056x", 0)
+
+	doHandshake(t, alice, bob, token)
+	alicePair := env.dialPair(token)
+	bobPair := env.dialPair(token)
+	alicePair.expectPaired(5 * time.Second)
+	bobPair.expectPaired(5 * time.Second)
+
+	const N = 60
+	payload := make([]byte, 32<<10)
+	for i := 0; i < N; i++ {
+		copy(payload, fmt.Sprintf("frame-%03d", i))
+		alicePair.writeBinary(payload)
+	}
+	// No close handshake: the worst case a client can produce.
+	alicePair.conn.Close()
+
+	for i := 0; i < N; i++ {
+		got := bobPair.expectBinary(5 * time.Second)
+		if want := fmt.Sprintf("frame-%03d", i); string(got[:len(want)]) != want {
+			t.Fatalf("frame %d: got %q", i, got[:len(want)])
+		}
+	}
+
+	bobPair.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, _, err := bobPair.conn.ReadMessage()
+	if !websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+		t.Fatalf("expected a normal close after the last frame, got %v", err)
+	}
+}
+
 func TestPairing_AttachBeforeJoin(t *testing.T) {
 	// Alice opens the pair WS before Bob has even sent pair_join.
 	// The server goroutine blocks in Attach and must stay blocked until Bob
@@ -326,10 +363,10 @@ func TestPairing_TTLExpiry(t *testing.T) {
 	alice.readMsgAs("pair_pending")
 
 	// Wind back CreatedAt to make the session appear expired.
-	env.relay.pairs.mu.Lock()
+	env.relay.pairs.pairLock.Lock()
 	sess := env.relay.pairs.sessions[token]
 	sess.CreatedAt = time.Now().Add(-(pairSessionTTL + time.Second))
-	env.relay.pairs.mu.Unlock()
+	env.relay.pairs.pairLock.Unlock()
 
 	env.relay.pairs.cleanupExpired()
 
@@ -341,9 +378,9 @@ func TestPairing_TTLExpiry(t *testing.T) {
 	}
 
 	// Session should be gone.
-	env.relay.pairs.mu.Lock()
+	env.relay.pairs.pairLock.Lock()
 	_, exists := env.relay.pairs.sessions[token]
-	env.relay.pairs.mu.Unlock()
+	env.relay.pairs.pairLock.Unlock()
 	if exists {
 		t.Fatal("session still in registry after TTL expiry")
 	}

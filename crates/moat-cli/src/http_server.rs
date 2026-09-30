@@ -75,6 +75,9 @@ struct ConversationDto {
     id: String,
     name: String,
     participant_dids: Vec<String>,
+    /// `false` while this device holds the conversation's history but is
+    /// not yet in its MLS group — see `App::register_synced_conversation`.
+    is_member: bool,
     epoch: u64,
     unread: usize,
 }
@@ -106,6 +109,20 @@ struct MessageDto {
     message_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     attachment: Option<ImageAttachmentDto>,
+    /// Emoji reactions on this message. Exposed so a test can see that
+    /// they survive history sync — a receiving device cannot rebuild them
+    /// from the PDS, so a drop here would be silent and permanent.
+    reactions: Vec<ReactionDto>,
+    /// `sending`, `sent` or `failed`, as the Dart runtime names them.
+    status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    send_error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ReactionDto {
+    emoji: String,
+    sender_did: String,
 }
 
 // ── Error helper ─────────────────────────────────────────────────────────────
@@ -160,6 +177,7 @@ async fn get_conversations(State(state): State<Arc<ServerState>>) -> Json<Vec<Co
             id: c.id.clone(),
             name: c.display_name(),
             participant_dids: c.participant_dids.clone(),
+            is_member: c.is_member,
             epoch: c.current_epoch,
             unread: c.unread,
         })
@@ -265,6 +283,20 @@ async fn get_messages(
                 sender_did: m.sender_did.clone(),
                 message_id: message_id_hex,
                 attachment,
+                reactions: m
+                    .reactions
+                    .iter()
+                    .map(|r| ReactionDto {
+                        emoji: r.emoji.clone(),
+                        sender_did: r.sender_did.clone(),
+                    })
+                    .collect(),
+                status: match (&m.send_failed, m.rkey.as_str()) {
+                    (Some(_), _) => "failed",
+                    (None, "pending") => "sending",
+                    (None, _) => "sent",
+                },
+                send_error: m.send_failed.clone(),
             }
         })
         .collect();
@@ -327,6 +359,19 @@ async fn post_reaction(
     app.api_send_reaction(&message_id, &body.emoji)
         .await
         .map_err(app_err)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn post_retry(
+    State(state): State<Arc<ServerState>>,
+    Path((group_id, message_id)): Path<(String, String)>,
+) -> HandlerResult<Json<Value>> {
+    let mut app = state.app.lock().await;
+    app.api_set_active_conversation(Some(&group_id))
+        .map_err(app_err)?;
+    let message_id = hex::decode(&message_id)
+        .map_err(|e| app_err(AppError::Other(format!("invalid message_id: {e}"))))?;
+    app.retry_send(&group_id, &message_id).map_err(app_err)?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -395,16 +440,108 @@ async fn post_ring_tick(State(state): State<Arc<ServerState>>) -> Json<Value> {
 
 async fn get_ring_status(State(state): State<Arc<ServerState>>) -> Json<Value> {
     let app = state.app.lock().await;
-    let (ring_group_id, coord_group_count) = app.api_ring_status();
+    let (ring_group_id, ring_member_count) = app.api_ring_status();
     Json(json!({
         "ring_group_id": ring_group_id,
-        "coord_group_count": coord_group_count,
+        "ring_member_count": ring_member_count,
+        "devices": app.api_ring_devices(),
     }))
 }
 
 async fn get_sync_status(State(state): State<Arc<ServerState>>) -> Json<Value> {
-    let app = state.app.lock().await;
+    let mut app = state.app.lock().await;
     Json(app.sync_status())
+}
+
+#[derive(Deserialize)]
+struct PairConfirmRequest {
+    code: String,
+}
+
+async fn post_pair_new(State(state): State<Arc<ServerState>>) -> HandlerResult<Json<Value>> {
+    let mut app = state.app.lock().await;
+    let code = app.api_pair_new().map_err(app_err)?;
+    Ok(Json(json!({ "code": code })))
+}
+
+async fn post_pair_confirm(
+    State(state): State<Arc<ServerState>>,
+    Json(body): Json<PairConfirmRequest>,
+) -> HandlerResult<Json<Value>> {
+    let mut app = state.app.lock().await;
+    app.api_pair_confirm(&body.code).map_err(app_err)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn post_pair_approve(State(state): State<Arc<ServerState>>) -> HandlerResult<Json<Value>> {
+    let mut app = state.app.lock().await;
+    app.api_pair_approve().map_err(app_err)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn post_pair_reject(State(state): State<Arc<ServerState>>) -> HandlerResult<Json<Value>> {
+    let mut app = state.app.lock().await;
+    app.api_pair_reject().map_err(app_err)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn post_pair_cancel(State(state): State<Arc<ServerState>>) -> HandlerResult<Json<Value>> {
+    let mut app = state.app.lock().await;
+    app.api_pair_cancel().map_err(app_err)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// `GET /pair/status` — the serialized `PairingUiState` verbatim, e.g.
+/// `{"phase":"showing_code","code":"...","uri":"..."}` or
+/// `{"phase":"failed","reason":"..."}`. No host-specific shape on top.
+async fn get_pair_status(State(state): State<Arc<ServerState>>) -> Json<moat_core::PairingUiState> {
+    let app = state.app.lock().await;
+    Json(app.api_pair_status())
+}
+
+/// Ask the user's other devices for history this one is missing. The
+/// sibling's user must accept — no host auto-accepts, matching pairing's
+/// explicit-approval rule.
+/// A device id, hex-encoded, as the body of a targeted sync call.
+#[derive(Deserialize)]
+struct DeviceIdRequest {
+    device_id: String,
+}
+
+fn parse_device_id(hex_id: &str) -> HandlerResult<moat_core::DeviceId> {
+    let bytes = hex::decode(hex_id)
+        .map_err(|e| app_err(AppError::Other(format!("invalid device_id: {e}"))))?;
+    <moat_core::DeviceId>::try_from(bytes.as_slice())
+        .map_err(|_| app_err(AppError::Other("device_id must be 16 bytes".to_string())))
+}
+
+/// `POST /sync/offer` — send history to a sibling that lacks it.
+async fn post_sync_offer(
+    State(state): State<Arc<ServerState>>,
+    Json(body): Json<DeviceIdRequest>,
+) -> HandlerResult<Json<Value>> {
+    let device_id = parse_device_id(&body.device_id)?;
+    let mut app = state.app.lock().await;
+    app.api_sync_offer(device_id).map_err(app_err)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn post_sync_request(State(state): State<Arc<ServerState>>) -> HandlerResult<Json<Value>> {
+    let mut app = state.app.lock().await;
+    app.api_sync_request().map_err(app_err)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn post_sync_accept(State(state): State<Arc<ServerState>>) -> HandlerResult<Json<Value>> {
+    let mut app = state.app.lock().await;
+    app.api_sync_accept().map_err(app_err)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn post_sync_decline(State(state): State<Arc<ServerState>>) -> HandlerResult<Json<Value>> {
+    let mut app = state.app.lock().await;
+    app.api_sync_decline().map_err(app_err)?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 async fn post_sync_start(State(state): State<Arc<ServerState>>) -> Json<Value> {
@@ -470,6 +607,7 @@ pub async fn run_http(
     // halfblocks picker doesn't query the terminal, safe for headless use
     let picker = ratatui_image::picker::Picker::halfblocks();
     let mut app = App::new(storage_dir, pds_url, drawbridge_url, picker)?;
+    app.fail_orphaned_sends();
 
     let (broadcast_tx, _) = tokio::sync::broadcast::channel::<String>(256);
     app.event_broadcast = Some(broadcast_tx.clone());
@@ -507,6 +645,10 @@ pub async fn run_http(
             "/conversations/:group_id/messages/:message_id/reactions",
             post(post_reaction),
         )
+        .route(
+            "/conversations/:group_id/messages/:message_id/retry",
+            post(post_retry),
+        )
         .route("/watch", get(get_watch))
         .route("/watch", post(post_watch))
         .route("/watch/:did", delete(delete_watch))
@@ -514,7 +656,17 @@ pub async fn run_http(
         .route("/poll/:seconds", post(post_poll_interval))
         .route("/ring-tick", post(post_ring_tick))
         .route("/ring-status", get(get_ring_status))
+        .route("/pair/new", post(post_pair_new))
+        .route("/pair/confirm", post(post_pair_confirm))
+        .route("/pair/approve", post(post_pair_approve))
+        .route("/pair/reject", post(post_pair_reject))
+        .route("/pair/cancel", post(post_pair_cancel))
+        .route("/pair/status", get(get_pair_status))
         .route("/sync/start", post(post_sync_start))
+        .route("/sync/request", post(post_sync_request))
+        .route("/sync/offer", post(post_sync_offer))
+        .route("/sync/accept", post(post_sync_accept))
+        .route("/sync/decline", post(post_sync_decline))
         .route("/sync/status", get(get_sync_status))
         .route("/events", get(get_events))
         // TODO: .route("/debug-log/:lines", get(get_debug_log))

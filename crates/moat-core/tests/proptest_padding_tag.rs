@@ -5,39 +5,50 @@ proptest! {
     // --- Padding properties ---
 
     #[test]
-    fn pad_unpad_roundtrip(data in proptest::collection::vec(any::<u8>(), 0..4092)) {
-        let padded = pad_to_bucket(&data);
+    fn pad_unpad_roundtrip(data in proptest::collection::vec(any::<u8>(), 0..16380)) {
+        let padded = pad_to_bucket(&data).unwrap();
         let recovered = unpad(&padded);
         prop_assert_eq!(&recovered, &data);
     }
 
     #[test]
-    fn padded_size_is_valid_bucket(data in proptest::collection::vec(any::<u8>(), 0..4092)) {
-        let padded = pad_to_bucket(&data);
+    fn padded_size_is_valid_bucket(data in proptest::collection::vec(any::<u8>(), 0..16380)) {
+        let padded = pad_to_bucket(&data).unwrap();
         let len = padded.len();
         prop_assert!(
-            len == 512 || len == 1024 || len == 4096,
+            len == 512 || len == 1024 || len == 4096 || len == 16384,
             "padded length {} is not a valid bucket size", len
         );
     }
 
     #[test]
-    fn bucket_selection_matches_padded_size(data in proptest::collection::vec(any::<u8>(), 0..4092)) {
+    fn bucket_selection_matches_padded_size(data in proptest::collection::vec(any::<u8>(), 0..16380)) {
         let bucket = Bucket::for_size(data.len());
-        let padded = pad_to_bucket(&data);
+        let padded = pad_to_bucket(&data).unwrap();
         prop_assert_eq!(padded.len(), bucket.size());
     }
 
     #[test]
-    fn padding_at_bucket_boundaries(len in 0usize..4092) {
+    fn padding_at_bucket_boundaries(len in 0usize..16380) {
         let data = vec![0x42; len];
-        let padded = pad_to_bucket(&data);
+        let padded = pad_to_bucket(&data).unwrap();
         let expected_bucket = Bucket::for_size(len);
         prop_assert_eq!(padded.len(), expected_bucket.size());
 
         // Verify content survives
         let recovered = unpad(&padded);
         prop_assert_eq!(recovered, data);
+    }
+
+    /// The other side of the bound every strategy above stops at: above
+    /// the largest bucket there is nothing to round up to, and the answer
+    /// is an error rather than a panic or a frame of some other size.
+    #[test]
+    fn oversized_payloads_are_rejected_not_padded(
+        len in 16381usize..40_000
+    ) {
+        let data = vec![0x42; len];
+        prop_assert!(pad_to_bucket(&data).is_err());
     }
 
     // --- Tag derivation properties ---

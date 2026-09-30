@@ -143,6 +143,16 @@ impl MlsStorage {
         Ok(())
     }
 
+    /// Whether a key package bundle with this hash reference is still in the
+    /// store, i.e. whether we still hold its private init key.
+    pub(crate) fn contains_key_package<H: Serialize>(&self, hash_ref: &H) -> bool {
+        let Ok(key) = serde_json::to_vec(hash_ref) else {
+            return false;
+        };
+        let storage_key = build_key_from_vec::<CURRENT_VERSION>(KEY_PACKAGE_LABEL, key);
+        self.values.read().unwrap().contains_key(&storage_key)
+    }
+
     /// Internal helper to append to a list value
     fn append_value(
         &self,

@@ -223,6 +223,9 @@ class AuthService {
     if (_deviceName == null) {
       throw StateError('Device name not set');
     }
+    if (_moatSession == null) {
+      throw StateError('Moat session not initialised');
+    }
 
     final keypair = generateStealthKeypair();
 
@@ -231,11 +234,17 @@ class AuthService {
       publicKey: keypair.publicKey,
     );
 
-    await _atprotoClient.publishStealthAddress(keypair.publicKey, _deviceName!);
+    final deviceId = await _moatSession!.deviceId();
+    await _atprotoClient.publishStealthAddress(
+      keypair.publicKey,
+      _deviceName!,
+      Uint8List.fromList(deviceId),
+    );
   }
 
   Future<void> _ensureStealthAddressOnPds() async {
     if (_did == null || _deviceName == null) return;
+    if (_moatSession == null) return;
 
     final stealthRecords = await _atprotoClient.fetchStealthAddresses(_did!);
     final hasOurAddress = stealthRecords.any((r) => r.deviceName == _deviceName);
@@ -244,7 +253,12 @@ class AuthService {
       moatLog('AuthService: Our stealth address not on PDS, re-publishing...');
       final stealthPubkey = await _secureStorage.loadStealthPublicKey();
       if (stealthPubkey != null) {
-        await _atprotoClient.publishStealthAddress(stealthPubkey, _deviceName!);
+        final deviceId = await _moatSession!.deviceId();
+        await _atprotoClient.publishStealthAddress(
+          stealthPubkey,
+          _deviceName!,
+          Uint8List.fromList(deviceId),
+        );
         moatLog('AuthService: Stealth address re-published for device $_deviceName');
       } else {
         moatLog('AuthService: ERROR - have private key but no public key stored');
@@ -374,13 +388,21 @@ class AuthService {
     return tryDecryptStealth(scanPrivkey: stealthPrivkey, payload: ciphertext);
   }
 
-  /// Populate candidate tags for all members in a group.
+  /// Populate candidate tags for all members in a group, and watch them on
+  /// this device's Drawbridge relay.
   Future<void> populateConversationTags(Uint8List groupId) async {
     if (_moatSession == null) return;
-    final tags = _moatSession!.populateCandidateTags(groupId: groupId);
-    for (final tag in tags) {
-      await registerTag(Uint8List.fromList(tag), groupId);
-    }
+    final tags = _moatSession!
+        .populateCandidateTags(groupId: groupId)
+        .map((t) => Uint8List.fromList(t))
+        .toList();
+    await registerTags(tags, _bytesToHex(groupId));
+  }
+
+  /// Route [tags] to [groupIdHex] in one write and watch them on Drawbridge.
+  Future<void> registerTags(List<Uint8List> tags, String groupIdHex) async {
+    await _secureStorage.registerTags(tags.map(_bytesToHex), groupIdHex);
+    DrawbridgeService.instance.addTags(tags);
   }
 
   /// Register a tag in the tag map.

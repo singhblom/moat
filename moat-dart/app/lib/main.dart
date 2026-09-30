@@ -8,7 +8,8 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart' hi
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:moat_dart_common/moat_dart_common.dart' hide DebugLog;
-import 'services/conversation_manager.dart' as app_cm;
+import 'services/pair_channel_manager.dart';
+import 'services/device_ring_manager.dart';
 import 'providers/auth_provider.dart';
 import 'providers/conversations_provider.dart';
 import 'providers/profile_provider.dart';
@@ -16,11 +17,21 @@ import 'providers/theme_provider.dart';
 import 'providers/watch_list_provider.dart';
 import 'screens/login_screen.dart';
 import 'screens/conversations_screen.dart';
+import 'screens/approve_pairing_screen.dart';
+import 'screens/approve_sync_request_screen.dart';
+import 'screens/show_pairing_code_screen.dart';
 import 'services/flutter_storage_backend.dart';
 import 'services/flutter_storage_factory.dart';
 import 'services/debug_log.dart';
 import 'services/push_service.dart';
+import 'widgets/sync_progress_view.dart';
 import 'firebase_options.dart';
+
+/// Lets the `PairChannelService.pairingState` listener below push a screen from
+/// outside the widget tree — mirrors `moat-cli`'s TUI switching to
+/// `Focus::PairApprove` the moment the session reaches `AwaitingApproval`,
+/// rather than the enter-code screen having to poll for it.
+final rootNavigatorKey = GlobalKey<NavigatorState>();
 
 const _notificationChannelId = 'moat_messages';
 const _androidDetails = AndroidNotificationDetails(
@@ -110,7 +121,6 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
           content: result.plaintextPreview!,
           timestamp: DateTime.now(),
           isOwn: false,
-          epoch: 0,
           messageId: result.messageId != null
               ? Uint8List.fromList(result.messageId!)
               : null,
@@ -184,6 +194,16 @@ TextTheme _applyFonts(TextTheme base) {
   );
 }
 
+// Dev-only overrides for pointing the app at a local Postern/Drawbridge
+// instead of real bsky.social — e.g. for testing pairing in an Android
+// emulator (see `crates/moat-postern/src/bin/dev_server.rs`). Empty by
+// default, so a normal `flutter run` is unaffected. Set via:
+//   flutter run \
+//     --dart-define=MOAT_PDS_URL=http://10.0.2.2:4000 \
+//     --dart-define=MOAT_DRAWBRIDGE_URL=ws://10.0.2.2:8081/ws
+const _devPdsUrl = String.fromEnvironment('MOAT_PDS_URL');
+const _devDrawbridgeUrl = String.fromEnvironment('MOAT_DRAWBRIDGE_URL');
+
 class MoatApp extends StatelessWidget {
   final DocumentBackend docBackend;
   final StorageBackend storageBackend;
@@ -197,11 +217,13 @@ class MoatApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final secureStorage = SecureStorageService(storage: storageBackend);
-    final atprotoClient = AtprotoClient();
+    final atprotoClient = AtprotoClient(
+      pdsOverride: _devPdsUrl.isEmpty ? null : _devPdsUrl,
+    );
     final authService = AuthService(
       atprotoClient: atprotoClient,
       secureStorage: secureStorage,
-      drawbridgeUrl: null,
+      drawbridgeUrl: _devDrawbridgeUrl.isEmpty ? null : _devDrawbridgeUrl,
     );
     final authProvider = AuthProvider(service: authService)..init();
 
@@ -271,8 +293,11 @@ class MoatApp extends StatelessWidget {
         builder: (context) {
           final themeMode = context.watch<ThemeProvider>().themeMode;
           return MaterialApp(
+            navigatorKey: rootNavigatorKey,
             title: 'Moat',
             debugShowCheckedModeBanner: false,
+            builder: (context, child) =>
+                SyncProgressFrame(child: child ?? const SizedBox.shrink()),
             themeMode: themeMode,
             theme: ThemeData(
               colorScheme: ColorScheme.fromSeed(
@@ -358,61 +383,86 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
     }
   }
 
-  void _registerAllTags() {
-    final auth = context.read<AuthProvider>();
-    final conversations = context.read<ConversationsProvider>().conversations;
-    if (!auth.isAuthenticated) return;
-
-    final session = auth.moatSession;
-    if (session == null) return;
-
-    final allTags = <Uint8List>[];
-    for (final conv in conversations) {
-      final tags = session.populateCandidateTags(groupId: conv.groupId);
-      allTags.addAll(tags.map((t) => Uint8List.fromList(t)));
-    }
-
-    DrawbridgeService.instance.watchTags(allTags);
-  }
-
-  void _startPollingIfNeeded(AuthProvider auth) {
+  Future<void> _startPollingIfNeeded(AuthProvider auth) async {
     if (auth.isAuthenticated && !_pollingStarted) {
       _pollingStarted = true;
-      final ringService = DeviceRingService(
+      final convsService = context.read<ConversationsProvider>().service;
+
+      final bundle = await createServiceBundle(
         auth: auth.service,
         drawbridge: DrawbridgeService.instance,
-        backend: widget.docBackend,
-      );
-      // Best-effort load of persisted ring state before polling starts.
-      // ignore: discarded_futures
-      ringService.init();
-      final syncService = SyncService(
-        auth: auth.service,
-        drawbridge: DrawbridgeService.instance,
-        ring: ringService,
-        conversationStorage: widget.convStorage,
-        messageStorage: widget.msgStorage,
-      );
-      _pollingService = PollingService(
-        authService: auth.service,
-        conversationsService: context.read<ConversationsProvider>().service,
+        docBackend: widget.docBackend,
+        conversationsService: convsService,
         watchListService: context.read<WatchListProvider>().service,
         secureStorage: widget.secureStorage,
-        ringService: ringService,
+        messageStorage: widget.msgStorage,
       );
-      ConversationManager.instance.init(
-        authService: auth.service,
-        storage: widget.msgStorage,
-        ringService: ringService,
-        syncService: syncService,
-      );
-      app_cm.ConversationManager.instance.init(
-        authService: auth.service,
-        storage: widget.msgStorage,
-      );
+      if (!mounted) return;
 
-      _pollingService!.onMessages = app_cm.ConversationManager.instance.notify;
-      _pollingService!.onReaction = app_cm.ConversationManager.instance.notifyReaction;
+      _pollingService = bundle.polling;
+
+      PairChannelManager.instance.init(bundle: bundle);
+      DeviceRingManager.instance.init(bundle.ring);
+      final pairChannel = bundle.pairChannel;
+
+      // `init()` just built a fresh service (and `state` notifier), so
+      // listeners can't accumulate across login cycles. Listening globally
+      // rather than per-screen is deliberate: an `Enroll` can arrive while
+      // the user is anywhere in the app.
+      var wasPaired = false;
+      pairChannel.pairingState.addListener(() {
+        final uiState = pairChannel.pairingState.value;
+        if (uiState is PairingUiStateDto_AwaitingApproval) {
+          rootNavigatorKey.currentState?.push(
+            MaterialPageRoute(builder: (_) => const ApprovePairingScreen()),
+          );
+        }
+        // The history transfer after a pairing failed, usually long after
+        // the pairing screens were dismissed.
+        final navContext = rootNavigatorKey.currentContext;
+        if (uiState is PairingUiStateDto_Failed &&
+            wasPaired &&
+            !ShowPairingCodeScreen.isOpen &&
+            navContext != null) {
+          showDialog<void>(
+            context: navContext,
+            builder: (context) => AlertDialog(
+              title: const Text('Pairing failed'),
+              content: Text(uiState.reason),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
+          );
+        }
+        wasPaired = uiState is PairingUiStateDto_Done;
+      });
+
+      // A finished transfer can bring whole conversations with it.
+      final syncProgress = pairChannel.progress;
+      var wasSyncing = false;
+      syncProgress.addListener(() {
+        final syncing = syncProgress.value != null;
+        if (wasSyncing && !syncing) {
+          context.read<ConversationsProvider>().refresh();
+        }
+        wasSyncing = syncing;
+      });
+
+      // Same reasoning as the pairing listener above: a sibling's request
+      // can arrive while the user is anywhere in the app.
+      pairChannel.syncRequestState.addListener(() {
+        final uiState = pairChannel.syncRequestState.value;
+        if (uiState is SyncRequestUiStateDto_AwaitingApproval) {
+          rootNavigatorKey.currentState?.push(
+            MaterialPageRoute(builder: (_) => const ApproveSyncRequestScreen()),
+          );
+        }
+      });
+
       _pollingService!.onNewConversation = () {
         context.read<ConversationsProvider>().refresh();
       };
@@ -427,7 +477,8 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       _pushService = null;
       _pollingStarted = false;
       ConversationManager.instance.clear();
-      app_cm.ConversationManager.instance.clear();
+      PairChannelManager.instance.clear();
+      DeviceRingManager.instance.clear();
       DrawbridgeService.instance.reset();
       debugPrint('PollingService stopped, Drawbridge reset');
     }
@@ -447,15 +498,13 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   }
 
   Future<void> _initDrawbridge(AuthProvider auth) async {
-    // Wire the app-specific poll-on-push callback and register conversation tags.
+    // Poll on push. PollingService registers conversation tags itself.
     // AuthService handles the Drawbridge connection itself (via login/resume).
     DrawbridgeService.instance.onNewEvent = (event) {
       // For now, trigger a poll on any new event notification.
       // Inline decryption using event.payload can be added later.
       _pollingService?.poll();
     };
-
-    _registerAllTags();
 
     // Fetch partner drawbridge configs for all conversations.
     final conversations = context.read<ConversationsProvider>().conversations;

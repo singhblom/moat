@@ -255,18 +255,24 @@ void main() {
       expect(decoded, kp);
     });
 
-    test('publishStealthAddress serializes scanPubkey as {"\$bytes": "..."}', () async {
+    test('publishStealthAddress serializes scanPubkey and deviceId as {"\$bytes": "..."}', () async {
       final client = AtprotoClient(httpClient: captureClient());
       client.restoreSession(_testSession());
 
       final pubkey = Uint8List.fromList(List.generate(32, (i) => i + 1));
-      await client.publishStealthAddress(pubkey, 'My Phone');
+      final deviceId = Uint8List.fromList(List.generate(16, (i) => i + 0x10));
+      await client.publishStealthAddress(pubkey, 'My Phone', deviceId);
 
+      expect(capturedRecord['v'], 3);
       expect(capturedRecord['scanPubkey'], isA<Map>());
       expect((capturedRecord['scanPubkey'] as Map)[r'$bytes'], isA<String>());
+      expect(capturedRecord['deviceId'], isA<Map>());
+      expect((capturedRecord['deviceId'] as Map)[r'$bytes'], isA<String>());
 
-      final decoded = base64Decode((capturedRecord['scanPubkey'] as Map)[r'$bytes'] as String);
-      expect(decoded, pubkey);
+      final decodedPubkey = base64Decode((capturedRecord['scanPubkey'] as Map)[r'$bytes'] as String);
+      expect(decodedPubkey, pubkey);
+      final decodedDeviceId = base64Decode((capturedRecord['deviceId'] as Map)[r'$bytes'] as String);
+      expect(decodedDeviceId, deviceId);
     });
   });
 

@@ -14,6 +14,7 @@ const _watchListKey = 'moat_watch_list';
 const _lastRkeysKey = 'moat_last_rkeys';
 const _tagMapKey = 'moat_tag_map';
 const _deviceIdKey = 'moat_device_id';
+const _parkedEventsKey = 'moat_parked_events';
 
 /// Secure storage service for credentials and cryptographic keys.
 /// Backend-agnostic: use [FileStorageBackend] for server, FlutterStorageBackend for app.
@@ -213,8 +214,15 @@ class SecureStorageService {
   }
 
   Future<void> registerTag(String tagHex, String groupIdHex) async {
+    await registerTags([tagHex], groupIdHex);
+  }
+
+  /// Route every tag in [tagHexes] to [groupIdHex], in a single write.
+  Future<void> registerTags(Iterable<String> tagHexes, String groupIdHex) async {
     final map = await loadTagMap();
-    map[tagHex] = groupIdHex;
+    for (final tagHex in tagHexes) {
+      map[tagHex] = groupIdHex;
+    }
     await saveTagMap(map);
   }
 
@@ -225,6 +233,23 @@ class SecureStorageService {
 
   Future<void> deleteTagMap() async {
     await _storage.delete(_tagMapKey);
+  }
+
+  // --- Parked events ---
+
+  /// Persist the inbox's parked events.
+  Future<void> saveParkedEvents(Uint8List bytes) async {
+    await _storage.write(_parkedEventsKey, base64Encode(bytes));
+  }
+
+  Future<Uint8List?> loadParkedEvents() async {
+    final b64 = await _storage.read(_parkedEventsKey);
+    if (b64 == null) return null;
+    try {
+      return base64Decode(b64);
+    } catch (_) {
+      return null;
+    }
   }
 
   // --- Device ID management ---

@@ -9,6 +9,7 @@ export 'models/bluesky_profile.dart';
 // Utils
 export 'utils/message_payload.dart';
 export 'utils/welcome_envelope.dart';
+export 'utils/value_listenable.dart';
 
 // Storage
 export 'services/storage_backend.dart';
@@ -17,6 +18,7 @@ export 'services/secure_storage.dart';
 export 'services/document_backend.dart';
 export 'services/conversation_storage.dart';
 export 'services/message_storage.dart';
+export 'services/outbox_storage.dart';
 export 'services/debug_log.dart';
 
 // ATProto
@@ -36,8 +38,12 @@ export 'services/conversation_starter.dart';
 export 'services/member_adder.dart';
 export 'services/drawbridge_service.dart';
 export 'services/device_ring_service.dart';
-export 'services/sync_service.dart';
+export 'utils/sync_failure_text.dart';
+export 'utils/short_device_id.dart';
+export 'services/pair_channel_service.dart';
+export 'services/sync_history.dart';
 export 'services/profile_cache_service.dart';
+export 'services/service_bundle.dart';
 
 // FRB bindings
 export 'rust/api/simple.dart';

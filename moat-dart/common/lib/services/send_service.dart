@@ -17,11 +17,13 @@ class SendService {
   SendService({required AuthService authService})
       : _authService = authService;
 
-  /// Send a message to a conversation.
+  /// Send a message to a conversation, published under [messageId] so a
+  /// retry republishes the same message.
   Future<Message> sendMessage({
     required Conversation conversation,
     required String text,
     required String localId,
+    required Uint8List messageId,
   }) async {
     final session = _authService.moatSession;
     final myDid = _authService.did;
@@ -53,6 +55,7 @@ class SendService {
       groupId: conversation.groupId,
       epoch: BigInt.from(conversation.epoch),
       payload: structuredPayload,
+      messageId: messageId,
     );
 
     final result = await session.encryptEvent(
@@ -65,10 +68,10 @@ class SendService {
 
     await _authService.saveMlsState();
 
-    final uri = await _authService.atprotoClient.publishEvent(
-      result.tag,
-      result.ciphertext,
-    );
+    final uri = await _stage('publish', () => _authService.atprotoClient.publishEvent(
+          result.tag,
+          result.ciphertext,
+        ));
 
     moatLog('SendService: Message published: $uri');
 
@@ -92,7 +95,6 @@ class SendService {
       content: preview,
       timestamp: DateTime.now(),
       isOwn: true,
-      epoch: conversation.epoch,
       status: MessageStatus.sent,
       messageId: result.messageId != null ? Uint8List.fromList(result.messageId!) : null,
     );
@@ -105,6 +107,7 @@ class SendService {
     required Conversation conversation,
     required Uint8List imageBytes,
     required String localId,
+    required Uint8List messageId,
     required BlobService blobService,
   }) async {
     final session = _authService.moatSession;
@@ -120,12 +123,21 @@ class SendService {
       throw SendException('No key bundle available');
     }
 
+    final id = _bytesToHex(messageId).substring(0, 8);
+    moatLog('SendService: image start id=$id input=${imageBytes.length}B');
+
     // 1. Process image: validate, resize, generate thumbhash.
     final processed = await processImageForSend(imageBytes: imageBytes);
     final processedBytes = Uint8List.fromList(processed.imageBytes);
+    moatLog('SendService: image processed id=$id '
+        '${processed.width}x${processed.height} ${processed.mimeType} ${processedBytes.length}B');
 
     // 2. Encrypt and upload blob.
-    final uploadResult = await blobService.encryptAndUpload(processedBytes);
+    final started = DateTime.now();
+    final uploadResult =
+        await _stage('blob upload', () => blobService.encryptAndUpload(processedBytes));
+    moatLog('SendService: image uploaded id=$id cid=${uploadResult.cid} '
+        'in ${DateTime.now().difference(started).inMilliseconds}ms');
 
     // 3. Build the at:// URI.
     final uri = 'at://$myDid/${uploadResult.cid}';
@@ -151,6 +163,7 @@ class SendService {
       groupId: conversation.groupId,
       epoch: BigInt.from(conversation.epoch),
       payload: structuredPayload,
+      messageId: messageId,
     );
 
     final result = await session.encryptEvent(
@@ -168,11 +181,11 @@ class SendService {
       mimeType: 'application/octet-stream',
       size: uploadResult.ciphertextSize,
     );
-    final eventUri = await _authService.atprotoClient.publishEvent(
-      result.tag,
-      result.ciphertext,
-      blobRef: blobRef,
-    );
+    final eventUri = await _stage('publish', () => _authService.atprotoClient.publishEvent(
+          result.tag,
+          result.ciphertext,
+          blobRef: blobRef,
+        ));
 
     moatLog('SendService: Image published: $eventUri');
 
@@ -197,7 +210,6 @@ class SendService {
       content: renderMessagePreview(structuredPayload),
       timestamp: DateTime.now(),
       isOwn: true,
-      epoch: conversation.epoch,
       status: MessageStatus.sent,
       messageId: result.messageId != null ? Uint8List.fromList(result.messageId!) : null,
       attachment: ImageAttachment(
@@ -272,6 +284,15 @@ class SendService {
     );
 
     moatLog('SendService: Reaction "$emoji" published');
+  }
+
+  /// Run one network stage of a send, naming it in any failure.
+  Future<T> _stage<T>(String name, Future<T> Function() run) async {
+    try {
+      return await run();
+    } catch (e) {
+      throw SendException('$name failed: $e');
+    }
   }
 
   String _extractRkey(String uri) {

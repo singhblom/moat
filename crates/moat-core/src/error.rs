@@ -43,6 +43,13 @@ pub enum ErrorCode {
     StateDiverged = 202,
     UnknownSender = 203,
     ConflictUnresolved = 204,
+    // Pairing error codes
+    PairingCrypto = 301,
+    PairingProtocol = 302,
+    // Sync-request error codes
+    SyncRequestProtocol = 400,
+    SyncProtocol = 401,
+    PayloadTooLarge = 402,
 }
 
 /// Errors that can occur during MLS operations
@@ -128,9 +135,38 @@ pub enum Error {
 
     #[error("blob content hash mismatch: {0}")]
     ContentHashMismatch(String),
+
+    #[error("pairing channel error: {0}")]
+    PairingCrypto(String),
+
+    #[error("pairing protocol error: {0}")]
+    PairingProtocol(String),
+
+    #[error("sync request protocol error: {0}")]
+    SyncRequestProtocol(String),
+
+    #[error("sync protocol error: {0}")]
+    SyncProtocol(String),
+
+    /// An event's serialized form exceeds the largest padding bucket.
+    ///
+    /// Bucket padding rounds *up* to a fixed size, so there is no bucket
+    /// for a payload larger than the biggest one. Oversized content
+    /// belongs in an external blob with only the reference in the event
+    /// (as `message.long_text` and `message.image` already do).
+    #[error("{0}")]
+    PayloadTooLarge(String),
 }
 
 impl Error {
+    /// An event whose serialized form has outgrown the largest bucket.
+    pub fn payload_too_large(len: usize, max: usize) -> Self {
+        Error::PayloadTooLarge(format!(
+            "payload of {len} bytes exceeds the largest padding bucket ({max} bytes); \
+             oversized content belongs in an external blob"
+        ))
+    }
+
     /// Return the numeric error code for this error.
     pub fn code(&self) -> ErrorCode {
         match self {
@@ -161,6 +197,11 @@ impl Error {
             Error::CiphertextHashMismatch(_) => ErrorCode::CiphertextHashMismatch,
             Error::BlobDecryptionFailed(_) => ErrorCode::BlobDecryptionFailed,
             Error::ContentHashMismatch(_) => ErrorCode::ContentHashMismatch,
+            Error::PairingCrypto(_) => ErrorCode::PairingCrypto,
+            Error::PairingProtocol(_) => ErrorCode::PairingProtocol,
+            Error::SyncRequestProtocol(_) => ErrorCode::SyncRequestProtocol,
+            Error::SyncProtocol(_) => ErrorCode::SyncProtocol,
+            Error::PayloadTooLarge(_) => ErrorCode::PayloadTooLarge,
         }
     }
 
@@ -193,7 +234,12 @@ impl Error {
             | Error::InvalidBlobUri(msg)
             | Error::CiphertextHashMismatch(msg)
             | Error::BlobDecryptionFailed(msg)
-            | Error::ContentHashMismatch(msg) => msg,
+            | Error::ContentHashMismatch(msg)
+            | Error::PairingCrypto(msg)
+            | Error::PairingProtocol(msg)
+            | Error::SyncRequestProtocol(msg)
+            | Error::SyncProtocol(msg)
+            | Error::PayloadTooLarge(msg) => msg,
         }
     }
 }

@@ -16,7 +16,8 @@ cargo test                   # Run all tests
 cargo test -p moat-core      # Run core crypto tests
 cargo test -p moat-atproto   # Run ATProto tests only (3 tests)
 cargo test -p moat-beacon    # Run integration tests (spins up real moat-cli processes)
-env BEACON_PARALLEL=4 cargo test -p moat-beacon --test proptest_three_party_push  # ~4× faster when run alone
+env BEACON_PARALLEL=4 cargo test -p moat-beacon --test proptest three_party_push  # ~4× faster when run alone
+env BEACON_WORLDS=3 cargo test -p moat-beacon --test smoke   # smoke runs 2 TestWorlds at once by default
 cargo run -p moat-cli        # Run the TUI (default, no subcommand)
 
 # Flutter tests
@@ -65,6 +66,7 @@ Rust workspace + Dart/Flutter packages + Go service:
 - `MoatSession` - Main API for MLS operations with file-backed persistence
 - `Event` / `EventKind` - Unified event type (Message, Commit, Welcome, Checkpoint)
 - `KeyBundle` - Serialized key package with private keys
+- `PairChannelDriver` - Sole owner of the Drawbridge pair channel: pairing, sync requests/offers and the history transfer. Hosts feed it relay events and gestures and carry out the `PairChannelCommand`s it returns; they keep no pair-channel state of their own
 
 **moat-atproto:**
 - `MoatAtprotoClient` - Async client for PDS operations (login, publish/fetch events, key packages, stealth addresses)
@@ -94,7 +96,8 @@ Located in `lexicons/social/moat/`:
 ├── mls.bin           # MoatSession's FileStorage (MLS state)
 ├── debug.log
 ├── data/
-│   └── blobs/        # BlobCache — keyed by hex(content_hash), one file per blob
+│   ├── blobs/        # BlobCache — keyed by hex(content_hash), one file per blob
+│   └── outbox/       # Source of unpublished sends, {hex(message_id)}.{image,text}; kept for retry
 └── keys/
     ├── credentials.json
     ├── identity.key
@@ -213,7 +216,7 @@ go test ./...
 - **moat-atproto** — Serialization tests in `src/records.rs`.
 - **moat-cli** — Unit tests inline in `src/blob_cache.rs`, `src/message_helpers.rs`, `src/keystore.rs`, and property-based tests in `tests/proptest_drawbridge.rs`.
 - **moat-postern** — Unit tests in `src/store.rs` covering record CRUD, handle/DID resolution, blob storage, cursor-based pagination, and rkey filtering.
-- **moat-beacon** — Integration tests in `tests/`. Each test creates a `TestWorld`, drives participants via `MoatCliClient`, and asserts delivery invariants. Tests require the `moat` binary to be built (auto-built on first run).
+- **moat-beacon** — Integration tests in three targets: `tests/smoke/` (deterministic scenarios), `tests/proptest/` (generative) and `tests/push/` (timing). Scenario bodies live in `src/scenarios/`; test files only call them. Each test creates a `TestWorld`, drives participants via `MoatCliClient`, and asserts delivery invariants. Tests require the `moat` binary to be built (auto-built on first run).
 - **moat-flutter (Dart)** — Unit tests in `moat-flutter/test/`:
   - `test/models/` — `Message`, `Conversation`, `BlueskyProfile` JSON roundtrips, `copyWith`, `groupIdHex`, status parsing, `isStale`, `fromApiResponse`.
   - `test/services/` — `ConversationStorage` and `MessageStorage` JSON format tests (save/load, add-or-update, dedup, timestamp sorting, per-group file isolation).

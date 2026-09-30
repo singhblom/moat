@@ -18,6 +18,14 @@ pub struct PosternConfig {
     /// Root directory for on-disk state. `None` = a fresh timestamped
     /// directory under `/tmp/postern/`.
     pub data_dir: Option<PathBuf>,
+    /// Interface to bind. `None` = `"127.0.0.1"` (loopback only, the
+    /// existing default every in-process caller — `moat-beacon` — relies
+    /// on). Set to `"0.0.0.0"` to accept connections from outside the host,
+    /// e.g. an Android emulator reaching the host via `10.0.2.2`. Does not
+    /// affect the self-reported `server_url` (still loopback-addressed —
+    /// see `spawn_postern`), which only needs to be reachable from
+    /// processes running on this same host (Drawbridge, in practice).
+    pub bind_addr: Option<String>,
 }
 
 /// Handle to a running Postern instance.

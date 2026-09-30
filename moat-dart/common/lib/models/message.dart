@@ -157,9 +157,6 @@ class Message {
   /// Whether this message was sent by us
   final bool isOwn;
 
-  /// MLS epoch when the message was sent
-  final int epoch;
-
   /// Status of the message (for sent messages)
   final MessageStatus status;
 
@@ -175,6 +172,9 @@ class Message {
   /// Attachment for non-text messages (image, etc.). Null for plain text.
   final Attachment? attachment;
 
+  /// Why a [MessageStatus.failed] send failed.
+  final String? sendError;
+
   Message({
     required this.id,
     required this.groupId,
@@ -183,12 +183,12 @@ class Message {
     required this.content,
     required this.timestamp,
     required this.isOwn,
-    required this.epoch,
     this.status = MessageStatus.sent,
     this.localId,
     this.messageId,
     this.reactions = const [],
     this.attachment,
+    this.sendError,
   });
 
   /// The rkey portion of the message ID (for ordering).
@@ -212,12 +212,12 @@ class Message {
         'content': content,
         'timestamp': timestamp.toIso8601String(),
         'isOwn': isOwn,
-        'epoch': epoch,
         'status': status.name,
         'localId': localId,
         'messageId': messageId != null ? base64Encode(messageId!) : null,
         'reactions': reactions.map((r) => r.toJson()).toList(),
         'attachment': attachment?.toJson(),
+        if (sendError != null) 'sendError': sendError,
       };
 
   /// Create a copy with updated fields
@@ -229,7 +229,6 @@ class Message {
     String? content,
     DateTime? timestamp,
     bool? isOwn,
-    int? epoch,
     MessageStatus? status,
     String? localId,
     Uint8List? messageId,
@@ -244,12 +243,29 @@ class Message {
         content: content ?? this.content,
         timestamp: timestamp ?? this.timestamp,
         isOwn: isOwn ?? this.isOwn,
-        epoch: epoch ?? this.epoch,
         status: status ?? this.status,
         localId: localId ?? this.localId,
         messageId: messageId ?? this.messageId,
         reactions: reactions ?? this.reactions,
         attachment: attachment ?? this.attachment,
+        sendError: this.sendError,
+      );
+
+  /// A copy in [status], carrying [error] (cleared when null).
+  Message withSendState(MessageStatus status, [String? error]) => Message(
+        id: id,
+        groupId: groupId,
+        senderDid: senderDid,
+        senderDeviceId: senderDeviceId,
+        content: content,
+        timestamp: timestamp,
+        isOwn: isOwn,
+        status: status,
+        localId: localId,
+        messageId: messageId,
+        reactions: reactions,
+        attachment: attachment,
+        sendError: error,
       );
 
   factory Message.fromJson(Map<String, dynamic> json) => Message(
@@ -260,7 +276,6 @@ class Message {
         content: json['content'] as String,
         timestamp: DateTime.parse(json['timestamp'] as String),
         isOwn: json['isOwn'] as bool,
-        epoch: json['epoch'] as int,
         status: _parseStatus(json['status'] as String?),
         localId: json['localId'] as String?,
         messageId: json['messageId'] != null
@@ -273,6 +288,7 @@ class Message {
         attachment: json['attachment'] != null
             ? Attachment.fromJson(json['attachment'] as Map<String, dynamic>)
             : null,
+        sendError: json['sendError'] as String?,
       );
 
   static MessageStatus _parseStatus(String? status) {

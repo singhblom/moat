@@ -44,6 +44,9 @@ pub struct DrawbridgeManager {
     /// Write half of the active pair WebSocket, if one is open.
     pair_writer: Option<PairWsWriter>,
 
+    /// Session token the open pair WebSocket attached with.
+    pair_token: Option<Vec<u8>>,
+
     /// Abort handle for the pair_read_loop task.  Aborting it drops the read
     /// half of the pair WS, so the TCP connection is fully closed and Drawbridge
     /// detects the peer disconnect (sends `pair_closed` on the main WS).
@@ -52,6 +55,10 @@ pub struct DrawbridgeManager {
 
 struct OwnDrawbridge {
     writer: WsWriter,
+    /// Aborting closes the socket without the read loop reporting a disconnect.
+    read_task: tokio::task::AbortHandle,
+    /// The relay this connection is to.
+    url: String,
 }
 
 /// Persisted Drawbridge state (stored in drawbridge.json).
@@ -72,6 +79,10 @@ pub struct CachedDrawbridgeConfig {
 /// Not persisted — refetched on login.
 pub type DrawbridgeConfigCache = HashMap<String, CachedDrawbridgeConfig>;
 
+/// How long a closing pair WS waits for its end to be confirmed: our own
+/// close for the peer's reply, a relay `pair_closed` for the socket to end.
+pub const PAIR_CLOSE_GRACE: Duration = Duration::from_secs(5);
+
 /// Backoff schedule for reconnection attempts.
 fn backoff_duration(attempt: u32) -> Duration {
     match attempt {
@@ -91,6 +102,7 @@ impl DrawbridgeManager {
             bg_tx,
             reconnect_attempt: 0,
             pair_writer: None,
+            pair_token: None,
             pair_read_task: None,
         }
     }
@@ -117,6 +129,9 @@ impl DrawbridgeManager {
         did: &str,
         identity_key_bundle: &[u8],
     ) -> Result<(), String> {
+        // Replace an existing connection rather than duplicate it.
+        self.close_own();
+
         let (ws_stream, _) = tokio_tungstenite::connect_async(url)
             .await
             .map_err(|e| format!("WebSocket connect failed: {e}"))?;
@@ -191,12 +206,17 @@ impl DrawbridgeManager {
         // 6. Spawn read loop
         let bg_tx = self.bg_tx.clone();
         let url_clone = url.to_string();
-        tokio::spawn(async move {
+        let read_task = tokio::spawn(async move {
             own_read_loop(reader, bg_tx, url_clone).await;
-        });
+        })
+        .abort_handle();
 
         // 7. Store connection, reset reconnect backoff
-        self.own = Some(OwnDrawbridge { writer });
+        self.own = Some(OwnDrawbridge {
+            writer,
+            read_task,
+            url: url.to_string(),
+        });
         self.reconnect_attempt = 0;
 
         Ok(())
@@ -296,7 +316,8 @@ impl DrawbridgeManager {
         Ok(())
     }
 
-    /// Send `pair_offer{token}` on the main WS.
+    /// Send `pair_offer{token}` on the main WS. Called by the new device to
+    /// start a live pairing session.
     pub async fn send_pair_offer(&mut self, token: &[u8]) -> Result<(), String> {
         let own = self.own.as_mut().ok_or("not connected to own Drawbridge")?;
         let msg = serde_json::json!({
@@ -309,7 +330,8 @@ impl DrawbridgeManager {
             .map_err(|e| format!("send pair_offer: {e}"))
     }
 
-    /// Send `pair_join{token}` on the main WS.
+    /// Send `pair_join{token}` on the main WS. Called by the existing
+    /// device in response to a scanned/typed pairing code.
     pub async fn send_pair_join(&mut self, token: &[u8]) -> Result<(), String> {
         let own = self.own.as_mut().ok_or("not connected to own Drawbridge")?;
         let msg = serde_json::json!({
@@ -368,17 +390,19 @@ impl DrawbridgeManager {
 
         // Spawn binary read loop; store abort handle so clear_pair can stop it.
         let bg_tx = self.bg_tx.clone();
+        let session_token = token.to_vec();
         let task = tokio::spawn(async move {
-            pair_read_loop(reader, bg_tx).await;
+            pair_read_loop(reader, bg_tx, session_token).await;
         });
         self.pair_read_task = Some(task.abort_handle());
 
         self.pair_writer = Some(writer);
-        let _ = self.bg_tx.send(BgEvent::PairConnected);
+        self.pair_token = Some(token.to_vec());
+        let _ = self.bg_tx.send(BgEvent::PairConnected { session_token: token.to_vec() });
         Ok(())
     }
 
-    /// Send a binary frame on the pair WS (ring-MLS ciphertext).
+    /// Send a binary frame on the pair WS.
     pub async fn send_pair_binary(&mut self, data: Vec<u8>) -> Result<(), String> {
         let writer = self.pair_writer.as_mut().ok_or("no pair WS connected")?;
         writer
@@ -397,6 +421,30 @@ impl DrawbridgeManager {
             handle.abort();
         }
         self.pair_writer = None;
+        self.pair_token = None;
+    }
+
+    /// Close the pair WS with a close handshake, after everything already
+    /// written. The read loop is left to see the peer's reply, so frames
+    /// the peer sent before closing are still delivered; it is aborted if
+    /// no reply comes.
+    pub async fn close_pair(&mut self) {
+        self.pair_token = None;
+        if let Some(mut writer) = self.pair_writer.take() {
+            let _ = writer.close().await;
+        }
+        if let Some(handle) = self.pair_read_task.take() {
+            tokio::spawn(async move {
+                tokio::time::sleep(PAIR_CLOSE_GRACE).await;
+                handle.abort();
+            });
+        }
+    }
+
+    /// Whether the pair WS for `token` is open; `None` matches any.
+    pub fn has_pair_socket(&self, token: Option<&[u8]>) -> bool {
+        self.pair_writer.is_some()
+            && token.map_or(true, |t| self.pair_token.as_deref() == Some(t))
     }
 
     /// Get the number of active connections (for status bar).
@@ -409,9 +457,21 @@ impl DrawbridgeManager {
         self.own.is_some()
     }
 
+    /// Whether this device is connected to its own relay at [url].
+    pub fn is_connected_to(&self, url: &str) -> bool {
+        self.own.as_ref().is_some_and(|own| own.url == url)
+    }
+
     /// Mark the connection as dropped (called on disconnect).
     pub fn clear_connection(&mut self) {
         self.own = None;
+    }
+
+    /// Close the connection to our own relay, if one is open.
+    fn close_own(&mut self) {
+        if let Some(own) = self.own.take() {
+            own.read_task.abort();
+        }
     }
 
     /// Get the backoff delay for the next reconnect attempt and increment the counter.
@@ -509,7 +569,15 @@ async fn own_read_loop(
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("unknown")
                                 .to_string();
-                            let _ = bg_tx.send(BgEvent::PairClosed { reason });
+                            let session_token = msg
+                                .get("token")
+                                .and_then(|v| v.as_str())
+                                .and_then(base64_decode);
+                            let _ = bg_tx.send(BgEvent::PairClosed {
+                                session_token,
+                                reason,
+                                via_relay: true,
+                            });
                         }
                         "error" => {
                             let err = msg
@@ -547,25 +615,37 @@ async fn own_read_loop(
 
 /// Read loop for the pair WebSocket. Forwards binary frames as `PairFrameReceived`
 /// and signals `PairClosed` on disconnect.
+///
+/// `clear_pair()` aborts this task, but not instantaneously: an
+/// already-observed frame or close can still be queued after the session
+/// is superseded, hence `session_token`.
 async fn pair_read_loop(
     mut reader: futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>,
     bg_tx: mpsc::UnboundedSender<BgEvent>,
+    session_token: Vec<u8>,
 ) {
     loop {
         match reader.next().await {
             Some(Ok(Message::Binary(data))) => {
-                let _ = bg_tx.send(BgEvent::PairFrameReceived { data });
+                let _ = bg_tx.send(BgEvent::PairFrameReceived {
+                    session_token: session_token.clone(),
+                    data,
+                });
             }
             Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => continue,
             Some(Ok(Message::Close(_))) | None => {
                 let _ = bg_tx.send(BgEvent::PairClosed {
+                    session_token: Some(session_token),
                     reason: "connection closed".to_string(),
+                    via_relay: false,
                 });
                 return;
             }
             Some(Err(e)) => {
                 let _ = bg_tx.send(BgEvent::PairClosed {
+                    session_token: Some(session_token),
                     reason: format!("read error: {e}"),
+                    via_relay: false,
                 });
                 return;
             }
@@ -604,6 +684,13 @@ mod tests {
     fn test_drawbridge_state_default() {
         let state = DrawbridgeState::default();
         assert!(state.own_url.is_none());
+    }
+
+    #[test]
+    fn a_manager_with_no_connection_is_connected_to_nothing() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mgr = DrawbridgeManager::new(tx);
+        assert!(!mgr.is_connected_to("wss://relay.example.com/ws"));
     }
 
     #[test]

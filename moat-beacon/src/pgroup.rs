@@ -81,6 +81,64 @@ impl Drop for ProcessGroup {
     }
 }
 
+// ── Orphan reaping ───────────────────────────────────────────────────────────
+
+/// Kill leftover beacon child processes that have been reparented to init.
+///
+/// Closes the one hole [`ProcessGroup`] and the signal handler cannot: if the
+/// *test binary* dies without unwinding — SIGKILL, or a `pkill` that matches
+/// `cargo` rather than the test binary it spawned — its children keep running.
+/// They are not merely untidy: they hold their storage roots and ports, burn
+/// CPU alongside later runs, and show up in `beacon triage` as devices stuck
+/// mid-bootstrap, which is indistinguishable from a real stall until you
+/// notice the process is still alive. That has already cost one
+/// misattributed diagnosis.
+///
+/// Only processes whose parent is init (PPID 1) are killed. A concurrently
+/// running test's children have a live parent, so this cannot disturb them —
+/// which matters because beacon tests run in parallel within a binary and
+/// several `cargo test` invocations may overlap.
+pub fn reap_orphaned_children() {
+    static REAP: std::sync::Once = std::sync::Once::new();
+    REAP.call_once(|| {
+        let Ok(out) = std::process::Command::new("ps")
+            .args(["-A", "-o", "pid=,ppid=,command="])
+            .output()
+        else {
+            return;
+        };
+        let listing = String::from_utf8_lossy(&out.stdout);
+
+        let mut reaped = 0usize;
+        for line in listing.lines() {
+            let mut parts = line.split_whitespace();
+            let (Some(pid), Some(ppid)) = (parts.next(), parts.next()) else {
+                continue;
+            };
+            if ppid != "1" {
+                continue; // still owned by a live test
+            }
+            let cmd = parts.collect::<Vec<_>>().join(" ");
+            let ours = cmd.contains("/tmp/moat-beacon-data/")
+                || cmd.contains("moat-beacon/toxiproxy")
+                || cmd.contains("target/moat-drawbridge/drawbridge")
+                || cmd.contains("target/moat-dart-server/moat_dart_server");
+            if !ours {
+                continue;
+            }
+            if let Ok(pid) = pid.parse::<i32>() {
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                }
+                reaped += 1;
+            }
+        }
+        if reaped > 0 {
+            eprintln!("[beacon] reaped {reaped} orphaned child process(es) from a previous run");
+        }
+    });
+}
+
 // ── Signal handler ────────────────────────────────────────────────────────────
 
 /// Install SIGINT + SIGTERM handlers (idempotent — safe to call repeatedly).

@@ -46,7 +46,6 @@ void main() {
       content: content,
       timestamp: timestamp ?? DateTime.utc(2025, 1, 15, 12, 0, 0),
       isOwn: isOwn,
-      epoch: epoch,
       status: status,
       localId: localId,
       messageId: messageId != null ? Uint8List.fromList(messageId) : null,

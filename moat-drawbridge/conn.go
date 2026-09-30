@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -26,6 +27,11 @@ type Client struct {
 	send   chan []byte     // outbound message queue
 	authed bool
 	log    *slog.Logger
+
+	// sendLock orders sendMsg against closeSend, so a message is never sent on
+	// a closed channel.
+	sendLock   sync.Mutex
+	sendClosed bool
 
 	// relayURL is the public-facing relay URL used for challenge verification,
 	// derived per-connection from request headers or relay config.
@@ -66,12 +72,26 @@ func (c *Client) sendMsg(v any) {
 		c.log.Error("failed to marshal message", "error", err)
 		return
 	}
-	defer func() { recover() }() // ignore send-on-closed-channel if client is disconnecting
+	c.sendLock.Lock()
+	defer c.sendLock.Unlock()
+	if c.sendClosed {
+		return
+	}
 	select {
 	case c.send <- data:
 	default:
 		// Send buffer full, drop message
 		c.log.Warn("send buffer full, dropping message")
+	}
+}
+
+// closeSend ends the outbound queue; the write pump drains it and exits.
+func (c *Client) closeSend() {
+	c.sendLock.Lock()
+	defer c.sendLock.Unlock()
+	if !c.sendClosed {
+		c.sendClosed = true
+		close(c.send)
 	}
 }
 

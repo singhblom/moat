@@ -46,10 +46,12 @@ MLS state or storage.
 # Run all beacon integration tests
 cargo test -p moat-beacon
 
-# Run a specific test file
+# Run one family: smoke (deterministic), proptest (generative), push (timing)
 cargo test -p moat-beacon --test smoke
-cargo test -p moat-beacon --test proptest_two_party    # ~20 s
-cargo test -p moat-beacon --test proptest_drawbridge   # ~35 s, requires Go
+cargo test -p moat-beacon --test proptest two_party    # filter by test name
+
+# Worlds running at once per binary (defaults: smoke 2, proptest/push 1)
+BEACON_WORLDS=3 cargo test -p moat-beacon --test smoke
 
 # See stdout from the test processes
 cargo test -p moat-beacon -- --nocapture

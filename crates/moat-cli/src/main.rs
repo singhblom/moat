@@ -7,6 +7,7 @@ mod http_server;
 mod image_processing;
 mod keystore;
 mod message_helpers;
+mod outbox;
 mod sync;
 mod ui;
 
@@ -214,6 +215,7 @@ async fn run_app(
     picker: ratatui_image::picker::Picker,
 ) -> anyhow::Result<()> {
     let mut app = App::new(storage_dir, pds_url, drawbridge_url, picker)?;
+    app.fail_orphaned_sends();
 
     loop {
         terminal.draw(|f| ui::draw(f, &mut app))?;
@@ -361,7 +363,7 @@ async fn cmd_fetch(storage_dir: Option<PathBuf>, repository: &str) -> anyhow::Re
     let group_ids = keys.list_groups().unwrap_or_default();
     for gid in &group_ids {
         let group_id_bytes = hex::decode(gid).unwrap_or_default();
-        if let Ok(tags) = mls.populate_candidate_tags(&group_id_bytes) {
+        if let Ok(tags) = mls.populate_candidate_tags(&group_id_bytes, &[]) {
             for tag in tags {
                 tag_map.insert(tag, group_id_bytes.clone());
             }
@@ -535,7 +537,7 @@ async fn cmd_send_test(
 
     for gid in &group_ids {
         let group_id_bytes = hex::decode(gid).unwrap_or_default();
-        if let Ok(tags) = mls.populate_candidate_tags(&group_id_bytes) {
+        if let Ok(tags) = mls.populate_candidate_tags(&group_id_bytes, &[]) {
             if tags.contains(&tag) {
                 found_group = Some(group_id_bytes);
                 break;
@@ -736,11 +738,8 @@ async fn cmd_remove_device(
     std::fs::write(&temp_path, &state)?;
     std::fs::rename(&temp_path, &mls_path)?;
 
-    // Derive tag for the commit
-    let tag = mls.derive_next_tag(&group_id, &key_bundle)?;
-
     // Publish the commit
-    let uri = client.publish_event(&tag, &result.commit, None).await?;
+    let uri = client.publish_event(&result.commit_tag, &result.commit, None).await?;
     println!("Removed device at leaf index {}", leaf_index);
     println!("Published commit: {}", uri);
 
@@ -785,11 +784,8 @@ async fn cmd_kick(
     std::fs::write(&temp_path, &state)?;
     std::fs::rename(&temp_path, &mls_path)?;
 
-    // Derive tag for the commit
-    let tag = mls.derive_next_tag(&group_id, &key_bundle)?;
-
     // Publish the commit
-    let uri = client.publish_event(&tag, &result.commit, None).await?;
+    let uri = client.publish_event(&result.commit_tag, &result.commit, None).await?;
     println!("Kicked user {}", did_to_kick);
     println!("Published commit: {}", uri);
 
@@ -830,11 +826,8 @@ async fn cmd_leave(storage_dir: Option<PathBuf>, conversation: &str) -> anyhow::
     std::fs::write(&temp_path, &state)?;
     std::fs::rename(&temp_path, &mls_path)?;
 
-    // Derive tag for the commit
-    let tag = mls.derive_next_tag(&group_id, &key_bundle)?;
-
     // Publish the commit
-    let uri = client.publish_event(&tag, &result.commit, None).await?;
+    let uri = client.publish_event(&result.commit_tag, &result.commit, None).await?;
     println!(
         "Left conversation {}",
         &conversation[..16.min(conversation.len())]

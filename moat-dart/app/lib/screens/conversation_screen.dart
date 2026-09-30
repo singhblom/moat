@@ -2,12 +2,11 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:moat_dart_common/moat_dart_common.dart' hide ConversationRepository;
+import 'package:moat_dart_common/moat_dart_common.dart';
 import '../providers/auth_provider.dart';
 import '../providers/conversations_provider.dart';
 import '../providers/profile_provider.dart';
 import '../utils/display_name.dart';
-import '../services/conversation_repository.dart';
 import '../widgets/message_bubble.dart';
 
 /// Screen showing messages in a conversation
@@ -308,14 +307,9 @@ class _ConversationScreenState extends State<ConversationScreen> {
     return ListView.builder(
       controller: _scrollController,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 16),
-      itemCount: provider.messages.length + 1, // +1 for history boundary
+      itemCount: provider.messages.length,
       itemBuilder: (context, index) {
-        // History boundary at the top
-        if (index == 0) {
-          return _buildHistoryBoundary(context, provider.messages);
-        }
-
-        final messageIndex = index - 1;
+        final messageIndex = index;
         final message = provider.messages[messageIndex];
         final previousMessage =
             messageIndex > 0 ? provider.messages[messageIndex - 1] : null;
@@ -338,7 +332,8 @@ class _ConversationScreenState extends State<ConversationScreen> {
           senderDid: showSender ? message.senderDid : null,
           onLongPress: () => _selectMessage(message),
           onRetry: message.status == MessageStatus.failed
-              ? () => provider.retryMessage(message.localId ?? message.id)
+              ? () => provider.retryMessage(message.localId ?? message.id,
+                  blobService: context.read<BlobService>())
               : null,
           onReaction: (emoji) => provider.sendReaction(message, emoji),
           imageFuture: imageFuture,
@@ -347,26 +342,31 @@ class _ConversationScreenState extends State<ConversationScreen> {
     );
   }
 
-  Widget _buildHistoryBoundary(BuildContext context, List<Message> messages) {
-    if (messages.isEmpty) return const SizedBox.shrink();
-
-    final firstMessage = messages.first;
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: Center(
+  /// Stands in for the composer while this device holds a conversation's
+  /// history but is not yet in its MLS group.
+  Widget _buildAwaitingMembershipNotice(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(8),
+      child: SafeArea(
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(16),
+            color: scheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(24),
           ),
-          child: Text(
-            'Messages before ${_formatDate(firstMessage.timestamp)} are on your other devices',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+          child: Row(
+            children: [
+              Icon(Icons.hourglass_empty, size: 18, color: scheme.outline),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Waiting to be connected to this conversation.',
+                  style: TextStyle(color: scheme.outline),
                 ),
-            textAlign: TextAlign.center,
+              ),
+            ],
           ),
         ),
       ),
@@ -374,6 +374,20 @@ class _ConversationScreenState extends State<ConversationScreen> {
   }
 
   Widget _buildMessageInput(BuildContext context, ConversationRepository provider) {
+    // A conversation whose history arrived by sync before the Add that
+    // puts us in the group has nothing to send into — there is no local
+    // MLS group to encrypt to. Replace the composer with a plain
+    // statement of that rather than accepting text that cannot go
+    // anywhere.
+    //
+    // Deliberately not worded as though it resolves any moment now: an
+    // Add can only come from a member, so if the device that served the
+    // history was the only one and it goes offline, nothing adds us until
+    // it comes back.
+    if (!widget.conversation.isMember) {
+      return _buildAwaitingMembershipNotice(context);
+    }
+
     final hasText = _textController.text.trim().isNotEmpty;
 
     return Container(
@@ -708,7 +722,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
             if (message.senderDeviceId != null)
               _buildInfoRow(context, 'Device', message.senderDeviceId!),
             _buildInfoRow(context, 'Time', _formatDateTime(message.timestamp)),
-            _buildInfoRow(context, 'Epoch', message.epoch.toString()),
             _buildInfoRow(context, 'Status', message.status.name),
             _buildInfoRow(context, 'Message ID', message.id, isMonospace: true),
             const SizedBox(height: 16),
@@ -748,11 +761,8 @@ class _ConversationScreenState extends State<ConversationScreen> {
     );
   }
 
-  String _formatDate(DateTime time) {
-    return '${time.month}/${time.day}/${time.year}';
-  }
-
   String _formatDateTime(DateTime time) {
-    return '${time.month}/${time.day}/${time.year} ${time.hour}:${time.minute.toString().padLeft(2, '0')}';
+    final local = time.toLocal();
+    return '${local.month}/${local.day}/${local.year} ${local.hour}:${local.minute.toString().padLeft(2, '0')}';
   }
 }

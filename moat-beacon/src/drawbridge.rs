@@ -12,11 +12,11 @@
 //! - `LOG_FORMAT=text`
 //! - `PLC_BASE_URL=<url>` (set via [`DrawbridgeProcess::set_plc_base_url`])
 
+use crate::ports::reserve_port;
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::Deserialize;
 use std::{
-    net::TcpListener,
     path::{Path, PathBuf},
     process::{Child, Command},
     time::{Duration, Instant},
@@ -73,7 +73,8 @@ impl DrawbridgeProcess {
         extra_env: &[(&str, &str)],
     ) -> Result<Self> {
         let bin = drawbridge_binary().context("obtain drawbridge binary")?;
-        let port = free_port().context("allocate drawbridge port")?;
+        let mut reserved = reserve_port().context("allocate drawbridge port")?;
+        let port = reserved.port();
 
         let mut cmd = Command::new(&bin);
         cmd.env("RELAY_TLS", "false")
@@ -88,6 +89,8 @@ impl DrawbridgeProcess {
         }
         #[cfg(unix)]
         cmd.process_group(pgid as i32);
+        // Last possible moment before the child binds it.
+        reserved.release();
         let child = cmd.spawn().context("spawn drawbridge process")?;
 
         let http_url = format!("http://127.0.0.1:{port}");
@@ -255,11 +258,6 @@ fn which_go() -> Option<PathBuf> {
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
-
-fn free_port() -> Result<u16> {
-    let listener = TcpListener::bind("127.0.0.1:0").context("bind ephemeral port")?;
-    Ok(listener.local_addr()?.port())
-}
 
 /// Poll `GET /health` until it returns 200 or the timeout elapses.
 async fn wait_for_health(http_url: &str, timeout: Duration) -> Result<()> {

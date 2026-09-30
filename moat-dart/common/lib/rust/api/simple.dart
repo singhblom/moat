@@ -8,9 +8,9 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'simple.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `from_core`, `into_core`, `push_media_label`, `push_plaintext_preview`
+// These functions are ignored because they are not marked as `pub`: `commands_dto`, `credential_from_dto`, `device_id_from`, `from_core`, `identity_from_dto`, `into_core`, `push_media_label`, `push_plaintext_preview`, `to_core_sibling_stealth`, `token_from`, `with_env`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `MoatError`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `try_from`
 
 /// Generate a stealth keypair. Returns (private_key, public_key) each 32 bytes.
 StealthKeypair generateStealthKeypair() =>
@@ -48,14 +48,6 @@ List<Uint8List> generateCandidateTags(
         fromCounter: fromCounter,
         count: count);
 
-/// Derive the next unique tag for publishing an event (increments counter).
-Uint8List deriveNextTag(
-        {required MoatSessionHandle handle,
-        required List<int> groupId,
-        required List<int> keyBundle}) =>
-    RustLib.instance.api.crateApiSimpleDeriveNextTag(
-        handle: handle, groupId: groupId, keyBundle: keyBundle);
-
 /// Sign a Drawbridge challenge with the Ed25519 identity key from a key bundle.
 ///
 /// Returns (signature_bytes, public_key_bytes) as raw bytes (64 and 32 bytes).
@@ -67,7 +59,11 @@ Future<DrawbridgeChallengeSignature> signDrawbridgeChallenge(
     RustLib.instance.api.crateApiSimpleSignDrawbridgeChallenge(
         keyBundle: keyBundle, message: message);
 
-/// Pad plaintext to bucket size (256, 1024, or 4096 bytes).
+/// Pad plaintext to bucket size (512, 1024, or 4096 bytes).
+///
+/// Fails above the largest bucket: there is nothing to round up to, and
+/// oversized content belongs in an external blob with only the reference
+/// in the event.
 Uint8List padToBucket({required List<int> plaintext}) =>
     RustLib.instance.api.crateApiSimplePadToBucket(plaintext: plaintext);
 
@@ -135,6 +131,11 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
       required List<int> keyBundle,
       required List<int> newMemberKeyPackage});
 
+  /// Mark a matched tag as seen and extend its sender's scanning window.
+  ///
+  /// Returns the newly covered tags, for the tag map and watch list.
+  List<Uint8List> advanceScanWindow({required List<int> tag});
+
   /// Create a new MLS group with DID and device name. Returns the group ID.
   Future<Uint8List> createGroup(
       {required String did,
@@ -145,23 +146,8 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
   Future<DecryptResultDto> decryptEvent(
       {required List<int> groupId, required List<int> ciphertext});
 
-  /// Decrypt an incoming `/pair` WS binary frame as a `SyncApp` event in the
-  /// ring group. Returns the inner payload bytes (`SyncMsg` JSON) on success,
-  /// or an error if decrypt failed or the event was not a `SyncApp`.
-  Future<Uint8List> decryptSyncFrame(
-      {required List<int> ringGroupId, required List<int> ciphertext});
-
   /// Get the 16-byte device ID.
   Uint8List deviceId();
-
-  /// Sparse digest anchors for a group, oldest-first.
-  Future<List<SyncAnchorDto>> digestAnchors({required List<int> groupId});
-
-  /// Oldest and newest known rkeys for a group, or None if the transcript is empty.
-  Future<(String, String)?> digestRange({required List<int> groupId});
-
-  /// Tip digest for a group. None if the group doesn't exist or has no transcript yet.
-  Future<Uint8List?> digestTip({required List<int> groupId});
 
   /// Encrypt an event for a group. Returns encrypt result.
   Future<EncryptResultDto> encryptEvent(
@@ -169,13 +155,8 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
       required List<int> keyBundle,
       required EventDto event});
 
-  /// Encrypt a `SyncApp` payload into the ring group, ready to be sent on the
-  /// `/pair` WebSocket. Returns just the ciphertext bytes; the Dart caller
-  /// never needs to construct an `EventDto` of an unsupported kind.
-  Future<Uint8List> encryptSyncApp(
-      {required List<int> ringGroupId,
-      required List<int> keyBundle,
-      required List<int> payload});
+  /// The parked events, serialized for the host to persist.
+  Uint8List exportParkedEvents();
 
   /// Export the full session state as bytes for persistence.
   Future<Uint8List> exportState();
@@ -205,17 +186,33 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
   Future<List<CredentialDto>> getGroupMemberCredentials(
       {required List<int> groupId});
 
+  /// The group a candidate tag belongs to, if it is one.
+  Uint8List? groupForTag({required List<int> tag});
+
   /// Check if there are unsaved changes.
   bool hasPendingChanges();
+
+  /// Restore parked events persisted with `export_parked_events`.
+  int importParkedEvents({required List<int> bytes});
+
+  /// Drop events parked too long. Returns how many were dropped.
+  int inboxExpire({required PlatformInt64 nowMs});
+
+  /// Park an event until its tag is generated.
+  void inboxPark({required InboxEventDto event, required PlatformInt64 nowMs});
+
+  /// The ready event with the lowest rkey.
+  InboxEventDto? inboxPopReady();
+
+  /// Queue a fetched event. Returns false if it is already held.
+  bool inboxPush({required InboxEventDto event});
 
   /// Check if a DID already has a device in the group.
   bool isDidInGroup({required List<int> groupId, required String did});
 
-  /// Mark a tag as seen, advancing the seen counter for that sender.
-  ///
-  /// Call this after matching a tag from `populate_candidate_tags`.
-  /// Returns true if the tag was found and the counter was updated.
-  bool markTagSeen({required List<int> tag});
+  /// The device name of the member of `group_id` with `device_id`, if any.
+  Future<String?> memberDeviceName(
+      {required List<int> groupId, required List<int> deviceId});
 
   /// Create a new session with empty state.
   static MoatSessionHandle newSession() =>
@@ -243,70 +240,186 @@ abstract class MoatSessionHandle implements RustOpaqueInterface {
       required List<int> keyBundle});
 }
 
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<PairChannelHandle>>
+abstract class PairChannelHandle implements RustOpaqueInterface {
+  bool isTransferring();
+
+  static PairChannelHandle newDriver() =>
+      RustLib.instance.api.crateApiSimplePairChannelHandleNewDriver();
+
+  /// A binary frame from the pair WS for `token`.
+  Future<List<PairChannelCommandDto>> onFrame(
+      {required MoatSessionHandle session,
+      required RingDriverHandle ring,
+      required PlatformInt64 nowMs,
+      required List<int> token,
+      required List<int> data});
+
+  /// The pair WS for `token` closed or failed to connect.
+  List<PairChannelCommandDto> onPairClosed(
+      {required List<int> token, required String reason});
+
+  List<PairChannelCommandDto> onPairReady(
+      {required List<int> token, required String url});
+
+  /// The pair WS for `token` reached `paired`.
+  Future<List<PairChannelCommandDto>> onPaired(
+      {required MoatSessionHandle session,
+      required RingDriverHandle ring,
+      required PlatformInt64 nowMs,
+      required List<int> token});
+
+  List<PairChannelCommandDto> onRelayConnected();
+
+  /// A sibling's `ring.msg` payload. `sender_name` must come from the
+  /// sender's MLS leaf credential.
+  List<PairChannelCommandDto> onRingMsg(
+      {required List<int> payload,
+      required String senderName,
+      required List<int> ownDeviceId,
+      required PlatformInt64 nowMs});
+
+  List<PairChannelCommandDto> onRingPublishFailed(
+      {required List<int> tag, required String detail});
+
+  /// Existing device: approve the pending `Enroll`. A failure while
+  /// approving fails the pairing rather than returning `Err`.
+  Future<List<PairChannelCommandDto>> pairApprove(
+      {required MoatSessionHandle session,
+      required RingDriverHandle ring,
+      required PlatformInt64 nowMs,
+      required List<SiblingStealthDto> siblingStealth});
+
+  List<PairChannelCommandDto> pairCancel();
+
+  /// Existing device: enter a code, in its text or `moat-pair:` form.
+  List<PairChannelCommandDto> pairConfirm(
+      {required PairIdentityDto identity, required String code});
+
+  /// New device: start a pairing; the code is what the screen shows.
+  PairNewDto pairNew({required PairIdentityDto identity});
+
+  List<PairChannelCommandDto> pairReject();
+
+  PairingUiStateDto pairingUiState();
+
+  SyncProgressDto? progress();
+
+  Future<List<PairChannelCommandDto>> provideHistory(
+      {required MoatSessionHandle session,
+      required RingDriverHandle ring,
+      required PlatformInt64 nowMs,
+      required List<int> token,
+      required List<ConvHistoryDto> history});
+
+  List<PairChannelCommandDto> syncAccept();
+
+  void syncDecline();
+
+  /// Offer this device's history to `target`.
+  Future<List<PairChannelCommandDto>> syncOffer(
+      {required MoatSessionHandle session,
+      required RingDriverHandle ring,
+      required PlatformInt64 nowMs,
+      required List<int> keyBundle,
+      required List<int> target});
+
+  /// Ask the user's other devices for history; `target` names one.
+  /// `key_bundle` seals the request to the ring.
+  Future<List<PairChannelCommandDto>> syncRequest(
+      {required MoatSessionHandle session,
+      required RingDriverHandle ring,
+      required PlatformInt64 nowMs,
+      required List<int> keyBundle,
+      Uint8List? target});
+
+  SyncRequestUiStateDto syncRequestUiState();
+
+  /// Expire an unanswered sync request.
+  List<PairChannelCommandDto> tick({required PlatformInt64 nowMs});
+}
+
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<RingDriverHandle>>
 abstract class RingDriverHandle implements RustOpaqueInterface {
-  /// Restore a ring driver from its persisted JSON state.
+  /// Claim one unused key package from the local pool for `owner`, marking
+  /// its seq consumed.  `None` means the pool is drained — the host should
+  /// emit a `KpRequest` via [`Self::emit_kp_request_for`] and defer the add
+  /// until a `KpBatch` arrives.  Single-use enforcement lives here, not in
+  /// the host: a seq is never returned twice, even if replayed into the
+  /// pool.
+  OfferedKpDto? claimKp({required List<int> ownerDeviceId});
+
+  /// One-line snapshot of ring membership and peer states, for the Dart
+  /// host's debug log. Same renderer as `moat-cli` uses, so a mixed-runtime
+  /// beacon failure produces comparable lines from both sides.
+  String debugSummary();
+
+  /// Emit a `KpRequest` to `owner` asking it to top up our pool.  The host
+  /// publishes the returned commands.  Empty if not in a ring or if the
+  /// sibling's stealth record is not yet known (self-healing: the next poll
+  /// retries).
+  Future<List<RingCommandDto>> emitKpRequestFor(
+      {required MoatSessionHandle session,
+      required String myDid,
+      required List<int> keyBundle,
+      required List<SiblingStealthDto> siblingStealth,
+      required List<int> ownerDeviceId});
+
+  /// Build the stealth-publish command carrying a `CoordMsg::UserConvWelcome`
+  /// for `owner`.  The CoordMsg framing stays in Rust so the wire format has
+  /// a single owner.  `None` if not in a ring or the sibling's stealth
+  /// record is unknown.
+  ///
+  /// Flat parameter list rather than a bundled struct: each `#[frb]`
+  /// parameter becomes a named argument in the generated Dart binding, so
+  /// callers get the same readability a struct would give without an
+  /// extra DTO to keep in sync.
+  Future<RingCommandDto?> encryptUserConvWelcome(
+      {required MoatSessionHandle session,
+      required String myDid,
+      required List<int> keyBundle,
+      required List<SiblingStealthDto> siblingStealth,
+      required List<int> ownerDeviceId,
+      required List<int> groupId,
+      required List<int> welcome});
+
+  /// Restore a ring state from its persisted JSON.
   static Future<RingDriverHandle> fromStateJson({required String json}) =>
       RustLib.instance.api
           .crateApiSimpleRingDriverHandleFromStateJson(json: json);
 
-  /// Handle an incoming coord-group message (decrypted JSON payload).
-  Future<List<RingCommandDto>> handleCoordMsg(
-      {required MoatSessionHandle session,
-      required String myDid,
-      required List<int> groupId,
-      required List<int> payload});
-
-  /// Create a new ring driver with empty state.
+  /// Create a new ring state with empty state.
   static RingDriverHandle newEmpty() =>
       RustLib.instance.api.crateApiSimpleRingDriverHandleNewEmpty();
-
-  /// Called when a coord-group Welcome was consumed outside `tick()` (e.g. by
-  /// `_pollOwnDid`).  Registers the coord group and returns a Hello
-  /// `PublishEvent` command for the caller to execute.
-  Future<List<RingCommandDto>> notifyCoordGroupJoined(
-      {required MoatSessionHandle session,
-      required List<int> groupId,
-      required List<int> keyBundle,
-      required String myDid});
 
   /// Cursor (rkey) for incremental own-PDS stealth scan.
   String? ownEventsCursor();
 
+  /// Record that we are now an MLS member of `ring_id`, looking up our
+  /// own leaf index from the group's member list. Called once, host-side,
+  /// when a pairing exchange completes — the new device from
+  /// `PairingCommandDto.persistRing`, the existing device right after a
+  /// successful `PairingSessionHandle.approve` (which has no command of
+  /// its own for this, since it already knows it just created/joined
+  /// `ring_id`). Mirrors `moat-cli`'s `App`-level interpreter.
+  Future<void> recordRingMembership(
+      {required MoatSessionHandle session,
+      required List<int> ringId,
+      required PlatformInt64 nowMs});
+
   /// Raw ring group ID, if a ring exists.
   Uint8List? ringGroupId();
+
+  /// Device ids of siblings confirmed to be in the ring.  Drives the
+  /// same-user fan-out loop in the host.
+  List<Uint8List> ringJoinedSiblings({required MoatSessionHandle session});
 
   /// Drive one ring coordination tick. Returns commands for the host to interpret.
   Future<List<RingCommandDto>> tick(
       {required MoatSessionHandle session, required TickInputsDto inputs});
 
-  /// Serialise the current ring driver state as JSON.
+  /// Serialise the current ring state as JSON.
   Future<String> toStateJson();
-}
-
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SyncSessionHandle>>
-abstract class SyncSessionHandle implements RustOpaqueInterface {
-  /// Populate the plan for one conversation before calling `on_paired`.
-  Future<void> addConvPlan(
-      {required List<int> groupId,
-      required String convId,
-      required List<SyncMessageDto> ourMessages,
-      required bool expectingBatch});
-
-  /// `true` once the session has reached the `Done` phase.
-  bool isDone();
-
-  /// Create a new session in the `SendingHello` phase.
-  static SyncSessionHandle newSession() =>
-      RustLib.instance.api.crateApiSimpleSyncSessionHandleNewSession();
-
-  /// Feed a received and decrypted `SyncMsg` (JSON bytes) into the state machine.
-  Future<List<SyncOutputDto>> onMessage(
-      {required List<int> msgBytes, required String ourDid});
-
-  /// Called when the pair WS reaches the `paired` state.
-  Future<List<SyncOutputDto>> onPaired(
-      {required List<ConvStateDto> ourConvs, required BigInt ringEpoch});
 }
 
 class BlobEncryptResult {
@@ -347,39 +460,26 @@ class BlobEncryptResult {
           contentHash == other.contentHash;
 }
 
-class ConvStateDto {
+/// One conversation's settled messages, for a transfer's `Hello`.
+class ConvHistoryDto {
   final Uint8List groupId;
-  final String? oldestRkey;
-  final String? newestRkey;
-  final Uint8List tipDigest;
-  final List<SyncAnchorDto> anchors;
+  final List<SyncMessageDto> messages;
 
-  const ConvStateDto({
+  const ConvHistoryDto({
     required this.groupId,
-    this.oldestRkey,
-    this.newestRkey,
-    required this.tipDigest,
-    required this.anchors,
+    required this.messages,
   });
 
   @override
-  int get hashCode =>
-      groupId.hashCode ^
-      oldestRkey.hashCode ^
-      newestRkey.hashCode ^
-      tipDigest.hashCode ^
-      anchors.hashCode;
+  int get hashCode => groupId.hashCode ^ messages.hashCode;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is ConvStateDto &&
+      other is ConvHistoryDto &&
           runtimeType == other.runtimeType &&
           groupId == other.groupId &&
-          oldestRkey == other.oldestRkey &&
-          newestRkey == other.newestRkey &&
-          tipDigest == other.tipDigest &&
-          anchors == other.anchors;
+          messages == other.messages;
 }
 
 /// Credential fields for a group member or key package.
@@ -510,8 +610,6 @@ class EncryptResultDto {
   final Uint8List newGroupState;
   final Uint8List tag;
   final Uint8List ciphertext;
-
-  /// The message_id assigned to the event (16 bytes for Message/Reaction, None otherwise)
   final Uint8List? messageId;
 
   const EncryptResultDto({
@@ -589,8 +687,7 @@ enum EventKindDto {
   welcome,
   checkpoint,
   reaction,
-  coord,
-  syncApp,
+  ringMsg,
   unknown,
   ;
 }
@@ -598,7 +695,6 @@ enum EventKindDto {
 enum GroupKindDto {
   user,
   ring,
-  deviceCoord,
   ;
 }
 
@@ -642,6 +738,47 @@ class ImageProcessResult {
           mimeType == other.mimeType;
 }
 
+/// A fetched `social.moat.event` record, as the inbox holds it.
+class InboxEventDto {
+  /// The DID whose PDS the record was fetched from.
+  final String sourceDid;
+  final String rkey;
+  final String authorDid;
+  final Uint8List tag;
+  final Uint8List ciphertext;
+  final PlatformInt64 createdAtMs;
+
+  const InboxEventDto({
+    required this.sourceDid,
+    required this.rkey,
+    required this.authorDid,
+    required this.tag,
+    required this.ciphertext,
+    required this.createdAtMs,
+  });
+
+  @override
+  int get hashCode =>
+      sourceDid.hashCode ^
+      rkey.hashCode ^
+      authorDid.hashCode ^
+      tag.hashCode ^
+      ciphertext.hashCode ^
+      createdAtMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is InboxEventDto &&
+          runtimeType == other.runtimeType &&
+          sourceDid == other.sourceDid &&
+          rkey == other.rkey &&
+          authorDid == other.authorDid &&
+          tag == other.tag &&
+          ciphertext == other.ciphertext &&
+          createdAtMs == other.createdAtMs;
+}
+
 class KeyPackageResult {
   final Uint8List keyPackage;
   final Uint8List keyBundle;
@@ -663,6 +800,31 @@ class KeyPackageResult {
           keyBundle == other.keyBundle;
 }
 
+/// One key package drawn from the same-user KP pool.
+class OfferedKpDto {
+  final Uint8List rkey;
+  final BigInt seq;
+  final Uint8List keyPackage;
+
+  const OfferedKpDto({
+    required this.rkey,
+    required this.seq,
+    required this.keyPackage,
+  });
+
+  @override
+  int get hashCode => rkey.hashCode ^ seq.hashCode ^ keyPackage.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is OfferedKpDto &&
+          runtimeType == other.runtimeType &&
+          rkey == other.rkey &&
+          seq == other.seq &&
+          keyPackage == other.keyPackage;
+}
+
 class OwnEventInputDto {
   final String rkey;
   final Uint8List ciphertext;
@@ -682,6 +844,162 @@ class OwnEventInputDto {
           runtimeType == other.runtimeType &&
           rkey == other.rkey &&
           ciphertext == other.ciphertext;
+}
+
+@freezed
+sealed class PairChannelCommandDto with _$PairChannelCommandDto {
+  const PairChannelCommandDto._();
+
+  const factory PairChannelCommandDto.sendPairOffer({
+    required Uint8List token,
+  }) = PairChannelCommandDto_SendPairOffer;
+  const factory PairChannelCommandDto.sendPairJoin({
+    required Uint8List token,
+  }) = PairChannelCommandDto_SendPairJoin;
+  const factory PairChannelCommandDto.connectPair({
+    required String url,
+    required Uint8List token,
+  }) = PairChannelCommandDto_ConnectPair;
+  const factory PairChannelCommandDto.sendFrame({
+    required Uint8List data,
+  }) = PairChannelCommandDto_SendFrame;
+
+  /// Close the pair WS behind the frames already sent.
+  const factory PairChannelCommandDto.closePair() =
+      PairChannelCommandDto_ClosePair;
+
+  /// Tear the pair WS down now, and stop resending any unacknowledged
+  /// offer or join.
+  const factory PairChannelCommandDto.dropPair() =
+      PairChannelCommandDto_DropPair;
+
+  /// Publish to this device's repo and tell the relay; report a failure
+  /// through `on_ring_publish_failed`.
+  const factory PairChannelCommandDto.publishRingEvent({
+    required Uint8List tag,
+    required Uint8List ciphertext,
+  }) = PairChannelCommandDto_PublishRingEvent;
+
+  /// Load every conversation's settled history and hand it to
+  /// `provide_history` with this token.
+  const factory PairChannelCommandDto.loadHistory({
+    required Uint8List token,
+  }) = PairChannelCommandDto_LoadHistory;
+  const factory PairChannelCommandDto.storeMessages({
+    required String convId,
+    required List<SyncMessageDto> messages,
+  }) = PairChannelCommandDto_StoreMessages;
+  const factory PairChannelCommandDto.saveMlsState() =
+      PairChannelCommandDto_SaveMlsState;
+  const factory PairChannelCommandDto.saveRingState() =
+      PairChannelCommandDto_SaveRingState;
+  const factory PairChannelCommandDto.ringJoined({
+    required Uint8List ringId,
+  }) = PairChannelCommandDto_RingJoined;
+  const factory PairChannelCommandDto.deviceAdmitted({
+    required Uint8List ringId,
+  }) = PairChannelCommandDto_DeviceAdmitted;
+  const factory PairChannelCommandDto.siblingStealthLearned({
+    required Uint8List deviceId,
+    required Uint8List scanPubkey,
+  }) = PairChannelCommandDto_SiblingStealthLearned;
+  const factory PairChannelCommandDto.transferComplete({
+    required SyncTallyDto tally,
+  }) = PairChannelCommandDto_TransferComplete;
+  const factory PairChannelCommandDto.transferFailed({
+    required String detail,
+    required bool duringPairing,
+  }) = PairChannelCommandDto_TransferFailed;
+  const factory PairChannelCommandDto.log({
+    required String line,
+  }) = PairChannelCommandDto_Log;
+}
+
+/// This device's identity, which a pairing keeps for its steps.
+class PairIdentityDto {
+  final CredentialDto credential;
+  final Uint8List keyBundle;
+
+  /// 32-byte X25519 stealth scan public key.
+  final Uint8List stealthPubkey;
+
+  const PairIdentityDto({
+    required this.credential,
+    required this.keyBundle,
+    required this.stealthPubkey,
+  });
+
+  @override
+  int get hashCode =>
+      credential.hashCode ^ keyBundle.hashCode ^ stealthPubkey.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PairIdentityDto &&
+          runtimeType == other.runtimeType &&
+          credential == other.credential &&
+          keyBundle == other.keyBundle &&
+          stealthPubkey == other.stealthPubkey;
+}
+
+/// `pair_new`'s code, and the commands that start its rendezvous.
+class PairNewDto {
+  final String code;
+  final List<PairChannelCommandDto> commands;
+
+  const PairNewDto({
+    required this.code,
+    required this.commands,
+  });
+
+  @override
+  int get hashCode => code.hashCode ^ commands.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PairNewDto &&
+          runtimeType == other.runtimeType &&
+          code == other.code &&
+          commands == other.commands;
+}
+
+@freezed
+sealed class PairingUiStateDto with _$PairingUiStateDto {
+  const PairingUiStateDto._();
+
+  /// No pairing in flight.
+  const factory PairingUiStateDto.idle() = PairingUiStateDto_Idle;
+
+  /// New device: code generated, waiting for the peer to enter it.
+  const factory PairingUiStateDto.showingCode({
+    required String code,
+    required String uri,
+  }) = PairingUiStateDto_ShowingCode;
+
+  /// Existing device: code accepted, waiting for the peer's `Enroll`.
+  const factory PairingUiStateDto.awaitingPeer() =
+      PairingUiStateDto_AwaitingPeer;
+
+  /// Existing device: `Enroll` received, waiting on the approve/reject
+  /// decision.
+  const factory PairingUiStateDto.awaitingApproval({
+    required String deviceName,
+    required String did,
+  }) = PairingUiStateDto_AwaitingApproval;
+
+  /// Enroll/Admit exchange complete. Says nothing about history sync —
+  /// that stays observable via `syncStatus`.
+  const factory PairingUiStateDto.done({
+    required Uint8List ringId,
+  }) = PairingUiStateDto_Done;
+
+  /// Terminal failure, with a reason retained on the session rather than
+  /// thrown away.
+  const factory PairingUiStateDto.failed({
+    required String reason,
+  }) = PairingUiStateDto_Failed;
 }
 
 /// Reaction payload extracted from a Reaction event.
@@ -710,46 +1028,38 @@ class ReactionPayloadDto {
 sealed class RingCommandDto with _$RingCommandDto {
   const RingCommandDto._();
 
-  const factory RingCommandDto.publishEvent({
+  const factory RingCommandDto.publishStealthEvent({
     required Uint8List tag,
     required Uint8List ciphertext,
-    required bool markOwn,
-  }) = RingCommandDto_PublishEvent;
-  const factory RingCommandDto.stealthPublishWelcome({
-    required Uint8List tag,
-    required Uint8List ciphertext,
-  }) = RingCommandDto_StealthPublishWelcome;
+  }) = RingCommandDto_PublishStealthEvent;
   const factory RingCommandDto.replenishKeyPackage() =
       RingCommandDto_ReplenishKeyPackage;
   const factory RingCommandDto.registerGroup({
     required Uint8List groupId,
     required GroupKindDto kind,
   }) = RingCommandDto_RegisterGroup;
-  const factory RingCommandDto.sendDrawbridgePairOffer({
-    required Uint8List token,
-  }) = RingCommandDto_SendDrawbridgePairOffer;
-  const factory RingCommandDto.sendDrawbridgePairJoin({
-    required Uint8List token,
-  }) = RingCommandDto_SendDrawbridgePairJoin;
   const factory RingCommandDto.pollForNewDevices() =
       RingCommandDto_PollForNewDevices;
 }
 
 /// Information about the sender of a message, extracted from MLS credentials.
 class SenderInfoDto {
-  /// The sender's DID (e.g., "did:plc:abc123")
   final String did;
 
   /// The sender's device name (format: "did:plc:xxx/Device Name")
   final String deviceName;
 
+  /// The sender's stable 16-byte device id, from their MLS credential.
+  final Uint8List deviceId;
+
   const SenderInfoDto({
     required this.did,
     required this.deviceName,
+    required this.deviceId,
   });
 
   @override
-  int get hashCode => did.hashCode ^ deviceName.hashCode;
+  int get hashCode => did.hashCode ^ deviceName.hashCode ^ deviceId.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -757,7 +1067,31 @@ class SenderInfoDto {
       other is SenderInfoDto &&
           runtimeType == other.runtimeType &&
           did == other.did &&
-          deviceName == other.deviceName;
+          deviceName == other.deviceName &&
+          deviceId == other.deviceId;
+}
+
+/// A sibling device's stealth address: the 32-byte X25519 scan pubkey plus the
+/// stable 16-byte device id it belongs to.  Mirrors `moat_core::SiblingStealth`.
+class SiblingStealthDto {
+  final Uint8List scanPubkey;
+  final Uint8List deviceId;
+
+  const SiblingStealthDto({
+    required this.scanPubkey,
+    required this.deviceId,
+  });
+
+  @override
+  int get hashCode => scanPubkey.hashCode ^ deviceId.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SiblingStealthDto &&
+          runtimeType == other.runtimeType &&
+          scanPubkey == other.scanPubkey &&
+          deviceId == other.deviceId;
 }
 
 class StealthKeypair {
@@ -781,25 +1115,28 @@ class StealthKeypair {
           publicKey == other.publicKey;
 }
 
-class SyncAnchorDto {
-  final String rkey;
-  final Uint8List digest;
+@freezed
+sealed class SyncFailureDto with _$SyncFailureDto {
+  const SyncFailureDto._();
 
-  const SyncAnchorDto({
-    required this.rkey,
-    required this.digest,
-  });
+  /// Requester: nobody joined the rendezvous before it expired.
+  const factory SyncFailureDto.noAnswer() = SyncFailureDto_NoAnswer;
 
-  @override
-  int get hashCode => rkey.hashCode ^ digest.hashCode;
+  /// Responder: the request expired before this device answered it.
+  const factory SyncFailureDto.requestExpired() = SyncFailureDto_RequestExpired;
 
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is SyncAnchorDto &&
-          runtimeType == other.runtimeType &&
-          rkey == other.rkey &&
-          digest == other.digest;
+  /// This device's user declined a sibling's request.
+  const factory SyncFailureDto.declined() = SyncFailureDto_Declined;
+
+  /// The pair channel closed before the transfer finished.
+  const factory SyncFailureDto.channelClosed({
+    required String detail,
+  }) = SyncFailureDto_ChannelClosed;
+
+  /// The request could not be published to the ring at all.
+  const factory SyncFailureDto.publishFailed({
+    required String detail,
+  }) = SyncFailureDto_PublishFailed;
 }
 
 class SyncMessageDto {
@@ -809,7 +1146,6 @@ class SyncMessageDto {
   final String senderDeviceName;
   final PlatformInt64 timestampMs;
   final String content;
-  final bool isOwn;
   final String? blobUri;
   final Uint8List? blobKey;
   final Uint8List? blobCiphertextHash;
@@ -819,6 +1155,14 @@ class SyncMessageDto {
   final int? blobWidth;
   final int? blobHeight;
 
+  /// The image's blurry placeholder, shown while the blob downloads.
+  final Uint8List? blobThumbhash;
+
+  /// Emoji reactions on this message. Carried because the receiving
+  /// device cannot rebuild them: reaction events predating its
+  /// membership are not decryptable to it.
+  final List<SyncReactionDto> reactions;
+
   const SyncMessageDto({
     required this.rkey,
     this.messageId,
@@ -826,7 +1170,6 @@ class SyncMessageDto {
     required this.senderDeviceName,
     required this.timestampMs,
     required this.content,
-    required this.isOwn,
     this.blobUri,
     this.blobKey,
     this.blobCiphertextHash,
@@ -835,6 +1178,8 @@ class SyncMessageDto {
     this.blobMime,
     this.blobWidth,
     this.blobHeight,
+    this.blobThumbhash,
+    required this.reactions,
   });
 
   @override
@@ -845,7 +1190,6 @@ class SyncMessageDto {
       senderDeviceName.hashCode ^
       timestampMs.hashCode ^
       content.hashCode ^
-      isOwn.hashCode ^
       blobUri.hashCode ^
       blobKey.hashCode ^
       blobCiphertextHash.hashCode ^
@@ -853,7 +1197,9 @@ class SyncMessageDto {
       blobContentHash.hashCode ^
       blobMime.hashCode ^
       blobWidth.hashCode ^
-      blobHeight.hashCode;
+      blobHeight.hashCode ^
+      blobThumbhash.hashCode ^
+      reactions.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -866,7 +1212,6 @@ class SyncMessageDto {
           senderDeviceName == other.senderDeviceName &&
           timestampMs == other.timestampMs &&
           content == other.content &&
-          isOwn == other.isOwn &&
           blobUri == other.blobUri &&
           blobKey == other.blobKey &&
           blobCiphertextHash == other.blobCiphertextHash &&
@@ -874,26 +1219,111 @@ class SyncMessageDto {
           blobContentHash == other.blobContentHash &&
           blobMime == other.blobMime &&
           blobWidth == other.blobWidth &&
-          blobHeight == other.blobHeight;
+          blobHeight == other.blobHeight &&
+          blobThumbhash == other.blobThumbhash &&
+          reactions == other.reactions;
 }
 
 @freezed
-sealed class SyncOutputDto with _$SyncOutputDto {
-  const SyncOutputDto._();
+sealed class SyncProgressDto with _$SyncProgressDto {
+  const SyncProgressDto._();
 
-  /// JSON-encoded `SyncMsg` ready to be encrypted via ring MLS and sent on the pair WS.
-  const factory SyncOutputDto.send({
-    required Uint8List bytes,
-  }) = SyncOutputDto_Send;
+  const factory SyncProgressDto.starting() = SyncProgressDto_Starting;
+  const factory SyncProgressDto.transferring({
+    required BigInt received,
+    required BigInt receiveTotal,
+    required BigInt sent,
+    required BigInt sendTotal,
+    required double fraction,
+  }) = SyncProgressDto_Transferring;
+}
 
-  /// Persist these messages for the conversation `conv_id` (hex group ID).
-  const factory SyncOutputDto.store({
-    required String convId,
-    required List<SyncMessageDto> messages,
-  }) = SyncOutputDto_Store;
+/// One emoji reaction, as carried by a synced message.
+class SyncReactionDto {
+  final String emoji;
+  final String senderDid;
 
-  /// Sync is complete; close the pair WS and tear down.
-  const factory SyncOutputDto.complete() = SyncOutputDto_Complete;
+  const SyncReactionDto({
+    required this.emoji,
+    required this.senderDid,
+  });
+
+  @override
+  int get hashCode => emoji.hashCode ^ senderDid.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SyncReactionDto &&
+          runtimeType == other.runtimeType &&
+          emoji == other.emoji &&
+          senderDid == other.senderDid;
+}
+
+@freezed
+sealed class SyncRequestUiStateDto with _$SyncRequestUiStateDto {
+  const SyncRequestUiStateDto._();
+
+  /// No sync request in flight.
+  const factory SyncRequestUiStateDto.idle() = SyncRequestUiStateDto_Idle;
+
+  /// Waiting on the rendezvous, in either role.
+  const factory SyncRequestUiStateDto.awaitingPeer() =
+      SyncRequestUiStateDto_AwaitingPeer;
+
+  /// A sibling asked for history; this device's user has not decided.
+  const factory SyncRequestUiStateDto.awaitingApproval({
+    required String deviceName,
+  }) = SyncRequestUiStateDto_AwaitingApproval;
+
+  /// Channel up, transfer running.
+  const factory SyncRequestUiStateDto.active() = SyncRequestUiStateDto_Active;
+
+  /// Transfer finished, with what it moved and where from.
+  const factory SyncRequestUiStateDto.complete({
+    required SyncTallyDto tally,
+    String? deviceName,
+  }) = SyncRequestUiStateDto_Complete;
+
+  /// Terminal failure, with the structured reason retained.
+  const factory SyncRequestUiStateDto.failed({
+    required SyncFailureDto reason,
+  }) = SyncRequestUiStateDto_Failed;
+}
+
+/// What a finished sync moved in each direction. See `moat_core::SyncTally`.
+class SyncTallyDto {
+  final BigInt messages;
+  final BigInt conversations;
+  final BigInt sentMessages;
+  final BigInt sentConversations;
+
+  const SyncTallyDto({
+    required this.messages,
+    required this.conversations,
+    required this.sentMessages,
+    required this.sentConversations,
+  });
+
+  static Future<SyncTallyDto> default_() =>
+      RustLib.instance.api.crateApiSimpleSyncTallyDtoDefault();
+
+  @override
+  int get hashCode =>
+      messages.hashCode ^
+      conversations.hashCode ^
+      sentMessages.hashCode ^
+      sentConversations.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SyncTallyDto &&
+          runtimeType == other.runtimeType &&
+          messages == other.messages &&
+          conversations == other.conversations &&
+          sentMessages == other.sentMessages &&
+          sentConversations == other.sentConversations;
 }
 
 class ThumbHashResult {
@@ -925,8 +1355,11 @@ class TickInputsDto {
   /// Sibling key packages fetched from our own PDS (driver filters out our own).
   final List<Uint8List> keyPackages;
 
-  /// Stealth scan-pubkeys (32 bytes each) for all of our devices.
-  final List<Uint8List> stealthPubkeys;
+  /// Per-sibling stealth addressing: `scan_pubkey` paired with the stable
+  /// `device_id` it belongs to.  Required for the ring driver to address
+  /// steady-state `SiblingMsg` payloads at a specific sibling.  Callers
+  /// should filter out their own device.
+  final List<SiblingStealthDto> siblingStealth;
 
   /// Own-PDS events since `own_events_cursor`.
   final List<OwnEventInputDto> ownEvents;
@@ -946,37 +1379,27 @@ class TickInputsDto {
   /// Wall-clock time (ms since epoch); used as `ring_created_at` for new rings.
   final PlatformInt64 nowMs;
 
-  /// Whether the host's main Drawbridge WS is connected.
-  final bool drawbridgeHasOwnConnection;
-
-  /// Whether a sync session is already running.
-  final bool syncSessionActive;
-
   const TickInputsDto({
     required this.keyPackages,
-    required this.stealthPubkeys,
+    required this.siblingStealth,
     required this.ownEvents,
     required this.stealthPrivkey,
     required this.did,
     required this.deviceName,
     required this.keyBundle,
     required this.nowMs,
-    required this.drawbridgeHasOwnConnection,
-    required this.syncSessionActive,
   });
 
   @override
   int get hashCode =>
       keyPackages.hashCode ^
-      stealthPubkeys.hashCode ^
+      siblingStealth.hashCode ^
       ownEvents.hashCode ^
       stealthPrivkey.hashCode ^
       did.hashCode ^
       deviceName.hashCode ^
       keyBundle.hashCode ^
-      nowMs.hashCode ^
-      drawbridgeHasOwnConnection.hashCode ^
-      syncSessionActive.hashCode;
+      nowMs.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -984,27 +1407,27 @@ class TickInputsDto {
       other is TickInputsDto &&
           runtimeType == other.runtimeType &&
           keyPackages == other.keyPackages &&
-          stealthPubkeys == other.stealthPubkeys &&
+          siblingStealth == other.siblingStealth &&
           ownEvents == other.ownEvents &&
           stealthPrivkey == other.stealthPrivkey &&
           did == other.did &&
           deviceName == other.deviceName &&
           keyBundle == other.keyBundle &&
-          nowMs == other.nowMs &&
-          drawbridgeHasOwnConnection == other.drawbridgeHasOwnConnection &&
-          syncSessionActive == other.syncSessionActive;
+          nowMs == other.nowMs;
 }
 
 class WelcomeResultDto {
   final Uint8List newGroupState;
   final Uint8List welcome;
   final Uint8List commit;
+  final Uint8List commitTag;
   final Uint8List groupId;
 
   const WelcomeResultDto({
     required this.newGroupState,
     required this.welcome,
     required this.commit,
+    required this.commitTag,
     required this.groupId,
   });
 
@@ -1013,6 +1436,7 @@ class WelcomeResultDto {
       newGroupState.hashCode ^
       welcome.hashCode ^
       commit.hashCode ^
+      commitTag.hashCode ^
       groupId.hashCode;
 
   @override
@@ -1023,5 +1447,6 @@ class WelcomeResultDto {
           newGroupState == other.newGroupState &&
           welcome == other.welcome &&
           commit == other.commit &&
+          commitTag == other.commitTag &&
           groupId == other.groupId;
 }

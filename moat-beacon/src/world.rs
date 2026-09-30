@@ -18,16 +18,16 @@
 //! Everything is cleaned up when `TestWorld` is dropped.
 
 
+use crate::ports::reserve_port;
 use crate::client::MoatCliClient;
 use crate::config::WorldConfig;
 use crate::drawbridge::DrawbridgeProcess;
-use crate::pgroup::{install_signal_handlers, ProcessGroup};
+use crate::pgroup::{install_signal_handlers, reap_orphaned_children, ProcessGroup};
 use crate::toxiproxy::{ProxyHandle, ToxiproxyManager};
 use anyhow::{Context, Result};
 use moat_postern::{AccountConfig, PosternConfig, PosternHandle};
 use std::{
     collections::HashMap,
-    net::TcpListener,
     path::PathBuf,
     process::{Child, Command, Stdio},
     fs::File,
@@ -35,6 +35,14 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::process::CommandExt as _;
 use tempfile::TempDir;
+
+/// How long to wait for a participant's HTTP server to start answering.
+///
+/// 30 s is generous for a single process (~0.1 s for either runtime),
+/// but the full suite runs many test binaries in parallel, each spawning
+/// several OS processes, so startup competes for CPU. 10 s was too tight
+/// under that contention and produced false failures.
+const STARTUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Which implementation a participant runs.
 #[derive(Clone, Debug, PartialEq)]
@@ -275,6 +283,7 @@ impl TestWorld {
             accounts,
             port: None,
             data_dir: None,
+            bind_addr: None,
         })
         .await;
         let postern_url = postern.url().to_string();
@@ -290,6 +299,7 @@ impl TestWorld {
         let pgid = toxiproxy.pgid;
         let process_group = ProcessGroup::new(pgid);
         install_signal_handlers();
+        reap_orphaned_children();
 
         let postern_addr = postern_url
             .strip_prefix("http://")
@@ -346,10 +356,9 @@ impl TestWorld {
                 .map(|(_, label)| label.map(|l| label_to_ws[l].clone()))
                 .collect();
 
-            // Advertise the first relay URL via Postern's describeServer so all
-            // participants can discover it after login without a CLI flag.
-            if let Some(url) = label_to_ws.values().next() {
-                postern.set_drawbridge_url(url);
+            // Advertise the first relay, the one `drawbridges.first()` inspects.
+            if let Some(label) = unique_labels.first() {
+                postern.set_drawbridge_url(&label_to_ws[label]);
             }
 
             (dbs, Some(db_verify), endpoints)
@@ -388,9 +397,9 @@ impl TestWorld {
             let full_handle = format!("{handle}{handle_suffix}");
             let drawbridge_ws = drawbridge_ws_endpoints[i].as_deref();
 
-            let http_port = free_port()?;
-            let http_addr = format!("127.0.0.1:{http_port}");
-            let storage = TempDir::new().context("create temp storage dir")?;
+            let mut http_port = reserve_port()?;
+            let http_addr = format!("127.0.0.1:{}", http_port.port());
+            let storage = make_storage_dir(handle)?;
 
             let mut args = vec![
                 "--storage-dir".to_string(),
@@ -416,6 +425,10 @@ impl TestWorld {
             };
 
             let (log_file, log_path) = open_participant_log(handle)?;
+            eprintln!(
+                "[beacon] storage[{handle}]: {}",
+                storage.path().display()
+            );
 
             let mut cmd = Command::new(&bin);
             cmd.args(&args)
@@ -423,6 +436,10 @@ impl TestWorld {
                 .stderr(Stdio::from(log_file));
             #[cfg(unix)]
             cmd.process_group(pgid as i32);
+            // Last possible moment: everything between here and the
+            // child's own bind is the window another process could take
+            // the port in.
+            http_port.release();
             let child = cmd
                 .spawn()
                 .with_context(|| format!("spawn participant ({kind:?}) for {full_handle}"))?;
@@ -440,20 +457,58 @@ impl TestWorld {
             });
         }
 
-        // Phase 2: wait for all HTTP servers to come up concurrently.
+        // Phase 2: wait for every HTTP server to come up.
+        //
+        // Polls the child processes alongside their sockets. A process that
+        // died on startup is indistinguishable from a slow one if you only
+        // watch the socket — which is how "did not start within 10s" came
+        // to be reported for failures that had nothing to do with the
+        // budget. Checking liveness turns those into an immediate, named
+        // error instead of a long stall and a guess.
         {
-            let mut join_set: tokio::task::JoinSet<Result<()>> = tokio::task::JoinSet::new();
-            for p in &pending {
-                let client = p.client.clone();
-                let short = p.short_handle.clone();
-                join_set.spawn(async move {
-                    wait_for_http(&client, std::time::Duration::from_secs(10))
-                        .await
-                        .with_context(|| format!("waiting for participant ({short}) to start"))
-                });
-            }
-            while let Some(res) = join_set.join_next().await {
-                res??;
+            let timeout = STARTUP_TIMEOUT;
+            let deadline = std::time::Instant::now() + timeout;
+            let mut ready = vec![false; pending.len()];
+
+            loop {
+                for (i, p) in pending.iter_mut().enumerate() {
+                    if ready[i] {
+                        continue;
+                    }
+                    if let Ok(Some(status)) = p.child.try_wait() {
+                        anyhow::bail!(
+                            "participant ({}) exited during startup with {status}\n{}",
+                            p.short_handle,
+                            log_tail(&p.log_path)
+                        );
+                    }
+                    if p.client.status().await.is_ok() {
+                        ready[i] = true;
+                    }
+                }
+                if ready.iter().all(|r| *r) {
+                    break;
+                }
+                if std::time::Instant::now() >= deadline {
+                    let stalled: Vec<&str> = pending
+                        .iter()
+                        .zip(&ready)
+                        .filter(|(_, r)| !**r)
+                        .map(|(p, _)| p.short_handle.as_str())
+                        .collect();
+                    let details: String = pending
+                        .iter()
+                        .zip(&ready)
+                        .filter(|(_, r)| !**r)
+                        .map(|(p, _)| format!("\n- {}\n{}", p.short_handle, log_tail(&p.log_path)))
+                        .collect();
+                    anyhow::bail!(
+                        "participant(s) {stalled:?} were still alive but not \
+                         serving HTTP after {timeout:?} — the process is up, \
+                         so this is a real stall rather than a crash{details}"
+                    );
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
         }
 
@@ -549,9 +604,18 @@ impl TestWorld {
         proc.child = Some(child);
         proc.log_path = log_path;
 
-        wait_for_http(&proc.client, std::time::Duration::from_secs(10))
-            .await
-            .with_context(|| format!("waiting for participant ({handle}) to restart"))?;
+        let child = proc
+            .child
+            .as_mut()
+            .expect("child was just set by the spawn above");
+        wait_for_http(
+            &proc.client,
+            child,
+            &proc.log_path,
+            STARTUP_TIMEOUT,
+        )
+        .await
+        .with_context(|| format!("waiting for participant ({handle}) to restart"))?;
         Ok(())
     }
 
@@ -572,9 +636,9 @@ impl TestWorld {
         label: &str,
         kind: ParticipantKind,
     ) -> Result<MoatCliClient> {
-        let http_port = free_port()?;
-        let http_addr = format!("127.0.0.1:{http_port}");
-        let storage = TempDir::new().context("create temp storage dir for second device")?;
+        let mut http_port = reserve_port()?;
+        let http_addr = format!("127.0.0.1:{}", http_port.port());
+        let storage = make_storage_dir(label)?;
 
         let mut args = vec![
             "--storage-dir".to_string(),
@@ -610,20 +674,32 @@ impl TestWorld {
 
         let pgid = self.process_group.pgid();
         let (log_file, log_path) = open_participant_log(label)?;
+        eprintln!(
+            "[beacon] storage[{label}]: {}",
+            storage.path().display()
+        );
         let mut cmd = Command::new(&bin);
         cmd.args(&args)
             .stdout(Stdio::null())
             .stderr(Stdio::from(log_file));
         #[cfg(unix)]
         cmd.process_group(pgid as i32);
+        // See the note at the matching release above.
+        http_port.release();
         let child = cmd
             .spawn()
             .with_context(|| format!("spawn second device ({kind:?}) for {label}"))?;
 
         let client = MoatCliClient::new(format!("http://{http_addr}"));
-        wait_for_http(&client, std::time::Duration::from_secs(10))
-            .await
-            .with_context(|| format!("waiting for second device ({label}) to start"))?;
+        let mut child = child;
+        wait_for_http(
+            &client,
+            &mut child,
+            &log_path,
+            STARTUP_TIMEOUT,
+        )
+        .await
+        .with_context(|| format!("waiting for second device ({label}) to start"))?;
 
         self.participants.insert(
             label.to_string(),
@@ -671,15 +747,70 @@ fn open_participant_log(label: &str) -> Result<(File, PathBuf)> {
     Ok((file, path))
 }
 
-/// Find a free TCP port by binding to `127.0.0.1:0`.
-fn free_port() -> Result<u16> {
-    let listener = TcpListener::bind("127.0.0.1:0").context("bind ephemeral port")?;
-    Ok(listener.local_addr()?.port())
+/// Create a per-participant storage directory under `/tmp/moat-beacon-data/`.
+///
+/// Storage is intentionally not cleaned up on drop so that `debug.log` is
+/// available for inspection after a test exits. Clear `/tmp/moat-beacon-data/`
+/// by hand when the accumulation matters; CI runs on fresh machines.
+/// Storage root for one participant, deliberately **not** cleaned up.
+///
+/// `disable_cleanup(true)` is what makes post-mortem debugging possible: after
+/// a failing run the participant's `data/debug.log` (including the `ring: tick
+/// in/out` lines) and `data/keys/ring.json` are still on disk. The path is
+/// printed so a failure can be traced to its directory without guessing —
+/// there are otherwise hundreds of sibling directories and no mapping from
+/// test to storage.
+///
+/// Old roots are pruned on creation; see [`prune_storage_roots`].
+fn make_storage_dir(label: &str) -> Result<TempDir> {
+    let base = std::path::Path::new("/tmp/moat-beacon-data");
+    std::fs::create_dir_all(base).context("create /tmp/moat-beacon-data")?;
+    prune_storage_roots(base);
+    let dir = tempfile::Builder::new()
+        .prefix(&format!("moat-beacon-{label}-"))
+        .disable_cleanup(true)
+        .tempdir_in(base)
+        .context("create persistent storage dir")?;
+    eprintln!("[beacon] storage: {}", dir.path().display());
+    Ok(dir)
 }
 
+/// Cap on retained participant storage roots.  They are never cleaned up
+/// (that is the point — see [`make_storage_dir`]), so without a cap they
+/// accumulate indefinitely; a few thousand had piled up before this existed.
+/// Override with `MOAT_BEACON_KEEP_ROOTS`.
+fn prune_storage_roots(base: &std::path::Path) {
+    let keep: usize = std::env::var("MOAT_BEACON_KEEP_ROOTS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(400);
+
+    let Ok(entries) = std::fs::read_dir(base) else { return };
+    let mut roots: Vec<(std::time::SystemTime, std::path::PathBuf)> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().starts_with("moat-beacon-"))
+        .filter_map(|e| {
+            let t = e.metadata().ok()?.modified().ok()?;
+            Some((t, e.path()))
+        })
+        .collect();
+
+    if roots.len() <= keep {
+        return;
+    }
+    roots.sort_by_key(|(t, _)| *t); // oldest first
+    for (_, path) in roots.iter().take(roots.len() - keep) {
+        let _ = std::fs::remove_dir_all(path);
+    }
+}
+
+/// Find a free TCP port by binding to `127.0.0.1:0`.
 /// Path to the `moat-cli` binary in the Cargo target directory.
 ///
-/// If the binary does not exist, this function builds it automatically.
+/// Always runs `cargo build -p moat-cli` first. This is incremental (a no-op
+/// when nothing changed), and building only when the binary is *missing* means
+/// every run after a source edit silently tests the stale binary — which reads
+/// as a passing integration test against code that is no longer there.
 fn moat_cli_binary() -> Result<PathBuf> {
     // Cargo sets CARGO_MANIFEST_DIR; walk up to the workspace root.
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
@@ -696,24 +827,24 @@ fn moat_cli_binary() -> Result<PathBuf> {
     // The moat-cli package defines its binary as "moat" (not "moat-cli").
     let bin = workspace_root.join("target").join(profile).join("moat");
 
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let mut args = vec!["build", "-p", "moat-cli"];
+    if !cfg!(debug_assertions) {
+        args.push("--release");
+    }
+    let status = Command::new(&cargo)
+        .args(&args)
+        .current_dir(&workspace_root)
+        .status()
+        .context("running cargo build -p moat-cli")?;
+    if !status.success() {
+        anyhow::bail!("cargo build -p moat-cli failed");
+    }
     if !bin.exists() {
-        // Auto-build moat-cli if not yet compiled.
-        eprintln!("beacon: moat-cli not found, building…");
-        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-        let status = Command::new(&cargo)
-            .args(["build", "-p", "moat-cli"])
-            .current_dir(&workspace_root)
-            .status()
-            .context("running cargo build -p moat-cli")?;
-        if !status.success() {
-            anyhow::bail!("cargo build -p moat-cli failed");
-        }
-        if !bin.exists() {
-            anyhow::bail!(
-                "moat binary still not found at {} after build",
-                bin.display()
-            );
-        }
+        anyhow::bail!(
+            "moat binary still not found at {} after build",
+            bin.display()
+        );
     }
 
     Ok(bin)
@@ -773,8 +904,12 @@ fn dart_server_binary() -> Result<(PathBuf, PathBuf)> {
     );
     let lib_path = rust_crate_dir.join("target").join(profile).join(&lib_name);
 
-    if !lib_path.exists() {
-        eprintln!("beacon: rust_lib_moat_flutter not found, building…");
+    // Always build, not just when missing: this crate wraps `moat-core`, so
+    // a change anywhere can leave the dylib stale — FRB then aborts the Dart
+    // server on its content-hash check, or worse the suite silently tests
+    // stale Rust. Cargo is the staleness oracle and a no-op when current.
+    {
+        eprintln!("beacon: building rust_lib_moat_flutter…");
         let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
         let mut cmd = Command::new(&cargo);
         cmd.arg("build")
@@ -841,14 +976,48 @@ fn dart_server_binary() -> Result<(PathBuf, PathBuf)> {
     Ok((dart_bin, lib_path))
 }
 
-/// Poll `GET /status` until it returns 200 or the timeout elapses.
-async fn wait_for_http(client: &MoatCliClient, timeout: std::time::Duration) -> Result<()> {
+/// Last few lines a participant wrote to stderr, for startup post-mortems.
+fn log_tail(path: &std::path::Path) -> String {
+    match std::fs::read_to_string(path) {
+        Ok(log) => {
+            let lines: Vec<String> =
+                log.lines().rev().take(8).map(|l| format!("  | {l}")).collect();
+            if lines.is_empty() {
+                format!("  | <stderr empty> ({})", path.display())
+            } else {
+                lines.into_iter().rev().collect::<Vec<_>>().join("\n")
+            }
+        }
+        Err(e) => format!("  | <log unreadable: {e}> ({})", path.display()),
+    }
+}
+
+/// Poll `GET /status` until it returns 200, the child dies, or the timeout
+/// elapses.
+///
+/// Watching the child matters as much as watching the socket: a process
+/// that exited on startup looks exactly like a slow one from the outside,
+/// and reporting the timeout for it sends you looking for a budget to
+/// widen instead of the error it actually printed.
+async fn wait_for_http(
+    client: &MoatCliClient,
+    child: &mut Child,
+    log_path: &std::path::Path,
+    timeout: std::time::Duration,
+) -> Result<()> {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
+        if let Ok(Some(status)) = child.try_wait() {
+            anyhow::bail!("process exited during startup with {status}\n{}", log_tail(log_path));
+        }
         if client.status().await.is_ok() {
             return Ok(());
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
-    anyhow::bail!("moat-cli HTTP server did not start within {:?}", timeout)
+    anyhow::bail!(
+        "process is alive but did not serve HTTP within {timeout:?} — a real \
+         stall, not a crash\n{}",
+        log_tail(log_path)
+    )
 }

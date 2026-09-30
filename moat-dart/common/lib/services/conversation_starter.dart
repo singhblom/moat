@@ -37,12 +37,13 @@ Future<Conversation> startConversation({
   }
   final stealthPubkeys = stealthRecords.map((r) => r.scanPubkey).toList();
 
-  // 4. Fetch key packages.
+  // 4. Fetch key packages — newest (last in ascending rkey order); older
+  //    ones may already be consumed.
   final keyPackages = await client.fetchKeyPackages(recipientDid);
   if (keyPackages.isEmpty) {
     throw Exception('Recipient has no valid key packages');
   }
-  final recipientKeyPackage = keyPackages.first.keyPackage;
+  final recipientKeyPackage = keyPackages.last.keyPackage;
 
   // 5. Create MLS group + welcome.
   final result = await authService.createConversation(
@@ -54,18 +55,10 @@ Future<Conversation> startConversation({
   // 6. Publish stealth-encrypted welcome.
   await client.publishEvent(result.randomTag, result.stealthCiphertext);
 
-  // 7. Populate candidate tags.
+  // 7. Populate candidate tags and watch them on own Drawbridge.
   await authService.populateConversationTags(result.groupId);
 
   final groupIdHex = _bytesToHex(result.groupId);
-
-  // 8. Register tags on own Drawbridge.
-  final session = authService.moatSession;
-  if (session != null) {
-    final tags = session.populateCandidateTags(groupId: result.groupId);
-    DrawbridgeService.instance
-        .addTags(tags.map((t) => Uint8List.fromList(t)).toList());
-  }
 
   // 9. Fetch recipient's Drawbridge config and cache it.
   final recipientRelayUrls = await client.fetchDrawbridgeConfig(recipientDid);

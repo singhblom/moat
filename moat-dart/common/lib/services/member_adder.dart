@@ -49,12 +49,13 @@ Future<void> addMemberToConversation({
   }
   final stealthPubkeys = stealthRecords.map((r) => r.scanPubkey).toList();
 
-  // 5. Fetch key packages for new member.
+  // 5. Fetch key packages for new member — newest (last in ascending rkey
+  //    order); older ones may already be consumed.
   final keyPackages = await client.fetchKeyPackages(newDid);
   if (keyPackages.isEmpty) {
     throw Exception('No key package found for $memberHandle');
   }
-  final newMemberKeyPackage = keyPackages.first.keyPackage;
+  final newMemberKeyPackage = keyPackages.last.keyPackage;
 
   // 6. Load our key bundle.
   final keyBundle = await authService.getKeyBundle();
@@ -62,14 +63,7 @@ Future<void> addMemberToConversation({
     throw StateError('No key bundle available');
   }
 
-  // 7. Derive commit tag BEFORE add_member (pre-epoch).
-  final commitTag = deriveNextTag(
-    handle: session,
-    groupId: groupId,
-    keyBundle: keyBundle,
-  );
-
-  // 8. Add member to MLS group.
+  // 7. Add member to MLS group.
   final welcomeResult = await session.addMember(
     groupId: groupId,
     keyBundle: keyBundle,
@@ -91,7 +85,7 @@ Future<void> addMemberToConversation({
   await client.publishEvent(randomTag, stealthCiphertext);
 
   // 10. Publish Commit with pre-epoch tag for existing members.
-  await client.publishEvent(commitTag, welcomeResult.commit);
+  await client.publishEvent(welcomeResult.commitTag, welcomeResult.commit);
 
   // 11. Save MLS state.
   await authService.saveMlsState();
@@ -107,9 +101,6 @@ Future<void> addMemberToConversation({
 
   // 13. Re-populate candidate tags for new epoch.
   await authService.populateConversationTags(groupId);
-  final tags = session.populateCandidateTags(groupId: groupId);
-  DrawbridgeService.instance
-      .addTags(tags.map((t) => Uint8List.fromList(t)).toList());
 
   // 14. Fetch new member's Drawbridge config.
   try {

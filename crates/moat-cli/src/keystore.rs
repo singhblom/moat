@@ -5,6 +5,7 @@
 use moat_core::GroupKind;
 pub use moat_core::DeviceRingState;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -39,10 +40,32 @@ pub struct GroupMetadata {
         default
     )]
     pub participant_handles: Vec<String>,
-    /// Classification of this group (User/Ring/DeviceCoord). Defaults to User
-    /// for backwards compatibility with groups stored before Phase 2.
-    #[serde(default)]
+    /// Classification of this group (User/Ring).
     pub kind: GroupKind,
+    /// DIDs that have left this group but whose PDS this device has not
+    /// swept since they left.
+    ///
+    /// A poll asks the DIDs in `participant_dids`, and processing a commit
+    /// overwrites that list from MLS membership. A device that is offline
+    /// while someone joins, speaks and leaves therefore processes the Add
+    /// and the Remove in one catch-up pass, and never runs a poll while
+    /// that person is a member — so their messages, which live on *their*
+    /// PDS, are never fetched at all.
+    ///
+    /// Holding departed DIDs here until they have been swept once closes
+    /// that gap. One sweep is enough: after the Remove merges they can
+    /// publish nothing further to this group, so a single fetch sees
+    /// everything they will ever have written to it.
+    ///
+    /// Persisted rather than kept in memory because the whole point is to
+    /// survive the offline window, which usually includes a restart. See
+    /// `MULTI_DEVICE.md`, "Catch-Up Across Membership Changes".
+    pub pending_ex_members: Vec<String>,
+    /// DID → device_id for all members ever seen in this group.
+    /// Populated from MLS credentials on startup and when members join.
+    /// Needed to generate candidate tags for departed members whose
+    /// MLS leaf credentials have been removed.
+    pub member_device_ids: std::collections::HashMap<String, Vec<u8>>,
 }
 
 /// Deserialize a field that may be a single string (old format) or a Vec<String> (new format).
@@ -131,6 +154,50 @@ pub struct StoredMessage {
     pub blob_width: Option<u32>,
     #[serde(default)]
     pub blob_height: Option<u32>,
+    /// The image's blurry placeholder, shown while the blob downloads.
+    #[serde(default)]
+    pub blob_thumbhash: Option<Vec<u8>>,
+    /// Emoji reactions on this message.
+    ///
+    /// Persisted rather than kept only in the in-memory display list,
+    /// because a device that receives this message through history sync
+    /// cannot rebuild them: reactions arrive as their own PDS events, and
+    /// events predating that device's membership are not decryptable to
+    /// it. Unpersisted, they would be lost the moment history moved.
+    #[serde(default)]
+    pub reactions: Vec<StoredReaction>,
+    /// Why an unsent (rkey "pending") own message failed to send. `None`
+    /// while the send is in flight and once it is published.
+    #[serde(default)]
+    pub send_failed: Option<String>,
+}
+
+/// Placeholder content of an image row whose send is in flight.
+pub const IMAGE_SENDING: &str = "[image — processing…]";
+/// Placeholder content of an image row whose send failed.
+pub const IMAGE_SEND_FAILED: &str = "[image — couldn't send]";
+/// Suffix of a long-text row whose blob upload is in flight.
+pub const LONG_TEXT_UPLOADING: &str = "[long text — uploading…]";
+const LONG_TEXT_SEND_FAILED: &str = "[long text — couldn't send]";
+
+impl StoredMessage {
+    /// Record a send failure, swapping an in-flight placeholder for one
+    /// that no longer implies work is happening.
+    pub fn mark_send_failed(&mut self, reason: &str) {
+        self.send_failed = Some(reason.to_string());
+        if self.content == IMAGE_SENDING {
+            self.content = IMAGE_SEND_FAILED.to_string();
+        } else if self.content.ends_with(LONG_TEXT_UPLOADING) {
+            self.content = self.content.replace(LONG_TEXT_UPLOADING, LONG_TEXT_SEND_FAILED);
+        }
+    }
+}
+
+/// One emoji reaction as persisted beside its message.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StoredReaction {
+    pub emoji: String,
+    pub sender_did: String,
 }
 
 /// All stored messages for a conversation
@@ -334,6 +401,21 @@ impl KeyStore {
         self.store_pagination_state(&state)
     }
 
+    /// Persist the inbox's parked events.
+    pub fn store_parked_events(&self, bytes: &[u8]) -> Result<()> {
+        fs::write(self.base_path.join("parked_events.bin"), bytes)?;
+        Ok(())
+    }
+
+    /// The parked events persisted by [`Self::store_parked_events`], if any.
+    pub fn load_parked_events(&self) -> Result<Option<Vec<u8>>> {
+        let path = self.base_path.join("parked_events.bin");
+        if !path.exists() {
+            return Ok(None);
+        }
+        Ok(Some(fs::read(&path)?))
+    }
+
     /// Load messages for a conversation
     pub fn load_messages(&self, conv_id: &str) -> Result<ConversationMessages> {
         let path = self.base_path.join(format!("messages_{}.json", conv_id));
@@ -353,15 +435,103 @@ impl KeyStore {
         Ok(())
     }
 
-    /// Append a message to a conversation's local storage, maintaining rkey order.
-    /// Returns `Ok(false)` if a message with the same rkey already exists (dedup).
-    /// Exception: if the existing message is missing blob metadata and the new one has it,
-    /// the blob metadata fields are updated before returning `Ok(false)`.
-    pub fn append_message(&self, conv_id: &str, message: StoredMessage) -> Result<bool> {
+    /// Toggle one emoji reaction on a stored message, by its message id.
+    ///
+    /// Reactions arrive as their own PDS events, so a device that was
+    /// present can rebuild them by replaying. A device that receives this
+    /// message through history sync cannot — those events predate its
+    /// membership and are not decryptable to it — so the reaction has to
+    /// be persisted here rather than living only in the display list.
+    ///
+    /// Toggling rather than adding: a reaction event means "this person
+    /// pressed this emoji", and pressing it again takes it back. Returns
+    /// whether the target message was found.
+    pub fn toggle_reaction(
+        &self,
+        conv_id: &str,
+        target_message_id: &[u8],
+        emoji: &str,
+        sender_did: &str,
+    ) -> Result<bool> {
         let mut messages = self.load_messages(conv_id)?;
-        if message.rkey != "pending" {
-            if let Some(existing) = messages.messages.iter_mut().find(|m| m.rkey == message.rkey) {
-                // Update blob metadata if the existing entry is missing it.
+        let Some(msg) = messages
+            .messages
+            .iter_mut()
+            .find(|m| m.message_id.as_deref() == Some(target_message_id))
+        else {
+            return Ok(false);
+        };
+        match msg
+            .reactions
+            .iter()
+            .position(|r| r.emoji == emoji && r.sender_did == sender_did)
+        {
+            Some(pos) => {
+                msg.reactions.remove(pos);
+            }
+            None => msg.reactions.push(StoredReaction {
+                emoji: emoji.to_string(),
+                sender_did: sender_did.to_string(),
+            }),
+        }
+        self.store_messages(conv_id, &messages)?;
+        Ok(true)
+    }
+
+    /// Returns whether the message was new; see [`Self::append_messages`]
+    /// for the dedup rules.
+    pub fn append_message(&self, conv_id: &str, message: StoredMessage) -> Result<bool> {
+        Ok(self.append_messages(conv_id, vec![message])? > 0)
+    }
+
+    /// Maintains rkey order; returns how many messages were new.
+    ///
+    /// Loads and stores the conversation once for the batch. One message
+    /// at a time is quadratic in the conversation's length.
+    ///
+    /// An unsent row is identified by `message_id`, since every one of
+    /// them carries the rkey "pending" — the image path writes twice under
+    /// it, placeholder then blob metadata, and matching on rkey alone
+    /// would duplicate the row. A real rkey already held is not
+    /// re-inserted, but blob metadata is merged into it if missing. A
+    /// published row whose `message_id` is already held under another
+    /// rkey is dropped: a retried send republishes under the same id, and
+    /// the first attempt may have landed too. All indexes cover rows added
+    /// earlier in the same batch.
+    pub fn append_messages(&self, conv_id: &str, incoming: Vec<StoredMessage>) -> Result<usize> {
+        if incoming.is_empty() {
+            return Ok(0);
+        }
+        let mut messages = self.load_messages(conv_id)?;
+
+        let mut by_rkey: HashMap<String, usize> = HashMap::new();
+        let mut pending_by_id: HashMap<Vec<u8>, usize> = HashMap::new();
+        let mut published_ids: HashSet<Vec<u8>> = HashSet::new();
+        for (i, m) in messages.messages.iter().enumerate() {
+            if m.rkey == "pending" {
+                if let Some(mid) = &m.message_id {
+                    pending_by_id.entry(mid.clone()).or_insert(i);
+                }
+            } else {
+                by_rkey.entry(m.rkey.clone()).or_insert(i);
+                published_ids.extend(m.message_id.clone());
+            }
+        }
+
+        let mut added = 0usize;
+        let mut changed = false;
+        for message in incoming {
+            if message.rkey == "pending" {
+                if let Some(mid) = message.message_id.clone() {
+                    if let Some(&i) = pending_by_id.get(&mid) {
+                        messages.messages[i] = message;
+                        changed = true;
+                        continue;
+                    }
+                    pending_by_id.insert(mid, messages.messages.len());
+                }
+            } else if let Some(&i) = by_rkey.get(&message.rkey) {
+                let existing = &mut messages.messages[i];
                 if existing.blob_uri.is_none() && message.blob_uri.is_some() {
                     existing.blob_uri = message.blob_uri;
                     existing.blob_key = message.blob_key;
@@ -369,17 +539,28 @@ impl KeyStore {
                     existing.blob_ciphertext_size = message.blob_ciphertext_size;
                     existing.blob_content_hash = message.blob_content_hash;
                     existing.blob_mime = message.blob_mime;
-                    self.store_messages(conv_id, &messages)?;
+                    changed = true;
                 }
-                return Ok(false);
+                continue;
+            } else if message.message_id.as_ref().is_some_and(|id| published_ids.contains(id)) {
+                continue;
+            } else {
+                by_rkey.insert(message.rkey.clone(), messages.messages.len());
+                published_ids.extend(message.message_id.clone());
             }
+            messages.messages.push(message);
+            added += 1;
+            changed = true;
         }
-        let pos = messages
-            .messages
-            .partition_point(|m| m.rkey <= message.rkey);
-        messages.messages.insert(pos, message);
-        self.store_messages(conv_id, &messages)?;
-        Ok(true)
+
+        if added > 0 {
+            // "pending" sorts after every real rkey, so unsent rows land last.
+            messages.messages.sort_by(|a, b| a.rkey.cmp(&b.rkey));
+        }
+        if changed {
+            self.store_messages(conv_id, &messages)?;
+        }
+        Ok(added)
     }
 
     /// Update a "pending" message's rkey to the real one and re-sort.
@@ -400,6 +581,45 @@ impl KeyStore {
         messages.messages.sort_by(|a, b| a.rkey.cmp(&b.rkey));
         self.store_messages(conv_id, &messages)?;
         Ok(())
+    }
+
+    /// Apply `f` to the message carrying `message_id`, returning whether
+    /// one was found.
+    pub fn update_message_by_id(
+        &self,
+        conv_id: &str,
+        message_id: &[u8],
+        f: impl FnOnce(&mut StoredMessage),
+    ) -> Result<bool> {
+        let mut messages = self.load_messages(conv_id)?;
+        let Some(msg) = messages
+            .messages
+            .iter_mut()
+            .find(|m| m.message_id.as_deref() == Some(message_id))
+        else {
+            return Ok(false);
+        };
+        f(msg);
+        self.store_messages(conv_id, &messages)?;
+        Ok(true)
+    }
+
+    /// Mark every own unsent row not already failed as failed; returns
+    /// their message ids. Send tasks live in memory only, so at startup
+    /// every such row has nothing left working on it.
+    pub fn fail_unsent_messages(&self, conv_id: &str, reason: &str) -> Result<Vec<Vec<u8>>> {
+        let mut messages = self.load_messages(conv_id)?;
+        let mut failed = Vec::new();
+        for m in messages.messages.iter_mut() {
+            if m.is_own && m.rkey == "pending" && m.send_failed.is_none() {
+                m.mark_send_failed(reason);
+                failed.extend(m.message_id.clone());
+            }
+        }
+        if !failed.is_empty() {
+            self.store_messages(conv_id, &messages)?;
+        }
+        Ok(failed)
     }
 
     /// Store credentials (handle and app password)
@@ -672,6 +892,82 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn parked_events_survive_a_restart() {
+        let dir = tempdir().unwrap();
+        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+        assert_eq!(store.load_parked_events().unwrap(), None);
+
+        store.store_parked_events(b"parked").unwrap();
+        let reopened = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+        assert_eq!(reopened.load_parked_events().unwrap().as_deref(), Some(&b"parked"[..]));
+    }
+
+    fn pending_msg(message_id: &[u8], content: &str) -> StoredMessage {
+        StoredMessage {
+            rkey: "pending".to_string(),
+            content: content.to_string(),
+            timestamp: chrono::Utc::now(),
+            is_own: true,
+            message_id: Some(message_id.to_vec()),
+            sender_did: None,
+            sender_device: None,
+            blob_uri: None,
+            blob_key: None,
+            blob_ciphertext_hash: None,
+            blob_ciphertext_size: None,
+            blob_content_hash: None,
+            blob_mime: None,
+            blob_width: None,
+            blob_height: None,
+            blob_thumbhash: None,
+            reactions: Vec::new(),
+            send_failed: None,
+        }
+    }
+
+    /// A send deferred behind a blob upload writes its optimistic row
+    /// twice: once as a placeholder, then again with the real preview and
+    /// blob metadata. Both carry rkey "pending", so identity has to come
+    /// from the message id — otherwise the second write inserts a
+    /// duplicate and the user is left staring at a permanent
+    /// "processing…" row beside the real message.
+    #[test]
+    fn a_second_pending_write_completes_the_row_instead_of_duplicating_it() {
+        let dir = tempdir().unwrap();
+        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+        let id = [7u8; 16];
+
+        assert!(store
+            .append_message("conv", pending_msg(&id, "[image — processing…]"))
+            .unwrap());
+
+        let mut finished = pending_msg(&id, "[image image/png 16x16]");
+        finished.blob_uri = Some("at://did:plc:alice/cid".to_string());
+        assert!(!store.append_message("conv", finished).unwrap());
+
+        let stored = store.load_messages("conv").unwrap().messages;
+        assert_eq!(stored.len(), 1, "the row must be completed, not duplicated");
+        assert_eq!(stored[0].content, "[image image/png 16x16]");
+        assert_eq!(
+            stored[0].blob_uri.as_deref(),
+            Some("at://did:plc:alice/cid"),
+            "the completing write carries the blob metadata"
+        );
+    }
+
+    /// Two genuinely different unsent messages must still both be kept.
+    #[test]
+    fn pending_rows_with_different_ids_coexist() {
+        let dir = tempdir().unwrap();
+        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+
+        store.append_message("conv", pending_msg(&[1u8; 16], "first")).unwrap();
+        store.append_message("conv", pending_msg(&[2u8; 16], "second")).unwrap();
+
+        assert_eq!(store.load_messages("conv").unwrap().messages.len(), 2);
+    }
+
+    #[test]
     fn test_identity_key_roundtrip() {
         let dir = tempdir().unwrap();
         let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
@@ -806,20 +1102,240 @@ mod tests {
         assert_eq!(loaded.participant_handles[1], "bob.bsky.social");
     }
 
+    /// Reactions have to survive in *storage*, not only in the display
+    /// list: storage is what history sync serves from, and a device
+    /// receiving a message that way cannot rebuild reactions — the events
+    /// carrying them predate its membership and are not decryptable to it.
     #[test]
-    fn test_group_metadata_backward_compat() {
+    fn toggling_a_reaction_persists_it() {
+        let dir = tempdir().unwrap();
+        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+        let id = vec![7u8; 16];
+        let mut msg = pending_msg(&id, "hello");
+        msg.rkey = "rkey001".to_string();
+        store.append_message("conv", msg).unwrap();
+
+        assert!(store
+            .toggle_reaction("conv", &id, "👍", "did:plc:bob")
+            .unwrap());
+        let held = store.load_messages("conv").unwrap();
+        assert_eq!(held.messages[0].reactions.len(), 1);
+        assert_eq!(held.messages[0].reactions[0].emoji, "👍");
+
+        // Pressing it again takes it back — a reaction event means "this
+        // person pressed this emoji", not "add one more".
+        store
+            .toggle_reaction("conv", &id, "👍", "did:plc:bob")
+            .unwrap();
+        assert!(store.load_messages("conv").unwrap().messages[0]
+            .reactions
+            .is_empty());
+    }
+
+    /// A reaction for a message this device does not hold is reported
+    /// rather than silently dropped, so a caller can tell "toggled" from
+    /// "nothing to toggle".
+    #[test]
+    fn a_reaction_for_an_unknown_message_reports_not_found() {
+        let dir = tempdir().unwrap();
+        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+        assert!(!store
+            .toggle_reaction("conv", &[9u8; 16], "👍", "did:plc:bob")
+            .unwrap());
+    }
+
+    /// Send tasks live in memory, so a restart strands every unsent row.
+    /// The startup sweep must fail exactly those — never a published
+    /// message, and never one already failed (its reason is kept).
+    #[test]
+    fn the_startup_sweep_fails_only_rows_still_in_flight() {
+        let dir = tempdir().unwrap();
+        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+        let mut earlier = pending_msg(&[2u8; 16], IMAGE_SEND_FAILED);
+        earlier.send_failed = Some("publish failed".to_string());
+        store
+            .append_messages(
+                "conv",
+                vec![
+                    real_msg("3kaaa", "published"),
+                    pending_msg(&[1u8; 16], IMAGE_SENDING),
+                    earlier,
+                    pending_msg(&[3u8; 16], &format!("preview {LONG_TEXT_UPLOADING}")),
+                ],
+            )
+            .unwrap();
+
+        let failed = store.fail_unsent_messages("conv", "interrupted").unwrap();
+        assert_eq!(failed, vec![vec![1u8; 16], vec![3u8; 16]]);
+
+        let stored = store.load_messages("conv").unwrap().messages;
+        let by_id = |b: u8| stored.iter().find(|m| m.message_id == Some(vec![b; 16])).unwrap();
+        assert!(stored.iter().find(|m| m.rkey == "3kaaa").unwrap().send_failed.is_none());
+        assert_eq!(by_id(1).content, IMAGE_SEND_FAILED, "no longer claims to be processing");
+        assert_eq!(by_id(1).send_failed.as_deref(), Some("interrupted"));
+        assert_eq!(by_id(2).send_failed.as_deref(), Some("publish failed"));
+        assert_eq!(by_id(3).content, "preview [long text — couldn't send]");
+
+        assert!(store.fail_unsent_messages("conv", "interrupted").unwrap().is_empty());
+    }
+
+    /// A published row whose message id is derived from its rkey.
+    fn real_msg(rkey: &str, content: &str) -> StoredMessage {
+        let mut id = [0u8; 16];
+        let n = rkey.len().min(16);
+        id[..n].copy_from_slice(&rkey.as_bytes()[..n]);
+        StoredMessage {
+            rkey: rkey.to_string(),
+            ..pending_msg(&id, content)
+        }
+    }
+
+    /// A retried send republishes under the same message id, and the
+    /// first attempt may have landed too; receivers must show it once.
+    #[test]
+    fn a_republished_message_id_is_not_shown_twice() {
+        let dir = tempdir().unwrap();
+        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+        let first = real_msg("a", "hello");
+        let retried = StoredMessage { rkey: "b".to_string(), ..first.clone() };
+        store.append_message("conv", first).unwrap();
+
+        assert!(!store.append_message("conv", retried.clone()).unwrap());
+        let fresh = real_msg("d", "other");
+        let fresh_retried = StoredMessage { rkey: "e".to_string(), ..fresh.clone() };
+        let batch = vec![StoredMessage { rkey: "c".to_string(), ..retried }, fresh, fresh_retried];
+        assert_eq!(store.append_messages("conv", batch).unwrap(), 1);
+
+        let rkeys: Vec<_> =
+            store.load_messages("conv").unwrap().messages.into_iter().map(|m| m.rkey).collect();
+        assert_eq!(rkeys, ["a", "d"]);
+    }
+
+    /// Real rkeys are TIDs, whose alphabet sorts below "pending" — a
+    /// change to the rkey format would move unsent rows out of place.
+    #[test]
+    fn a_batch_is_stored_in_rkey_order_with_unsent_rows_last() {
         let dir = tempdir().unwrap();
         let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
 
-        // Simulate old single-value JSON format written directly as the store would
-        let old_json = r#"{"participant_did":"did:plc:old","participant_handle":"old.bsky.social"}"#;
-        fs::write(dir.path().join("group_group-old.meta"), old_json).unwrap();
+        store
+            .append_messages(
+                "conv",
+                vec![
+                    real_msg("d", "fourth"),
+                    pending_msg(&[9u8; 16], "unsent"),
+                    real_msg("a", "first"),
+                    real_msg("c", "third"),
+                ],
+            )
+            .unwrap();
 
-        let loaded = store.load_group_metadata("group-old").unwrap();
-        assert_eq!(loaded.participant_dids, vec!["did:plc:old".to_string()]);
+        let stored = store.load_messages("conv").unwrap().messages;
+        let rkeys: Vec<&str> = stored.iter().map(|m| m.rkey.as_str()).collect();
+        assert_eq!(rkeys, ["a", "c", "d", "pending"]);
+    }
+
+    /// A peer sends its whole plan, not the complement alone.
+    #[test]
+    fn a_batch_does_not_re_insert_an_rkey_already_held() {
+        let dir = tempdir().unwrap();
+        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+        store.append_message("conv", real_msg("b", "held")).unwrap();
+
+        let added = store
+            .append_messages(
+                "conv",
+                vec![real_msg("a", "new"), real_msg("b", "resent"), real_msg("c", "new")],
+            )
+            .unwrap();
+
+        assert_eq!(added, 2, "the row already held is not new");
+        let stored = store.load_messages("conv").unwrap().messages;
+        assert_eq!(stored.len(), 3);
         assert_eq!(
-            loaded.participant_handles,
-            vec!["old.bsky.social".to_string()]
+            stored[1].content, "held",
+            "a resent row must not overwrite the held one"
         );
+    }
+
+    #[test]
+    fn a_batch_containing_one_rkey_twice_stores_it_once() {
+        let dir = tempdir().unwrap();
+        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+
+        let added = store
+            .append_messages("conv", vec![real_msg("a", "first"), real_msg("a", "again")])
+            .unwrap();
+
+        assert_eq!(added, 1);
+        let stored = store.load_messages("conv").unwrap().messages;
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].content, "first", "the first occurrence wins");
+    }
+
+    /// A deferred image writes its row twice, and both writes can land in
+    /// the same batch.
+    #[test]
+    fn a_placeholder_and_its_completion_in_one_batch_become_one_row() {
+        let dir = tempdir().unwrap();
+        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+        let id = [7u8; 16];
+
+        let mut finished = pending_msg(&id, "[image image/png 16x16]");
+        finished.blob_uri = Some("at://did:plc:alice/cid".to_string());
+        let added = store
+            .append_messages("conv", vec![pending_msg(&id, "[image — processing…]"), finished])
+            .unwrap();
+
+        assert_eq!(added, 1);
+        let stored = store.load_messages("conv").unwrap().messages;
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].content, "[image image/png 16x16]");
+    }
+
+    #[test]
+    fn a_batch_completes_blob_metadata_but_never_replaces_it() {
+        let dir = tempdir().unwrap();
+        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+        store.append_message("conv", real_msg("a", "image")).unwrap();
+
+        let mut with_blob = real_msg("a", "image");
+        with_blob.blob_uri = Some("at://did:plc:alice/first".to_string());
+        assert_eq!(store.append_messages("conv", vec![with_blob]).unwrap(), 0);
+        assert_eq!(
+            store.load_messages("conv").unwrap().messages[0].blob_uri.as_deref(),
+            Some("at://did:plc:alice/first"),
+            "metadata fills a row that was missing it"
+        );
+
+        let mut other_blob = real_msg("a", "image");
+        other_blob.blob_uri = Some("at://did:plc:alice/second".to_string());
+        store.append_messages("conv", vec![other_blob]).unwrap();
+        assert_eq!(
+            store.load_messages("conv").unwrap().messages[0].blob_uri.as_deref(),
+            Some("at://did:plc:alice/first"),
+            "a row that already has metadata keeps it"
+        );
+    }
+
+    /// Re-fetches deliver rows this device already holds, and the file is
+    /// the whole conversation.
+    #[cfg(unix)]
+    #[test]
+    fn a_batch_of_only_duplicates_does_not_rewrite_the_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir().unwrap();
+        let store = KeyStore::with_path(dir.path().to_path_buf()).unwrap();
+        store.append_message("conv", real_msg("a", "held")).unwrap();
+
+        let path = dir.path().join("messages_conv.json");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
+        let duplicate = store.append_messages("conv", vec![real_msg("a", "held")]);
+        // Must fail, or the read-only bit proved nothing about the call above.
+        let genuine = store.append_messages("conv", vec![real_msg("b", "new")]);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert_eq!(duplicate.unwrap(), 0, "a write was attempted for an unchanged batch");
+        assert!(genuine.is_err(), "the file was writable — this test proves nothing");
     }
 }

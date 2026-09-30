@@ -17,6 +17,72 @@ Uint8List _hexToBytes(String hex) {
   return result;
 }
 
+/// Serialize a `PairingUiStateDto` the same way moat-core's `#[serde(tag =
+/// "phase", rename_all = "snake_case")]` does on the Rust side, so
+/// `GET /pair/status` matches moat-cli's wire shape exactly regardless of
+/// which host answered it. `ring_id` is base64, mirroring the
+/// `#[serde_as(as = "Base64")]` on the Rust struct field.
+Map<String, dynamic> _pairingUiStateJson(PairingUiStateDto state) {
+  return state.when(
+    idle: () => {'phase': 'idle'},
+    showingCode: (code, uri) => {'phase': 'showing_code', 'code': code, 'uri': uri},
+    awaitingPeer: () => {'phase': 'awaiting_peer'},
+    awaitingApproval: (deviceName, did) =>
+        {'phase': 'awaiting_approval', 'device_name': deviceName, 'did': did},
+    done: (ringId) => {'phase': 'done', 'ring_id': base64Encode(ringId)},
+    failed: (reason) => {'phase': 'failed', 'reason': reason},
+  );
+}
+
+Map<String, dynamic> _syncRequestUiStateJson(SyncRequestUiStateDto state) {
+  return state.when(
+    idle: () => {'phase': 'idle'},
+    awaitingPeer: () => {'phase': 'awaiting_peer'},
+    awaitingApproval: (deviceName) =>
+        {'phase': 'awaiting_approval', 'device_name': deviceName},
+    active: () => {'phase': 'active'},
+    complete: (tally, deviceName) => {
+      'phase': 'complete',
+      'tally': {
+        'messages': tally.messages.toInt(),
+        'conversations': tally.conversations.toInt(),
+        'sent_messages': tally.sentMessages.toInt(),
+        'sent_conversations': tally.sentConversations.toInt(),
+      },
+      'device_name': deviceName,
+    },
+    failed: (reason) => {'phase': 'failed', 'reason': _syncFailureJson(reason)},
+  );
+}
+
+String _hexBytes(List<int> bytes) =>
+    bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+/// Serialize a `SyncFailureDto` the way `moat_core::SyncFailure` does —
+/// a tagged object, so callers match on `kind` rather than parsing prose.
+Map<String, dynamic> _syncFailureJson(SyncFailureDto reason) {
+  return reason.when(
+    noAnswer: () => {'kind': 'no_answer'},
+    requestExpired: () => {'kind': 'request_expired'},
+    declined: () => {'kind': 'declined'},
+    channelClosed: (detail) => {'kind': 'channel_closed', 'detail': detail},
+    publishFailed: (detail) => {'kind': 'publish_failed', 'detail': detail},
+  );
+}
+
+/// Response for `/pair/approve`: `{"ok": true}`, or a 500 with the reason
+/// if approving failed the pairing — a reported failure, not a 200.
+/// Rejecting or cancelling ends in `Failed` by design, so those answer
+/// `ok` whenever the call itself succeeded, as moat-cli does.
+Response _pairResultResponse(PairChannelService pairChannel) {
+  final uiState = pairChannel.pairingState.value;
+  if (uiState is PairingUiStateDto_Failed) {
+    return Response(500,
+        body: jsonEncode({'error': uiState.reason}), headers: _jsonHeaders);
+  }
+  return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
+}
+
 /// Build the Shelf router with all moat-cli-compatible endpoints.
 Handler buildRouter({
   required AuthService authService,
@@ -25,7 +91,7 @@ Handler buildRouter({
   required PollingService pollingService,
   required BlobService blobService,
   required DeviceRingService ringService,
-  required SyncService syncService,
+  required PairChannelService pairChannel,
   MessageStorage? messageStorage,
 }) {
   final router = Router();
@@ -77,6 +143,7 @@ Handler buildRouter({
           'id': c.groupIdHex,
           'name': c.resolveDisplayName((did) => did),
           'participant_dids': c.participants,
+          'is_member': c.isMember,
           'epoch': c.epoch,
           'unread': c.unreadCount,
         }).toList();
@@ -164,6 +231,11 @@ Handler buildRouter({
             'sender_did': m.senderDid,
             'message_id': m.messageIdHex,
             'attachment': m.attachment?.toJson(),
+            'reactions': m.reactions
+                .map((r) => {'emoji': r.emoji, 'sender_did': r.senderDid})
+                .toList(),
+            'status': m.status.name,
+            if (m.sendError != null) 'send_error': m.sendError,
           }).toList();
     } else if (messageStorage != null) {
       // Conversation not yet registered locally (e.g. synced history before
@@ -180,6 +252,9 @@ Handler buildRouter({
             'sender_did': m.senderDid,
             'message_id': m.messageIdHex,
             'attachment': m.attachment?.toJson(),
+            'reactions': m.reactions
+                .map((r) => {'emoji': r.emoji, 'sender_did': r.senderDid})
+                .toList(),
           }).toList();
       // Return [] when empty (mirrors Rust's api_set_active_conversation fallback).
     } else {
@@ -210,14 +285,20 @@ Handler buildRouter({
             jsonEncode({'error': 'conversation not found'}),
             headers: _jsonHeaders);
       }
+      if (!conv.isMember) {
+        return Response(409,
+            body: jsonEncode(
+                {'error': 'waiting to be connected to this conversation'}),
+            headers: _jsonHeaders);
+      }
 
+      // Returns once the send is under way, as moat-cli does; the
+      // outcome shows as the message's `status`.
       final repo = ConversationManager.instance.getRepository(conv);
-      final message = await repo.sendMessageSync(text);
-
-      moatLog('Server: Message sent: ${message.id}');
+      final localId = repo.sendMessage(text);
 
       return Response.ok(
-        jsonEncode({'message_id': message.messageIdHex ?? 'unknown'}),
+        jsonEncode({'message_id': repo.pendingMessage(localId)?.messageIdHex}),
         headers: _jsonHeaders,
       );
     } catch (e) {
@@ -251,12 +332,10 @@ Handler buildRouter({
       }
 
       final repo = ConversationManager.instance.getRepository(conv);
-      final message = await repo.sendImageSync(imageBytes, blobService);
-
-      moatLog('Server: Image sent: ${message.id}');
+      final localId = repo.sendImage(imageBytes, blobService);
 
       return Response.ok(
-        jsonEncode(message.toJson()),
+        jsonEncode({'message_id': repo.pendingMessage(localId)?.messageIdHex}),
         headers: _jsonHeaders,
       );
     } catch (e) {
@@ -304,6 +383,25 @@ Handler buildRouter({
       return Response(500,
           body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
     }
+  });
+
+  // POST /conversations/:group_id/messages/:message_id/retry
+  router.post('/conversations/<groupId>/messages/<messageId>/retry',
+      (Request request, String groupId, String messageId) async {
+    final conv = convsService.findByGroupId(_hexToBytes(groupId));
+    if (conv == null) {
+      return Response.notFound(
+          jsonEncode({'error': 'conversation not found'}),
+          headers: _jsonHeaders);
+    }
+    final repo = ConversationManager.instance.getRepository(conv);
+    await repo.loadMessages();
+    if (!repo.retryMessage(messageId, blobService: blobService)) {
+      return Response(400,
+          body: jsonEncode({'error': 'this message cannot be retried'}),
+          headers: _jsonHeaders);
+    }
+    return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
   });
 
   // POST /watch — add a handle to watch list
@@ -420,17 +518,122 @@ Handler buildRouter({
     }
   });
 
-  // GET /ring-status — current ring group id and coord group count
+  // GET /ring-status — current ring group id, coord group count, and this
+  // device's own MLS view of ring membership (0 if not in a ring) — lets a
+  // bystander sibling's convergence (or lack of it) after another device's
+  // pairing be observed at all, matching moat-cli's `/ring-status`.
   router.get('/ring-status', (Request request) async {
     final ringId = await ringService.ringGroupId();
     final ringIdHex = ringId == null
         ? null
         : ringId.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    var ringMemberCount = 0;
+    var ringDevices = <Map<String, dynamic>>[];
+    final session = authService.moatSession;
+    if (ringId != null && session != null) {
+      try {
+        final creds = await session.getGroupMemberCredentials(groupId: ringId);
+        ringMemberCount = creds.length;
+        // Names come from the ring's own MLS leaf credentials, so this
+        // list is exactly "who can read your messages" rather than a
+        // self-reported roster. Matches moat-cli's `/ring-status`.
+        final myDeviceId = session.deviceId();
+        final myDeviceIdHex = _hexBytes(myDeviceId);
+        ringDevices = [
+          for (final c in creds)
+            {
+              'device_id': _hexBytes(c.deviceId),
+              'device_name': c.deviceName,
+              'is_self': _hexBytes(c.deviceId) == myDeviceIdHex,
+            }
+        ];
+      } catch (e) {
+        moatLog('Server: ring-status getGroupMemberCredentials failed: $e');
+      }
+    }
     return Response.ok(
       jsonEncode({
         'ring_group_id': ringIdHex,
-        'coord_group_count': ringService.coordGroupCount(),
+        'ring_member_count': ringMemberCount,
+        'devices': ringDevices,
       }),
+      headers: _jsonHeaders,
+    );
+  });
+
+  // POST /pair/new — new device requests a pairing code.
+  router.post('/pair/new', (Request request) async {
+    try {
+      final code = await pairChannel.startPairing();
+      return Response.ok(jsonEncode({'code': code}), headers: _jsonHeaders);
+    } catch (e) {
+      moatLog('Server: pair/new error: $e');
+      return Response(500,
+          body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
+    }
+  });
+
+  // POST /pair/confirm — existing device enters a pairing code. No longer
+  // implies approval of the resulting Enroll — see /pair/approve.
+  router.post('/pair/confirm', (Request request) async {
+    try {
+      final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+      final code = body['code'] as String;
+      await pairChannel.confirmPairingCode(code);
+      return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
+    } catch (e) {
+      moatLog('Server: pair/confirm error: $e');
+      return Response(500,
+          body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
+    }
+  });
+
+  // POST /pair/approve — existing device: approve the pending Enroll
+  // `pairChannel.pairingState` reports as `awaiting_approval`. No host,
+  // including this headless server, auto-approves anymore.
+  router.post('/pair/approve', (Request request) async {
+    try {
+      await pairChannel.approvePairing();
+    } catch (e) {
+      moatLog('Server: pair/approve error: $e');
+      return Response(500,
+          body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
+    }
+    return _pairResultResponse(pairChannel);
+  });
+
+  // POST /pair/reject — existing device: decline the pending Enroll.
+  router.post('/pair/reject', (Request request) async {
+    try {
+      await pairChannel.rejectPairing();
+    } catch (e) {
+      moatLog('Server: pair/reject error: $e');
+      return Response(500,
+          body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
+    }
+    return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
+  });
+
+  // POST /pair/cancel — either role: abort an in-flight pairing before it
+  // reaches a terminal state.
+  router.post('/pair/cancel', (Request request) async {
+    try {
+      await pairChannel.cancelPairing();
+    } catch (e) {
+      moatLog('Server: pair/cancel error: $e');
+      return Response(500,
+          body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
+    }
+    return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
+  });
+
+  // GET /pair/status — the serialized `PairingUiStateDto` verbatim, e.g.
+  // `{"phase":"showing_code","code":"...","uri":"..."}` or
+  // `{"phase":"failed","reason":"..."}` — matching moat-cli's
+  // `/pair/status` exactly. No host-specific shape on top.
+  router.get('/pair/status', (Request request) async {
+    return Response.ok(
+      jsonEncode(_pairingUiStateJson(pairChannel.pairingState.value)),
       headers: _jsonHeaders,
     );
   });
@@ -447,10 +650,70 @@ Handler buildRouter({
     }
   });
 
-  // GET /sync/status — whether a sync session is active
+  // POST /sync/request — ask this user's other devices for history this
+  // one is missing. A sibling's user must accept (`POST /sync/accept`);
+  // no host answers automatically, matching pairing's approval rule.
+  router.post('/sync/request', (Request request) async {
+    try {
+      await pairChannel.requestSync();
+      return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
+    } catch (e) {
+      moatLog('Server: sync/request error: $e');
+      return Response(500,
+          body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
+    }
+  });
+
+  // POST /sync/offer — send history to a sibling that lacks it. This call
+  // is the human approval; the target joins without prompting.
+  router.post('/sync/offer', (Request request) async {
+    try {
+      final body =
+          jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+      final deviceId = _hexToBytes(body['device_id'] as String);
+      await pairChannel.offerSync(deviceId);
+      return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
+    } catch (e) {
+      moatLog('Server: sync/offer error: $e');
+      return Response(500,
+          body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
+    }
+  });
+
+  // POST /sync/accept — send this device's history to the sibling that
+  // asked for it.
+  router.post('/sync/accept', (Request request) async {
+    try {
+      await pairChannel.acceptSyncRequest();
+      return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
+    } catch (e) {
+      moatLog('Server: sync/accept error: $e');
+      return Response(500,
+          body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
+    }
+  });
+
+  // POST /sync/decline — refuse a sibling's request. Local only: the
+  // requester keeps waiting for another sibling.
+  router.post('/sync/decline', (Request request) async {
+    try {
+      await pairChannel.declineSyncRequest();
+      return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
+    } catch (e) {
+      moatLog('Server: sync/decline error: $e');
+      return Response(500,
+          body: jsonEncode({'error': e.toString()}), headers: _jsonHeaders);
+    }
+  });
+
+  // GET /sync/status — whether a transfer is running, plus the
+  // sync-request projection verbatim, matching moat-cli's shape.
   router.get('/sync/status', (Request request) {
     return Response.ok(
-      jsonEncode({'active': syncService.isActive}),
+      jsonEncode({
+        'active': pairChannel.isTransferring,
+        'request': _syncRequestUiStateJson(pairChannel.refreshSyncRequest()),
+      }),
       headers: _jsonHeaders,
     );
   });

@@ -5,22 +5,25 @@ use crate::{
     drawbridge,
     drawbridge::DrawbridgeManager,
     image_processing,
-    keystore::{hex, GroupMetadata, KeyStore, StoredSession},
+    keystore::{hex, GroupMetadata, KeyStore, StoredSession, IMAGE_SENDING, LONG_TEXT_UPLOADING},
     message_helpers::{build_text_payload, needs_blob_upload, render_message_preview, truncate_to_preview},
+    outbox::{Outbox, OutboxEntry},
 };
 use crossterm::event::{KeyCode, KeyEvent};
 use moat_atproto::{BlobRef, MoatAtprotoClient};
 use moat_core::{
-    blob_decrypt, blob_encrypt, decode_coord_msg, encrypt_for_stealth, generate_stealth_keypair,
-    try_decrypt_stealth, ControlKind, DeviceRingState, Event, EventKind, ExternalBlob, GroupKind,
-    LongTextMessage, MediaMessage, MessagePayload, MoatCredential, MoatSession, ModifierKind,
-    ParsedMessagePayload, RingCommand, RingEvent, StepEnv, CIPHERSUITE,
+    blob_decrypt, blob_encrypt, encrypt_for_stealth, generate_stealth_keypair,
+    stealth_pubkey_from_privkey, try_decrypt_stealth, ControlKind, CoordMsg, DeviceRingState,
+    Event, EventKind, ExternalBlob, GroupKind, LongTextMessage, MediaMessage, MessagePayload,
+    ConvHistory, MoatCredential, MoatSession, ModifierKind, PairChannelCommand, PairChannelDriver,
+    PairEnv, PairIdentity, PairingUiState, ParsedMessagePayload, RingCommand, SiblingStealth,
+    StepEnv, SyncRequestUiState, CIPHERSUITE,
 };
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 use tokio::sync::mpsc;
 
@@ -88,16 +91,49 @@ impl std::fmt::Debug for ImageProto {
     }
 }
 
+/// What an unsent text row shows: the text itself, or for long text its
+/// preview while the blob uploads.
+fn pending_text_content(text: &str) -> String {
+    if needs_blob_upload(text) {
+        format!("{} {LONG_TEXT_UPLOADING}", truncate_to_preview(text))
+    } else {
+        render_message_preview(&ParsedMessagePayload::Structured(build_text_payload(text)))
+    }
+}
+
+/// Short hex prefix of an id, for log lines.
+fn short_hex(id: &[u8]) -> String {
+    hex::encode(&id[..id.len().min(4)])
+}
+
+/// Short prefix of a hex conversation id, for log lines.
+fn short_hex_str(id: &str) -> String {
+    id.chars().take(16).collect()
+}
+
 /// Debug logger that writes to a file in the storage directory
+#[derive(Clone)]
 struct DebugLog {
     path: PathBuf,
 }
 
 impl DebugLog {
     fn new(storage_dir: &std::path::Path) -> Self {
-        Self {
+        let log = Self {
             path: storage_dir.join("debug.log"),
-        }
+        };
+        // A storage root can be reused across process restarts (the beacon
+        // restart scenarios do exactly that), so without a marker the log of
+        // one run runs straight into the next with only wall-clock times to
+        // separate them. Line timestamps carry no date, which makes that
+        // ambiguous across midnight and useless for correlating with a test
+        // run.
+        log.log(&format!(
+            "=== run start {} pid={} ===",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+            std::process::id(),
+        ));
+        log
     }
 
     fn log(&self, msg: &str) {
@@ -135,15 +171,65 @@ pub enum AppError {
 
 pub type Result<T> = std::result::Result<T, AppError>;
 
-/// UI focus state
+/// Which fullscreen surface fills the terminal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Focus {
+pub enum Screen {
     Conversations,
-    Messages,
-    Input,
-    Login,
+    Chat,
+    Status,
+}
+
+impl Screen {
+    pub fn next(self) -> Self {
+        match self {
+            Screen::Conversations => Screen::Chat,
+            Screen::Chat => Screen::Status,
+            Screen::Status => Screen::Conversations,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        self.next().next()
+    }
+}
+
+/// Where keys go inside [`Screen::Chat`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatMode {
+    Compose,
+    Browse,
+}
+
+/// A modal above whichever screen is showing, owning the keyboard while
+/// it is up. Separate from [`Screen`] so an incoming `Enroll` can
+/// interrupt any screen without changing which one the user returns to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overlay {
+    None,
     NewConversation,
     WatchHandle,
+    /// Existing device: text-entry for a pairing code shown elsewhere.
+    PairEnterCode,
+    /// New device: showing the pairing code, waiting for the existing
+    /// device to enter it and approve.
+    PairShowCode,
+    /// Existing device: confirmation naming the peer awaiting approval.
+    PairApprove,
+    /// A sibling asked for history: confirmation naming it, awaiting the
+    /// decision to send.
+    SyncApprove,
+}
+
+/// The top level: a login gate, or a session showing one screen.
+///
+/// Login is deliberately not a [`Screen`] — nothing is behind it, `Esc`
+/// quits rather than going back, and no session state exists until it
+/// completes. Keeping it out makes the screen cycle total and "Chat with
+/// no session" unrepresentable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum View {
+    Login,
+    Session(Screen),
 }
 
 /// Login form state
@@ -173,6 +259,14 @@ pub struct Conversation {
     pub participant_handles: Vec<String>,
     pub current_epoch: u64,
     pub unread: usize,
+    /// Whether this device is an MLS member of the group.
+    ///
+    /// `false` for a conversation whose history arrived by sync before
+    /// the fan-out that adds us to it — see [`App::register_synced_conversation`].
+    /// Not a separate source of truth: it caches the check that already
+    /// decides the epoch below, namely whether a local MLS group exists
+    /// for this id.
+    pub is_member: bool,
 }
 
 impl Conversation {
@@ -217,6 +311,8 @@ pub struct DisplayMessage {
     pub image_loading: bool,
     /// ATProto record key (TID), used for canonical ordering.
     pub rkey: String,
+    /// Why an own message failed to send; see `StoredMessage::send_failed`.
+    pub send_failed: Option<String>,
 }
 
 /// A notification about a new device joining a conversation
@@ -251,7 +347,7 @@ pub(crate) struct ImageMeta {
 pub(crate) enum BgEvent {
     /// Network portion of poll_messages completed.
     PollFetched {
-        participant_events: Vec<(Vec<usize>, moat_atproto::EventRecord, String)>,
+        participant_events: Vec<(moat_atproto::EventRecord, String)>,
         watched_events: Vec<(String, moat_atproto::EventRecord)>,
         new_rkeys: Vec<(String, String)>,
     },
@@ -265,8 +361,13 @@ pub(crate) enum BgEvent {
         /// MLS message ID, used to correlate with the pending stored message.
         message_id: Option<Vec<u8>>,
     },
-    /// Network publish for send_message failed.
-    SendFailed(String),
+    /// A send failed at some stage. `message_id` names the unsent row to
+    /// mark failed; `None` when the row cannot be identified.
+    SendFailed {
+        conv_id: String,
+        message_id: Option<Vec<u8>>,
+        error: String,
+    },
     /// Background auto-login completed.
     LoggedIn {
         client: MoatAtprotoClient,
@@ -332,6 +433,7 @@ pub(crate) enum BgEvent {
     BlobUploaded {
         blob: UploadedBlob,
         preview_text: String,
+        pending_message_id: Vec<u8>,
         conv_id: String,
     },
 
@@ -364,10 +466,6 @@ pub(crate) enum BgEvent {
 
     // ── Drawbridge pairing (main WS control plane) ───────────────────────────
 
-    /// Send `pair_join{token}` on the main Drawbridge WS.
-    DrawbridgeSendPairJoin {
-        token: Vec<u8>,
-    },
     /// Relay acknowledged our offer; waiting for a joiner.
     PairPending,
     /// Both sides matched; open the `/pair` WS.
@@ -377,6 +475,17 @@ pub(crate) enum BgEvent {
     },
     /// A pairing session ended (either side closed).
     PairClosed {
+        /// `None` only if the relay omitted it.
+        session_token: Option<Vec<u8>>,
+        reason: String,
+        /// `true` for the relay's `pair_closed` notice on the main WS,
+        /// `false` for the pair socket itself ending.
+        via_relay: bool,
+    },
+    /// A relay `pair_closed` whose pair socket had not ended after
+    /// [`PAIR_CLOSE_GRACE`](crate::drawbridge::PAIR_CLOSE_GRACE).
+    PairCloseOverdue {
+        session_token: Option<Vec<u8>>,
         reason: String,
     },
     /// Open and attach to the `/pair` WebSocket.
@@ -384,16 +493,46 @@ pub(crate) enum BgEvent {
         url: String,
         token: Vec<u8>,
     },
-    /// Send binary data on the pair WS (ring-MLS ciphertext).
+    /// Send a pairing-AEAD frame on the pair WS.
     DrawbridgeSendPairBinary {
         data: Vec<u8>,
     },
-    /// A binary frame arrived on the pair WS.
+    /// Close the pair WS once the sends queued ahead of this have gone out.
+    DrawbridgeClosePair,
+    /// Send `pair_offer{token}` on the main WS.
+    DrawbridgeSendPairOffer {
+        token: Vec<u8>,
+    },
+    /// Send `pair_join{token}` on the main WS.
+    DrawbridgeSendPairJoin {
+        token: Vec<u8>,
+    },
+    /// Existing device, right after admitting a new one: fan the newcomer
+    /// into every pre-existing user conversation now rather than on the
+    /// next ring tick.
+    PollForNewDevicesNow,
+    /// New device, right after persisting ring membership (`Done`):
+    /// proactively scan for the `UserConvWelcome`s an existing sibling's
+    /// `PollForNewDevicesNow` may already have published, rather than
+    /// waiting for the next periodic ring tick (every 30s) — same "shows
+    /// conversations within seconds" promise as `PollForNewDevicesNow`,
+    /// mirrored on the receiving side.
+    RingTickNow,
+    /// Publish a ring event (a sync request or offer, or a pairing's ring
+    /// Add commit) to our own repo and notify Drawbridge, so siblings
+    /// holding a live relay connection see it at once instead of on their
+    /// next 30 s poll.
+    PublishRingEvent { tag: [u8; 16], ciphertext: Vec<u8> },
+
+    /// A binary frame arrived on the pair WS for `session_token`.
     PairFrameReceived {
+        session_token: Vec<u8>,
         data: Vec<u8>,
     },
-    /// Pair WS is fully attached (both sides present).
-    PairConnected,
+    /// The pair WS for `session_token` is fully attached (both sides present).
+    PairConnected {
+        session_token: Vec<u8>,
+    },
 }
 
 impl BgEvent {
@@ -407,13 +546,18 @@ impl BgEvent {
             BgEvent::DrawbridgeConnectOwn { .. }
             | BgEvent::DrawbridgeNotifyEventPosted { .. }
             | BgEvent::DrawbridgeWatchTags { .. }
-            | BgEvent::DrawbridgeSendPairJoin { .. }
             | BgEvent::DrawbridgeConnectPair { .. }
-            | BgEvent::DrawbridgeSendPairBinary { .. } => true,
+            | BgEvent::DrawbridgeSendPairBinary { .. }
+            | BgEvent::DrawbridgeClosePair
+            | BgEvent::DrawbridgeSendPairOffer { .. }
+            | BgEvent::DrawbridgeSendPairJoin { .. }
+            | BgEvent::PollForNewDevicesNow
+            | BgEvent::RingTickNow
+            | BgEvent::PublishRingEvent { .. } => true,
 
             BgEvent::PollFetched { .. }
             | BgEvent::SendPublished { .. }
-            | BgEvent::SendFailed(_)
+            | BgEvent::SendFailed { .. }
             | BgEvent::LoggedIn { .. }
             | BgEvent::LoginFailed(_)
             | BgEvent::PollError(_)
@@ -429,8 +573,9 @@ impl BgEvent {
             | BgEvent::PairPending
             | BgEvent::PairReady { .. }
             | BgEvent::PairClosed { .. }
+            | BgEvent::PairCloseOverdue { .. }
             | BgEvent::PairFrameReceived { .. }
-            | BgEvent::PairConnected => false,
+            | BgEvent::PairConnected { .. } => false,
         }
     }
 }
@@ -450,16 +595,25 @@ pub struct App {
     mls_path: std::path::PathBuf,
     /// Persistent disk cache for decrypted blob content, keyed by content_hash.
     blob_cache: BlobCache,
+    /// Source bytes of unpublished image sends, for retry.
+    outbox: Outbox,
     /// Terminal image renderer — auto-detects Kitty/Sixel/iTerm2/half-block protocol.
     picker: Picker,
     debug_log: DebugLog,
 
     // UI state
-    pub focus: Focus,
+    pub view: View,
+    pub chat_mode: ChatMode,
+    pub overlay: Overlay,
     pub login_form: LoginForm,
+    /// Advanced by `m`, unbounded: only the footer knows how many pages
+    /// the terminal's width makes, and takes this modulo that.
+    pub hint_page: usize,
     pub error_message: Option<String>,
-    pub status_message: Option<String>,
-    /// Cached handle of the logged-in user (for the info bar)
+    status_message: Option<String>,
+    /// When `status_message` was set — see `status_notice`.
+    status_set_at: Option<Instant>,
+    /// Cached handle of the logged-in user (shown on the Status screen)
     pub logged_in_handle: Option<String>,
 
     // Conversations
@@ -468,8 +622,12 @@ pub struct App {
 
     // Messages for active conversation
     pub messages: Vec<DisplayMessage>,
-    pub message_scroll: usize,
-    pub selected_message: Option<usize>, // For message info feature
+    /// Viewport top edge in rows from the first message; `None` follows the bottom.
+    pub message_scroll_top: Option<u32>,
+    /// Index into `messages` of the browse selection.
+    pub selected_message: Option<usize>,
+    /// First and last fully visible message at the last render.
+    pub visible_messages: Option<(usize, usize)>,
     pub show_message_info: bool,         // Toggle message info popup
     pub reaction_picker: Option<usize>,  // Emoji picker index (Some = popup open)
 
@@ -486,16 +644,6 @@ pub struct App {
     // Tag -> conversation mapping (tag -> hex-encoded group_id)
     pub tag_map: HashMap<[u8; 16], String>,
 
-    // Tags published by this device — skip these during polling to avoid
-    // self-decryption errors. Using tags rather than rkeys because we know
-    // the tag before the network publish completes.
-    own_published_tags: HashSet<[u8; 16]>,
-
-    // Events that were fetched but could not be processed (tag miss or decrypt
-    // failure). Retried each poll cycle after new events are processed, since
-    // commits in new events may advance epochs and unlock these.
-    unprocessed_events: Vec<(Vec<usize>, moat_atproto::EventRecord, String)>,
-
     // Polling state
     last_poll: Option<Instant>,
     last_device_poll: Option<Instant>,
@@ -503,6 +651,7 @@ pub struct App {
     // DIDs to watch for incoming invites
     watched_dids: std::collections::HashSet<String>,
     pub watch_handle_input: String,
+    pub pair_enter_code_input: String,
 
     // Background task channel
     bg_tx: mpsc::UnboundedSender<BgEvent>,
@@ -541,11 +690,23 @@ pub struct App {
     /// When was the last ring tick run?
     last_ring_tick: Option<Instant>,
 
-    /// Active history sync session (Some while a pair WS session is in progress).
-    sync_session: Option<crate::sync::SyncSession>,
+    /// Pairing, sync requests and the history transfer on the pair channel.
+    pair_channel: PairChannelDriver,
 
-    /// Pairing token for the in-flight pair WS session.
-    pending_pair_token: Option<Vec<u8>>,
+    /// Ex-members this poll cycle actually asked for events, as
+    /// `(conv_id, did)`. Cleared from `pending_ex_members` once the
+    /// results have been processed — see the note where it is populated.
+    swept_ex_members: Vec<(String, String)>,
+
+    /// Cached per-sibling stealth address records (`scan_pubkey` +
+    /// `device_id`), refreshed each `ring_tick_inner` from
+    /// `fetch_stealth_addresses`.  Needed by any code path that stealth-
+    /// encrypts a `CoordMsg` to a sibling (same-user KP lane) outside the
+    /// tick's own fresh fetch — `poll_for_new_devices` in particular.  A
+    /// one-tick-stale cache is fine: the consumer-driven low-water
+    /// `KpRequest` retries self-heal any miss caused by a sibling whose
+    /// stealth record hasn't propagated yet.
+    cached_sibling_stealth: Vec<moat_core::SiblingStealth>,
 }
 
 impl App {
@@ -592,6 +753,9 @@ impl App {
         let blob_cache = BlobCache::new(data_dir.join("blobs"))
             .map_err(|e| AppError::Other(format!("Failed to create blob cache: {e}")))?;
 
+        let outbox = Outbox::new(data_dir.join("outbox"))
+            .map_err(|e| AppError::Other(format!("Failed to create outbox: {e}")))?;
+
         let debug_log = DebugLog::new(&data_dir);
 
         // If credentials.txt exists and no credentials are stored yet, import them.
@@ -607,10 +771,10 @@ impl App {
 
         let logged_in_handle = keys.load_credentials().ok().map(|(h, _)| h);
 
-        let focus = if logged_in_handle.is_some() {
-            Focus::Conversations
+        let view = if logged_in_handle.is_some() {
+            View::Session(Screen::Conversations)
         } else {
-            Focus::Login
+            View::Login
         };
 
         let (bg_tx, bg_rx) = mpsc::unbounded_channel();
@@ -624,6 +788,9 @@ impl App {
         let drawbridge = DrawbridgeManager::new(bg_tx.clone());
 
         let ring_driver = keys.load_ring_state().unwrap_or_default();
+        if let Ok(Some(bytes)) = keys.load_parked_events() {
+            let _ = mls.import_parked_events(&bytes);
+        }
 
         Ok(Self {
             keys,
@@ -631,18 +798,24 @@ impl App {
             mls,
             mls_path,
             blob_cache,
+            outbox,
             picker,
             debug_log,
-            focus,
+            view,
+            chat_mode: ChatMode::Compose,
+            overlay: Overlay::None,
             login_form: LoginForm::default(),
+            hint_page: 0,
             error_message: None,
             status_message: None,
+            status_set_at: None,
             logged_in_handle,
             conversations: Vec::new(),
             active_conversation: None,
             messages: Vec::new(),
-            message_scroll: 0,
+            message_scroll_top: None,
             selected_message: None,
+            visible_messages: None,
             show_message_info: false,
             reaction_picker: None,
             device_alerts: Vec::new(),
@@ -650,12 +823,11 @@ impl App {
             cursor_position: 0,
             new_conv_handle: String::new(),
             tag_map: HashMap::new(),
-            own_published_tags: HashSet::new(),
-            unprocessed_events: Vec::new(),
             last_poll: None,
             last_device_poll: None,
             watched_dids: std::collections::HashSet::new(),
             watch_handle_input: String::new(),
+            pair_enter_code_input: String::new(),
             bg_tx,
             bg_rx,
             poll_in_flight: false,
@@ -668,8 +840,9 @@ impl App {
             poll_interval_override: None,
             ring_driver,
             last_ring_tick: None,
-            sync_session: None,
-            pending_pair_token: None,
+            pair_channel: PairChannelDriver::new(),
+            swept_ex_members: Vec::new(),
+            cached_sibling_stealth: Vec::new(),
         })
     }
 
@@ -688,7 +861,7 @@ impl App {
     /// Called from the auto-login path where do_login()'s provisioning may have been skipped.
     fn ensure_keys_provisioned(&mut self, client: &MoatAtprotoClient, did: &str) {
         let mut key_package_to_publish: Option<(Vec<u8>, String)> = None;
-        let mut stealth_to_publish: Option<([u8; 32], String)> = None;
+        let mut stealth_to_publish: Option<([u8; 32], String, [u8; 16])> = None;
 
         // Generate identity key if missing
         if !self.keys.has_identity_key() {
@@ -736,7 +909,7 @@ impl App {
                     return;
                 }
             };
-            stealth_to_publish = Some((stealth_pubkey, device_name));
+            stealth_to_publish = Some((stealth_pubkey, device_name, *self.mls.device_id()));
         }
 
         // Publish to PDS in a background task if anything needs publishing
@@ -751,9 +924,9 @@ impl App {
                         )));
                     }
                 }
-                if let Some((stealth_pubkey, device_name)) = stealth_to_publish {
+                if let Some((stealth_pubkey, device_name, device_id)) = stealth_to_publish {
                     if let Err(e) = client
-                        .publish_stealth_address(&stealth_pubkey, &device_name)
+                        .publish_stealth_address(&stealth_pubkey, &device_name, &device_id)
                         .await
                     {
                         let _ = tx.send(BgEvent::PollError(format!(
@@ -773,6 +946,44 @@ impl App {
     /// Set a status message to display
     pub fn set_status(&mut self, msg: String) {
         self.status_message = Some(msg);
+        self.status_set_at = Some(Instant::now());
+    }
+
+    pub fn clear_status(&mut self) {
+        self.status_message = None;
+        self.status_set_at = None;
+    }
+
+    /// The status message while it is still worth the footer row. A status
+    /// is progress on something the user just did; once read it is only in
+    /// the way of the key hints, and nothing else expires one.
+    pub fn status_notice(&self) -> Option<&str> {
+        const LINGER: Duration = Duration::from_secs(4);
+        let set_at = self.status_set_at?;
+        if set_at.elapsed() > LINGER {
+            return None;
+        }
+        self.status_message.as_deref()
+    }
+
+    /// The `--pds-url` override; `None` means the account's own PDS.
+    pub fn pds_override(&self) -> Option<&str> {
+        self.pds_url.as_deref()
+    }
+
+    pub fn own_did(&self) -> Option<&str> {
+        self.client.as_ref().map(|c| c.did())
+    }
+
+    pub fn own_device_id(&self) -> String {
+        hex::encode(self.mls.device_id())
+    }
+
+    /// The name a sibling sees in this device's ring credential.
+    pub fn own_device_name(&self) -> String {
+        self.keys
+            .get_or_create_device_name()
+            .unwrap_or_else(|_| "This device".to_string())
     }
 
     /// Clear error message
@@ -794,20 +1005,20 @@ impl App {
         match group_id_hex {
             None => {
                 self.active_conversation = None;
-                self.messages.clear();
+                self.clear_messages();
                 Ok(())
             }
             Some(id) => {
                 match self.conversations.iter().position(|c| c.id == id) {
                     Some(idx) => {
                         self.active_conversation = Some(idx);
-                        self.load_messages()
+                        self.open_messages()
                     }
                     None => {
                         // Conv not in local MLS state yet (e.g. synced history before joining).
                         // Load from keystore directly so get_messages still works.
                         self.active_conversation = None;
-                        self.messages.clear();
+                        self.clear_messages();
                         let local = self.keys.load_messages(id).unwrap_or_default();
                         for stored in &local.messages {
                             let from = if stored.is_own {
@@ -827,6 +1038,7 @@ impl App {
                                 image_proto: None,
                                 image_loading: false,
                                 rkey: stored.rkey.clone(),
+                                send_failed: stored.send_failed.clone(),
                             });
                         }
                         Ok(())
@@ -959,7 +1171,6 @@ impl App {
         );
 
         let encrypted = self.mls.encrypt_event(&group_id, &key_bundle, &event)?;
-        self.own_published_tags.insert(encrypted.tag);
         self.save_mls_state()?;
         self.keys
             .store_group_state(&conv_id, &encrypted.new_group_state)?;
@@ -1034,7 +1245,7 @@ impl App {
                 } else {
                     Some(self.conversations.len() - 1)
                 };
-                self.messages.clear();
+                self.clear_messages();
             }
         }
         Ok(())
@@ -1063,13 +1274,108 @@ impl App {
         self.poll_interval_override = Some(seconds);
     }
 
-    /// HTTP: return the current device ring state for integration tests.
-    ///
-    /// Returns `(ring_group_id_hex, coord_group_count)`.
+    /// One linked device, as the Devices screen renders it. Names come
+    /// from the ring's own MLS leaf credentials — the authenticated
+    /// `device_id -> signature key` map the ring exists to be — so this
+    /// list is exactly "who can read your messages", not a self-reported
+    /// roster.
+    pub fn api_ring_devices(&self) -> Vec<serde_json::Value> {
+        let Some(ring_id) = self.ring_driver.ring_id() else {
+            return Vec::new();
+        };
+        let Ok(members) = self.mls.get_group_members(ring_id) else {
+            return Vec::new();
+        };
+        let my_device_id = *self.mls.device_id();
+        let mut devices: Vec<serde_json::Value> = members
+            .into_iter()
+            .filter_map(|(leaf, cred)| {
+                let cred = cred?;
+                Some(serde_json::json!({
+                    "leaf": leaf,
+                    "device_id": hex::encode(cred.device_id()),
+                    "device_name": cred.device_name(),
+                    "is_self": cred.device_id() == &my_device_id,
+                }))
+            })
+            .collect();
+        // Stable order so the list doesn't reshuffle between polls.
+        devices.sort_by_key(|d| d["leaf"].as_u64().unwrap_or(0));
+        devices
+    }
+
+    /// HTTP: `(ring_group_id_hex, ring_member_count)`. The member count is
+    /// this device's own MLS view of the ring — 0 if not in a ring.
     pub fn api_ring_status(&self) -> (Option<String>, usize) {
-        let ring_group_id = self.ring_driver.ring_id().map(hex::encode);
-        let coord_count = self.ring_driver.coord_group_count();
-        (ring_group_id, coord_count)
+        let ring_group_id = self.ring_driver.ring_id();
+        let member_count = ring_group_id
+            .and_then(|id| self.mls.get_group_members(id).ok())
+            .map(|m| m.len())
+            .unwrap_or(0);
+        (ring_group_id.map(hex::encode), member_count)
+    }
+
+    /// HTTP `POST /pair/new` — new device requests a pairing code and
+    /// starts the rendezvous. Returns the text-form code.
+    pub fn api_pair_new(&mut self) -> Result<String> {
+        let identity = self.pair_identity().ok_or(AppError::NotLoggedIn)?;
+        let (code, cmds) = self.pair_channel.pair_new(identity);
+        self.apply_pair_commands(cmds);
+        Ok(code)
+    }
+
+    /// HTTP `POST /pair/confirm` — existing device enters a pairing code.
+    /// Approving the resulting `Enroll` is a separate step: poll
+    /// `GET /pair/status` for `awaiting_approval`, then `POST /pair/approve`
+    /// or `/pair/reject`. No host auto-approves.
+    pub fn api_pair_confirm(&mut self, code: &str) -> Result<()> {
+        let identity = self.pair_identity().ok_or(AppError::NotLoggedIn)?;
+        let cmds = self.pair_channel.pair_confirm(identity, code).map_err(AppError::Mls)?;
+        self.apply_pair_commands(cmds);
+        Ok(())
+    }
+
+    /// HTTP `POST /pair/approve` — existing device: approve the `Enroll`
+    /// `GET /pair/status` reports as `awaiting_approval`.
+    pub fn api_pair_approve(&mut self) -> Result<()> {
+        self.approve_pending_pairing()
+    }
+
+    /// HTTP `POST /pair/reject` — existing device: decline the pending
+    /// `Enroll`, moving the pairing to `Failed`.
+    pub fn api_pair_reject(&mut self) -> Result<()> {
+        let cmds = self.pair_channel.pair_reject().map_err(AppError::Mls)?;
+        self.apply_pair_commands(cmds);
+        Ok(())
+    }
+
+    /// HTTP `POST /pair/cancel` — either role: abort an in-flight pairing,
+    /// moving it to `Failed`.
+    pub fn api_pair_cancel(&mut self) -> Result<()> {
+        let cmds = self.pair_channel.pair_cancel().map_err(AppError::Mls)?;
+        self.apply_pair_commands(cmds);
+        Ok(())
+    }
+
+    /// HTTP `GET /pair/status` — the serialized `PairingUiState` verbatim.
+    pub fn api_pair_status(&self) -> PairingUiState {
+        self.pairing_ui_state()
+    }
+
+    /// The single source of truth every render and dispatch site reads.
+    pub(crate) fn pairing_ui_state(&self) -> PairingUiState {
+        self.pair_channel.pairing_ui_state()
+    }
+
+    /// `true` once the active pairing (if any) has nothing left to do —
+    /// reached a terminal state (`Done`/`Failed`), or there is no session
+    /// at all. Used by the TUI popups to know when any key should dismiss
+    /// rather than be interpreted as approve/reject/cancel.
+    pub(crate) fn pairing_is_terminal(&self) -> bool {
+        matches!(
+            self.pairing_ui_state(),
+            PairingUiState::Idle | PairingUiState::Done { .. } | PairingUiState::Failed { .. }
+        )
     }
 
     // ── End HTTP API methods ──────────────────────────────────────────
@@ -1085,13 +1391,87 @@ impl App {
             return Ok(false);
         }
 
-        match self.focus {
-            Focus::Login => self.handle_login_key(key).await,
-            Focus::Conversations => self.handle_conversations_key(key).await,
-            Focus::Messages => self.handle_messages_key(key).await,
-            Focus::Input => self.handle_input_key(key), // sync — no await
-            Focus::NewConversation => self.handle_new_conversation_key(key).await,
-            Focus::WatchHandle => self.handle_watch_handle_key(key).await,
+        match self.overlay {
+            Overlay::None => {}
+            Overlay::NewConversation => return self.handle_new_conversation_key(key).await,
+            Overlay::WatchHandle => return self.handle_watch_handle_key(key).await,
+            Overlay::PairEnterCode => return self.handle_pair_enter_code_key(key),
+            Overlay::PairShowCode => return self.handle_pair_show_code_key(key),
+            Overlay::PairApprove => return self.handle_pair_approve_key(key),
+            Overlay::SyncApprove => return self.handle_sync_approve_key(key),
+        }
+
+        let screen = match self.view {
+            View::Login => return self.handle_login_key(key).await,
+            View::Session(screen) => screen,
+        };
+
+        // Tab cycles from anywhere in a session, the composer included —
+        // a tab character is not something a message needs.
+        match key.code {
+            KeyCode::Tab => {
+                self.show_screen(screen.next());
+                return Ok(false);
+            }
+            KeyCode::BackTab => {
+                self.show_screen(screen.prev());
+                return Ok(false);
+            }
+            KeyCode::Char('m') if self.hints_are_pageable() => {
+                self.hint_page = self.hint_page.wrapping_add(1);
+                return Ok(false);
+            }
+            _ => {}
+        }
+
+        match screen {
+            Screen::Conversations => self.handle_conversations_key(key).await,
+            Screen::Chat => match self.chat_mode {
+                ChatMode::Browse => self.handle_chat_browse_key(key).await,
+                ChatMode::Compose => self.handle_chat_compose_key(key), // sync — no await
+            },
+            Screen::Status => self.handle_status_key(key), // sync — no await
+        }
+    }
+
+    /// Switch screens, dropping the state that belonged to the last one.
+    pub(crate) fn show_screen(&mut self, screen: Screen) {
+        self.show_message_info = false;
+        self.reaction_picker = None;
+        self.hint_page = 0;
+        if screen == Screen::Chat {
+            self.enter_compose();
+        }
+        self.view = View::Session(screen);
+    }
+
+    /// Whether `m` can page the footer hints: not in the composer, where
+    /// it is a letter, and not where the key set always fits one row.
+    pub fn hints_are_pageable(&self) -> bool {
+        if self.overlay != Overlay::None {
+            return false;
+        }
+        match self.view {
+            View::Login => false,
+            View::Session(Screen::Chat) => self.chat_mode != ChatMode::Compose,
+            View::Session(_) => true,
+        }
+    }
+
+    fn enter_compose(&mut self) {
+        self.hint_page = 0;
+        self.chat_mode = ChatMode::Compose;
+        self.selected_message = None;
+    }
+
+    /// Selects where the view already is, so `r`/`i` act on a message
+    /// from the first keypress rather than after a scroll.
+    pub(crate) fn enter_browse(&mut self) {
+        self.hint_page = 0;
+        self.chat_mode = ChatMode::Browse;
+        if let Some(last) = self.messages.len().checked_sub(1) {
+            let at = self.visible_messages.map_or(last, |(_, bottom)| bottom);
+            self.selected_message = Some(at.min(last));
         }
     }
 
@@ -1229,6 +1609,30 @@ impl App {
                     .push(idx);
             }
         }
+
+        // Members are not the whole story: someone who left still has
+        // messages on their own PDS that this device may never have asked
+        // for. `pending_ex_members` holds them for exactly one sweep after
+        // their removal — see MULTI_DEVICE.md, "Catch-Up Across Membership
+        // Changes".
+        //
+        // Which ones this cycle actually asks is captured *now*, before any
+        // event is processed. A departure discovered later in this same
+        // cycle must not be cleared by it: the fetch already happened, so
+        // it would be cleared without ever having been swept.
+        let mut swept_ex_members: Vec<(String, String)> = Vec::new();
+        for (idx, conv) in self.conversations.iter().enumerate() {
+            let pending = self
+                .keys
+                .load_group_metadata(&conv.id)
+                .map(|m| m.pending_ex_members)
+                .unwrap_or_default();
+            for did in pending {
+                dids_to_poll.entry(did.clone()).or_default().push(idx);
+                swept_ex_members.push((conv.id.clone(), did));
+            }
+        }
+        self.swept_ex_members = swept_ex_members;
         // Always poll own DID — needed to receive coord-group messages from sibling
         // devices even when there are no user conversations yet.
         {
@@ -1236,21 +1640,24 @@ impl App {
             dids_to_poll.entry(my_did).or_insert(all_conv_indices);
         }
 
-        let watched: Vec<(String, Option<String>)> = self
+        // Watched DIDs keep their own cursor, so a watch fetch can't skip
+        // messages from a group this device hasn't joined yet.
+        let watched: Vec<(String, String, Option<String>)> = self
             .watched_dids
             .iter()
             .filter(|did| !dids_to_poll.contains_key(*did))
             .map(|did| {
-                let last_rkey = self.keys.get_last_rkey(did).ok().flatten();
-                (did.clone(), last_rkey)
+                let cursor_key = format!("watch:{did}");
+                let last_rkey = self.keys.get_last_rkey(&cursor_key).ok().flatten();
+                (did.clone(), cursor_key, last_rkey)
             })
             .collect();
 
-        let dids_with_rkeys: Vec<(String, Vec<usize>, Option<String>)> = dids_to_poll
+        let dids_with_rkeys: Vec<(String, Option<String>)> = dids_to_poll
             .into_iter()
-            .map(|(did, indices)| {
+            .map(|(did, _)| {
                 let last_rkey = self.keys.get_last_rkey(&did).ok().flatten();
-                (did, indices, last_rkey)
+                (did, last_rkey)
             })
             .collect();
 
@@ -1260,7 +1667,7 @@ impl App {
             let mut participant_events = Vec::new();
             let mut new_rkeys = Vec::new();
 
-            for (participant_did, conv_indices, last_rkey) in &dids_with_rkeys {
+            for (participant_did, last_rkey) in &dids_with_rkeys {
                 if let Ok(events) = client
                     .fetch_events_from_did(participant_did, last_rkey.as_deref())
                     .await {
@@ -1274,11 +1681,7 @@ impl App {
                         if max_rkey.as_ref().map_or(true, |m| event.rkey > *m) {
                             max_rkey = Some(event.rkey.clone());
                         }
-                        participant_events.push((
-                            conv_indices.clone(),
-                            event,
-                            participant_did.clone(),
-                        ));
+                        participant_events.push((event, participant_did.clone()));
                     }
                     if let Some(rkey) = max_rkey {
                         new_rkeys.push((participant_did.clone(), rkey));
@@ -1287,7 +1690,7 @@ impl App {
             }
 
             let mut watched_events = Vec::new();
-            for (did, last_rkey) in &watched {
+            for (did, cursor_key, last_rkey) in &watched {
                 if let Ok(events) = client
                     .fetch_events_from_did(did, last_rkey.as_deref())
                     .await {
@@ -1304,7 +1707,7 @@ impl App {
                         watched_events.push((did.clone(), event));
                     }
                     if let Some(rkey) = max_rkey {
-                        new_rkeys.push((did.clone(), rkey));
+                        new_rkeys.push((cursor_key.clone(), rkey));
                     }
                 }
             }
@@ -1359,7 +1762,7 @@ impl App {
                     refresh_jwt,
                 });
                 self.client = Some(client.clone());
-                self.status_message = None;
+                self.clear_status();
                 self.load_conversations_sync();
 
                 // Resolve handles for all conversations on login
@@ -1388,7 +1791,7 @@ impl App {
                 self.set_error(format!(
                     "Login failed: {e}\n\nIf you hit rate limits, wait before trying again."
                 ));
-                self.focus = Focus::Login;
+                self.view = View::Login;
             }
             BgEvent::PollFetched {
                 participant_events,
@@ -1415,8 +1818,10 @@ impl App {
                 self.set_error(format!("Poll error: {e}"));
             }
             BgEvent::SendPublished { uri, conv_id, tag, ciphertext, message_id } => {
-                self.debug_log
-                    .log(&format!("send_message: published to PDS, uri={}", uri));
+                self.debug_log.log(&format!(
+                    "send: published id={} uri={uri}",
+                    message_id.as_deref().map(short_hex).unwrap_or_else(|| "?".into()),
+                ));
                 self.tag_map.insert(tag, conv_id.clone());
 
                 let rkey = uri.split('/').next_back().unwrap_or("").to_string();
@@ -1428,24 +1833,16 @@ impl App {
                             "send_message: failed to fixup pending rkey: {e}"
                         ));
                     }
-                    // Update conversation digest for the sent message.
-                    if let Some(mid) = &message_id {
-                        if mid.len() == 16 {
-                            if let Ok(group_id) = hex::decode(&conv_id) {
-                                let mut arr = [0u8; 16];
-                                arr.copy_from_slice(mid);
-                                let _ = self.mls.append_to_digest(&group_id, &rkey, &arr);
-                            }
-                        }
-                    }
                     // Also fix up in-memory display messages
                     if let Some(dm) = self.messages.iter_mut().rev().find(|m| {
                         m.rkey == "pending" && (message_id.is_none() || m.message_id.as_ref() == message_id.as_ref())
                     }) {
                         dm.rkey = rkey.clone();
                     }
-                    // Re-sort display messages by rkey
-                    self.messages.sort_by(|a, b| a.rkey.cmp(&b.rkey));
+                    self.sort_messages();
+                }
+                if let Some(id) = &message_id {
+                    self.outbox.remove(id);
                 }
 
                 // Notify Drawbridge about the published event with payload + relay URLs.
@@ -1463,8 +1860,16 @@ impl App {
                     });
                 }
             }
-            BgEvent::SendFailed(e) => {
-                self.set_error(format!("Send error: {e}"));
+            BgEvent::SendFailed { conv_id, message_id, error } => {
+                self.debug_log.log(&format!(
+                    "send: failed id={} conv={}: {error}",
+                    message_id.as_deref().map(short_hex).unwrap_or_else(|| "?".into()),
+                    short_hex_str(&conv_id),
+                ));
+                if let Some(id) = message_id {
+                    self.mark_send_failed(&conv_id, &id, &error);
+                }
+                self.set_error(format!("Send error: {error}"));
             }
             BgEvent::DrawbridgeNewEvent { tag, rkey, payload } => {
                 self.debug_log.log(&format!(
@@ -1480,6 +1885,7 @@ impl App {
                         let group_id = hex::decode(&conv_id).unwrap_or_default();
                         if let Ok(decrypted) = self.mls.decrypt_event(&group_id, ciphertext) {
                             self.debug_log.log("drawbridge: inline payload decrypted successfully");
+                            self.note_tag_seen(&conv_id, &tag);
                             // Process the decrypted event inline — skip PDS fetch
                             self.process_inline_decrypted(&conv_id, &rkey, decrypted);
                             self.save_mls_state().ok();
@@ -1552,13 +1958,15 @@ impl App {
                             participant_dids: conv.participant_dids.clone(),
                             participant_handles: conv.participant_handles.clone(),
                             kind: GroupKind::User,
+                            pending_ex_members: Vec::new(),
+                            member_device_ids: Default::default(),
                         },
                     );
                 }
             }
 
-            BgEvent::BlobUploaded { blob, preview_text, conv_id } => {
-                self.handle_blob_uploaded(blob, preview_text, conv_id);
+            BgEvent::BlobUploaded { blob, preview_text, pending_message_id, conv_id } => {
+                self.handle_blob_uploaded(blob, preview_text, pending_message_id, conv_id);
             }
 
             BgEvent::BlobFetched { message_id, full_text } => {
@@ -1603,38 +2011,61 @@ impl App {
             }
 
             // ── Drawbridge pairing (async side handled by handle_bg_event_async) ──
-            BgEvent::DrawbridgeSendPairJoin { .. }
-            | BgEvent::DrawbridgeConnectPair { .. }
-            | BgEvent::DrawbridgeSendPairBinary { .. } => {}
+            BgEvent::DrawbridgeConnectPair { .. }
+            | BgEvent::DrawbridgeSendPairBinary { .. }
+            | BgEvent::DrawbridgeClosePair
+            | BgEvent::DrawbridgeSendPairOffer { .. }
+            | BgEvent::DrawbridgeSendPairJoin { .. }
+            | BgEvent::PollForNewDevicesNow
+            | BgEvent::RingTickNow
+            | BgEvent::PublishRingEvent { .. } => {}
 
             BgEvent::PairPending => {
                 self.debug_log.log("sync: pair offer registered, waiting for joiner");
             }
 
             BgEvent::PairReady { pair_url, token } => {
-                self.debug_log.log(&format!("sync: pair_ready — opening pair WS at {pair_url}"));
-                // Build the sync session now so it's ready when PairConnected arrives.
-                self.pending_pair_token = Some(token.clone());
-                let _ = self.bg_tx.send(BgEvent::DrawbridgeConnectPair {
-                    url: pair_url,
-                    token,
-                });
+                let cmds = self.pair_channel.on_pair_ready(&token, pair_url);
+                self.apply_pair_commands(cmds);
             }
 
-            BgEvent::PairClosed { reason } => {
-                self.debug_log.log(&format!("sync: pair WS closed: {reason}"));
-                self.drawbridge.clear_pair();
-                self.sync_session = None;
-                self.pending_pair_token = None;
+            BgEvent::PairClosed { session_token, reason, via_relay } => {
+                // Once the pair socket is open, its own end is the signal:
+                // it arrives behind every frame the peer sent, where the
+                // relay's notice on the main WS can overtake them. The
+                // notice still arms a deadline, so a socket that died
+                // without its end reaching us cannot hold the session open.
+                if via_relay && self.drawbridge.has_pair_socket(session_token.as_deref()) {
+                    self.debug_log.log(&format!(
+                        "sync: pair_closed ({reason}) from relay; awaiting pair socket end"
+                    ));
+                    let bg_tx = self.bg_tx.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(crate::drawbridge::PAIR_CLOSE_GRACE).await;
+                        let _ = bg_tx.send(BgEvent::PairCloseOverdue { session_token, reason });
+                    });
+                    return;
+                }
+                self.on_pair_closed(session_token, reason);
             }
 
-            BgEvent::PairConnected => {
-                self.debug_log.log("sync: pair WS paired — starting sync session");
-                self.start_sync_session();
+            BgEvent::PairCloseOverdue { session_token, reason } => {
+                if self.drawbridge.has_pair_socket(session_token.as_deref()) {
+                    self.debug_log.log(&format!(
+                        "sync: pair socket outlived the relay's pair_closed ({reason}); closing it"
+                    ));
+                    self.on_pair_closed(session_token, reason);
+                }
             }
 
-            BgEvent::PairFrameReceived { data } => {
-                self.process_sync_frame(data);
+            BgEvent::PairConnected { session_token } => {
+                let cmds = self.with_pair_env(|d, env| d.on_paired(env, &session_token));
+                self.apply_pair_commands(cmds);
+            }
+
+            BgEvent::PairFrameReceived { session_token, data } => {
+                let cmds = self.with_pair_env(|d, env| d.on_frame(env, &session_token, data));
+                self.apply_pair_commands(cmds);
             }
         }
     }
@@ -1644,21 +2075,26 @@ impl App {
         &mut self,
         blob: UploadedBlob,
         preview_text: String,
+        pending_message_id: Vec<u8>,
         conv_id: String,
     ) {
+        let fail = |app: &mut Self, error: String| {
+            let _ = app.bg_tx.send(BgEvent::SendFailed {
+                conv_id: conv_id.clone(),
+                message_id: Some(pending_message_id.clone()),
+                error,
+            });
+        };
+
         let Some(client) = self.client.as_ref() else {
-            self.set_error("blob uploaded but client is gone".to_string());
-            return;
+            return fail(self, "blob uploaded but client is gone".to_string());
         };
 
         let uri = format!("at://{}/{}", client.did(), blob.cid);
 
         let key_arr: [u8; 32] = match blob.key.try_into() {
             Ok(k) => k,
-            Err(_) => {
-                self.set_error("blob key has wrong length".to_string());
-                return;
-            }
+            Err(_) => return fail(self, "blob key has wrong length".to_string()),
         };
 
         let external = match ExternalBlob::new(
@@ -1669,10 +2105,7 @@ impl App {
             blob.content_hash,
         ) {
             Ok(e) => e,
-            Err(e) => {
-                self.set_error(format!("failed to build ExternalBlob: {e}"));
-                return;
-            }
+            Err(e) => return fail(self, format!("failed to build ExternalBlob: {e}")),
         };
 
         let payload = MessagePayload::LongText(LongTextMessage {
@@ -1683,32 +2116,25 @@ impl App {
 
         let group_id = match hex::decode(&conv_id) {
             Ok(id) => id,
-            Err(e) => {
-                self.set_error(format!("invalid conv_id in BlobUploaded: {e}"));
-                return;
-            }
+            Err(e) => return fail(self, format!("invalid conv_id in BlobUploaded: {e}")),
         };
 
         let key_bundle = match self.keys.load_identity_key() {
             Ok(k) => k,
-            Err(e) => {
-                self.set_error(format!("failed to load identity key: {e}"));
-                return;
-            }
+            Err(e) => return fail(self, format!("failed to load identity key: {e}")),
         };
 
         let current_epoch = self.mls.get_group_epoch(&group_id).ok().flatten().unwrap_or(1);
-        let event = Event::message(group_id.clone(), current_epoch, &payload);
+        // Same reasoning as the image path: the optimistic row is stored
+        // under this id, and the rkey fix-up on publish matches on it.
+        let mut event = Event::message(group_id.clone(), current_epoch, &payload);
+        event.message_id = Some(pending_message_id.clone());
 
         let encrypted = match self.mls.encrypt_event(&group_id, &key_bundle, &event) {
             Ok(e) => e,
-            Err(e) => {
-                self.set_error(format!("MLS encrypt failed for long text: {e}"));
-                return;
-            }
+            Err(e) => return fail(self, format!("MLS encrypt failed for long text: {e}")),
         };
 
-        self.own_published_tags.insert(encrypted.tag);
         if let Err(e) = self.save_mls_state() {
             self.debug_log.log(&format!("blob_uploaded: failed to save MLS state: {e}"));
         }
@@ -1718,20 +2144,19 @@ impl App {
 
         // Update the pending optimistic message to the real preview.
         let display_content = format!("{preview_text} [long text]");
-        if let Some(msg) = self.messages.iter_mut().rev().find(|m| m.is_own && m.content.contains("[long text — uploading…]")) {
-            msg.content = display_content.clone();
-            if let Some(msg_id) = &msg.message_id {
-                let _ = self.keys.append_message(&conv_id, crate::keystore::StoredMessage {
-                    rkey: "pending".to_string(),
-                    content: display_content,
-                    timestamp: msg.timestamp,
-                    is_own: true,
-                    message_id: Some(msg_id.clone()),
-                    sender_did: msg.sender_did.clone(),
-                    sender_device: msg.sender_device.clone(),
-                    blob_uri: None, blob_key: None, blob_ciphertext_hash: None, blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None, blob_width: None, blob_height: None,
-                });
-            }
+        let stored = self.keys.update_message_by_id(&conv_id, &pending_message_id, |m| {
+            m.content = display_content.clone();
+        });
+        if let Err(e) = stored {
+            self.debug_log.log(&format!("blob_uploaded: failed to store preview: {e}"));
+        }
+        if let Some(msg) = self
+            .messages
+            .iter_mut()
+            .rev()
+            .find(|m| m.message_id.as_ref() == Some(&pending_message_id))
+        {
+            msg.content = display_content;
         }
 
         // Publish the MLS-encrypted event.
@@ -1746,7 +2171,11 @@ impl App {
                     let _ = tx.send(BgEvent::SendPublished { uri, conv_id, tag, ciphertext, message_id: msg_id });
                 }
                 Err(e) => {
-                    let _ = tx.send(BgEvent::SendFailed(format!("{e}")));
+                    let _ = tx.send(BgEvent::SendFailed {
+                        conv_id,
+                        message_id: Some(pending_message_id),
+                        error: format!("publish failed: {e}"),
+                    });
                 }
             }
         });
@@ -1760,6 +2189,15 @@ impl App {
                 did,
                 signature_key,
             } => {
+                // Keep a live connection to the same relay: reconnecting leaves
+                // a window with no watcher.
+                if self.drawbridge.is_connected_to(&url) {
+                    self.debug_log.log(&format!(
+                        "drawbridge: already connected to own relay at {url}"
+                    ));
+                    self.send_all_watched_tags().await;
+                    return;
+                }
                 self.debug_log.log(&format!(
                     "drawbridge: connecting to own relay at {}",
                     url
@@ -1798,6 +2236,13 @@ impl App {
                                 }
                             });
                         }
+
+                        // A `pair_join` that reached the relay before the
+                        // peer's `pair_offer` is rejected as connection-fatal
+                        // "token not found", so an unacknowledged offer or
+                        // join is resent on every reconnect.
+                        let cmds = self.pair_channel.on_relay_connected();
+                        self.apply_pair_commands(cmds);
                     }
                     Err(e) => {
                         let delay = self.drawbridge.next_reconnect_delay();
@@ -1838,27 +2283,74 @@ impl App {
                         .log(&format!("drawbridge: register_push (tag-sync) failed: {e}"));
                 }
             }
-            BgEvent::DrawbridgeSendPairJoin { token } => {
-                if let Err(e) = self.drawbridge.send_pair_join(&token).await {
-                    self.debug_log.log(&format!("drawbridge: pair_join failed: {e}"));
-                }
-            }
             BgEvent::DrawbridgeConnectPair { url, token } => {
                 self.debug_log.log(&format!("sync: connecting to pair WS at {url}"));
                 match self.drawbridge.connect_pair(&url, &token).await {
                     Ok(()) => {
                         self.debug_log.log("sync: pair WS connected, waiting for paired");
                     }
-                    Err(e) => {
-                        self.debug_log.log(&format!("sync: pair WS connect failed: {e}"));
-                        self.sync_session = None;
-                        self.pending_pair_token = None;
-                    }
+                    Err(e) => self.on_pair_closed(Some(token), format!("pair WS connect failed: {e}")),
                 }
             }
             BgEvent::DrawbridgeSendPairBinary { data } => {
                 if let Err(e) = self.drawbridge.send_pair_binary(data).await {
                     self.debug_log.log(&format!("sync: send_pair_binary failed: {e}"));
+                }
+            }
+            BgEvent::DrawbridgeClosePair => {
+                self.drawbridge.close_pair().await;
+            }
+            BgEvent::DrawbridgeSendPairOffer { token } => {
+                // Unsent offers and joins are resent on reconnect.
+                if let Err(e) = self.drawbridge.send_pair_offer(&token).await {
+                    self.debug_log.log(&format!("pair: send_pair_offer failed: {e}"));
+                }
+            }
+            BgEvent::DrawbridgeSendPairJoin { token } => {
+                if let Err(e) = self.drawbridge.send_pair_join(&token).await {
+                    self.debug_log.log(&format!("pair: send_pair_join failed: {e}"));
+                }
+            }
+            BgEvent::PollForNewDevicesNow => {
+                if let Err(e) = self.poll_for_new_devices().await {
+                    self.debug_log
+                        .log(&format!("pairing: poll_for_new_devices failed: {e}"));
+                }
+            }
+            BgEvent::RingTickNow => {
+                self.do_ring_tick().await;
+            }
+            BgEvent::PublishRingEvent { tag, ciphertext } => {
+                let Some(client) = self.client.clone() else { return };
+                match client.publish_event(&tag, &ciphertext, None).await {
+                    Ok(uri) => {
+                        self.debug_log.log("ring: published ring event");
+                        // `publish_event` hands back the record's AT URI;
+                        // the relay verifies against the bare rkey.
+                        let rkey = uri.split('/').next_back().unwrap_or("").to_string();
+                        // Siblings watch the ring's candidate tags, so the
+                        // relay can hand them this event immediately rather
+                        // than leaving it for the next poll.
+                        if self.drawbridge.has_own_connection() {
+                            let did = self
+                                .client
+                                .as_ref()
+                                .map(|c| c.did().to_string())
+                                .unwrap_or_default();
+                            let _ = self.bg_tx.send(BgEvent::DrawbridgeNotifyEventPosted {
+                                did,
+                                tag,
+                                rkey,
+                                payload: ciphertext,
+                                drawbridge_urls: Vec::new(),
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        self.debug_log.log(&format!("ring: publish ring event failed: {e}"));
+                        let cmds = self.pair_channel.on_ring_publish_failed(&tag, e.to_string());
+                        self.apply_pair_commands(cmds);
+                    }
                 }
             }
             _ => {} // Non-async events handled by handle_bg_event
@@ -1983,7 +2475,7 @@ impl App {
         let device_name = self.keys.get_or_create_device_name().ok();
         self.messages.push(DisplayMessage {
             from: "You".to_string(),
-            content: "[image — processing…]".to_string(),
+            content: IMAGE_SENDING.to_string(),
             timestamp,
             is_own: true,
             sender_did: Some(my_did.clone()),
@@ -1993,12 +2485,13 @@ impl App {
             image_proto: None,
             image_loading: true,
             rkey: "pending".to_string(),
+            send_failed: None,
         });
 
         // Persist the placeholder so the message survives a restart.
         let stored_msg = crate::keystore::StoredMessage {
             rkey: "pending".to_string(),
-            content: "[image — processing…]".to_string(),
+            content: IMAGE_SENDING.to_string(),
             timestamp,
             is_own: true,
             message_id: Some(pending_message_id.clone()),
@@ -2006,20 +2499,52 @@ impl App {
             sender_device: device_name,
             blob_uri: None, blob_key: None, blob_ciphertext_hash: None,
             blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None,
-            blob_width: None, blob_height: None,
+            blob_width: None, blob_height: None, blob_thumbhash: None,
+            reactions: Vec::new(),
+            send_failed: None,
         };
         if let Err(e) = self.keys.append_message(&conv_id, stored_msg) {
             self.debug_log
                 .log(&format!("send_image: failed to store locally: {e}"));
         }
+        // Kept until published, so a failed send can be retried.
+        if let Err(e) = self.outbox.put(&pending_message_id, &OutboxEntry::Image(bytes.clone())) {
+            self.debug_log
+                .log(&format!("send_image: failed to keep source for retry: {e}"));
+        }
 
         self.input_buffer.clear();
         self.cursor_position = 0;
 
-        let client = self.client.as_ref().unwrap().clone();
+        self.spawn_image_upload(conv_id, pending_message_id, bytes);
+        Ok(())
+    }
+
+    /// Process, encrypt and upload an image in the background; the result
+    /// arrives as `ImageUploaded` or `SendFailed`.
+    fn spawn_image_upload(&self, conv_id: String, pending_message_id: Vec<u8>, bytes: Vec<u8>) {
+        let Some(client) = self.client.clone() else {
+            let _ = self.bg_tx.send(BgEvent::SendFailed {
+                conv_id,
+                message_id: Some(pending_message_id),
+                error: "not logged in".to_string(),
+            });
+            return;
+        };
         let tx = self.bg_tx.clone();
+        let log = self.debug_log.clone();
+        let id = short_hex(&pending_message_id);
+        log.log(&format!("send_image: start id={id} input={}B", bytes.len()));
 
         tokio::spawn(async move {
+            let fail = |error: String| {
+                let _ = tx.send(BgEvent::SendFailed {
+                    conv_id: conv_id.clone(),
+                    message_id: Some(pending_message_id.clone()),
+                    error,
+                });
+            };
+
             // Image processing runs on the blocking thread pool.
             let result = tokio::task::spawn_blocking(move || {
                 image_processing::process_image_from_bytes(&bytes)
@@ -2028,14 +2553,8 @@ impl App {
 
             let processed = match result {
                 Ok(Ok(r)) => r,
-                Ok(Err(e)) => {
-                    let _ = tx.send(BgEvent::SendFailed(format!("image processing failed: {e}")));
-                    return;
-                }
-                Err(e) => {
-                    let _ = tx.send(BgEvent::SendFailed(format!("image task panicked: {e}")));
-                    return;
-                }
+                Ok(Err(e)) => return fail(format!("image processing failed: {e}")),
+                Err(e) => return fail(format!("image task panicked: {e}")),
             };
             let (image_bytes, width, height, thumbhash, mime) = (
                 processed.bytes,
@@ -2044,26 +2563,28 @@ impl App {
                 processed.thumbhash,
                 processed.mime,
             );
+            log.log(&format!(
+                "send_image: processed id={id} {width}x{height} {mime} {}B",
+                image_bytes.len()
+            ));
 
             // Encrypt blob (fast, CPU-only).
             let encrypted = match moat_core::blob_encrypt(&image_bytes) {
                 Ok(r) => r,
-                Err(e) => {
-                    let _ =
-                        tx.send(BgEvent::SendFailed(format!("blob encrypt failed: {e}")));
-                    return;
-                }
+                Err(e) => return fail(format!("blob encrypt failed: {e}")),
             };
             let ciphertext_size = encrypted.blob.len() as u64;
 
             // Upload blob to PDS.
+            let started = Instant::now();
             let cid = match client.upload_blob(&encrypted.blob).await {
                 Ok(cid) => cid,
-                Err(e) => {
-                    let _ = tx.send(BgEvent::SendFailed(format!("blob upload failed: {e}")));
-                    return;
-                }
+                Err(e) => return fail(format!("blob upload failed: {e}")),
             };
+            log.log(&format!(
+                "send_image: uploaded id={id} cid={cid} in {}ms",
+                started.elapsed().as_millis()
+            ));
 
             let _ = tx.send(BgEvent::ImageUploaded {
                 blob: UploadedBlob {
@@ -2078,8 +2599,105 @@ impl App {
                 conv_id,
             });
         });
+    }
 
+    /// Retry a failed send from the source kept in the outbox.
+    pub fn retry_send(&mut self, conv_id: &str, message_id: &[u8]) -> Result<()> {
+        let stored = self
+            .keys
+            .load_messages(conv_id)?
+            .messages
+            .into_iter()
+            .find(|m| m.message_id.as_deref() == Some(message_id))
+            .ok_or_else(|| AppError::Other("no such message".to_string()))?;
+        if stored.send_failed.is_none() {
+            return Err(AppError::Other("message has not failed to send".to_string()));
+        }
+        let entry = self
+            .outbox
+            .get(message_id)
+            .ok_or_else(|| AppError::Other("this message cannot be retried".to_string()))?;
+        self.debug_log
+            .log(&format!("send: retry id={}", short_hex(message_id)));
+
+        let (content, is_image) = match &entry {
+            OutboxEntry::Image(_) => (IMAGE_SENDING.to_string(), true),
+            OutboxEntry::Text(text) => (pending_text_content(text), false),
+        };
+        self.keys.update_message_by_id(conv_id, message_id, |m| {
+            m.content = content.clone();
+            m.send_failed = None;
+        })?;
+        if let Some(dm) = self
+            .messages
+            .iter_mut()
+            .find(|m| m.message_id.as_deref() == Some(message_id))
+        {
+            dm.content = content;
+            dm.send_failed = None;
+            dm.image_loading = is_image;
+        }
+        match entry {
+            OutboxEntry::Image(bytes) => {
+                self.spawn_image_upload(conv_id.to_string(), message_id.to_vec(), bytes)
+            }
+            OutboxEntry::Text(text) => {
+                self.start_text_send(conv_id.to_string(), message_id.to_vec(), text)
+            }
+        }
         Ok(())
+    }
+
+    /// The selected message, if `retry_send` can act on it.
+    pub fn selected_retryable(&self) -> Option<&DisplayMessage> {
+        let msg = self.messages.get(self.selected_message?)?;
+        let id = msg.message_id.as_deref()?;
+        (msg.send_failed.is_some() && self.outbox.contains(id)).then_some(msg)
+    }
+
+    /// Mark an unsent row failed in storage and on screen.
+    fn mark_send_failed(&mut self, conv_id: &str, message_id: &[u8], reason: &str) {
+        let mut content = None;
+        let found = self.keys.update_message_by_id(conv_id, message_id, |m| {
+            if m.rkey == "pending" {
+                m.mark_send_failed(reason);
+            }
+            content = Some((m.content.clone(), m.send_failed.clone()));
+        });
+        if let Err(e) = found {
+            self.debug_log.log(&format!("send: failed to mark row failed: {e}"));
+        }
+        let Some((content, send_failed)) = content else { return };
+        if let Some(dm) = self
+            .messages
+            .iter_mut()
+            .find(|m| m.message_id.as_deref() == Some(message_id))
+        {
+            dm.content = content;
+            dm.send_failed = send_failed;
+            dm.image_loading = false;
+        }
+    }
+
+    /// Mark every unsent row failed. Called once when a long-running
+    /// front end starts: send tasks do not survive the process, so any row
+    /// still unsent now has nothing working on it.
+    pub fn fail_orphaned_sends(&mut self) {
+        let Ok(groups) = self.keys.list_groups() else { return };
+        for conv_id in groups {
+            match self.keys.fail_unsent_messages(&conv_id, "interrupted before it was sent") {
+                Ok(ids) if !ids.is_empty() => self.debug_log.log(&format!(
+                    "startup: marked {} unsent message(s) failed in conv {}",
+                    ids.len(),
+                    short_hex_str(&conv_id)
+                )),
+                Ok(_) => {}
+                Err(e) => self.debug_log.log(&format!(
+                    "startup: failed to sweep unsent messages in conv {}: {e}",
+                    short_hex_str(&conv_id)
+                )),
+            }
+        }
     }
 
     /// TUI entry point: read the file at `path` then call [`send_image_bytes_nonblocking`].
@@ -2101,33 +2719,34 @@ impl App {
         let UploadedBlob { cid, key, ciphertext_hash, ciphertext_size, content_hash } = blob;
         let ImageMeta { width, height, thumbhash, mime } = image;
 
+        let fail = |app: &mut Self, error: String| {
+            let _ = app.bg_tx.send(BgEvent::SendFailed {
+                conv_id: conv_id.clone(),
+                message_id: Some(pending_message_id.clone()),
+                error,
+            });
+        };
+
         let Some(client) = self.client.as_ref() else {
-            self.set_error("image uploaded but client is gone".to_string());
-            return;
+            return fail(self, "image uploaded but client is gone".to_string());
         };
 
         let uri = format!("at://{}/{}", client.did(), cid);
 
         let key_arr: [u8; 32] = match key.try_into() {
             Ok(k) => k,
-            Err(_) => {
-                self.set_error("image blob key has wrong length".to_string());
-                return;
-            }
+            Err(_) => return fail(self, "image blob key has wrong length".to_string()),
         };
 
         let external = match ExternalBlob::new(
-            uri,
+            uri.clone(),
             key_arr.to_vec(),
             ciphertext_hash.clone(),
             ciphertext_size,
             content_hash.clone(),
         ) {
             Ok(e) => e,
-            Err(e) => {
-                self.set_error(format!("failed to build ExternalBlob for image: {e}"));
-                return;
-            }
+            Err(e) => return fail(self, format!("failed to build ExternalBlob for image: {e}")),
         };
 
         let payload = MessagePayload::Image(MediaMessage {
@@ -2140,32 +2759,34 @@ impl App {
 
         let group_id = match hex::decode(&conv_id) {
             Ok(id) => id,
-            Err(e) => {
-                self.set_error(format!("invalid conv_id in ImageUploaded: {e}"));
-                return;
-            }
+            Err(e) => return fail(self, format!("invalid conv_id in ImageUploaded: {e}")),
         };
 
         let key_bundle = match self.keys.load_identity_key() {
             Ok(k) => k,
-            Err(e) => {
-                self.set_error(format!("failed to load identity key for image: {e}"));
-                return;
-            }
+            Err(e) => return fail(self, format!("failed to load identity key for image: {e}")),
         };
 
         let current_epoch = self.mls.get_group_epoch(&group_id).ok().flatten().unwrap_or(1);
-        let event = Event::message(group_id.clone(), current_epoch, &payload);
+        let mut event = Event::message(group_id.clone(), current_epoch, &payload);
+        // Publish under the id the optimistic row already carries, rather
+        // than the fresh one `Event::message` mints. That id is the
+        // message's identity from the moment the user hit send, and it is
+        // what `fixup_pending_rkey_by_message_id` matches on when the
+        // publish returns. Mint a new one and the match fails, the row
+        // keeps its "pending" rkey forever, and every sync skips it —
+        // meaning a device never sends anyone the images it took.
+        event.message_id = Some(pending_message_id.clone());
 
         let encrypted = match self.mls.encrypt_event(&group_id, &key_bundle, &event) {
             Ok(e) => e,
-            Err(e) => {
-                self.set_error(format!("MLS encrypt failed for image: {e}"));
-                return;
-            }
+            Err(e) => return fail(self, format!("MLS encrypt failed for image: {e}")),
         };
+        self.debug_log.log(&format!(
+            "send_image: encrypted id={} epoch={current_epoch}",
+            short_hex(&pending_message_id)
+        ));
 
-        self.own_published_tags.insert(encrypted.tag);
         if let Err(e) = self.save_mls_state() {
             self.debug_log
                 .log(&format!("image_uploaded: failed to save MLS state: {e}"));
@@ -2175,39 +2796,34 @@ impl App {
                 .log(&format!("image_uploaded: failed to store group state: {e}"));
         }
 
-        // Decode ThumbHash for placeholder rendering and update the pending message.
+        // Record the final display string and full blob metadata so the
+        // /image endpoint can fetch and decrypt later. Written whether or
+        // not the conversation is on screen.
         let display_content = format!("[image {mime} {width}×{height}]");
+        let stored = self.keys.update_message_by_id(&conv_id, &pending_message_id, |m| {
+            m.content = display_content.clone();
+            m.blob_uri = Some(uri);
+            m.blob_key = Some(key_arr.to_vec());
+            m.blob_ciphertext_hash = Some(ciphertext_hash);
+            m.blob_ciphertext_size = Some(ciphertext_size);
+            m.blob_content_hash = Some(content_hash);
+            m.blob_mime = Some(mime.clone());
+            m.blob_width = Some(width);
+            m.blob_height = Some(height);
+            m.blob_thumbhash = Some(thumbhash.clone());
+        });
+        if let Err(e) = stored {
+            self.debug_log
+                .log(&format!("image_uploaded: failed to store blob metadata: {e}"));
+        }
         if let Some(msg) = self
             .messages
             .iter_mut()
             .rev()
             .find(|m| m.message_id.as_ref() == Some(&pending_message_id))
         {
-            msg.content = display_content.clone();
+            msg.content = display_content;
             msg.image_loading = false;
-            // Update the locally stored entry with the final display string and
-            // full blob metadata so the /image endpoint can fetch and decrypt later.
-            let blob_uri_str = format!("at://{}/{}", client.did(), cid);
-            let _ = self.keys.append_message(
-                &conv_id,
-                crate::keystore::StoredMessage {
-                    rkey: "pending".to_string(),
-                    content: display_content,
-                    timestamp: msg.timestamp,
-                    is_own: true,
-                    message_id: Some(pending_message_id.clone()),
-                    sender_did: msg.sender_did.clone(),
-                    sender_device: msg.sender_device.clone(),
-                    blob_uri: Some(blob_uri_str),
-                    blob_key: Some(key_arr.to_vec()),
-                    blob_ciphertext_hash: Some(ciphertext_hash),
-                    blob_ciphertext_size: Some(ciphertext_size),
-                    blob_content_hash: Some(content_hash),
-                    blob_mime: Some(mime.clone()),
-                    blob_width: Some(width),
-                    blob_height: Some(height),
-                },
-            );
             if let Some(thumb_img) = image_processing::decode_thumbhash(&thumbhash) {
                 msg.image_proto = Some(ImageProto(self.picker.new_resize_protocol(thumb_img)));
             }
@@ -2227,7 +2843,11 @@ impl App {
                     let _ = tx.send(BgEvent::SendPublished { uri, conv_id, tag, ciphertext, message_id: msg_id });
                 }
                 Err(e) => {
-                    let _ = tx.send(BgEvent::SendFailed(format!("{e}")));
+                    let _ = tx.send(BgEvent::SendFailed {
+                        conv_id,
+                        message_id: Some(pending_message_id),
+                        error: format!("publish failed: {e}"),
+                    });
                 }
             }
         });
@@ -2423,7 +3043,9 @@ impl App {
                     message_id: decrypted.event.message_id.clone(),
                     sender_did: sender_did.clone(),
                     sender_device: sender_device.clone(),
-                    blob_uri: None, blob_key: None, blob_ciphertext_hash: None, blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None, blob_width: None, blob_height: None,
+                    blob_uri: None, blob_key: None, blob_ciphertext_hash: None, blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None, blob_width: None, blob_height: None, blob_thumbhash: None,
+                    reactions: Vec::new(),
+                    send_failed: None,
                 };
                 match self.keys.append_message(conv_id, stored_msg) {
                     Ok(false) => {
@@ -2452,11 +3074,9 @@ impl App {
                         image_proto: None,
                         image_loading: false,
                         rkey: rkey.to_string(),
+                        send_failed: None,
                     };
-                    let pos = self
-                        .messages
-                        .partition_point(|m| m.rkey <= dm.rkey);
-                    self.messages.insert(pos, dm);
+                    self.insert_message_ordered(dm);
                 } else if let Some(idx) = conv_idx {
                     if let Some(conv) = self.conversations.get_mut(idx) {
                         conv.unread += 1;
@@ -2470,9 +3090,8 @@ impl App {
                 // Epoch advanced — regenerate candidate tags
                 if let Some(idx) = conv_idx {
                     let group_id = hex::decode(conv_id).unwrap_or_default();
-                    self.populate_candidate_tags(conv_id, &group_id);
+                    self.register_group_tags(conv_id, &group_id);
                     self.conversations[idx].current_epoch += 1;
-                    self.schedule_watch_tags_update();
                 }
                 self.keys.store_group_state(conv_id, &decrypted.new_group_state).ok();
             }
@@ -2524,10 +3143,31 @@ impl App {
 
         self.conversations.clear();
         for group_id in group_ids {
-            let meta = self.keys.load_group_metadata(&group_id).unwrap_or_default();
+            let mut meta = self.keys.load_group_metadata(&group_id).unwrap_or_default();
+            let group_id_bytes = hex::decode(&group_id).unwrap_or_default();
+
+            // Populate member_device_ids from current MLS membership.
+            // This fills the map on first run (migration) and keeps it
+            // current for members still in the group.
+            if let Ok(members) = self.mls.get_group_members(&group_id_bytes) {
+                let mut changed = false;
+                for (_leaf_idx, cred) in &members {
+                    if let Some(c) = cred {
+                        let did = c.did().to_string();
+                        let dev = c.device_id().to_vec();
+                        if meta.member_device_ids.get(&did) != Some(&dev) {
+                            meta.member_device_ids.insert(did, dev);
+                            changed = true;
+                        }
+                    }
+                }
+                if changed {
+                    let _ = self.keys.store_group_metadata(&group_id, &meta);
+                }
+            }
+
             // Ring and DeviceCoord groups are infrastructure — hide from the conversation list
             // but still populate their candidate tags for event routing.
-            let group_id_bytes = hex::decode(&group_id).unwrap_or_default();
             if meta.kind != GroupKind::User {
                 self.populate_candidate_tags(&group_id, &group_id_bytes);
                 continue;
@@ -2535,11 +3175,11 @@ impl App {
             let (participant_dids, participant_handles) =
                 (meta.participant_dids, meta.participant_handles);
 
-            let current_epoch = if let Ok(Some(epoch)) = self.mls.get_group_epoch(&group_id_bytes) {
-                epoch
-            } else {
-                1
-            };
+            // One lookup answers both questions: a group with no local
+            // MLS state is one we hold history for but are not yet in.
+            let local_epoch = self.mls.get_group_epoch(&group_id_bytes).ok().flatten();
+            let is_member = local_epoch.is_some();
+            let current_epoch = local_epoch.unwrap_or(1);
 
             self.populate_candidate_tags(&group_id, &group_id_bytes);
 
@@ -2550,6 +3190,7 @@ impl App {
                 participant_handles,
                 current_epoch,
                 unread: 0,
+                is_member,
             });
         }
     }
@@ -2559,7 +3200,16 @@ impl App {
     /// Generates tags for each member device using the GAP_LIMIT window.
     /// Tags map back to the hex-encoded group_id for routing.
     fn populate_candidate_tags(&mut self, conv_id: &str, group_id: &[u8]) {
-        match self.mls.populate_candidate_tags(group_id) {
+        let extras = self.extra_members_for_tags(conv_id);
+        let extra_refs: Vec<(&str, &[u8; 16])> = extras
+            .iter()
+            .filter_map(|(did, dev)| {
+                <&[u8; 16]>::try_from(dev.as_slice())
+                    .ok()
+                    .map(|d| (did.as_str(), d))
+            })
+            .collect();
+        match self.mls.populate_candidate_tags(group_id, &extra_refs) {
             Ok(tags) => {
                 for tag in tags {
                     self.tag_map.insert(tag, conv_id.to_string());
@@ -2572,10 +3222,46 @@ impl App {
         }
     }
 
+    /// Populate a group's candidate tags and bring the Drawbridge watch list
+    /// up to date with them.
+    fn register_group_tags(&mut self, conv_id: &str, group_id: &[u8]) {
+        self.populate_candidate_tags(conv_id, group_id);
+        self.schedule_watch_tags_update();
+    }
+
+    /// Advance the scanning window for a matched tag and register new tags.
+    fn note_tag_seen(&mut self, conv_id: &str, tag: &[u8; 16]) {
+        let added = self.mls.advance_scan_window(tag);
+        if added.is_empty() {
+            return;
+        }
+        for t in added {
+            self.tag_map.insert(t, conv_id.to_string());
+        }
+        self.schedule_watch_tags_update();
+    }
+
+    /// Collect (DID, device_id) pairs for pending ex-members whose device_ids
+    /// are known from the persisted member_device_ids map.
+    fn extra_members_for_tags(&self, conv_id: &str) -> Vec<(String, Vec<u8>)> {
+        let meta = match self.keys.load_group_metadata(conv_id) {
+            Ok(m) => m,
+            Err(_) => return Vec::new(),
+        };
+        meta.pending_ex_members
+            .iter()
+            .filter_map(|did| {
+                meta.member_device_ids
+                    .get(did)
+                    .map(|dev| (did.clone(), dev.clone()))
+            })
+            .collect()
+    }
+
     /// Process poll results on the main thread (decrypt, update state).
     fn process_poll_results(
         &mut self,
-        participant_events: Vec<(Vec<usize>, moat_atproto::EventRecord, String)>,
+        participant_events: Vec<(moat_atproto::EventRecord, String)>,
         mut watched_events: Vec<(String, moat_atproto::EventRecord)>,
         new_rkeys: Vec<(String, String)>,
     ) -> PollStats {
@@ -2587,77 +3273,74 @@ impl App {
             .map(|c| c.did().to_string())
             .unwrap_or_default();
 
-        // Combine new events with previously unprocessed cached events.
-        // Sort by rkey so events are processed in chronological order.
-        let cached_count = self.unprocessed_events.len();
-        let mut all_events = std::mem::take(&mut self.unprocessed_events);
-        let new_count = participant_events.len();
-        all_events.extend(participant_events);
-        all_events.sort_by(|a, b| a.1.rkey.cmp(&b.1.rkey));
-
-        if !all_events.is_empty() {
+        // Queue fetched events; the inbox returns them, and any woken parked
+        // events, in rkey order.
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let fetched = participant_events.len();
+        for (record, source_did) in participant_events {
+            self.mls.inbox_push(moat_core::InboxEvent {
+                source_did,
+                rkey: record.rkey,
+                author_did: record.author_did,
+                tag: record.tag,
+                ciphertext: record.ciphertext,
+                created_at_ms: record.created_at.timestamp_millis(),
+            });
+        }
+        if fetched > 0 {
             self.debug_log.log(&format!(
-                "poll: processing {} events ({} new, {} cached)",
-                all_events.len(),
-                new_count,
-                cached_count,
+                "poll: processing {fetched} fetched events ({} parked)",
+                self.mls.inbox_parked_len(),
             ));
         }
 
-        // Process events in a loop: commits may advance epochs and unlock
-        // previously unprocessable events (new tags or new decryption keys).
-        loop {
-            let mut made_progress = false;
-            let mut still_unprocessed = Vec::new();
-
-            for (conv_indices, event_record, did) in all_events {
-                if self.own_published_tags.contains(&event_record.tag) {
-                    continue;
-                }
-                let tag_hex: String =
-                    event_record.tag.iter().map(|b| format!("{b:02x}")).collect();
-
-                if self.tag_map.contains_key(&event_record.tag) {
-                    self.debug_log.log(&format!(
-                        "poll: tag matched: {} rkey={}",
-                        tag_hex, event_record.rkey
-                    ));
-                    match self.process_matched_event(&conv_indices, &event_record, &my_did) {
-                        Some(true) => {
-                            new_messages += 1;
-                            made_progress = true;
-                        }
-                        Some(false) => {
-                            made_progress = true;
-                        }
-                        None => {
-                            // Decrypt failed — cache for retry
-                            still_unprocessed.push((conv_indices, event_record, did));
-                        }
-                    }
-                } else {
-                    // Unknown tag — try as welcome
-                    if self.try_process_welcome_sync(
-                        &event_record.ciphertext,
-                        &event_record.author_did,
-                        event_record.tag,
-                    ) {
-                        made_progress = true;
-                    } else {
-                        // Neither tag match nor welcome — cache for retry
-                        still_unprocessed.push((conv_indices, event_record, did));
-                    }
-                }
-            }
-
-            all_events = still_unprocessed;
-            if !made_progress {
-                break;
+        fn event_record(event: moat_core::InboxEvent) -> moat_atproto::EventRecord {
+            moat_atproto::EventRecord {
+                uri: String::new(),
+                rkey: event.rkey,
+                author_did: event.author_did,
+                v: 1,
+                tag: event.tag,
+                ciphertext: event.ciphertext,
+                created_at: chrono::DateTime::from_timestamp_millis(event.created_at_ms)
+                    .unwrap_or_default(),
             }
         }
 
-        // Store remaining unprocessed events for next poll cycle
-        self.unprocessed_events = all_events;
+        // Processing a commit or Welcome generates tags, waking parked events.
+        while let Some(event) = self.mls.inbox_pop_ready() {
+            if self.tag_map.contains_key(&event.tag) {
+                let tag_hex: String = event.tag.iter().map(|b| format!("{b:02x}")).collect();
+                self.debug_log
+                    .log(&format!("poll: tag matched: {} rkey={}", tag_hex, event.rkey));
+                let record = event_record(event);
+                match self.process_matched_event(&record, &my_did) {
+                    Ok(true) => new_messages += 1,
+                    Ok(false) => {}
+                    Err(e) => self
+                        .debug_log
+                        .log(&format!("poll: dropping event rkey={}: {e}", record.rkey)),
+                }
+            } else if self.try_process_welcome_sync(&event.ciphertext, &event.author_did, event.tag) {
+                // Joining generated tags, waking parked events.
+            } else if event.source_did != my_did {
+                // Park until its tag exists. Skip our own PDS: our stealth
+                // payloads never decrypt here.
+                self.mls.inbox_park(event, now_ms);
+            }
+        }
+
+        let expired = self.mls.inbox_expire(now_ms);
+        if expired > 0 {
+            self.debug_log.log(&format!(
+                "poll: dropped {expired} parked event(s) that never became readable",
+            ));
+        }
+        // Saved before the cursors move past the events.
+        if let Err(e) = self.keys.store_parked_events(&self.mls.export_parked_events()) {
+            self.debug_log
+                .log(&format!("poll: failed to persist parked events: {e}"));
+        }
 
         // Sort watched events by rkey (ascending) so Welcomes are processed
         // before derived-tag events.
@@ -2675,15 +3358,8 @@ impl App {
             let tag_hex: String = event_record.tag.iter().map(|b| format!("{b:02x}")).collect();
             if self.tag_map.contains_key(&event_record.tag) {
                 // Tag matched a known conversation — decrypt instead of trying as Welcome.
-                let conv_indices: Vec<usize> = self
-                    .conversations
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, c)| c.participant_dids.contains(&did))
-                    .map(|(i, _)| i)
-                    .collect();
-                if !conv_indices.is_empty() {
-                    reprocess.push((conv_indices, event_record, did));
+                if self.conversations.iter().any(|c| c.participant_dids.contains(&did)) {
+                    reprocess.push(event_record);
                 }
                 continue;
             }
@@ -2704,11 +3380,8 @@ impl App {
         }
         // Decrypt watched events that matched the tag_map (e.g. events
         // arriving in the same batch as the Welcome that created the conversation).
-        for (conv_indices, event_record, _did) in reprocess {
-            if self.own_published_tags.contains(&event_record.tag) {
-                continue;
-            }
-            if let Some(true) = self.process_matched_event(&conv_indices, &event_record, &my_did) { new_messages += 1; }
+        for event_record in reprocess {
+            if let Ok(true) = self.process_matched_event(&event_record, &my_did) { new_messages += 1; }
         }
 
         // Save MLS state if modified
@@ -2730,6 +3403,25 @@ impl App {
             }
         }
 
+        // The ex-members this cycle asked for events have now been swept:
+        // their PDS was fetched after they left, so everything they could
+        // ever have published to the group has been seen. Stop asking.
+        //
+        // Only the DIDs captured at fetch time are cleared. Someone whose
+        // departure was discovered while processing *these* events is not
+        // among them, and stays pending for the next cycle — which is the
+        // cycle that will actually fetch from them.
+        for (conv_id, did) in std::mem::take(&mut self.swept_ex_members) {
+            if let Ok(mut meta) = self.keys.load_group_metadata(&conv_id) {
+                if let Some(pos) = meta.pending_ex_members.iter().position(|d| *d == did) {
+                    meta.pending_ex_members.remove(pos);
+                    let _ = self.keys.store_group_metadata(&conv_id, &meta);
+                    self.debug_log
+                        .log(&format!("poll: swept {did} for {conv_id}; no longer polling them"));
+                }
+            }
+        }
+
         PollStats {
             new_messages,
             new_conversations: self.conversations.len().saturating_sub(conv_count_before),
@@ -2737,28 +3429,27 @@ impl App {
     }
 
     /// Decrypt and handle a single event whose tag matched the tag_map.
-    /// Returns `Some(true)` if a new message was stored, `Some(false)` if
-    /// processed successfully but no message (commit/reaction), or `None`
-    /// if decryption failed (caller should cache for retry).
+    /// Returns `Ok(true)` if a new message was stored, `Ok(false)` if
+    /// processed successfully but no message (commit/reaction), or the
+    /// decryption error.
     fn process_matched_event(
         &mut self,
-        conv_indices: &[usize],
         event_record: &moat_atproto::EventRecord,
         my_did: &str,
-    ) -> Option<bool> {
+    ) -> std::result::Result<bool, moat_core::Error> {
         let conv_id = match self.tag_map.get(&event_record.tag).cloned() {
             Some(id) => id,
-            None => return Some(false),
+            None => return Ok(false),
         };
         let group_id = match hex::decode(&conv_id) {
             Ok(id) => id,
-            Err(_) => return Some(false),
+            Err(_) => return Ok(false),
         };
 
         let mut msg_stored = false;
         match self.mls.decrypt_event(&group_id, &event_record.ciphertext) {
             Ok(outcome) => {
-                self.mls.mark_tag_seen(&event_record.tag);
+                self.note_tag_seen(&conv_id, &event_record.tag);
                 for w in outcome.warnings() {
                     self.debug_log
                         .log(&format!("poll: transcript warning: {}", w));
@@ -2773,7 +3464,7 @@ impl App {
                         .log(&format!("poll: failed to store group state: {}", e));
                 }
 
-                let conv_idx = conv_indices.first().copied();
+                let conv_idx = self.conversations.iter().position(|c| c.id == conv_id);
 
                 match decrypted.event.kind {
                     EventKind::Message(_) => {
@@ -2791,7 +3482,7 @@ impl App {
                             sender_did.as_ref().is_some_and(|did| did == my_did);
 
                         // Extract ExternalBlob metadata for image messages (for HTTP download).
-                        let (blob_uri, blob_key, blob_ciphertext_hash, blob_ciphertext_size, blob_content_hash, blob_mime, blob_width, blob_height) =
+                        let (blob_uri, blob_key, blob_ciphertext_hash, blob_ciphertext_size, blob_content_hash, blob_mime, blob_width, blob_height, blob_thumbhash) =
                             if let Some(moat_core::ParsedMessagePayload::Structured(
                                 moat_core::MessagePayload::Image(ref m),
                             )) = parsed
@@ -2805,9 +3496,16 @@ impl App {
                                     m.mime.clone(),
                                     m.width,
                                     m.height,
+                                    // Kept rather than only decoded for
+                                    // display: a device receiving this
+                                    // message through history sync cannot
+                                    // recover it from the PDS, because the
+                                    // event carrying it predates its
+                                    // membership.
+                                    Some(m.preview_thumbhash.clone()),
                                 )
                             } else {
-                                (None, None, None, None, None, None, None, None)
+                                (None, None, None, None, None, None, None, None, None)
                             };
 
                         // Persist received message locally
@@ -2827,6 +3525,9 @@ impl App {
                             blob_mime,
                             blob_width,
                             blob_height,
+                            blob_thumbhash,
+                            reactions: Vec::new(),
+                            send_failed: None,
                         };
                         match self.keys.append_message(&conv_id, stored_msg) {
                             Err(e) => {
@@ -2835,22 +3536,10 @@ impl App {
                             }
                             Ok(false) => {
                                 // Duplicate rkey — already stored, skip in-memory insert.
-                                return Some(msg_stored);
+                                return Ok(msg_stored);
                             }
                             Ok(true) => {
                                 msg_stored = true;
-                                // Update conversation digest for sync comparison.
-                                if let Some(mid) = &decrypted.event.message_id {
-                                    if mid.len() == 16 {
-                                        let mut arr = [0u8; 16];
-                                        arr.copy_from_slice(mid);
-                                        let _ = self.mls.append_to_digest(
-                                            &group_id,
-                                            &event_record.rkey,
-                                            &arr,
-                                        );
-                                    }
-                                }
                             }
                         }
 
@@ -2870,11 +3559,9 @@ impl App {
                                 image_proto: None,
                                 image_loading: false,
                                 rkey: event_record.rkey.clone(),
+                                send_failed: None,
                             };
-                            let pos = self
-                                .messages
-                                .partition_point(|m| m.rkey <= dm.rkey);
-                            self.messages.insert(pos, dm);
+                            self.insert_message_ordered(dm);
                         } else if let Some(idx) = conv_idx {
                             if let Some(conv) = self.conversations.get_mut(idx) {
                                 conv.unread += 1;
@@ -2984,6 +3671,47 @@ impl App {
                                     conv.participant_dids = member_dids.clone();
                                     conv.participant_handles = new_handles.clone();
                                 }
+                                // Anyone who just left still has messages
+                                // on their own PDS that this device may
+                                // never have fetched — it only ever asks
+                                // the DIDs in `participant_dids`, and this
+                                // assignment has just removed them from
+                                // it. Hold them for one sweep.
+                                //
+                                // Without this, a device offline while
+                                // someone joins, speaks and leaves handles
+                                // the Add and the Remove in a single
+                                // catch-up pass and never polls them at
+                                // all. See MULTI_DEVICE.md, "Catch-Up
+                                // Across Membership Changes".
+                                let existing_meta = self
+                                    .keys
+                                    .load_group_metadata(&conv_id)
+                                    .unwrap_or_default();
+                                let mut pending_ex_members = existing_meta.pending_ex_members;
+                                let mut member_device_ids = existing_meta.member_device_ids;
+                                // Refresh device_ids for current members (captures newcomers)
+                                if let Ok(members) = self.mls.get_group_members(&group_id) {
+                                    for (_leaf_idx, cred) in &members {
+                                        if let Some(c) = cred {
+                                            member_device_ids.insert(
+                                                c.did().to_string(),
+                                                c.device_id().to_vec(),
+                                            );
+                                        }
+                                    }
+                                }
+                                for departed in &old_dids {
+                                    if !member_dids.contains(departed)
+                                        && !pending_ex_members.contains(departed)
+                                    {
+                                        self.debug_log.log(&format!(
+                                            "poll: {departed} left {conv_id}; holding for one sweep"
+                                        ));
+                                        pending_ex_members.push(departed.clone());
+                                    }
+                                }
+
                                 // Update stored metadata
                                 let _ = self.keys.store_group_metadata(
                                     &conv_id,
@@ -2991,6 +3719,8 @@ impl App {
                                         participant_dids: member_dids,
                                         participant_handles: new_handles,
                                         kind: GroupKind::User,
+                                        pending_ex_members,
+                                        member_device_ids,
                                     },
                                 );
                                 // Fetch relay configs for any new members
@@ -2999,24 +3729,31 @@ impl App {
                         }
 
                         // Regenerate candidate tags for the new epoch
-                        self.populate_candidate_tags(&conv_id, &group_id);
-
-                        // Update watched tags on own Drawbridge for the new epoch
-                        self.schedule_watch_tags_update();
-
-                        // Signal that the next message in this conversation should anchor.
-                        self.mls.mark_digest_epoch_boundary(&group_id);
-
-                    }
-                    EventKind::Coord => {
-                        // Route coord messages to the ring driver (pure state only;
-                        // any outgoing network responses are sent on the next ring tick).
-                        self.handle_coord_msg_sync(&group_id, &decrypted.event.payload);
+                        self.register_group_tags(&conv_id, &group_id);
                     }
                     EventKind::Modifier(ModifierKind::Reaction) => {
                         if let Some(rp) = decrypted.event.reaction_payload() {
                             let sender_did =
                                 decrypted.sender.map(|s| s.did).unwrap_or_default();
+                            // Persist first, and unconditionally. Storage
+                            // is what history sync serves from, and a
+                            // device receiving this message later cannot
+                            // rebuild the reaction from the PDS: the event
+                            // carrying it predates that device's
+                            // membership. Doing this only for the open
+                            // conversation also lost reactions on every
+                            // other one outright.
+                            if let Err(e) = self.keys.toggle_reaction(
+                                &conv_id,
+                                &rp.target_message_id,
+                                &rp.emoji,
+                                &sender_did,
+                            ) {
+                                self.debug_log
+                                    .log(&format!("poll: failed to store reaction: {e}"));
+                            }
+                            // Mirror it into the display list when the
+                            // conversation is on screen.
                             if self.active_conversation == conv_idx {
                                 if let Some(msg) = self.messages.iter_mut().find(|m| {
                                     m.message_id.as_ref() == Some(&rp.target_message_id)
@@ -3035,16 +3772,46 @@ impl App {
                             }
                         }
                     }
+                    EventKind::RingMsg => {
+                        // Ring application traffic. The sender's identity is
+                        // whatever MLS says it is — the payload declares no
+                        // device of its own.
+                        let sender_name = decrypted
+                            .sender
+                            .as_ref()
+                            .map(|s| s.device_name.clone())
+                            .unwrap_or_else(|| "an unnamed device".to_string());
+                        let sender_did = decrypted.sender.as_ref().map(|s| s.did.clone());
+                        if sender_did.as_deref() != Some(my_did) {
+                            self.debug_log.log(
+                                "poll: ignoring a ring message whose sender is not us",
+                            );
+                        } else {
+                            match moat_core::decode_ring_msg(&decrypted.event.payload) {
+                                Ok(msg) => {
+                                    let own = *self.mls.device_id();
+                                    let now_ms = chrono::Utc::now().timestamp_millis();
+                                    let cmds = self
+                                        .pair_channel
+                                        .on_ring_msg(msg, sender_name, &own, now_ms);
+                                    self.apply_pair_commands(cmds);
+                                }
+                                Err(e) => self
+                                    .debug_log
+                                    .log(&format!("poll: undecodable ring message: {e}")),
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
             Err(e) => {
                 self.debug_log
                     .log(&format!("poll: decryption failed: {}", e));
-                return None;
+                return Err(e);
             }
         }
-        Some(msg_stored)
+        Ok(msg_stored)
     }
 
     /// Synchronous welcome processing (no handle resolution — uses DID as name).
@@ -3097,20 +3864,17 @@ impl App {
             .filter(|d| d != &my_did)
             .collect();
 
-        // A group where all members share our DID is a device-coordination group,
-        // not a user conversation.  Register its tags for routing but don't surface it.
+        // A group where all members share our DID cannot legitimately arrive
+        // via this cross-user stealth path: ring membership changes ride the
+        // pairing channel or `MoatSession::add_member` directly. Register
+        // tags so we don't lose track of an already-joined MLS group, but
+        // don't surface a conversation.
         if participant_dids.is_empty() {
-            let _ = self.keys.store_group_metadata(
-                &conv_id,
-                &GroupMetadata {
-                    participant_dids: vec![],
-                    participant_handles: vec![],
-                    kind: GroupKind::DeviceCoord,
-                },
-            );
-            self.populate_candidate_tags(&conv_id, &group_id);
+            self.register_group_tags(&conv_id, &group_id);
             self.replenish_key_package();
-            self.debug_log.log("process_welcome: joined coord group (same-DID), skipping conversation");
+            self.debug_log.log(
+                "process_welcome: same-DID Welcome via stealth is unexpected (registered tags only)",
+            );
             return true;
         }
 
@@ -3123,6 +3887,8 @@ impl App {
                 participant_dids: participant_dids.clone(),
                 participant_handles: participant_handles.clone(),
                 kind: GroupKind::User,
+                pending_ex_members: Vec::new(),
+                member_device_ids: Default::default(),
             },
         );
 
@@ -3133,9 +3899,10 @@ impl App {
             participant_handles,
             current_epoch: 1,
             unread: 1,
+            is_member: true,
         });
 
-        self.populate_candidate_tags(&conv_id, &group_id);
+        self.register_group_tags(&conv_id, &group_id);
 
         // Resolve DID → handle in background for each participant
         if let Some(conv) = self.conversations.last() {
@@ -3144,8 +3911,6 @@ impl App {
 
         // Fetch relay configs for the new conversation's partners
         self.fetch_partner_drawbridge_configs(&conv_id);
-        // Register new conversation tags on own Drawbridge relay
-        self.schedule_watch_tags_update();
 
         self.debug_log
             .log("process_welcome: successfully joined group");
@@ -3294,19 +4059,20 @@ impl App {
             // Store private key locally
             self.keys.store_stealth_key(&stealth_privkey)?;
 
-            // Publish public key to PDS with device name
+            // Publish public key to PDS with device name and device id
             self.set_status("Publishing stealth address...".to_string());
             let device_name = self.keys.get_or_create_device_name()?;
+            let device_id = *self.mls.device_id();
             client
-                .publish_stealth_address(&stealth_pubkey, &device_name)
+                .publish_stealth_address(&stealth_pubkey, &device_name, &device_id)
                 .await?;
         }
 
         let did = client.did().to_string();
         self.client = Some(client);
-        self.status_message = None;
+        self.clear_status();
         self.logged_in_handle = Some(handle);
-        self.focus = Focus::Conversations;
+        self.view = View::Session(Screen::Conversations);
 
         self.load_conversations_sync();
 
@@ -3362,13 +4128,17 @@ impl App {
             KeyCode::Char('q') => return Ok(true),
             KeyCode::Char('n') => {
                 // Switch to new conversation input mode
-                self.focus = Focus::NewConversation;
+                self.overlay = Overlay::NewConversation;
                 self.new_conv_handle.clear();
             }
             KeyCode::Char('w') => {
                 // Switch to watch handle input mode
-                self.focus = Focus::WatchHandle;
+                self.overlay = Overlay::WatchHandle;
                 self.watch_handle_input.clear();
+            }
+            KeyCode::Char('s') => {
+                // Safe to press twice: the Status screen leaves `s` unbound.
+                self.show_screen(Screen::Status);
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 if !self.conversations.is_empty() {
@@ -3388,13 +4158,9 @@ impl App {
                     if let Some(conv) = self.conversations.get(idx) {
                         self.resolve_conversation_handle(conv);
                     }
-                    self.load_messages()?;
-                    self.message_scroll = 0;
-                    self.focus = Focus::Input;
+                    self.open_messages()?;
+                    self.show_screen(Screen::Chat);
                 }
-            }
-            KeyCode::Tab => {
-                self.focus = Focus::Messages;
             }
             _ => {}
         }
@@ -3416,7 +4182,7 @@ impl App {
                 self.new_conv_handle.pop();
             }
             KeyCode::Esc => {
-                self.focus = Focus::Conversations;
+                self.overlay = Overlay::None;
                 self.new_conv_handle.clear();
             }
             _ => {}
@@ -3439,8 +4205,173 @@ impl App {
                 self.watch_handle_input.pop();
             }
             KeyCode::Esc => {
-                self.focus = Focus::Conversations;
+                self.overlay = Overlay::None;
                 self.watch_handle_input.clear();
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    /// New device: showing the pairing code (rendered from `ui_state()` —
+    /// see `draw_pair_show_code_popup`). Any key dismisses once terminal
+    /// (`Done` or `Failed`); Esc while still showing the code aborts the
+    /// pairing via `cancel()`.
+    fn handle_pair_show_code_key(&mut self, key: KeyEvent) -> Result<bool> {
+        let terminal = self.pairing_is_terminal();
+        match key.code {
+            KeyCode::Esc => {
+                if !terminal {
+                    let _ = self.api_pair_cancel();
+                }
+                self.overlay = Overlay::None;
+            }
+            _ if terminal => {
+                self.overlay = Overlay::None;
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    /// Existing device: text-entry for a pairing code.
+    fn handle_pair_enter_code_key(&mut self, key: KeyEvent) -> Result<bool> {
+        match key.code {
+            KeyCode::Enter => {
+                if !self.pair_enter_code_input.is_empty() {
+                    let code = self.pair_enter_code_input.clone();
+                    match self.api_pair_confirm(&code) {
+                        Ok(()) => {
+                            self.pair_enter_code_input.clear();
+                            self.overlay = Overlay::None;
+                        }
+                        Err(e) => self.set_error(format!("pairing code rejected: {e}")),
+                    }
+                }
+            }
+            KeyCode::Char(c) => {
+                self.pair_enter_code_input.push(c);
+            }
+            KeyCode::Backspace => {
+                self.pair_enter_code_input.pop();
+            }
+            KeyCode::Esc => {
+                self.overlay = Overlay::None;
+                self.pair_enter_code_input.clear();
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    /// Existing device: confirmation screen naming the peer awaiting
+    /// approval (rendered from `ui_state()` — see `draw_pair_approve_popup`).
+    /// Enter/`y` approves; Esc/`n` rejects. Any key dismisses once terminal
+    /// — reached either by this key's own approve/reject, or by a
+    /// background failure since the prompt was shown (surfaced via
+    /// `ui_state()`'s `Failed` instead of a silent teardown).
+    fn handle_pair_approve_key(&mut self, key: KeyEvent) -> Result<bool> {
+        if self.pairing_is_terminal() {
+            self.overlay = Overlay::None;
+            return Ok(false);
+        }
+        match key.code {
+            KeyCode::Enter | KeyCode::Char('y') => {
+                // On failure, stay on this screen — `ui_state()` now shows
+                // `Failed { reason }`, dismissible by the next key press.
+                if self.approve_pending_pairing().is_ok() {
+                    self.overlay = Overlay::None;
+                }
+            }
+            KeyCode::Esc | KeyCode::Char('n') => {
+                let _ = self.api_pair_reject();
+                self.overlay = Overlay::None;
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    /// Each key is the first letter of what it does, which a screen can
+    /// afford because it owns its letters — `s` here is not the `s` on the
+    /// conversation list.
+    ///
+    /// Pairing and sync are bound here because this is the screen that
+    /// shows the devices they act on, and because the conversation list's
+    /// own keys then fit one footer row.
+    ///
+    /// Requesting from here rather than from a bare keystroke on the
+    /// conversation list is deliberate — this is the screen that then
+    /// *shows* what the request is doing, which a fire-and-forget key
+    /// press never did.
+    fn handle_status_key(&mut self, key: KeyEvent) -> Result<bool> {
+        match key.code {
+            KeyCode::Char('v') => {
+                // New device: request a pairing code and show it.
+                match self.api_pair_new() {
+                    Ok(_) => self.overlay = Overlay::PairShowCode,
+                    Err(e) => self.set_error(format!("Link this device failed: {e}")),
+                }
+            }
+            KeyCode::Char('e') => {
+                // Existing device: enter a pairing code shown elsewhere.
+                self.overlay = Overlay::PairEnterCode;
+                self.pair_enter_code_input.clear();
+            }
+            KeyCode::Char('g') => {
+                if let Err(e) = self.api_sync_request() {
+                    self.set_error(format!("Sync history failed: {e}"));
+                }
+            }
+            // Send history to the first other ring device. Pressing this is
+            // the approval; the recipient joins without a prompt.
+            KeyCode::Char('o') => {
+                let target = self
+                    .api_ring_devices()
+                    .into_iter()
+                    .find(|d| !d["is_self"].as_bool().unwrap_or(false))
+                    .and_then(|d| d["device_id"].as_str().map(str::to_string))
+                    .and_then(|hex_id| hex::decode(&hex_id).ok())
+                    .and_then(|b| <moat_core::DeviceId>::try_from(b.as_slice()).ok());
+                match target {
+                    Some(device_id) => {
+                        if let Err(e) = self.api_sync_offer(device_id) {
+                            self.set_error(format!("Send history failed: {e}"));
+                        }
+                    }
+                    None => self.set_error("No other linked device.".to_string()),
+                }
+            }
+            KeyCode::Esc => {
+                self.show_screen(Screen::Conversations);
+            }
+            KeyCode::Char('q') => return Ok(true),
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    /// Approval screen for a sibling's sync request: `y`/Enter sends this
+    /// device's history, `n`/Esc refuses. Refusing is local — the sibling
+    /// keeps waiting for another device.
+    fn handle_sync_approve_key(&mut self, key: KeyEvent) -> Result<bool> {
+        if !matches!(
+            self.sync_request_ui_state(),
+            SyncRequestUiState::AwaitingApproval { .. }
+        ) {
+            self.overlay = Overlay::None;
+            return Ok(false);
+        }
+        match key.code {
+            KeyCode::Enter | KeyCode::Char('y') => {
+                if let Err(e) = self.api_sync_accept() {
+                    self.set_error(format!("Send history failed: {e}"));
+                }
+                self.overlay = Overlay::None;
+            }
+            KeyCode::Esc | KeyCode::Char('n') => {
+                let _ = self.api_sync_decline();
+                self.overlay = Overlay::None;
             }
             _ => {}
         }
@@ -3461,8 +4392,8 @@ impl App {
         self.watched_dids.insert(did);
         let _ = self.keys.store_watched_dids(&self.watched_dids);
 
-        self.status_message = None;
-        self.focus = Focus::Conversations;
+        self.clear_status();
+        self.overlay = Overlay::None;
         self.watch_handle_input.clear();
 
         Ok(())
@@ -3492,10 +4423,11 @@ impl App {
         {
             // Switch to existing conversation instead of creating a duplicate
             self.active_conversation = Some(existing_idx);
-            self.load_messages()?;
-            self.focus = Focus::Input;
+            self.open_messages()?;
+            self.overlay = Overlay::None;
+            self.show_screen(Screen::Chat);
             self.new_conv_handle.clear();
-            self.status_message = None;
+            self.clear_status();
             self.set_status(format!(
                 "Switched to existing conversation with {}",
                 recipient_handle
@@ -3591,6 +4523,8 @@ impl App {
                 participant_dids: vec![recipient_did.clone()],
                 participant_handles: vec![recipient_handle.to_string()],
                 kind: GroupKind::User,
+                pending_ex_members: Vec::new(),
+                member_device_ids: Default::default(),
             },
         )?;
 
@@ -3602,27 +4536,28 @@ impl App {
             participant_handles: vec![recipient_handle.to_string()],
             current_epoch: 1, // Post-add epoch
             unread: 0,
+            is_member: true,
         });
 
         // 11. Register candidate tags for this conversation
-        self.populate_candidate_tags(&conv_id, &group_id);
+        self.register_group_tags(&conv_id, &group_id);
         self.debug_log.log(&format!(
             "start_conv: registered candidate tags for conv {}",
             &conv_id[..16]
         ));
 
-        // 12. Fetch partner relay configs and update watched tags
+        // 12. Fetch partner relay configs
         self.fetch_partner_drawbridge_configs(&conv_id);
-        self.schedule_watch_tags_update();
 
         // 13. Select the new conversation and switch to input mode
         self.active_conversation = Some(self.conversations.len() - 1);
-        self.focus = Focus::Input;
+        self.overlay = Overlay::None;
+        self.show_screen(Screen::Chat);
         self.new_conv_handle.clear();
-        self.status_message = None;
+        self.clear_status();
 
         // Load placeholder message for the new conversation
-        self.messages.clear();
+        self.clear_messages();
         self.messages.push(DisplayMessage {
             from: "System".to_string(),
             content: format!(
@@ -3638,6 +4573,7 @@ impl App {
             image_proto: None,
             image_loading: false,
             rkey: String::new(),
+            send_failed: None,
         });
 
         Ok(())
@@ -3686,10 +4622,7 @@ impl App {
         // 5. Load our key bundle
         let key_bundle = self.keys.load_identity_key()?;
 
-        // 6. Derive commit tag BEFORE add_member (pre-epoch-advance)
-        let commit_tag = self.mls.derive_next_tag(&group_id, &key_bundle)?;
-
-        // 7. Add member to MLS group
+        // 6. Add member to MLS group
         let welcome_result = self.mls.add_member(&group_id, &key_bundle, &kp_bytes)?;
         self.save_mls_state()?;
 
@@ -3704,7 +4637,7 @@ impl App {
 
         // 10. Publish the Commit with pre-epoch tag for existing members
         client
-            .publish_event(&commit_tag, &welcome_result.commit, None)
+            .publish_event(&welcome_result.commit_tag, &welcome_result.commit, None)
             .await?;
 
         // 11. Update GroupMetadata — add new DID/handle
@@ -3720,15 +4653,16 @@ impl App {
                     participant_dids: conv.participant_dids.clone(),
                     participant_handles: conv.participant_handles.clone(),
                     kind: GroupKind::User,
+                    pending_ex_members: Vec::new(),
+                    member_device_ids: Default::default(),
                 },
             );
         }
 
         // 12. Re-populate candidate tags for the new epoch
-        self.populate_candidate_tags(group_id_hex, &group_id);
+        self.register_group_tags(group_id_hex, &group_id);
 
-        // 13. Update watched tags and fetch new member's relay config
-        self.schedule_watch_tags_update();
+        // 13. Fetch new member's relay config
         self.fetch_partner_drawbridge_configs(group_id_hex);
 
         self.debug_log.log(&format!(
@@ -3757,15 +4691,12 @@ impl App {
         // 3. Load key bundle
         let key_bundle = self.keys.load_identity_key()?;
 
-        // 4. Derive commit tag BEFORE kick (pre-epoch-advance)
-        let commit_tag = self.mls.derive_next_tag(&group_id, &key_bundle)?;
-
-        // 5. Kick user from MLS group
+        // 4. Kick user from MLS group
         let result = self.mls.kick_user(&group_id, &key_bundle, &did_to_kick)?;
         self.save_mls_state()?;
 
         // 6. Publish the Commit with pre-epoch tag
-        client.publish_event(&commit_tag, &result.commit, None).await?;
+        client.publish_event(&result.commit_tag, &result.commit, None).await?;
 
         // 7. Update GroupMetadata — remove DID/handle
         if let Some(conv) = self.conversations.iter_mut().find(|c| c.id == group_id_hex) {
@@ -3778,15 +4709,14 @@ impl App {
                     participant_dids: conv.participant_dids.clone(),
                     participant_handles: conv.participant_handles.clone(),
                     kind: GroupKind::User,
+                    pending_ex_members: Vec::new(),
+                    member_device_ids: Default::default(),
                 },
             );
         }
 
         // 8. Re-populate candidate tags for the new epoch
-        self.populate_candidate_tags(group_id_hex, &group_id);
-
-        // 9. Update watched tags
-        self.schedule_watch_tags_update();
+        self.register_group_tags(group_id_hex, &group_id);
 
         self.debug_log.log(&format!(
             "kick_member: removed {handle} ({did_to_kick}) from group {}",
@@ -3796,11 +4726,60 @@ impl App {
         Ok(())
     }
 
-    /// Load messages from local storage.
+    /// Empty the message list and reset the view onto it.
+    fn clear_messages(&mut self) {
+        self.messages.clear();
+        self.selected_message = None;
+        self.message_scroll_top = None;
+        self.visible_messages = None;
+    }
+
+    /// Insert in rkey order, keeping the selection on the same message.
+    fn insert_message_ordered(&mut self, dm: DisplayMessage) {
+        let pos = self.messages.partition_point(|m| m.rkey <= dm.rkey);
+        self.messages.insert(pos, dm);
+        if let Some(sel) = self.selected_message.as_mut() {
+            if *sel >= pos {
+                *sel += 1;
+            }
+        }
+    }
+
+    /// Sort by rkey, keeping the selection on the same message.
+    fn sort_messages(&mut self) {
+        let selected = self.selected_identity();
+        self.messages.sort_by(|a, b| a.rkey.cmp(&b.rkey));
+        self.reselect(selected);
+    }
+
+    fn selected_identity(&self) -> Option<(Option<Vec<u8>>, String)> {
+        let msg = self.messages.get(self.selected_message?)?;
+        Some((msg.message_id.clone(), msg.rkey.clone()))
+    }
+
+    /// Point the selection back at the message `selected_identity` named.
+    fn reselect(&mut self, identity: Option<(Option<Vec<u8>>, String)>) {
+        self.selected_message = identity.and_then(|(id, rkey)| {
+            self.messages.iter().position(|m| match &id {
+                Some(id) => m.message_id.as_ref() == Some(id),
+                None => m.rkey == rkey,
+            })
+        });
+    }
+
+    /// Open the active conversation with the view at its newest message.
+    fn open_messages(&mut self) -> Result<()> {
+        self.clear_messages();
+        self.load_messages()
+    }
+
+    /// Reload messages from local storage, keeping the selection.
     fn load_messages(&mut self) -> Result<()> {
+        let selected = self.selected_identity();
         self.messages.clear();
 
         let Some(idx) = self.active_conversation else {
+            self.selected_message = None;
             return Ok(());
         };
 
@@ -3822,12 +4801,24 @@ impl App {
                 sender_did: stored.sender_did.clone(),
                 sender_device: stored.sender_device.clone(),
                 message_id: stored.message_id.clone(),
-                reactions: vec![],
+                // From storage, not rebuilt by replaying events: history
+                // that arrived by sync has no replayable events on this
+                // device, so anything not read from here is invisible.
+                reactions: stored
+                    .reactions
+                    .iter()
+                    .map(|r| DisplayReaction {
+                        emoji: r.emoji.clone(),
+                        sender_did: r.sender_did.clone(),
+                    })
+                    .collect(),
                 image_proto: None,
                 image_loading: false,
                 rkey: stored.rkey.clone(),
+                send_failed: stored.send_failed.clone(),
             });
         }
+        self.reselect(selected);
 
         // Clear unread count
         if let Some(conv) = self.conversations.get_mut(idx) {
@@ -3837,7 +4828,7 @@ impl App {
         Ok(())
     }
 
-    async fn handle_messages_key(&mut self, key: KeyEvent) -> Result<bool> {
+    async fn handle_chat_browse_key(&mut self, key: KeyEvent) -> Result<bool> {
         // If reaction picker popup is open, handle it separately
         if let Some(ref mut idx) = self.reaction_picker {
             match key.code {
@@ -3864,23 +4855,20 @@ impl App {
 
         match key.code {
             KeyCode::Char('q') => return Ok(true),
-            KeyCode::Tab => {
-                self.focus = Focus::Input;
+            KeyCode::Enter => {
+                self.enter_compose();
             }
+            // The render pass scrolls to keep the selection visible.
             KeyCode::Up | KeyCode::Char('k') => {
-                // Scroll up (increase offset from bottom)
-                let max_scroll = self.messages.len().saturating_sub(1);
-                if self.message_scroll < max_scroll {
-                    self.message_scroll += 1;
+                if let Some(last) = self.messages.len().checked_sub(1) {
+                    self.selected_message =
+                        Some(self.selected_message.map_or(last, |i| i.saturating_sub(1)));
                 }
-                // Update selected message index (from bottom)
-                self.selected_message = Some(self.message_scroll);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                // Scroll down (decrease offset from bottom)
-                self.message_scroll = self.message_scroll.saturating_sub(1);
-                // Update selected message index (from bottom)
-                self.selected_message = Some(self.message_scroll);
+                if let Some(last) = self.messages.len().checked_sub(1) {
+                    self.selected_message = Some(self.selected_message.map_or(last, |i| (i + 1).min(last)));
+                }
             }
             KeyCode::Char('i') => {
                 // Toggle message info popup for selected message
@@ -3894,11 +4882,18 @@ impl App {
                     self.reaction_picker = Some(0);
                 }
             }
+            KeyCode::Char('s') => {
+                if let (Some(msg), Some(idx)) = (self.selected_retryable(), self.active_conversation) {
+                    let message_id = msg.message_id.clone().unwrap_or_default();
+                    let conv_id = self.conversations[idx].id.clone();
+                    self.retry_send(&conv_id, &message_id)?;
+                }
+            }
             KeyCode::Esc => {
                 if self.show_message_info {
                     self.show_message_info = false;
                 } else {
-                    self.focus = Focus::Conversations;
+                    self.show_screen(Screen::Conversations);
                 }
             }
             _ => {}
@@ -3906,8 +4901,8 @@ impl App {
         Ok(false)
     }
 
-    /// Handle input key — fully synchronous for typing, crypto inline for send.
-    fn handle_input_key(&mut self, key: KeyEvent) -> Result<bool> {
+    /// Fully synchronous for typing, crypto inline for send.
+    fn handle_chat_compose_key(&mut self, key: KeyEvent) -> Result<bool> {
         match key.code {
             KeyCode::Enter => {
                 if self.input_buffer.starts_with("/image ") {
@@ -3946,94 +4941,115 @@ impl App {
             KeyCode::End => {
                 self.cursor_position = self.input_buffer.len();
             }
-            KeyCode::Tab => {
-                self.focus = Focus::Conversations;
-            }
             KeyCode::Esc => {
-                self.focus = Focus::Messages;
+                self.enter_browse();
             }
             _ => {}
         }
         Ok(false)
     }
 
-    /// Encrypt inline (fast) and spawn the network publish to background.
+    /// Add the optimistic row, then encrypt and publish in the background.
     fn send_message_nonblocking(&mut self) -> Result<()> {
         if self.client.is_none() {
             return Err(AppError::NotLoggedIn);
         }
         let conv_idx = self.active_conversation.ok_or(AppError::NoConversation)?;
+        // A conversation registered read-only from synced history has no
+        // local MLS group, so there is nothing to encrypt to. The TUI
+        // closes its composer, but the HTTP surface reaches here directly.
+        if !self.conversations[conv_idx].is_member {
+            return Err(AppError::Other(
+                "waiting to be connected to this conversation".to_string(),
+            ));
+        }
         let conv_id = self.conversations[conv_idx].id.clone();
+        let text = std::mem::take(&mut self.input_buffer);
+        self.cursor_position = 0;
 
+        let message_id: Vec<u8> = {
+            use rand::RngCore;
+            let mut id = vec![0u8; 16];
+            rand::thread_rng().fill_bytes(&mut id);
+            id
+        };
         self.debug_log.log(&format!(
-            "send_message: conv_id={}, msg_len={}",
-            &conv_id[..16],
-            self.input_buffer.len()
+            "send_message: start id={} conv={} len={}",
+            short_hex(&message_id),
+            short_hex_str(&conv_id),
+            text.len()
         ));
 
-        let key_bundle = self.keys.load_identity_key()?;
-        let group_id = hex::decode(&conv_id)
-            .map_err(|e| AppError::Other(format!("Invalid group ID: {}", e)))?;
+        // Optimistic UI, stored with placeholder rkey until publish returns.
+        let content = pending_text_content(&text);
+        let timestamp = chrono::Utc::now();
+        let my_did = self.client.as_ref().unwrap().did().to_string();
+        let device_name = self.keys.get_or_create_device_name().ok();
+        self.messages.push(DisplayMessage {
+            from: "You".to_string(),
+            content: content.clone(),
+            timestamp,
+            is_own: true,
+            sender_did: Some(my_did.clone()),
+            sender_device: device_name.clone(),
+            message_id: Some(message_id.clone()),
+            reactions: vec![],
+            image_proto: None,
+            image_loading: false,
+            rkey: "pending".to_string(),
+            send_failed: None,
+        });
+        let stored_msg = crate::keystore::StoredMessage {
+            rkey: "pending".to_string(),
+            content,
+            timestamp,
+            is_own: true,
+            message_id: Some(message_id.clone()),
+            sender_did: Some(my_did),
+            sender_device: device_name,
+            blob_uri: None, blob_key: None, blob_ciphertext_hash: None, blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None, blob_width: None, blob_height: None, blob_thumbhash: None,
+            reactions: Vec::new(),
+            send_failed: None,
+        };
+        if let Err(e) = self.keys.append_message(&conv_id, stored_msg) {
+            self.debug_log
+                .log(&format!("send_message: failed to store locally: {e}"));
+        }
+        // Kept until published, so a failed send can be retried.
+        if let Err(e) = self.outbox.put(&message_id, &OutboxEntry::Text(text.clone())) {
+            self.debug_log
+                .log(&format!("send_message: failed to keep source for retry: {e}"));
+        }
 
-        let current_epoch = self.mls.get_group_epoch(&group_id)?.unwrap_or(1);
+        self.start_text_send(conv_id, message_id, text);
+        Ok(())
+    }
+
+    /// Encrypt and publish `text` under `message_id`. Short text is
+    /// MLS-encrypted inline; long text uploads its blob first and finishes
+    /// in `handle_blob_uploaded`. The result arrives as `SendPublished`
+    /// or `SendFailed`.
+    fn start_text_send(&mut self, conv_id: String, message_id: Vec<u8>, text: String) {
+        let fail = |app: &mut Self, error: String| {
+            let _ = app.bg_tx.send(BgEvent::SendFailed {
+                conv_id: conv_id.clone(),
+                message_id: Some(message_id.clone()),
+                error,
+            });
+        };
+        let Some(client) = self.client.clone() else {
+            return fail(self, "not logged in".to_string());
+        };
 
         // Long text: encrypt blob, upload async, then MLS-encrypt on callback.
-        if needs_blob_upload(&self.input_buffer) {
-            let full_text = self.input_buffer.clone();
-            let preview_text = truncate_to_preview(&full_text);
-
-            // Blob-encrypt synchronously (fast — no I/O).
-            let encrypted = blob_encrypt(full_text.as_bytes())
-                .map_err(|e| AppError::Other(format!("blob encrypt failed: {e}")))?;
+        if needs_blob_upload(&text) {
+            let preview_text = truncate_to_preview(&text);
+            let encrypted = match blob_encrypt(text.as_bytes()) {
+                Ok(e) => e,
+                Err(e) => return fail(self, format!("blob encrypt failed: {e}")),
+            };
             let ciphertext_size = encrypted.blob.len() as u64;
-
-            // Optimistic UI: show preview + uploading indicator.
-            let timestamp = chrono::Utc::now();
-            let my_did = self.client.as_ref().unwrap().did().to_string();
-            let pending_message_id: Vec<u8> = {
-                use rand::RngCore;
-                let mut id = vec![0u8; 16];
-                rand::thread_rng().fill_bytes(&mut id);
-                id
-            };
-            let optimistic_content = format!("{preview_text} [long text — uploading…]");
-            self.messages.push(DisplayMessage {
-                from: "You".to_string(),
-                content: optimistic_content.clone(),
-                timestamp,
-                is_own: true,
-                sender_did: Some(my_did.clone()),
-                sender_device: self.keys.get_or_create_device_name().ok(),
-                message_id: Some(pending_message_id.clone()),
-                reactions: vec![],
-                image_proto: None,
-                image_loading: false,
-                rkey: "pending".to_string(),
-            });
-
-            let stored_msg = crate::keystore::StoredMessage {
-                rkey: "pending".to_string(),
-                content: optimistic_content,
-                timestamp,
-                is_own: true,
-                message_id: Some(pending_message_id.clone()),
-                sender_did: Some(my_did),
-                sender_device: self.keys.get_or_create_device_name().ok(),
-                blob_uri: None, blob_key: None, blob_ciphertext_hash: None, blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None, blob_width: None, blob_height: None,
-            };
-            if let Err(e) = self.keys.append_message(&conv_id, stored_msg) {
-                self.debug_log
-                    .log(&format!("send_message: failed to store locally: {e}"));
-            }
-
-            self.input_buffer.clear();
-            self.cursor_position = 0;
-
-            // Upload blob in background; BgEvent::BlobUploaded triggers MLS-encrypt + publish.
-            let client = self.client.as_ref().unwrap().clone();
             let tx = self.bg_tx.clone();
-            let conv_id_clone = conv_id;
-
             tokio::spawn(async move {
                 match client.upload_blob(&encrypted.blob).await {
                     Ok(cid) => {
@@ -4046,109 +5062,81 @@ impl App {
                                 content_hash: encrypted.content_hash,
                             },
                             preview_text,
-                            conv_id: conv_id_clone,
+                            pending_message_id: message_id,
+                            conv_id,
                         });
                     }
                     Err(e) => {
-                        let _ = tx.send(BgEvent::SendFailed(format!("blob upload failed: {e}")));
+                        let _ = tx.send(BgEvent::SendFailed {
+                            conv_id,
+                            message_id: Some(message_id),
+                            error: format!("blob upload failed: {e}"),
+                        });
                     }
                 }
             });
-
-            return Ok(());
+            return;
         }
 
-        // Short / medium text: existing synchronous-crypto + async-publish path.
-        let text_payload = build_text_payload(&self.input_buffer);
-        let event = Event::message(group_id.clone(), current_epoch, &text_payload);
-        let preview_payload = ParsedMessagePayload::Structured(text_payload.clone());
-        let preview = render_message_preview(&preview_payload);
+        let key_bundle = match self.keys.load_identity_key() {
+            Ok(k) => k,
+            Err(e) => return fail(self, format!("failed to load identity key: {e}")),
+        };
+        let group_id = match hex::decode(&conv_id) {
+            Ok(id) => id,
+            Err(e) => return fail(self, format!("invalid group ID: {e}")),
+        };
+        let current_epoch = self.mls.get_group_epoch(&group_id).ok().flatten().unwrap_or(1);
+        let mut event = Event::message(group_id.clone(), current_epoch, &build_text_payload(&text));
+        // Same reasoning as the image path: the row's id is the message's
+        // identity, and a retry republishes under it.
+        event.message_id = Some(message_id.clone());
 
-        // Encrypt synchronously (fast — pure crypto, no I/O)
-        let encrypted = self.mls.encrypt_event(&group_id, &key_bundle, &event)?;
-        self.own_published_tags.insert(encrypted.tag);
-        self.save_mls_state()?;
-
+        let encrypted = match self.mls.encrypt_event(&group_id, &key_bundle, &event) {
+            Ok(e) => e,
+            Err(e) => return fail(self, format!("MLS encrypt failed: {e}")),
+        };
+        if let Err(e) = self.save_mls_state() {
+            self.debug_log.log(&format!("send_message: failed to save MLS state: {e}"));
+        }
+        if let Err(e) = self.keys.store_group_state(&conv_id, &encrypted.new_group_state) {
+            self.debug_log.log(&format!("send_message: failed to store group state: {e}"));
+        }
         self.debug_log.log(&format!(
-            "send_message: encrypted, tag={:02x?}",
-            &encrypted.tag[..4]
+            "send_message: encrypted id={} epoch={current_epoch}",
+            short_hex(&message_id)
         ));
 
-        self.keys
-            .store_group_state(&conv_id, &encrypted.new_group_state)?;
-
-        // Optimistically update UI before network publish
-        let timestamp = chrono::Utc::now();
-        let my_did = self.client.as_ref().unwrap().did().to_string();
-        self.messages.push(DisplayMessage {
-            from: "You".to_string(),
-            content: preview.clone(),
-            timestamp,
-            is_own: true,
-            sender_did: Some(my_did.clone()),
-            sender_device: self.keys.get_or_create_device_name().ok(),
-            message_id: event.message_id.clone(),
-            reactions: vec![],
-            image_proto: None,
-            image_loading: false,
-            rkey: "pending".to_string(),
-        });
-
-        // Store locally with placeholder rkey (will be real once publish completes)
-        let stored_msg = crate::keystore::StoredMessage {
-            rkey: "pending".to_string(),
-            content: preview,
-            timestamp,
-            is_own: true,
-            message_id: encrypted.message_id.clone(),
-            sender_did: Some(my_did),
-            sender_device: self.keys.get_or_create_device_name().ok(),
-            blob_uri: None, blob_key: None, blob_ciphertext_hash: None, blob_ciphertext_size: None, blob_content_hash: None, blob_mime: None, blob_width: None, blob_height: None,
-        };
-        if let Err(e) = self.keys.append_message(&conv_id, stored_msg) {
-            self.debug_log
-                .log(&format!("send_message: failed to store locally: {}", e));
-        }
-
-        // Clear input immediately (before network)
-        self.input_buffer.clear();
-        self.cursor_position = 0;
-
-        // Spawn network publish in background
-        let client = self.client.as_ref().unwrap().clone();
         let tag = encrypted.tag;
         let ciphertext = encrypted.ciphertext;
-        let msg_id = encrypted.message_id.clone();
-        let conv_id_clone = conv_id;
         let tx = self.bg_tx.clone();
-
         tokio::spawn(async move {
             match client.publish_event(&tag, &ciphertext, None).await {
                 Ok(uri) => {
                     let _ = tx.send(BgEvent::SendPublished {
                         uri,
-                        conv_id: conv_id_clone,
+                        conv_id,
                         tag,
                         ciphertext,
-                        message_id: msg_id,
+                        message_id: Some(message_id),
                     });
                 }
                 Err(e) => {
-                    let _ = tx.send(BgEvent::SendFailed(format!("{e}")));
+                    let _ = tx.send(BgEvent::SendFailed {
+                        conv_id,
+                        message_id: Some(message_id),
+                        error: format!("publish failed: {e}"),
+                    });
                 }
             }
         });
-
-        Ok(())
     }
 
     /// Send an emoji reaction to the currently selected message
     async fn send_reaction(&mut self, emoji: &str) -> Result<()> {
-        // Find the selected message (selected_message is offset from bottom)
-        let msg_index = {
-            let offset = self.selected_message.unwrap_or(0);
-            self.messages.len().saturating_sub(1).saturating_sub(offset)
-        };
+        let msg_index = self
+            .selected_message
+            .unwrap_or_else(|| self.messages.len().saturating_sub(1));
         let target_message_id = match self
             .messages
             .get(msg_index)
@@ -4171,272 +5159,236 @@ impl App {
     /// - No race conditions with other users trying to add the same device
     /// - Simple, predictable behavior
     async fn poll_for_new_devices(&mut self) -> Result<()> {
-        let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?;
+        // Same-user fan-out: we walk every confirmed ring sibling, and
+        // for each user conversation they are not yet in we draw a
+        // fresh KP from the pool, MLS-add them, and ship the Welcome
+        // as a `CoordMsg::UserConvWelcome` stealth event addressed to
+        // the sibling.  If the local pool is empty for a sibling, we
+        // emit one `CoordMsg::KpRequest` per poll cycle (also
+        // stealth-addressed) and defer the add — the next tick
+        // retries once the owner ships a fresh `CoordMsg::KpBatch`.
+        // The init key consumed comes from the KP-lane pool, not the
+        // PDS pool, so no replenish on the cross-user
+        // `social.moat.keyPackage` pool is required.
+        let client = self.client.as_ref().ok_or(AppError::NotLoggedIn)?.clone();
         let my_did = client.did().to_string();
 
-        // Fetch key packages for our own DID
-        let key_packages = match client.fetch_key_packages(&my_did).await {
-            Ok(kps) => kps,
-            Err(e) => {
-                self.debug_log.log(&format!(
-                    "poll_devices: failed to fetch own key packages: {}",
-                    e
-                ));
-                return Ok(());
-            }
-        };
-
-        if key_packages.is_empty() {
+        // No ring → no ring-borne KPs → nothing to fan out.  Bootstrap
+        // and ring formation happen elsewhere; we wait for them.
+        if self.ring_driver.ring_id().is_none() {
             return Ok(());
         }
 
-        // Load key bundle for MLS operations
-        let key_bundle = match self.keys.load_identity_key() {
-            Ok(kb) => kb,
-            Err(e) => {
-                self.debug_log
-                    .log(&format!("poll_devices: failed to load key bundle: {}", e));
-                return Ok(());
-            }
-        };
-
-        // Collect group info for all conversations
-        let mut groups_to_check: Vec<(Vec<u8>, String)> = Vec::new();
-        for conv in &self.conversations {
-            if let Ok(group_id) = hex::decode(&conv.id) {
-                groups_to_check.push((group_id, conv.id.clone()));
-            }
+        let siblings = self.ring_driver.ring_joined_siblings(&self.mls);
+        if siblings.is_empty() {
+            return Ok(());
         }
 
-        // Sort newest-first so we prefer the replenished key package over an older
-        // consumed one. Key packages are single-use: the init key is deleted from
-        // the local KeyStore once a Welcome is processed, so a stale key package on
-        // the PDS produces a Welcome the new device cannot decrypt.
-        let mut key_packages = key_packages;
-        key_packages.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        let key_bundle = self
+            .keys
+            .load_identity_key()
+            .map_err(|e| AppError::Other(format!("poll_devices: load_identity_key: {e}")))?;
+        let device_name = self
+            .keys
+            .get_or_create_device_name()
+            .map_err(|e| AppError::Other(format!("poll_devices: get_device_name: {e}")))?;
+        let credential = MoatCredential::new(&my_did, &device_name, *self.mls.device_id());
+        let sibling_stealth = self.cached_sibling_stealth.clone();
+        let env = StepEnv {
+            my_did: &my_did,
+            credential: &credential,
+            key_bundle: &key_bundle,
+            now_ms: chrono::Utc::now().timestamp_millis(),
+            sibling_stealth: &sibling_stealth,
+        };
 
-        // For each conversation, check if any of our key packages represent new devices
-        for (group_id, conv_id) in groups_to_check {
-            // Get current members with their device names
-            let current_members = match self.mls.get_group_members(&group_id) {
+        // Snapshot conversations so we can mutate `self` later.
+        let groups: Vec<(Vec<u8>, String)> = self
+            .conversations
+            .iter()
+            .filter_map(|c| hex::decode(&c.id).ok().map(|g| (g, c.id.clone())))
+            .collect();
+
+        // Once per cycle, send at most one KpRequest per sibling whose
+        // pool is empty.  Without this, fan-out across N conversations
+        // with an empty pool would emit N redundant requests.
+        let mut requested_refill: HashSet<[u8; 16]> = HashSet::new();
+
+        for (group_id, conv_id) in &groups {
+            let current_members = match self.mls.get_group_members(group_id) {
                 Ok(m) => m,
                 Err(e) => {
-                    self.debug_log.log(&format!(
-                        "poll_devices: failed to get members for group {}: {}",
-                        &conv_id[..16.min(conv_id.len())],
-                        e
-                    ));
+                    self.debug_log
+                        .log(&format!("poll_devices: get_group_members: {e}"));
                     continue;
                 }
             };
-
-            // Build a set of (DID, device_id) pairs for existing members.
-            // Keyed by device_id (not device_name) so two devices sharing a name but
-            // different device_ids are both added.
-            // Declared mut so we can update it after each successful add, preventing
-            // a second (older) key package for the same device from triggering a
-            // duplicate add.
-            let mut existing_devices: std::collections::HashSet<(String, [u8; 16])> =
-                current_members
-                    .iter()
-                    .filter_map(|(_, cred)| {
-                        cred.as_ref()
-                            .map(|c| (c.did().to_string(), *c.device_id()))
-                    })
-                    .collect();
+            let existing_device_ids: HashSet<[u8; 16]> = current_members
+                .iter()
+                .filter_map(|(_, c)| c.as_ref().map(|c| *c.device_id()))
+                .collect();
 
             self.debug_log.log(&format!(
                 "poll_devices: group {} has {} devices",
                 &conv_id[..16.min(conv_id.len())],
-                existing_devices.len()
+                existing_device_ids.len()
             ));
 
-            // Check each of our key packages to see if it's a new device
-            for kp_record in &key_packages {
-                let credential = match self
-                    .mls
-                    .extract_credential_from_key_package(&kp_record.key_package)
-                {
-                    Ok(Some(c)) => c,
-                    Ok(None) => {
-                        self.debug_log
-                            .log("poll_devices: key package has no credential");
-                        continue;
-                    }
-                    Err(e) => {
-                        self.debug_log.log(&format!(
-                            "poll_devices: failed to extract credential: {}",
-                            e
-                        ));
-                        continue;
-                    }
-                };
-
-                let device_key = (
-                    credential.did().to_string(),
-                    *credential.device_id(),
-                );
-
-                self.debug_log.log(&format!(
-                    "poll_devices: key package device_name='{}' for did={}",
-                    credential.device_name(),
-                    &credential.did()[..20.min(credential.did().len())]
-                ));
-
-                // Skip if this device is already in the group
-                if existing_devices.contains(&device_key) {
-                    self.debug_log.log(&format!(
-                        "poll_devices: device '{}' already in group, skipping",
-                        credential.device_name()
-                    ));
+            for sibling_id in &siblings {
+                if existing_device_ids.contains(sibling_id) {
                     continue;
                 }
 
-                self.debug_log.log(&format!(
-                    "poll_devices: found new device '{}' for our DID",
-                    credential.device_name()
-                ));
+                // Ring-borne KP claim.  None ⇒ pool drained; defer.
+                let kp = match self.ring_driver.claim_kp(sibling_id) {
+                    Some(k) => k,
+                    None => {
+                        if requested_refill.insert(*sibling_id) {
+                            let cmds = self.ring_driver.emit_kp_request_for(
+                                &self.mls,
+                                &env,
+                                sibling_id,
+                            );
+                            for cmd in cmds {
+                                self.publish_ring_command(&client, cmd).await;
+                            }
+                            self.debug_log.log(&format!(
+                                "poll_devices: KP pool empty for sibling {}; emitted KpRequest, deferring",
+                                hex::encode(sibling_id)
+                            ));
+                        }
+                        continue;
+                    }
+                };
 
-                // Derive tag for the commit using pre-advance counter
-                let commit_tag = match self.mls.derive_next_tag(&group_id, &key_bundle) {
-                    Ok(t) => t,
+                let welcome_result = match self.mls.add_device(group_id, &key_bundle, &kp.key_package) {
+                    Ok(w) => w,
                     Err(e) => {
                         self.debug_log.log(&format!(
-                            "poll_devices: failed to derive pre-add tag: {}",
-                            e
+                            "poll_devices: add_device for sibling {} failed: {e}",
+                            hex::encode(sibling_id)
                         ));
                         continue;
                     }
                 };
 
-                // Add the new device
-                match self
-                    .mls
-                    .add_device(&group_id, &key_bundle, &kp_record.key_package)
+                if let Err(e) = self.save_mls_state() {
+                    self.debug_log
+                        .log(&format!("poll_devices: save_mls_state: {e}"));
+                }
+
+                self.register_group_tags(conv_id, group_id);
+
+                if let Err(e) = client
+                    .publish_event(&welcome_result.commit_tag, &welcome_result.commit, None)
+                    .await
                 {
-                    Ok(welcome_result) => {
-                        self.debug_log.log(&format!(
-                            "poll_devices: successfully added device '{}' to group",
-                            credential.device_name()
-                        ));
+                    self.debug_log
+                        .log(&format!("poll_devices: publish commit: {e}"));
+                } else {
+                    self.debug_log.log("poll_devices: published commit");
+                }
 
-                        // Mark device as seen so a second (older) key package for the
-                        // same device doesn't trigger a redundant add in this loop.
-                        existing_devices.insert(device_key);
+                // Stealth-addressed Welcome, same lane as sibling messages.
+                // Other users in this group see the Commit via the PDS as
+                // before; only the same-user delivery channel changes.
+                let msg = CoordMsg::UserConvWelcome {
+                    owner_device_id: sibling_id.to_vec(),
+                    group_id: group_id.clone(),
+                    welcome: welcome_result.welcome,
+                };
+                if let Some(cmd) =
+                    self.ring_driver.encrypt_for_sibling(&self.mls, &env, sibling_id, &msg)
+                {
+                    self.publish_ring_command(&client, cmd).await;
+                    self.debug_log.log(&format!(
+                        "poll_devices: published UserConvWelcome for sibling {} in group {}",
+                        hex::encode(sibling_id),
+                        &conv_id[..16.min(conv_id.len())]
+                    ));
+                } else {
+                    self.debug_log
+                        .log("poll_devices: encrypt_for_sibling(UserConvWelcome) failed — sibling stealth record not yet known");
+                }
 
-                        // Save MLS state
-                        if let Err(e) = self.save_mls_state() {
-                            self.debug_log
-                                .log(&format!("poll_devices: failed to save MLS state: {}", e));
-                        }
+                let conv_name = self
+                    .conversations
+                    .iter()
+                    .find(|c| c.id == *conv_id)
+                    .map(|c| c.display_name())
+                    .unwrap_or_else(|| "Unknown".to_string());
 
-                        // Repopulate candidate tags for the new epoch
-                        if let Ok(tags) = self.mls.populate_candidate_tags(&group_id) {
-                            for t in tags {
-                                self.tag_map.insert(t, conv_id.clone());
-                            }
-                        }
-
-                        // Publish the commit with PRE-advance epoch tag so others can see it
-                        if let Err(e) = client
-                            .publish_event(&commit_tag, &welcome_result.commit, None)
-                            .await
-                        {
-                            self.debug_log
-                                .log(&format!("poll_devices: failed to publish commit: {}", e));
-                        } else {
-                            self.debug_log.log("poll_devices: published commit");
-                        }
-
-                        // Encrypt and publish welcome for the new device using our stealth addresses
-                        match client.fetch_stealth_addresses(&my_did).await {
-                            Ok(stealth_records) if !stealth_records.is_empty() => {
-                                let stealth_pubkeys: Vec<[u8; 32]> =
-                                    stealth_records.iter().map(|r| r.scan_pubkey).collect();
-                                let welcome_envelope =
-                                    encode_welcome_envelope(&welcome_result.welcome, &[]);
-                                match moat_core::encrypt_for_stealth(
-                                    &stealth_pubkeys,
-                                    &welcome_envelope,
-                                ) {
-                                    Ok(stealth_ciphertext) => {
-                                        let random_tag: [u8; 16] = rand::random();
-                                        if let Err(e) = client
-                                            .publish_event(&random_tag, &stealth_ciphertext, None)
-                                            .await
-                                        {
-                                            self.debug_log.log(&format!(
-                                                "poll_devices: failed to publish welcome: {}",
-                                                e
-                                            ));
-                                        } else {
-                                            self.debug_log.log(&format!(
-                                                "poll_devices: published welcome for device '{}' (encrypted for {} stealth keys)",
-                                                credential.device_name(),
-                                                stealth_pubkeys.len()
-                                            ));
-                                        }
-                                    }
-                                    Err(e) => {
-                                        self.debug_log.log(&format!(
-                                            "poll_devices: failed to encrypt welcome: {}",
-                                            e
-                                        ));
-                                    }
-                                }
-                            }
-                            Ok(_) => {
-                                self.debug_log.log("poll_devices: no stealth addresses for own DID, cannot send welcome");
-                            }
-                            Err(e) => {
-                                self.debug_log.log(&format!(
-                                    "poll_devices: failed to fetch stealth addresses: {}",
-                                    e
-                                ));
-                            }
-                        }
-
-                        // Update conversation epoch in UI and add device alert
-                        let conv_name = self
-                            .conversations
-                            .iter()
-                            .find(|c| c.id == conv_id)
-                            .map(|c| c.display_name())
-                            .unwrap_or_else(|| "Unknown".to_string());
-
-                        if let Some(conv) = self.conversations.iter_mut().find(|c| c.id == conv_id)
-                        {
-                            if let Ok(Some(new_epoch)) = self.mls.get_group_epoch(&group_id) {
-                                conv.current_epoch = new_epoch;
-                            }
-                        }
-
-                        // Add device alert for UI notification
-                        self.device_alerts.push(DeviceAlert {
-                            conversation_name: conv_name,
-                            user_name: my_did.clone(),
-                            device_name: credential.device_name().to_string(),
-                            timestamp: chrono::Utc::now(),
-                        });
-                    }
-                    Err(e) => {
-                        self.debug_log.log(&format!(
-                            "poll_devices: failed to add device '{}': {}",
-                            credential.device_name(),
-                            e
-                        ));
+                if let Some(conv) = self.conversations.iter_mut().find(|c| c.id == *conv_id) {
+                    if let Ok(Some(new_epoch)) = self.mls.get_group_epoch(group_id) {
+                        conv.current_epoch = new_epoch;
                     }
                 }
+
+                let sibling_display = self
+                    .ring_driver
+                    .ring_id()
+                    .map(<[u8]>::to_vec)
+                    .and_then(|rid| self.mls.get_group_members(&rid).ok())
+                    .and_then(|members| {
+                        members.into_iter().find_map(|(_, c)| {
+                            c.as_ref().and_then(|c| {
+                                if c.device_id() == sibling_id {
+                                    Some(c.device_name().to_string())
+                                } else {
+                                    None
+                                }
+                            })
+                        })
+                    })
+                    .unwrap_or_else(|| hex::encode(sibling_id));
+
+                self.device_alerts.push(DeviceAlert {
+                    conversation_name: conv_name,
+                    user_name: my_did.clone(),
+                    device_name: sibling_display,
+                    timestamp: chrono::Utc::now(),
+                });
             }
         }
 
         Ok(())
     }
 
+    /// Publish a single [`RingCommand::PublishEvent`] produced by the
+    /// ring driver (e.g., the `KpRequest` or `UserConvWelcome` that the
+    /// same-user fan-out path emits outside the normal ring_tick loop).
+    /// Any other variant is unexpected here — log and drop.
+    async fn publish_ring_command(
+        &mut self,
+        client: &moat_atproto::MoatAtprotoClient,
+        cmd: RingCommand,
+    ) {
+        match cmd {
+            RingCommand::PublishStealthEvent { tag, ciphertext } => {
+                // Same-user KP lane (KpBatch / KpRequest / UserConvWelcome),
+                // stealth-addressed to a specific sibling.  Stealth payloads
+                // are decrypted out-of-band by the recipient, so they are
+                // never marked own.
+                if let Err(e) = client.publish_event(&tag, &ciphertext, None).await {
+                    self.debug_log
+                        .log(&format!("publish_ring_command: stealth publish failed: {e}"));
+                }
+            }
+            other => {
+                self.debug_log.log(&format!(
+                    "publish_ring_command: unexpected variant {other:?} — dropping"
+                ));
+            }
+        }
+    }
+
     // ── Device ring ───────────────────────────────────────────────────────────
 
     /// Periodic ring driver tick. Called from the main loop every ~30 s.
     pub async fn do_ring_tick(&mut self) {
+        // The session has no clock of its own; this is the tick that
+        // supplies one on the TUI, where nothing polls `/sync/status`.
+        self.expire_sync_request_if_due();
         self.last_ring_tick = Some(Instant::now());
         if let Err(e) = self.ring_tick_inner().await {
             self.debug_log.log(&format!("ring_tick: {e}"));
@@ -4472,8 +5424,20 @@ impl App {
             .fetch_stealth_addresses(&my_did)
             .await
             .unwrap_or_default();
-        let stealth_pubkeys: Vec<[u8; 32]> =
-            stealth_records.iter().map(|r| r.scan_pubkey).collect();
+        // Per-sibling addressing for the same-user KP lane: drop our own device
+        let my_device_id = *self.mls.device_id();
+        let sibling_stealth: Vec<moat_core::SiblingStealth> = stealth_records
+            .iter()
+            .filter(|r| r.device_id != [0u8; 16] && r.device_id != my_device_id)
+            .map(|r| moat_core::SiblingStealth {
+                scan_pubkey: r.scan_pubkey,
+                device_id: r.device_id,
+            })
+            .collect();
+        // Cache for callers outside this tick (poll_for_new_devices,
+        // handle_coord_msg_sync) that also need to stealth-address a
+        // sibling for the same-user KP lane.
+        self.cached_sibling_stealth = sibling_stealth.clone();
 
         let event_records = client
             .fetch_events_from_did(&my_did, self.ring_driver.own_events_cursor())
@@ -4485,44 +5449,53 @@ impl App {
             .collect();
 
         let now_ms = chrono::Utc::now().timestamp_millis();
-        let drawbridge_has_own_connection = self.drawbridge.has_own_connection();
-        let sync_session_active = self.sync_session.is_some();
+
+        self.debug_log.log(&format!(
+            "ring: tick in  kp={} sibling_stealth={} own_events={} | {}",
+            key_packages.len(),
+            sibling_stealth.len(),
+            own_events.len(),
+            self.ring_driver.debug_summary(),
+        ));
 
         // ── Drive the ring state machine ─────────────────────────────────────
         let cmds = self.ring_driver.tick(
             &self.mls,
             TickInputs {
                 key_packages: &key_packages,
-                stealth_pubkeys: &stealth_pubkeys,
+                sibling_stealth: &sibling_stealth,
                 own_events: &own_events,
                 stealth_privkey: &stealth_privkey,
                 credential: &credential,
                 key_bundle: &key_bundle,
                 now_ms,
-                drawbridge_has_own_connection,
-                sync_session_active,
                 my_did: &my_did,
             },
         );
 
         let _ = self.save_mls_state();
 
+        self.debug_log.log(&format!(
+            "ring: tick out cmds=[{}] | {}",
+            moat_core::summarize_ring_commands(&cmds),
+            self.ring_driver.debug_summary(),
+        ));
+        // Persist the driver state now, not only on the periodic save. The
+        // last on-disk snapshot is the primary post-mortem artifact for a
+        // beacon failure, and if it lags the failure it reports peer state
+        // that never caused anything.
+        if let Err(e) = self.keys.save_ring_state(&self.ring_driver) {
+            self.debug_log.log(&format!("ring: failed to persist ring state: {e}"));
+        }
+
         // ── Interpret commands ───────────────────────────────────────────────
         let mut needs_poll_for_new_devices = false;
         for cmd in cmds {
             match cmd {
-                RingCommand::PublishEvent { tag, ciphertext, mark_own } => {
+                RingCommand::PublishStealthEvent { tag, ciphertext } => {
                     if let Err(e) = client.publish_event(&tag, &ciphertext, None).await {
                         self.debug_log
-                            .log(&format!("ring: failed to publish event: {e}"));
-                    } else if mark_own {
-                        self.own_published_tags.insert(tag);
-                    }
-                }
-                RingCommand::StealthPublishWelcome { tag, ciphertext } => {
-                    if let Err(e) = client.publish_event(&tag, &ciphertext, None).await {
-                        self.debug_log
-                            .log(&format!("ring: failed to publish stealth welcome: {e}"));
+                            .log(&format!("ring: failed to publish stealth event: {e}"));
                     }
                 }
                 RingCommand::RegisterGroup { group_id, kind } => {
@@ -4534,17 +5507,22 @@ impl App {
                             participant_dids: vec![my_did.clone()],
                             participant_handles: vec![],
                             kind,
+                            pending_ex_members: Vec::new(),
+                            member_device_ids: Default::default(),
                         },
                     );
-                    self.populate_candidate_tags(&group_id_hex, &group_id);
+                    self.register_group_tags(&group_id_hex, &group_id);
 
                     // User conversations discovered via ring_tick step-3 stealth
-                    // Welcome scan need to be surfaced in self.conversations.  The
-                    // normal poll path (try_process_welcome_sync) would fail here
-                    // because the Welcome was already consumed above.
-                    if is_user_group
-                        && !self.conversations.iter().any(|c| c.id == group_id_hex)
-                    {
+                    // Welcome scan, and same-user fan-out via Phase E
+                    // `UserConvWelcome`, both need to be surfaced in
+                    // self.conversations here.  Whether the cross-user
+                    // `social.moat.keyPackage` pool needs replenishing is
+                    // signalled explicitly by `RingCommand::ReplenishKeyPackage`
+                    // — the cross-user stealth-Welcome path emits it, the
+                    // same-user `UserConvWelcome` path does not (the consumed
+                    // init key came from the ring-borne pool).
+                    if is_user_group {
                         let participant_dids = self
                             .mls
                             .get_group_dids(&group_id)
@@ -4553,27 +5531,43 @@ impl App {
                             .filter(|d| d != &my_did)
                             .collect::<Vec<_>>();
                         let participant_handles = participant_dids.clone();
-                        self.conversations.push(Conversation {
-                            id: group_id_hex.clone(),
-                            name: None,
-                            participant_dids: participant_dids.clone(),
-                            participant_handles,
-                            current_epoch: 1,
-                            unread: 1,
-                        });
-                        // Replenish init key consumed by this Welcome.
-                        self.replenish_key_package();
+                        match self
+                            .conversations
+                            .iter_mut()
+                            .find(|c| c.id == group_id_hex)
+                        {
+                            // A read-only placeholder: its history arrived
+                            // by sync before the Add that put us in the
+                            // group. This is the moment it stops being
+                            // read-only, and the moment the participants
+                            // become knowable from MLS rather than
+                            // guessed from senders.
+                            //
+                            // Guarded on `!is_member` so a repeat
+                            // registration of a conversation we are
+                            // already in leaves it alone — overwriting
+                            // there would replace resolved handles with
+                            // bare DIDs.
+                            Some(existing) if !existing.is_member => {
+                                existing.is_member = true;
+                                existing.participant_dids = participant_dids.clone();
+                                existing.participant_handles = participant_handles;
+                            }
+                            Some(_) => {}
+                            None => self.conversations.push(Conversation {
+                                id: group_id_hex.clone(),
+                                name: None,
+                                participant_dids: participant_dids.clone(),
+                                participant_handles,
+                                current_epoch: 1,
+                                unread: 1,
+                                is_member: true,
+                            }),
+                        }
                     }
                 }
                 RingCommand::ReplenishKeyPackage => {
                     self.replenish_key_package();
-                }
-                RingCommand::SendDrawbridgePairOffer { token } => {
-                    self.pending_pair_token = Some(token.clone());
-                    let _ = self.drawbridge.send_pair_offer(&token).await;
-                }
-                RingCommand::SendDrawbridgePairJoin { token } => {
-                    let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairJoin { token });
                 }
                 RingCommand::PollForNewDevices => {
                     needs_poll_for_new_devices = true;
@@ -4594,112 +5588,6 @@ impl App {
         Ok(())
     }
 
-    /// Synchronous coord-message handler — pure state only, no network I/O.
-    ///
-    /// Called from the sync `process_matched_event` path.  Any outgoing
-    /// network responses (RingInfo, Supersede) are deferred to the next
-    /// `ring_tick_inner` invocation via `ring_driver` state.
-    fn handle_coord_msg_sync(&mut self, group_id: &[u8], payload: &[u8]) {
-        let msg = match decode_coord_msg(payload) {
-            Ok(m) => m,
-            Err(e) => {
-                self.debug_log
-                    .log(&format!("ring: coord msg decode failed: {e}"));
-                return;
-            }
-        };
-
-        let my_did = match self.client.as_ref() {
-            Some(c) => c.did().to_string(),
-            None => return,
-        };
-
-        let key_bundle = match self.keys.load_identity_key() {
-            Ok(k) => k,
-            Err(e) => {
-                self.debug_log
-                    .log(&format!("ring: failed to load identity key: {e}"));
-                return;
-            }
-        };
-        let device_name = match self.keys.get_or_create_device_name() {
-            Ok(n) => n,
-            Err(_) => return,
-        };
-        let credential = MoatCredential::new(&my_did, &device_name, *self.mls.device_id());
-
-        let env = StepEnv {
-            my_did: &my_did,
-            credential: &credential,
-            key_bundle: &key_bundle,
-            now_ms: chrono::Utc::now().timestamp_millis(),
-            drawbridge_connected: self.drawbridge.has_own_connection(),
-            sync_session_active: self.sync_session.is_some(),
-            stealth_pubkeys: &[],
-        };
-
-        let cmds = self.ring_driver.step(
-            &self.mls,
-            &env,
-            RingEvent::CoordMsgReceived {
-                source_group_id: group_id.to_vec(),
-                msg,
-            },
-        );
-
-        // step() may have called process_welcome internally — persist MLS state.
-        let _ = self.save_mls_state();
-
-        // Interpret the (small set of) commands this sync path can produce.
-        // Async-only commands (PublishEvent, StealthPublishWelcome,
-        // SendDrawbridgePairOffer) are not expected here; they fire from
-        // ring_tick_inner and are logged if seen.
-        self.interpret_sync_commands(cmds, &my_did);
-
-        if let Err(e) = self.keys.save_ring_state(&self.ring_driver) {
-            self.debug_log
-                .log(&format!("ring: failed to save ring state: {e}"));
-        }
-    }
-
-    /// Interpret the subset of [`RingCommand`]s that a synchronous coord-message
-    /// handler can emit.  Async-only commands are logged and dropped — they
-    /// will be re-emitted by the next `ring_tick_inner` invocation if needed.
-    fn interpret_sync_commands(&mut self, cmds: Vec<RingCommand>, my_did: &str) {
-        for cmd in cmds {
-            match cmd {
-                RingCommand::RegisterGroup { group_id, kind } => {
-                    let group_id_hex = hex::encode(&group_id);
-                    let _ = self.keys.store_group_metadata(
-                        &group_id_hex,
-                        &GroupMetadata {
-                            participant_dids: vec![my_did.to_string()],
-                            participant_handles: vec![],
-                            kind,
-                        },
-                    );
-                    self.populate_candidate_tags(&group_id_hex, &group_id);
-                }
-                RingCommand::ReplenishKeyPackage => {
-                    self.replenish_key_package();
-                }
-                RingCommand::PollForNewDevices => {
-                    // Defer to next ring_tick (which calls poll_for_new_devices async).
-                }
-                RingCommand::SendDrawbridgePairJoin { token } => {
-                    self.pending_pair_token = Some(token.clone());
-                    let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairJoin { token });
-                }
-                RingCommand::PublishEvent { .. }
-                | RingCommand::StealthPublishWelcome { .. }
-                | RingCommand::SendDrawbridgePairOffer { .. } => {
-                    self.debug_log
-                        .log("ring: async-only command emitted from sync path — dropped (will retry on next tick)");
-                }
-            }
-        }
-    }
-
     /// Dismiss the oldest device alert
     pub fn dismiss_device_alert(&mut self) {
         if !self.device_alerts.is_empty() {
@@ -4707,199 +5595,456 @@ impl App {
         }
     }
 
-    // ── History sync ───────────────────────────────────────────────────────────
+    // ── Pair channel: pairing, sync requests and history transfer ─────────────
 
-    /// Build and start a `SyncSession` once the pair WS reports `PairConnected`.
-    fn start_sync_session(&mut self) {
-        use crate::sync::{ConvState, AnchorDto};
-
-        let ring_id = match self.ring_driver.ring_id().map(<[u8]>::to_vec) {
-            Some(id) => id,
-            None => return,
-        };
-        let key_bundle = match self.keys.load_identity_key() {
-            Ok(k) => k,
-            Err(_) => return,
-        };
-        let ring_epoch = self.mls.get_group_epoch(&ring_id).ok().flatten().unwrap_or(0);
-
-        // Collect all user conversations with their digest state.
-        let conv_ids: Vec<String> = self.conversations.iter().map(|c| c.id.clone()).collect();
-        let mut session = crate::sync::SyncSession::new();
-
-        for conv_id in &conv_ids {
-            let group_id = match hex::decode(conv_id) {
-                Ok(id) => id,
-                Err(_) => continue,
-            };
-            let our_messages = self.keys.load_messages(conv_id)
-                .map(|cm| cm.messages)
-                .unwrap_or_default();
-            let our_messages: Vec<crate::sync::SyncMessage> = our_messages.into_iter()
-                .filter(|m| m.rkey != "pending")
-                .map(|m| crate::sync::sync_message_from_stored(&m))
-                .collect();
-            let has_history = !our_messages.is_empty();
-            session.add_conv_plan(group_id.clone(), conv_id.clone(), our_messages, !has_history);
-        }
-
-        // Build our ConvState list for the Hello.
-        let our_convs: Vec<ConvState> = conv_ids.iter().filter_map(|conv_id| {
-            let group_id = hex::decode(conv_id).ok()?;
-            let tip = self.mls.digest_tip(&group_id).unwrap_or([0u8; 32]);
-            let anchors = self.mls.digest_anchors(&group_id);
-            let range = self.mls.range(&group_id);
-            let (oldest, newest) = match range {
-                Some((o, n)) => (Some(o), Some(n)),
-                None => {
-                    // mls.range only tracks events processed via decrypt_event.
-                    // Messages received via sync are stored in keystore only.
-                    // Fall back to keystore so the peer knows we have history.
-                    let msgs = self.keys.load_messages(conv_id)
-                        .map(|cm| cm.messages)
-                        .unwrap_or_default();
-                    let valid: Vec<_> = msgs.iter()
-                        .filter(|m| m.rkey != "pending")
-                        .map(|m| m.rkey.clone())
-                        .collect();
-                    if valid.is_empty() {
-                        (None, None)
-                    } else {
-                        let oldest = valid.iter().min().cloned();
-                        let newest = valid.iter().max().cloned();
-                        (oldest, newest)
-                    }
-                }
-            };
-            Some(ConvState {
-                group_id,
-                oldest_rkey: oldest,
-                newest_rkey: newest,
-                tip_digest: tip.to_vec(),
-                anchors: anchors.iter().map(AnchorDto::from).collect(),
-            })
-        }).collect();
-
-        let outputs = session.on_paired(our_convs, ring_epoch);
-        self.sync_session = Some(session);
-        self.process_sync_outputs(outputs, &ring_id, &key_bundle);
+    /// This device's credential, key bundle and stealth public key, for a
+    /// pairing to keep; `None` until logged in with keys loaded.
+    fn pair_identity(&self) -> Option<PairIdentity> {
+        let my_did = self.client.as_ref()?.did().to_string();
+        let key_bundle = self.keys.load_identity_key().ok()?;
+        let stealth_privkey = self.keys.load_stealth_key().ok()?;
+        let device_name = self.keys.get_or_create_device_name().ok()?;
+        Some(PairIdentity {
+            credential: MoatCredential::new(&my_did, &device_name, *self.mls.device_id()),
+            key_bundle,
+            stealth_pubkey: stealth_pubkey_from_privkey(&stealth_privkey),
+        })
     }
 
-    /// Process `SyncOutput` actions from the state machine.
-    fn process_sync_outputs(
+    /// The key bundle that seals a sync request or offer to the ring.
+    fn sync_key_bundle(&self) -> Result<Vec<u8>> {
+        if self.client.is_none() {
+            return Err(AppError::NotLoggedIn);
+        }
+        Ok(self.keys.load_identity_key()?)
+    }
+
+    /// Run `f` against the pair-channel driver with this device's local state.
+    fn with_pair_env<T>(
         &mut self,
-        outputs: Vec<crate::sync::SyncOutput>,
-        ring_id: &[u8],
-        key_bundle: &[u8],
-    ) {
-        use crate::sync::SyncOutput;
+        f: impl FnOnce(&mut PairChannelDriver, &mut PairEnv<'_>) -> T,
+    ) -> T {
+        let mut env = PairEnv {
+            mls: &self.mls,
+            ring: &mut self.ring_driver,
+            now_ms: chrono::Utc::now().timestamp_millis(),
+        };
+        f(&mut self.pair_channel, &mut env)
+    }
 
-        for output in outputs {
-            match output {
-                SyncOutput::Send(msg) => {
-                    let payload = crate::sync::encode_sync_msg(&msg);
-                    let epoch = self.mls.get_group_epoch(ring_id).ok().flatten().unwrap_or(0);
-                    let event = Event::sync_app(ring_id.to_vec(), epoch, payload);
-                    if let Ok(enc) = self.mls.encrypt_event(ring_id, key_bundle, &event) {
-                        let _ = self.save_mls_state();
-                        let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairBinary { data: enc.ciphertext });
+    /// Carry out the driver's commands, in order.
+    fn apply_pair_commands(&mut self, cmds: Vec<PairChannelCommand>) {
+        for cmd in cmds {
+            match cmd {
+                PairChannelCommand::SendPairOffer { token } => {
+                    let _ = self
+                        .bg_tx
+                        .send(BgEvent::DrawbridgeSendPairOffer { token: token.to_vec() });
+                }
+                PairChannelCommand::SendPairJoin { token } => {
+                    let _ = self
+                        .bg_tx
+                        .send(BgEvent::DrawbridgeSendPairJoin { token: token.to_vec() });
+                }
+                PairChannelCommand::ConnectPair { url, token } => {
+                    let _ = self
+                        .bg_tx
+                        .send(BgEvent::DrawbridgeConnectPair { url, token: token.to_vec() });
+                }
+                PairChannelCommand::SendFrame { data } => {
+                    let _ = self.bg_tx.send(BgEvent::DrawbridgeSendPairBinary { data });
+                }
+                // Queued behind the final sends, which a direct close would drop.
+                PairChannelCommand::ClosePair => {
+                    let _ = self.bg_tx.send(BgEvent::DrawbridgeClosePair);
+                }
+                PairChannelCommand::DropPair => self.drawbridge.clear_pair(),
+                PairChannelCommand::PublishRingEvent { tag, ciphertext } => {
+                    let _ = self.bg_tx.send(BgEvent::PublishRingEvent { tag, ciphertext });
+                }
+                PairChannelCommand::LoadHistory { token } => {
+                    let history = self.load_sync_history();
+                    let cmds = self.with_pair_env(|d, env| d.provide_history(env, &token, history));
+                    self.apply_pair_commands(cmds);
+                }
+                PairChannelCommand::StoreMessages { conv_id, messages } => {
+                    self.store_synced_messages(&conv_id, &messages);
+                }
+                PairChannelCommand::SaveMlsState => {
+                    let _ = self.save_mls_state();
+                }
+                PairChannelCommand::SaveRingState => {
+                    let _ = self.keys.save_ring_state(&self.ring_driver);
+                }
+                PairChannelCommand::RingJoined { ring_id } => {
+                    self.register_ring(&ring_id);
+                    // Fan-out Welcomes may already be waiting.
+                    let _ = self.bg_tx.send(BgEvent::RingTickNow);
+                }
+                PairChannelCommand::DeviceAdmitted { ring_id } => {
+                    // The ring's epoch, and so its candidate tags, advance
+                    // on every Add.
+                    self.register_ring(&ring_id);
+                    let _ = self.bg_tx.send(BgEvent::PollForNewDevicesNow);
+                }
+                PairChannelCommand::SiblingStealthLearned { device_id, scan_pubkey } => {
+                    let cache = &mut self.cached_sibling_stealth;
+                    match cache.iter_mut().find(|c| c.device_id == device_id) {
+                        Some(existing) => existing.scan_pubkey = scan_pubkey,
+                        None => cache.push(SiblingStealth { scan_pubkey, device_id }),
                     }
                 }
-                SyncOutput::Store { conv_id, messages } => {
-                    let my_did = self.client.as_ref().map(|c| c.did().to_string());
-                    for sync_msg in messages {
-                        let mut stored = crate::sync::stored_from_sync_message(&sync_msg);
-                        // Mark is_own based on sender_did vs our DID.
-                        if let (Some(ref did), Some(ref sender)) = (&my_did, &stored.sender_did) {
-                            stored.is_own = sender == did;
-                        }
-                        let _ = self.keys.append_message(&conv_id, stored);
-                    }
-                    self.debug_log.log(&format!("sync: stored batch for conv {conv_id}"));
-                    // Refresh UI if this is the active conversation.
-                    let active_id = self.active_conversation
-                        .and_then(|i| self.conversations.get(i))
-                        .map(|c| c.id.clone());
-                    if active_id.as_deref() == Some(&conv_id) {
-                        let _ = self.load_messages();
+                PairChannelCommand::TransferComplete { tally } => {
+                    self.debug_log.log(&format!(
+                        "sync: transfer complete — received {} message(s) across {} \
+                         conversation(s), sent {} across {}",
+                        tally.messages,
+                        tally.conversations,
+                        tally.sent_messages,
+                        tally.sent_conversations
+                    ));
+                }
+                PairChannelCommand::TransferFailed { detail, during_pairing } => {
+                    self.debug_log.log(&format!("sync: transfer failed: {detail}"));
+                    // The "Paired!" popup is usually dismissed by now.
+                    if during_pairing && self.overlay == Overlay::None {
+                        self.overlay = match self.pair_channel.pairing_is_new_device() {
+                            Some(false) => Overlay::PairApprove,
+                            _ => Overlay::PairShowCode,
+                        };
                     }
                 }
-                SyncOutput::Complete => {
-                    self.debug_log.log("sync: session complete — closing pair WS");
-                    self.sync_session = None;
-                    self.pending_pair_token = None;
-                    self.drawbridge.clear_pair();
-                }
+                PairChannelCommand::Log(line) => self.debug_log.log(&line),
             }
+        }
+        self.sync_pair_overlays();
+    }
+
+    /// Open the prompt a pairing or a sibling's request is waiting on; either
+    /// can arrive while the user is anywhere in the TUI.
+    fn sync_pair_overlays(&mut self) {
+        if matches!(self.pairing_ui_state(), PairingUiState::AwaitingApproval { .. }) {
+            self.overlay = Overlay::PairApprove;
+        } else if self.overlay == Overlay::None
+            && matches!(self.sync_request_ui_state(), SyncRequestUiState::AwaitingApproval { .. })
+        {
+            self.overlay = Overlay::SyncApprove;
         }
     }
 
-    /// Decrypt and dispatch an incoming binary frame from the pair WS.
-    fn process_sync_frame(&mut self, data: Vec<u8>) {
-        use moat_core::EventKind;
+    /// Candidate tags and group metadata for the ring, so this device
+    /// recognises the ring's traffic at its current epoch.
+    fn register_ring(&mut self, ring_id: &[u8]) {
+        let ring_id_hex = hex::encode(ring_id);
+        let my_did = self.client.as_ref().map(|c| c.did().to_string());
+        let _ = self.keys.store_group_metadata(
+            &ring_id_hex,
+            &GroupMetadata {
+                participant_dids: my_did.into_iter().collect(),
+                participant_handles: vec![],
+                kind: GroupKind::Ring,
+                pending_ex_members: Vec::new(),
+                member_device_ids: Default::default(),
+            },
+        );
+        self.register_group_tags(&ring_id_hex, ring_id);
+    }
 
-        let ring_id = match self.ring_driver.ring_id().map(<[u8]>::to_vec) {
-            Some(id) => id,
-            None => return,
-        };
-        let key_bundle = match self.keys.load_identity_key() {
-            Ok(k) => k,
-            Err(_) => return,
-        };
-        let my_did = match self.client.as_ref() {
-            Some(c) => c.did().to_string(),
-            None => return,
-        };
+    /// Every conversation's settled messages, for the transfer's `Hello`.
+    fn load_sync_history(&self) -> Vec<ConvHistory> {
+        self.conversations
+            .iter()
+            .filter_map(|conv| {
+                let group_id = hex::decode(&conv.id).ok()?;
+                let messages = self
+                    .keys
+                    .load_messages(&conv.id)
+                    .map(|cm| cm.messages)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|m| m.rkey != "pending")
+                    .map(|m| crate::sync::sync_message_from_stored(&m))
+                    .collect();
+                Some(ConvHistory { group_id, messages })
+            })
+            .collect()
+    }
 
-        let outcome = match self.mls.decrypt_event(&ring_id, &data) {
-            Ok(o) => o,
-            Err(e) => {
-                self.debug_log.log(&format!("sync: decrypt_event failed: {e}"));
-                return;
-            }
-        };
-        let _ = self.save_mls_state();
+    fn store_synced_messages(&mut self, conv_id: &str, messages: &[crate::sync::SyncMessage]) {
+        self.register_synced_conversation(conv_id, messages);
+        let my_did = self.client.as_ref().map(|c| c.did().to_string());
+        // One write for the batch; per-message append is quadratic.
+        let stored = messages
+            .iter()
+            .map(|m| crate::sync::stored_from_sync_message(m, my_did.as_deref()))
+            .collect();
+        let _ = self.keys.append_messages(conv_id, stored);
+        self.debug_log.log(&format!("sync: stored batch for conv {conv_id}"));
+        let active_id = self
+            .active_conversation
+            .and_then(|i| self.conversations.get(i))
+            .map(|c| c.id.clone());
+        if active_id.as_deref() == Some(conv_id) {
+            let _ = self.load_messages();
+        }
+    }
 
-        let decrypted = outcome.into_result();
-        if !matches!(decrypted.event.kind, EventKind::SyncApp) {
-            self.debug_log.log("sync: unexpected event kind on pair WS");
+    /// Surface a conversation whose history arrived by sync before we were
+    /// a member of it.
+    ///
+    /// `handle_hello` plans for every conversation the peer has and we do
+    /// not, so a donor can serve history for a group whose fan-out `Add`
+    /// has not reached us yet. Without this the messages land in storage
+    /// and are visible nowhere — the conversation list is built from
+    /// group metadata, and there is none.
+    ///
+    /// Registered read-only: participants are inferred from who actually
+    /// sent the messages, since there is no local MLS group to ask, and
+    /// `is_member` stays false until the `Add` arrives and
+    /// `RingCommand::RegisterGroup` upgrades it. The composer is closed
+    /// meanwhile, because there is genuinely nothing to send into.
+    ///
+    /// Normally transient: the peer that had the history is in the
+    /// conversation and its `poll_for_new_devices` adds us. Not
+    /// guaranteed to be brief, though — an Add can only come from a
+    /// member, so if the donor was the only one and it goes offline right
+    /// after the transfer, nothing adds us until it returns.
+    fn register_synced_conversation(&mut self, conv_id: &str, messages: &[crate::sync::SyncMessage]) {
+        if self.conversations.iter().any(|c| c.id == conv_id) {
+            return;
+        }
+        let Ok(group_id) = hex::decode(conv_id) else { return };
+        // A group we are actually in has local MLS state; one we only
+        // hold history for does not. Same check the conversation list
+        // makes on load.
+        if self.mls.get_group_epoch(&group_id).ok().flatten().is_some() {
             return;
         }
 
-        let msg = match crate::sync::decode_sync_msg(&decrypted.event.payload) {
-            Ok(m) => m,
-            Err(e) => {
-                self.debug_log.log(&format!("sync: decode_sync_msg failed: {e}"));
-                return;
+        let my_did = self.client.as_ref().map(|c| c.did().to_string());
+        let mut participant_dids: Vec<String> = Vec::new();
+        for m in messages {
+            if Some(&m.sender_did) == my_did.as_ref() {
+                continue;
             }
-        };
-
-        let session = match self.sync_session.as_mut() {
-            Some(s) => s,
-            None => {
-                self.debug_log.log("sync: frame received but no active session");
-                return;
+            if !participant_dids.contains(&m.sender_did) {
+                participant_dids.push(m.sender_did.clone());
             }
-        };
+        }
 
-        let outputs = session.on_message(msg, &my_did);
-        // Borrow checker: take the session out temporarily to call process_sync_outputs.
-        let ring_id_clone = ring_id.clone();
-        self.process_sync_outputs(outputs, &ring_id_clone, &key_bundle);
+        let metadata = GroupMetadata {
+            participant_dids: participant_dids.clone(),
+            participant_handles: Vec::new(),
+            kind: GroupKind::User,
+            pending_ex_members: Vec::new(),
+            member_device_ids: Default::default(),
+        };
+        if let Err(e) = self.keys.store_group_metadata(conv_id, &metadata) {
+            self.debug_log
+                .log(&format!("sync: could not persist synced conversation {conv_id}: {e}"));
+            return;
+        }
+
+        self.debug_log.log(&format!(
+            "sync: registering {conv_id} read-only — history arrived before membership"
+        ));
+        self.conversations.push(Conversation {
+            id: conv_id.to_string(),
+            name: None,
+            participant_handles: participant_dids.clone(),
+            participant_dids,
+            current_epoch: 1,
+            unread: messages.len(),
+            is_member: false,
+        });
+    }
+
+    /// The pair channel for `session_token` ended.
+    fn on_pair_closed(&mut self, session_token: Option<Vec<u8>>, reason: String) {
+        let cmds = self.pair_channel.on_pair_closed(session_token.as_deref(), reason);
+        self.apply_pair_commands(cmds);
     }
 
     /// Return the current sync status for the HTTP API.
-    pub fn sync_status(&self) -> serde_json::Value {
-        match &self.sync_session {
-            Some(_) => serde_json::json!({ "active": true }),
-            None => serde_json::json!({ "active": false }),
+    ///
+    /// Takes `&mut self` so a request whose rendezvous has expired is
+    /// reported as failed the moment it is *read*.
+    pub fn sync_status(&mut self) -> serde_json::Value {
+        self.expire_sync_request_if_due();
+        serde_json::json!({
+            "active": self.pair_channel.is_transferring(),
+            "request": self.sync_request_ui_state(),
+        })
+    }
+
+    /// Progress of the history transfer on the pair channel, whichever
+    /// gesture opened it; `None` when nothing is transferring.
+    pub fn sync_progress(&self) -> Option<moat_core::SyncProgress> {
+        self.pair_channel.progress()
+    }
+
+    /// Move an unanswered sync request to `Failed` once its rendezvous
+    /// token has expired. Driven from the periodic tick and from every
+    /// read of the status, since the driver has no clock of its own.
+    pub fn expire_sync_request_if_due(&mut self) {
+        let cmds = self.pair_channel.tick(chrono::Utc::now().timestamp_millis());
+        self.apply_pair_commands(cmds);
+    }
+
+    /// Projection of the sync-request gesture, for `/sync/status` and the TUI.
+    pub fn sync_request_ui_state(&self) -> SyncRequestUiState {
+        self.pair_channel.sync_request_ui_state()
+    }
+
+    /// HTTP `POST /sync/request` — ask the user's other devices for
+    /// history this one is missing. Every online sibling prompts its user;
+    /// whichever one they approve serves.
+    pub fn api_sync_request(&mut self) -> Result<()> {
+        self.api_sync_request_from(None)
+    }
+
+    /// HTTP `POST /sync/request` with a chosen donor; `None` asks every
+    /// sibling.
+    pub fn api_sync_request_from(
+        &mut self,
+        target_device_id: Option<moat_core::DeviceId>,
+    ) -> Result<()> {
+        let key_bundle = self.sync_key_bundle()?;
+        let cmds = self
+            .with_pair_env(|d, env| d.sync_request(env, &key_bundle, target_device_id))
+            .map_err(AppError::Mls)?;
+        self.apply_pair_commands(cmds);
+        Ok(())
+    }
+
+    /// HTTP `POST /sync/offer` — send history to another device. This call
+    /// is the human approval, so the target joins without a prompt.
+    pub fn api_sync_offer(&mut self, target_device_id: moat_core::DeviceId) -> Result<()> {
+        let key_bundle = self.sync_key_bundle()?;
+        let cmds = self
+            .with_pair_env(|d, env| d.sync_offer(env, &key_bundle, target_device_id))
+            .map_err(AppError::Mls)?;
+        self.apply_pair_commands(cmds);
+        Ok(())
+    }
+
+    /// HTTP `POST /sync/accept` — send this device's history to the
+    /// sibling that asked for it.
+    pub fn api_sync_accept(&mut self) -> Result<()> {
+        if self.client.is_none() {
+            return Err(AppError::NotLoggedIn);
+        }
+        let cmds = self.pair_channel.sync_accept().map_err(AppError::Mls)?;
+        self.apply_pair_commands(cmds);
+        Ok(())
+    }
+
+    /// HTTP `POST /sync/decline` — refuse a sibling's request. Local only:
+    /// it keeps waiting for another sibling or for its token to expire.
+    pub fn api_sync_decline(&mut self) -> Result<()> {
+        self.pair_channel.sync_decline().map_err(AppError::Mls)
+    }
+
+    /// Existing device: approve the pending `Enroll`, from the TUI or
+    /// `POST /pair/approve`.
+    fn approve_pending_pairing(&mut self) -> Result<()> {
+        let siblings = self.cached_sibling_stealth.clone();
+        let cmds = self
+            .with_pair_env(|d, env| d.pair_approve(env, &siblings))
+            .map_err(AppError::Mls)?;
+        self.apply_pair_commands(cmds);
+        match self.pairing_ui_state() {
+            PairingUiState::Failed { reason } => Err(AppError::Other(reason)),
+            _ => Ok(()),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use moat_atproto::EventRecord;
+
+    fn display(rkey: &str, id: u8) -> DisplayMessage {
+        DisplayMessage {
+            from: "Peer".to_string(),
+            content: rkey.to_string(),
+            timestamp: chrono::Utc::now(),
+            is_own: false,
+            sender_did: None,
+            sender_device: None,
+            message_id: Some(vec![id]),
+            reactions: vec![],
+            image_proto: None,
+            image_loading: false,
+            rkey: rkey.to_string(),
+            send_failed: None,
+        }
+    }
+
+    fn app_with_messages(dir: &std::path::Path, rkeys: &[&str]) -> App {
+        let mut app = App::new(
+            Some(dir.to_path_buf()),
+            None,
+            None,
+            ratatui_image::picker::Picker::halfblocks(),
+        )
+        .expect("app in a temp dir");
+        app.messages = rkeys.iter().enumerate().map(|(i, r)| display(r, i as u8)).collect();
+        app
+    }
+
+    fn selected_rkey(app: &App) -> Option<&str> {
+        app.selected_message.map(|i| app.messages[i].rkey.as_str())
+    }
+
+    /// A reaction goes to the selected message, so an arrival must not
+    /// move the selection onto a different one.
+    #[test]
+    fn an_arrival_before_the_selection_leaves_it_on_the_same_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = app_with_messages(dir.path(), &["b", "d", "f"]);
+        app.selected_message = Some(1);
+
+        app.insert_message_ordered(display("a", 10));
+        app.insert_message_ordered(display("e", 11));
+        app.insert_message_ordered(display("g", 12));
+
+        assert_eq!(selected_rkey(&app), Some("d"));
+    }
+
+    #[test]
+    fn a_resort_leaves_the_selection_on_the_same_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = app_with_messages(dir.path(), &["b", "pending", "c"]);
+        app.selected_message = Some(2);
+
+        app.sort_messages();
+
+        assert_eq!(selected_rkey(&app), Some("c"));
+    }
+
+    /// Nothing else expires a status, so one that outstayed its welcome
+    /// would mask the key hints for the rest of the session.
+    #[test]
+    fn a_status_notice_expires_and_gives_the_footer_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(
+            Some(dir.path().to_path_buf()),
+            None,
+            None,
+            ratatui_image::picker::Picker::halfblocks(),
+        )
+        .expect("app in a temp dir");
+
+        app.set_status("Resolving alice.test...".to_string());
+        assert_eq!(app.status_notice(), Some("Resolving alice.test..."));
+
+        // Backdated rather than slept for: a test that waits on the real
+        // clock is a test that is slow and flaky at once.
+        app.status_set_at = Some(Instant::now() - Duration::from_secs(60));
+        assert_eq!(app.status_notice(), None);
+    }
 
     fn make_event(rkey: &str, tag: [u8; 16]) -> EventRecord {
         EventRecord {
@@ -4953,6 +6098,7 @@ mod tests {
             participant_handles: vec!["alice.bsky.social".to_string(), "bob.bsky.social".to_string()],
             current_epoch: 1,
             unread: 0,
+            is_member: true,
         };
         assert_eq!(conv.display_name(), "Work Chat");
     }
@@ -4966,6 +6112,7 @@ mod tests {
             participant_handles: vec!["alice.bsky.social".to_string(), "bob.bsky.social".to_string()],
             current_epoch: 1,
             unread: 0,
+            is_member: true,
         };
         assert_eq!(conv.display_name(), "alice.bsky.social, bob.bsky.social");
     }
@@ -4979,6 +6126,7 @@ mod tests {
             participant_handles: vec![],
             current_epoch: 1,
             unread: 0,
+            is_member: true,
         };
         assert_eq!(conv.display_name(), "did:plc:alice, did:plc:bob");
     }
@@ -5016,6 +6164,7 @@ mod tests {
             participant_handles: vec!["alice.bsky.social".to_string()],
             current_epoch: 1,
             unread: 0,
+            is_member: true,
         };
         assert_eq!(conv.display_name(), "alice.bsky.social");
     }

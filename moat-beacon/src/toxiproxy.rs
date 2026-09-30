@@ -8,11 +8,11 @@
 //! Phase 2 just routes connections through clean proxies (no toxics).
 //! Fault injection is added in Phase 3+.
 
+use crate::ports::reserve_port;
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde_json::json;
 use std::{
-    net::TcpListener,
     path::PathBuf,
     process::{Child, Command},
 };
@@ -60,7 +60,8 @@ impl ToxiproxyManager {
             .await
             .context("obtain toxiproxy-server binary")?;
 
-        let mgmt_port = free_port().context("allocate toxiproxy management port")?;
+        let mut reserved = reserve_port().context("allocate toxiproxy management port")?;
+        let mgmt_port = reserved.port();
 
         let mut cmd = Command::new(&bin);
         cmd.args(["-port", &mgmt_port.to_string()])
@@ -68,6 +69,8 @@ impl ToxiproxyManager {
             .stderr(std::process::Stdio::null());
         #[cfg(unix)]
         cmd.process_group(0); // new group; child PID becomes the PGID
+        // Last possible moment before the child binds it.
+        reserved.release();
         let child = cmd.spawn().context("spawn toxiproxy-server")?;
 
         let pgid = child.id();
@@ -97,8 +100,12 @@ impl ToxiproxyManager {
     ///
     /// Returns a [`ProxyHandle`] containing the listen address and a full URL.
     pub async fn create_proxy(&self, name: &str, upstream_addr: &str) -> Result<ProxyHandle> {
-        let listen_port = free_port().context("allocate proxy listen port")?;
-        let listen_addr = format!("127.0.0.1:{listen_port}");
+        // Toxiproxy binds this port itself when it accepts the request,
+        // so the reservation is released immediately before the POST
+        // rather than before a spawn.
+        let mut reserved = reserve_port().context("allocate proxy listen port")?;
+        let listen_addr = format!("127.0.0.1:{}", reserved.port());
+        reserved.release();
 
         let resp = self
             .client
@@ -131,6 +138,9 @@ impl ToxiproxyManager {
     /// `kind` is a Toxiproxy toxic type string (e.g. `"latency"`, `"timeout"`,
     /// `"bandwidth"`, `"slow_close"`, `"reset_peer"`, `"limit_data"`).
     ///
+    /// `stream` is `"upstream"` (client → server) or `"downstream"`
+    /// (server → client).
+    ///
     /// `attributes` is passed verbatim as the `attributes` JSON object.
     /// Example for latency: `json!({"latency": 200, "jitter": 50})`.
     pub async fn add_toxic(
@@ -138,6 +148,7 @@ impl ToxiproxyManager {
         proxy_name: &str,
         toxic_name: &str,
         kind: &str,
+        stream: &str,
         toxicity: f64,
         attributes: serde_json::Value,
     ) -> Result<()> {
@@ -150,7 +161,7 @@ impl ToxiproxyManager {
             .json(&json!({
                 "name":       toxic_name,
                 "type":       kind,
-                "stream":     "upstream",
+                "stream":     stream,
                 "toxicity":   toxicity,
                 "attributes": attributes,
             }))
@@ -354,11 +365,6 @@ async fn download_toxiproxy(dest: &PathBuf) -> Result<()> {
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
-
-fn free_port() -> Result<u16> {
-    let listener = TcpListener::bind("127.0.0.1:0").context("bind ephemeral port")?;
-    Ok(listener.local_addr()?.port())
-}
 
 /// Poll `GET /version` until Toxiproxy's management API responds or the
 /// 10-second deadline expires.

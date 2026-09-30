@@ -621,8 +621,12 @@ pub async fn spawn_postern(config: PosternConfig) -> PosternHandle {
     // Build the in-memory store.
     let store = Arc::new(RwLock::new(Store::new(&config.accounts)));
 
-    // Bind the TCP listener.
-    let addr = format!("127.0.0.1:{}", config.port.unwrap_or(0));
+    // Bind the TCP listener. `server_url` (below) intentionally stays
+    // loopback-addressed regardless of `bind_addr` — it's self-reported to
+    // Drawbridge and in Postern's own `.well-known/did.json`, and those
+    // consumers always run on this same host.
+    let bind_host = config.bind_addr.as_deref().unwrap_or("127.0.0.1");
+    let addr = format!("{bind_host}:{}", config.port.unwrap_or(0));
     let listener = TcpListener::bind(&addr)
         .await
         .expect("failed to bind postern listener");

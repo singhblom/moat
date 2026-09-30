@@ -21,7 +21,6 @@ void main() {
       content: content,
       timestamp: DateTime.utc(2025, 1, 15, 12, 0, 0),
       isOwn: true,
-      epoch: 0,
       status: status,
       localId: localId,
       messageId: Uint8List.fromList([1, 2, 3, 4]),
@@ -40,23 +39,6 @@ void main() {
       }
 
       expect(sentOrder, ['msg-a', 'msg-b', 'msg-c']);
-    });
-
-    test('stops processing on failure', () async {
-      final sentOrder = <String>[];
-      final failedIds = <String>[];
-      final items = ['msg-a', 'msg-b-fail', 'msg-c'];
-
-      for (final localId in items) {
-        if (localId.contains('fail')) {
-          failedIds.add(localId);
-          break; // Stop on failure
-        }
-        sentOrder.add(localId);
-      }
-
-      expect(sentOrder, ['msg-a']);
-      expect(failedIds, ['msg-b-fail']);
     });
 
     test('retry reprocesses failed message', () async {
@@ -103,11 +85,11 @@ void main() {
     test('callbacks invoked on failure', () {
       String? failedLocalId;
 
-      void onFailed(String localId) {
+      void onFailed(String localId, String error) {
         failedLocalId = localId;
       }
 
-      onFailed('local_1');
+      onFailed('local_1', 'Mock failure');
 
       expect(failedLocalId, 'local_1');
     });

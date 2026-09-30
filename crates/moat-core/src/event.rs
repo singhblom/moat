@@ -17,12 +17,21 @@ pub enum EventKind {
     Control(ControlKind),
     Message(MessageKind),
     Modifier(ModifierKind),
-    /// Device-coordination message sent over a `DeviceCoord` or `Ring` group.
-    /// The full [`crate::CoordMsg`] is JSON-encoded in `Event.payload`.
-    Coord,
-    /// Sync protocol message sent over the device ring, transmitted as binary
-    /// frames on the pair WebSocket. The payload is a padded JSON `SyncMsg`.
-    SyncApp,
+    /// Steady-state same-user coordination message addressed to a specific
+    /// sibling device. The payload is a JSON-encoded [`crate::CoordMsg`]
+    /// (`KpBatch` / `KpRequest` / `UserConvWelcome`); the sender's device id
+    /// travels in `Event.sender_device_id`. Delivered as a stealth-encrypted
+    /// `social.moat.event` to the sibling's `scan_pubkey` — epoch-free and
+    /// order-insensitive. `group_id` and `epoch` are not meaningful
+    /// (empty / 0).
+    SiblingMsg,
+    /// Application message on the device ring, MLS-encrypted and published
+    /// to the PDS under a ring tag. The payload is a JSON-encoded
+    /// [`crate::RingMsg`]. Unlike [`EventKind::SiblingMsg`] this lane is
+    /// authenticated (the sender's identity comes from its MLS leaf
+    /// credential) and reaches every sibling from one publish, at the cost
+    /// of being epoch-bound like any MLS application message.
+    RingMsg,
     /// Legacy or unknown domain.
     Unknown(String),
 }
@@ -61,8 +70,8 @@ impl EventKind {
             EventKind::Control(kind) => kind.as_str_with_domain("control"),
             EventKind::Message(kind) => kind.as_str_with_domain("message"),
             EventKind::Modifier(kind) => kind.as_str_with_domain("modifier"),
-            EventKind::Coord => "coord".to_string(),
-            EventKind::SyncApp => "sync.app".to_string(),
+            EventKind::SiblingMsg => "sibling.msg".to_string(),
+            EventKind::RingMsg => "ring.msg".to_string(),
             EventKind::Unknown(s) => s.clone(),
         }
     }
@@ -74,12 +83,21 @@ impl EventKind {
 /// This provides both user identity (DID) and device information for multi-device support.
 ///
 /// Note: This is receiver-side metadata extracted from MLS, not part of the encrypted Event.
+/// `Event.sender_device_id` carries the *same* device id encoded inside the
+/// encrypted payload, used at decrypt time as the per-device hash-chain key;
+/// `decrypt_event` cross-checks the two and surfaces a
+/// `TranscriptWarning::SenderIdentityMismatch` on divergence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SenderInfo {
     /// The sender's decentralized identifier
     pub did: String,
     /// The name of the device that sent the message (format: "did:plc:xxx/Device Name")
     pub device_name: String,
+    /// The sender's stable 16-byte device id, taken from the MLS credential.
+    /// Matches `Event.sender_device_id` (which is the in-plaintext mirror used
+    /// for hash-chain keying); divergence between the two is a transcript
+    /// warning.
+    pub device_id: [u8; 16],
     /// The MLS leaf index of the sender (for internal use)
     #[serde(default)]
     pub leaf_index: Option<u32>,
@@ -91,6 +109,7 @@ impl SenderInfo {
         Self {
             did: credential.did().to_string(),
             device_name: credential.device_name().to_string(),
+            device_id: *credential.device_id(),
             leaf_index: None,
         }
     }
@@ -158,8 +177,20 @@ pub struct Event {
     #[serde(default)]
     pub epoch_fingerprint: Option<Vec<u8>>,
 
-    /// The 16-byte device ID of the sender. Used to key the per-device
-    /// hash chain on the recipient side. Set by encrypt_event.
+    /// The 16-byte device ID of the sender, embedded in the encrypted
+    /// payload at encrypt time.  Used at decrypt time as the key into
+    /// the per-device hash chain (`prev_event_hash` indexing) — i.e. it
+    /// is a wire-level transcript-integrity field, *not* the canonical
+    /// receiver-side sender identity.
+    ///
+    /// The same device id is also extracted from the MLS credential at
+    /// decrypt time and exposed on [`crate::DecryptResult::sender`]
+    /// (see [`SenderInfo::device_id`]).  `decrypt_event` cross-checks the
+    /// two; if they disagree the receiver gets a
+    /// [`TranscriptWarning::SenderIdentityMismatch`].  Removing this
+    /// field would conflate the wire/transcript concern with the
+    /// receiver-facing API and would also change `Event` JSON, breaking
+    /// the chain digest.
     #[serde_as(as = "Option<serde_with::base64::Base64>")]
     #[serde(default)]
     pub sender_device_id: Option<Vec<u8>>,
@@ -273,13 +304,16 @@ impl Event {
         }
     }
 
-    /// Create a sync-app message event for the device ring, transmitted on the pair WS.
-    pub fn sync_app(group_id: Vec<u8>, epoch: u64, payload: Vec<u8>) -> Self {
+    /// Create a device-ring application event carrying a JSON-encoded
+    /// [`crate::RingMsg`]. MLS-framed like any group message, so `group_id`
+    /// is the ring and `epoch` the ring's current epoch; the sender is
+    /// authenticated by MLS rather than declared in the payload.
+    pub fn ring_msg(group_id: Vec<u8>, epoch: u64, ring_msg_json: Vec<u8>) -> Self {
         Self {
-            kind: EventKind::SyncApp,
+            kind: EventKind::RingMsg,
             group_id,
             epoch,
-            payload,
+            payload: ring_msg_json,
             message_id: None,
             prev_event_hash: None,
             epoch_fingerprint: None,
@@ -287,17 +321,21 @@ impl Event {
         }
     }
 
-    /// Create a coordination message event for a `DeviceCoord` group.
-    pub fn coord(group_id: Vec<u8>, epoch: u64, payload: Vec<u8>) -> Self {
+    /// Create a sibling coordination event carrying a JSON-encoded `CoordMsg`
+    /// destined for a specific sibling via the stealth lane. `group_id` and
+    /// `epoch` are unused (empty / `0`); the sender identifies itself via
+    /// `sender_device_id` (unauthenticated at this layer — receivers verify
+    /// KP payloads against ring leaf credentials).
+    pub fn sibling_msg(sender_device_id: Vec<u8>, coord_msg_json: Vec<u8>) -> Self {
         Self {
-            kind: EventKind::Coord,
-            group_id,
-            epoch,
-            payload,
+            kind: EventKind::SiblingMsg,
+            group_id: Vec::new(),
+            epoch: 0,
+            payload: coord_msg_json,
             message_id: None,
             prev_event_hash: None,
             epoch_fingerprint: None,
-            sender_device_id: None,
+            sender_device_id: Some(sender_device_id),
         }
     }
 
@@ -366,6 +404,18 @@ pub enum TranscriptWarning {
     },
     /// A commit conflict was automatically recovered.
     ConflictRecovered { group_id: Vec<u8> },
+    /// The `device_id` in the encrypted payload (`Event.sender_device_id`)
+    /// disagreed with the MLS credential's `device_id`.  Both should be
+    /// the same byte-string; a mismatch means the sender lied in the
+    /// plaintext or an MLS-layer key substitution slipped past the
+    /// authenticator.  Either case is a security-relevant signal.
+    SenderIdentityMismatch {
+        group_id: Vec<u8>,
+        /// What the encrypted payload claimed.
+        payload_device_id: Vec<u8>,
+        /// What the MLS credential said.
+        credential_device_id: Vec<u8>,
+    },
 }
 
 impl std::fmt::Display for TranscriptWarning {
@@ -394,6 +444,18 @@ impl std::fmt::Display for TranscriptWarning {
             }
             TranscriptWarning::ConflictRecovered { .. } => {
                 write!(f, "commit conflict automatically recovered")
+            }
+            TranscriptWarning::SenderIdentityMismatch {
+                payload_device_id,
+                credential_device_id,
+                ..
+            } => {
+                write!(
+                    f,
+                    "sender identity mismatch: payload={:02x?} credential={:02x?}",
+                    &payload_device_id[..4.min(payload_device_id.len())],
+                    &credential_device_id[..4.min(credential_device_id.len())],
+                )
             }
         }
     }
@@ -465,14 +527,14 @@ impl<'de> Deserialize<'de> for EventKind {
                 "control" => EventKind::Control(ControlKind::from_variant(variant)),
                 "message" => EventKind::Message(MessageKind::from_variant(variant)),
                 "modifier" => EventKind::Modifier(ModifierKind::from_variant(variant)),
-                "sync" => EventKind::SyncApp,
+                "sibling" if variant == "msg" => EventKind::SiblingMsg,
+                "ring" if variant == "msg" => EventKind::RingMsg,
                 _ => EventKind::Unknown(raw),
             };
             Ok(kind)
         } else {
             // Legacy single-token kinds.
             let legacy = match raw.as_str() {
-                "coord" => EventKind::Coord,
                 "message" => EventKind::Message(MessageKind::Legacy),
                 "commit" => EventKind::Control(ControlKind::Commit),
                 "welcome" => EventKind::Control(ControlKind::Welcome),
@@ -620,6 +682,26 @@ mod tests {
             EventKind::Modifier(ModifierKind::Reaction)
         ));
         assert!(reaction.message_id.is_some());
+    }
+
+    #[test]
+    fn test_sibling_msg_roundtrip() {
+        let sender = vec![7u8; 16];
+        let payload = br#"{"type":"kp_request","owner_device_id":"BwcHBwcHBwcHBwcHBwcHBw==","count":4}"#.to_vec();
+        let event = Event::sibling_msg(sender.clone(), payload.clone());
+
+        let bytes = event.to_bytes().unwrap();
+        let recovered = Event::from_bytes(&bytes).unwrap();
+
+        assert!(matches!(recovered.kind, EventKind::SiblingMsg));
+        assert_eq!(recovered.payload, payload);
+        assert_eq!(recovered.sender_device_id, Some(sender));
+        assert!(recovered.group_id.is_empty());
+        assert_eq!(recovered.epoch, 0);
+
+        // Wire tag is `sibling.msg`.
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["kind"], serde_json::Value::String("sibling.msg".to_string()));
     }
 
     #[test]

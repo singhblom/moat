@@ -1,18 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:moat_dart_common/moat_dart_common.dart' hide ConversationManager, ConversationRepository;
+import 'package:moat_dart_common/moat_dart_common.dart';
 import '../providers/auth_provider.dart';
 import '../providers/conversations_provider.dart';
 import '../providers/theme_provider.dart';
 import '../providers/watch_list_provider.dart';
-import '../services/conversation_manager.dart';
-import '../services/conversation_repository.dart';
 import '../providers/profile_provider.dart';
 import '../utils/display_name.dart';
+import '../widgets/common_listenable.dart';
 import '../widgets/avatar_widget.dart';
 import 'conversation_screen.dart';
 import 'new_conversation_screen.dart';
+import 'show_pairing_code_screen.dart';
+import 'enter_pairing_code_screen.dart';
 import 'watch_list_screen.dart';
+import '../services/device_ring_manager.dart';
+import 'devices_screen.dart';
 
 class ConversationsScreen extends StatelessWidget {
   const ConversationsScreen({super.key});
@@ -42,6 +45,29 @@ class ConversationsScreen extends StatelessWidget {
               } else if (value == 'toggle_theme') {
                 final brightness = Theme.of(context).brightness;
                 context.read<ThemeProvider>().toggleTheme(brightness);
+              } else if (value == 'show_pairing_code') {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => const ShowPairingCodeScreen(),
+                  ),
+                );
+              } else if (value == 'enter_pairing_code') {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => const EnterPairingCodeScreen(),
+                  ),
+                );
+              } else if (value == 'devices') {
+                final ring = DeviceRingManager.instance.service;
+                if (ring == null) return;
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => DevicesScreen(
+                      authService: auth.service,
+                      ringService: ring,
+                    ),
+                  ),
+                );
               }
             },
             itemBuilder: (context) {
@@ -68,6 +94,38 @@ class ConversationsScreen extends StatelessWidget {
                     ],
                   ),
                 ),
+                const PopupMenuDivider(),
+                const PopupMenuItem(
+                  value: 'show_pairing_code',
+                  child: Row(
+                    children: [
+                      Icon(Icons.qr_code),
+                      SizedBox(width: 8),
+                      Text('Show my pairing code'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'enter_pairing_code',
+                  child: Row(
+                    children: [
+                      Icon(Icons.qr_code_scanner),
+                      SizedBox(width: 8),
+                      Text('Enter a pairing code'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'devices',
+                  child: Row(
+                    children: [
+                      Icon(Icons.devices_other),
+                      SizedBox(width: 8),
+                      Text('Linked devices'),
+                    ],
+                  ),
+                ),
+                const PopupMenuDivider(),
                 const PopupMenuItem(
                   value: 'logout',
                   child: Row(
@@ -239,8 +297,9 @@ class _ConversationTile extends StatelessWidget {
 
         Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (context) => ChangeNotifierProvider<ConversationRepository>.value(
+            builder: (context) => CommonListenableProvider<ConversationRepository>.value(
               value: repo,
+              listenable: (r) => r.changes,
               child: ConversationScreen(conversation: conversation),
             ),
           ),

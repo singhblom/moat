@@ -128,7 +128,10 @@ func NewRelay(publicURL, fallbackURL string, resolver DIDResolver, verifier PDSV
 //  1. RELAY_PUBLIC_URL (explicit config) — works everywhere, no header needed
 //  2. X-Forwarded-Proto + Host headers — works on Fly.io, AWS, Railway, Render,
 //     Traefik, Caddy, HAProxy, and any properly configured Nginx
-//  3. TLS-based fallback URL — used in local dev and when running without a proxy
+//  3. Host header, scheme from RELAY_TLS — local dev without a proxy, where
+//     clients may reach the same relay via different addresses (emulator on
+//     10.0.2.2, CLI on 127.0.0.1); one fixed string cannot match both.
+//  4. TLS-based fallback — only if the request carries no Host header.
 func (r *Relay) clientRelayURL(req *http.Request) string {
 	path := req.URL.Path
 	if r.publicURL != "" {
@@ -140,6 +143,13 @@ func (r *Relay) clientRelayURL(req *http.Request) string {
 		return "wss://" + host + path
 	case "http":
 		return "ws://" + host + path
+	}
+	if host != "" {
+		scheme := "ws"
+		if strings.HasPrefix(r.relayURL, "wss://") {
+			scheme = "wss"
+		}
+		return scheme + "://" + host + path
 	}
 	return r.relayURL + path
 }
@@ -194,14 +204,14 @@ func (r *Relay) unregister(c *Client) {
 	}
 	delete(r.clients, c)
 
-	// Remove from tag index; collect tags that now have no remaining watchers.
-	var emptyTags []string
+	// Remove from tag index.
+	watched := make([]string, 0, len(c.tags))
 	for tag := range c.tags {
+		watched = append(watched, tag)
 		if clients, ok := r.byTag[tag]; ok {
 			delete(clients, c)
 			if len(clients) == 0 {
 				delete(r.byTag, tag)
-				emptyTags = append(emptyTags, tag)
 			}
 		}
 	}
@@ -214,25 +224,28 @@ func (r *Relay) unregister(c *Client) {
 
 	r.mu.Unlock()
 
-	// Create a disconnect buffer for each tag that lost its last watcher.
-	// Any client that reconnects and watches one of these tags will receive
-	// the buffered events, regardless of which DID it authenticated with.
-	if len(emptyTags) > 0 {
+	// Buffer every watched tag, even ones others still watch (a sender never
+	// gets its own events); push relies on this during the grace window. Keep
+	// existing buffers.
+	if len(watched) > 0 {
+		expiresAt := time.Now().Add(30 * time.Second)
 		r.bufferMu.Lock()
-		for _, tag := range emptyTags {
-			r.buffers[tag] = &DisconnectBuffer{
-				expiresAt: time.Now().Add(30 * time.Second),
+		for _, tag := range watched {
+			if buf, ok := r.buffers[tag]; ok {
+				buf.expiresAt = expiresAt
+			} else {
+				r.buffers[tag] = &DisconnectBuffer{expiresAt: expiresAt}
 			}
 		}
 		r.bufferMu.Unlock()
-		r.log.Info("created disconnect buffers", "tag_count", len(emptyTags))
+		r.log.Info("created disconnect buffers", "tag_count", len(watched))
 	}
 
 	// Cancel any pending pairing sessions before closing the send channel so
 	// that pair_closed notifications can still be queued to c.send (they'll
 	// be drained by the write pump before it exits).
 	r.pairs.onMainWSDisconnect(c)
-	close(c.send)
+	c.closeSend()
 }
 
 func (r *Relay) handleWatchTags(c *Client, msg *WatchTagsMsg) {
@@ -696,10 +709,15 @@ func (r *Relay) handlePairJoin(c *Client, msg *PairJoinMsg) {
 		c.sendMsg(ErrorMsg{Type: "error", Message: err.Error()})
 		return
 	}
-	pairURL := pairWSURL(sess.Offerer.relayURL)
-	ready := PairReadyMsg{Type: "pair_ready", Token: msg.Token, PairURL: pairURL}
-	sess.Offerer.sendMsg(ready)
-	c.sendMsg(ready)
+	// Each side gets a /pair URL from *its own* relayURL — same reasoning as
+	// clientRelayURL. One shared URL taken from the offerer only works when
+	// every client reaches the relay at the same address.
+	sess.Offerer.sendMsg(PairReadyMsg{
+		Type: "pair_ready", Token: msg.Token, PairURL: pairWSURL(sess.Offerer.relayURL),
+	})
+	c.sendMsg(PairReadyMsg{
+		Type: "pair_ready", Token: msg.Token, PairURL: pairWSURL(c.relayURL),
+	})
 	r.log.Info("pair session ready")
 }
 
@@ -760,30 +778,31 @@ func (r *Relay) servePairWS(w http.ResponseWriter, req *http.Request) {
 	pairedData, _ := json.Marshal(PairedMsg{Type: "paired"})
 	conn.SetWriteDeadline(time.Now().Add(writeWait))
 	if err := conn.WriteMessage(websocket.TextMessage, pairedData); err != nil {
-		r.pairs.terminateSession(attach.Token, "write_error")
+		r.pairs.terminateSession(attach.Token, "write_error", false)
 		return
 	}
 	conn.SetWriteDeadline(time.Time{})
 
 	// Determine transfer direction for byte tracking.
-	sess.mu.Lock()
+	sess.pairLock.Lock()
 	direction := 0 // A→B
 	if sess.B == pc {
 		direction = 1 // B→A
 	}
-	sess.mu.Unlock()
+	sess.pairLock.Unlock()
 
 	token := attach.Token
 	onByteCap := func() {
 		r.pairs.metricByteCaps.Add(1)
-		r.pairs.terminateSession(token, "byte_cap")
+		r.pairs.terminateSession(token, "byte_cap", false)
 	}
 
 	go runPairWritePump(pc)
-	runPairForwarder(pc, peer.send, sess, r.pairs, direction, onByteCap)
+	runPairForwarder(pc, peer, sess, r.pairs, direction, onByteCap)
 	// Forwarder exited — the connection dropped or was terminated. Clean up any
-	// remaining session state (no-op if already terminated by the peer side).
-	r.pairs.terminateSession(token, "peer_gone")
+	// remaining session state (no-op if already terminated by the peer side),
+	// delivering what the peer is still owed.
+	r.pairs.terminateSession(token, "peer_gone", true)
 }
 
 func (r *Relay) metricsHandler(w http.ResponseWriter, req *http.Request) {

@@ -465,6 +465,46 @@ impl MoatAtprotoClient {
         Ok(output.uri.to_string())
     }
 
+    /// Delete one of our own event records, given its `at://` URI.
+    ///
+    /// Used to retire a superseded record — a history summary replaced by
+    /// a newer one. Deleting the *record* is also what releases its blob:
+    /// the PDS garbage-collects a blob once nothing references it, so
+    /// there is no separate blob-delete call to make.
+    ///
+    /// A URI that no longer exists is not an error worth propagating: the
+    /// desired state (that record gone) already holds.
+    pub async fn delete_event(&self, uri: &str) -> Result<()> {
+        let rkey = uri
+            .split('/')
+            .next_back()
+            .filter(|r| !r.is_empty())
+            .ok_or_else(|| Error::InvalidRecord(format!("no rkey in record URI: {uri}")))?;
+
+        let input = delete_record::InputData {
+            collection: Nsid::new(EVENT_NSID.to_string())
+                .map_err(|e| Error::InvalidRecord(e.to_string()))?,
+            repo: AtIdentifier::Did(
+                self.did
+                    .parse()
+                    .map_err(|_| Error::InvalidDid(self.did.clone()))?,
+            ),
+            rkey: rkey.to_string(),
+            swap_commit: None,
+            swap_record: None,
+        };
+
+        self.agent
+            .api
+            .com
+            .atproto
+            .repo
+            .delete_record(input.into())
+            .await
+            .map_err(|e| Error::Pds(e.to_string()))?;
+        Ok(())
+    }
+
     /// Fetch events from a specific DID.
     ///
     /// Resolves the DID's PDS and queries it directly.
@@ -618,11 +658,13 @@ impl MoatAtprotoClient {
         &self,
         scan_pubkey: &[u8; 32],
         device_name: &str,
+        device_id: &[u8; 16],
     ) -> Result<String> {
         let data = StealthAddressData {
-            v: 2,
+            v: 3,
             scan_pubkey: *scan_pubkey,
             device_name: device_name.to_string(),
+            device_id: *device_id,
             created_at: Utc::now(),
         };
 
@@ -704,8 +746,8 @@ impl MoatAtprotoClient {
                 .map_err(|e| Error::Serialization(e.to_string()))?;
 
             if let Ok(mut record) = serde_json::from_value::<StealthAddressRecord>(value) {
-                // Only accept v2 records (multi-device)
-                if record.v == 2 {
+                // Only accept v3 records (multi-device with stable device_id)
+                if record.v == 3 {
                     // Extract rkey from URI
                     if let Some(rkey) = item.uri.split('/').next_back() {
                         record.rkey = rkey.to_string();
