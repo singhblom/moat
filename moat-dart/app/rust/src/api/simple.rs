@@ -1,10 +1,8 @@
 use flutter_rust_bridge::frb;
 use moat_core::{
-    self,
-    sync::SyncMessage,
-    ControlKind, EncryptResult, Event, EventKind, GroupKind, KeyPackageInput, MoatCredential,
+    self, ControlKind, EncryptResult, Event, EventKind, GroupKind, KeyPackageInput, MoatCredential,
     MoatSession, ModifierKind, OwnEventInput, ReactionPayload as CoreReactionPayload, RingCommand,
-    SenderInfo, StepEnv, TickInputs, WelcomeResult,
+    SenderInfo, StepEnv, SyncMessage, TickInputs, WelcomeResult,
 };
 use moat_core::DeviceRingState;
 use moat_core::CoordMsg;
@@ -1553,7 +1551,7 @@ impl From<moat_core::SyncRequestUiState> for SyncRequestUiStateDto {
     }
 }
 
-/// This device's identity, for the driver steps that need its keys.
+/// This device's identity, which a pairing keeps for its steps.
 pub struct PairIdentityDto {
     pub credential: CredentialDto,
     pub key_bundle: Vec<u8>,
@@ -1564,7 +1562,6 @@ pub struct PairIdentityDto {
 /// One conversation's settled messages, for a transfer's `Hello`.
 pub struct ConvHistoryDto {
     pub group_id: Vec<u8>,
-    pub conv_id: String,
     pub messages: Vec<SyncMessageDto>,
 }
 
@@ -1651,9 +1648,9 @@ fn device_id_from(device_id: &[u8]) -> Result<moat_core::DeviceId, String> {
 }
 
 /// Opaque handle to a `moat_core::PairChannelDriver`, the one owner of
-/// this device's pair channel. Methods taking a session, ring and identity
-/// run against this device's local state; locks are taken session, ring,
-/// then driver, the same order `RingDriverHandle` uses.
+/// this device's pair channel. Methods taking a session and ring run
+/// against this device's local state; locks are taken session, ring, then
+/// driver, the same order `RingDriverHandle` uses.
 pub struct PairChannelHandle {
     inner: Mutex<moat_core::PairChannelDriver>,
 }
@@ -1668,31 +1665,14 @@ impl PairChannelHandle {
         &self,
         session: &MoatSessionHandle,
         ring: &RingDriverHandle,
-        identity: PairIdentityDto,
-        sibling_stealth: Vec<SiblingStealthDto>,
         now_ms: i64,
         f: impl FnOnce(&mut moat_core::PairChannelDriver, &mut moat_core::PairEnv<'_>) -> T,
-    ) -> Result<T, String> {
-        let identity = moat_core::PairIdentity {
-            credential: credential_from_dto(identity.credential)?,
-            key_bundle: identity.key_bundle,
-            stealth_pubkey: identity
-                .stealth_pubkey
-                .try_into()
-                .map_err(|_| "stealth_pubkey must be 32 bytes".to_string())?,
-        };
-        let sibling_stealth = to_core_sibling_stealth(sibling_stealth)?;
+    ) -> T {
         let mls = session.inner.lock().unwrap();
         let mut ring = ring.inner.lock().unwrap();
         let mut driver = self.inner.lock().unwrap();
-        let mut env = moat_core::PairEnv {
-            mls: &mls,
-            ring: &mut ring,
-            identity: &identity,
-            sibling_stealth: &sibling_stealth,
-            now_ms,
-        };
-        Ok(f(&mut driver, &mut env))
+        let mut env = moat_core::PairEnv { mls: &mls, ring: &mut ring, now_ms };
+        f(&mut driver, &mut env)
     }
 
     #[frb(sync)]
@@ -1717,15 +1697,26 @@ impl PairChannelHandle {
 
     /// New device: start a pairing; the code is what the screen shows.
     #[frb(sync)]
-    pub fn pair_new(&self) -> PairNewDto {
-        let (code, cmds) = self.inner.lock().unwrap().pair_new();
-        PairNewDto { code, commands: commands_dto(cmds) }
+    pub fn pair_new(&self, identity: PairIdentityDto) -> Result<PairNewDto, String> {
+        let identity = identity_from_dto(identity)?;
+        let (code, cmds) = self.inner.lock().unwrap().pair_new(identity);
+        Ok(PairNewDto { code, commands: commands_dto(cmds) })
     }
 
     /// Existing device: enter a code, in its text or `moat-pair:` form.
     #[frb(sync)]
-    pub fn pair_confirm(&self, code: String) -> Result<Vec<PairChannelCommandDto>, String> {
-        self.inner.lock().unwrap().pair_confirm(&code).map(commands_dto).map_err(|e| e.to_string())
+    pub fn pair_confirm(
+        &self,
+        identity: PairIdentityDto,
+        code: String,
+    ) -> Result<Vec<PairChannelCommandDto>, String> {
+        let identity = identity_from_dto(identity)?;
+        self.inner
+            .lock()
+            .unwrap()
+            .pair_confirm(identity, &code)
+            .map(commands_dto)
+            .map_err(|e| e.to_string())
     }
 
     /// Existing device: approve the pending `Enroll`. A failure while
@@ -1734,15 +1725,13 @@ impl PairChannelHandle {
         &self,
         session: &MoatSessionHandle,
         ring: &RingDriverHandle,
-        identity: PairIdentityDto,
-        sibling_stealth: Vec<SiblingStealthDto>,
         now_ms: i64,
+        sibling_stealth: Vec<SiblingStealthDto>,
     ) -> Result<Vec<PairChannelCommandDto>, String> {
-        self.with_env(session, ring, identity, sibling_stealth, now_ms, |d, env| {
-            d.pair_approve(env)
-        })?
-        .map(commands_dto)
-        .map_err(|e| e.to_string())
+        let sibling_stealth = to_core_sibling_stealth(sibling_stealth)?;
+        self.with_env(session, ring, now_ms, |d, env| d.pair_approve(env, &sibling_stealth))
+            .map(commands_dto)
+            .map_err(|e| e.to_string())
     }
 
     #[frb(sync)]
@@ -1756,21 +1745,19 @@ impl PairChannelHandle {
     }
 
     /// Ask the user's other devices for history; `target` names one.
+    /// `key_bundle` seals the request to the ring.
     pub fn sync_request(
         &self,
         session: &MoatSessionHandle,
         ring: &RingDriverHandle,
-        identity: PairIdentityDto,
-        sibling_stealth: Vec<SiblingStealthDto>,
         now_ms: i64,
+        key_bundle: Vec<u8>,
         target: Option<Vec<u8>>,
     ) -> Result<Vec<PairChannelCommandDto>, String> {
         let target = target.as_deref().map(device_id_from).transpose()?;
-        self.with_env(session, ring, identity, sibling_stealth, now_ms, |d, env| {
-            d.sync_request(env, target)
-        })?
-        .map(commands_dto)
-        .map_err(|e| e.to_string())
+        self.with_env(session, ring, now_ms, |d, env| d.sync_request(env, &key_bundle, target))
+            .map(commands_dto)
+            .map_err(|e| e.to_string())
     }
 
     /// Offer this device's history to `target`.
@@ -1778,17 +1765,14 @@ impl PairChannelHandle {
         &self,
         session: &MoatSessionHandle,
         ring: &RingDriverHandle,
-        identity: PairIdentityDto,
-        sibling_stealth: Vec<SiblingStealthDto>,
         now_ms: i64,
+        key_bundle: Vec<u8>,
         target: Vec<u8>,
     ) -> Result<Vec<PairChannelCommandDto>, String> {
         let target = device_id_from(&target)?;
-        self.with_env(session, ring, identity, sibling_stealth, now_ms, |d, env| {
-            d.sync_offer(env, target)
-        })?
-        .map(commands_dto)
-        .map_err(|e| e.to_string())
+        self.with_env(session, ring, now_ms, |d, env| d.sync_offer(env, &key_bundle, target))
+            .map(commands_dto)
+            .map_err(|e| e.to_string())
     }
 
     #[frb(sync)]
@@ -1836,39 +1820,33 @@ impl PairChannelHandle {
         commands_dto(self.inner.lock().unwrap().on_pair_ready(&token, url))
     }
 
+    /// The pair WS for `token` reached `paired`.
     pub fn on_paired(
         &self,
         session: &MoatSessionHandle,
         ring: &RingDriverHandle,
-        identity: PairIdentityDto,
-        sibling_stealth: Vec<SiblingStealthDto>,
         now_ms: i64,
-    ) -> Result<Vec<PairChannelCommandDto>, String> {
-        self.with_env(session, ring, identity, sibling_stealth, now_ms, |d, env| d.on_paired(env))
-            .map(commands_dto)
+        token: Vec<u8>,
+    ) -> Vec<PairChannelCommandDto> {
+        commands_dto(self.with_env(session, ring, now_ms, |d, env| d.on_paired(env, &token)))
     }
 
+    /// A binary frame from the pair WS for `token`.
     pub fn on_frame(
         &self,
         session: &MoatSessionHandle,
         ring: &RingDriverHandle,
-        identity: PairIdentityDto,
-        sibling_stealth: Vec<SiblingStealthDto>,
         now_ms: i64,
+        token: Vec<u8>,
         data: Vec<u8>,
-    ) -> Result<Vec<PairChannelCommandDto>, String> {
-        self.with_env(session, ring, identity, sibling_stealth, now_ms, |d, env| {
-            d.on_frame(env, data)
-        })
-        .map(commands_dto)
+    ) -> Vec<PairChannelCommandDto> {
+        commands_dto(self.with_env(session, ring, now_ms, |d, env| d.on_frame(env, &token, data)))
     }
 
     pub fn provide_history(
         &self,
         session: &MoatSessionHandle,
         ring: &RingDriverHandle,
-        identity: PairIdentityDto,
-        sibling_stealth: Vec<SiblingStealthDto>,
         now_ms: i64,
         token: Vec<u8>,
         history: Vec<ConvHistoryDto>,
@@ -1878,29 +1856,18 @@ impl PairChannelHandle {
             .into_iter()
             .map(|h| moat_core::ConvHistory {
                 group_id: h.group_id,
-                conv_id: h.conv_id,
                 messages: h.messages.into_iter().map(Into::into).collect(),
             })
             .collect();
-        self.with_env(session, ring, identity, sibling_stealth, now_ms, |d, env| {
-            d.provide_history(env, &token, history)
-        })
-        .map(commands_dto)
+        Ok(commands_dto(
+            self.with_env(session, ring, now_ms, |d, env| d.provide_history(env, &token, history)),
+        ))
     }
 
-    /// The pair channel for `token` ended.
+    /// The pair WS for `token` closed or failed to connect.
     #[frb(sync)]
-    pub fn on_pair_closed(
-        &self,
-        token: Option<Vec<u8>>,
-        reason: String,
-    ) -> Vec<PairChannelCommandDto> {
-        commands_dto(self.inner.lock().unwrap().on_pair_closed(token.as_deref(), reason))
-    }
-
-    #[frb(sync)]
-    pub fn on_rendezvous_failed(&self, reason: String) -> Vec<PairChannelCommandDto> {
-        commands_dto(self.inner.lock().unwrap().on_rendezvous_failed(reason))
+    pub fn on_pair_closed(&self, token: Vec<u8>, reason: String) -> Vec<PairChannelCommandDto> {
+        commands_dto(self.inner.lock().unwrap().on_pair_closed(Some(&token), reason))
     }
 
     /// Expire an unanswered sync request.
@@ -1908,6 +1875,17 @@ impl PairChannelHandle {
     pub fn tick(&self, now_ms: i64) -> Vec<PairChannelCommandDto> {
         commands_dto(self.inner.lock().unwrap().tick(now_ms))
     }
+}
+
+fn identity_from_dto(identity: PairIdentityDto) -> Result<moat_core::PairIdentity, String> {
+    Ok(moat_core::PairIdentity {
+        credential: credential_from_dto(identity.credential)?,
+        key_bundle: identity.key_bundle,
+        stealth_pubkey: identity
+            .stealth_pubkey
+            .try_into()
+            .map_err(|_| "stealth_pubkey must be 32 bytes".to_string())?,
+    })
 }
 
 #[frb(init)]
@@ -2764,11 +2742,14 @@ mod push_tests {
 mod pair_channel_ffi_tests {
     use super::*;
 
+    const TOKEN_UNSET: &str = "the rendezvous token is set once pair_new has run";
+
     struct Device {
         session: MoatSessionHandle,
         ring: RingDriverHandle,
         identity: PairIdentityDto,
         driver: PairChannelHandle,
+        token: std::cell::RefCell<Option<Vec<u8>>>,
     }
 
     impl Device {
@@ -2789,6 +2770,7 @@ mod pair_channel_ffi_tests {
                 ring: RingDriverHandle::new_empty(),
                 identity,
                 driver: PairChannelHandle::new_driver(),
+                token: Default::default(),
             }
         }
 
@@ -2804,14 +2786,16 @@ mod pair_channel_ffi_tests {
             }
         }
 
+        fn token(&self) -> Vec<u8> {
+            self.token.borrow().clone().expect(TOKEN_UNSET)
+        }
+
         fn on_paired(&self) -> Vec<PairChannelCommandDto> {
-            self.driver.on_paired(&self.session, &self.ring, self.identity(), vec![], 0).unwrap()
+            self.driver.on_paired(&self.session, &self.ring, 0, self.token())
         }
 
         fn on_frame(&self, data: Vec<u8>) -> Vec<PairChannelCommandDto> {
-            self.driver
-                .on_frame(&self.session, &self.ring, self.identity(), vec![], 0, data)
-                .unwrap()
+            self.driver.on_frame(&self.session, &self.ring, 0, self.token(), data)
         }
 
         /// Frames to hand to the peer, answering history requests with an
@@ -2824,15 +2808,7 @@ mod pair_channel_ffi_tests {
                     PairChannelCommandDto::LoadHistory { token } => {
                         let cmds = self
                             .driver
-                            .provide_history(
-                                &self.session,
-                                &self.ring,
-                                self.identity(),
-                                vec![],
-                                0,
-                                token,
-                                vec![],
-                            )
+                            .provide_history(&self.session, &self.ring, 0, token, vec![])
                             .unwrap();
                         frames.extend(self.frames(cmds));
                     }
@@ -2862,7 +2838,7 @@ mod pair_channel_ffi_tests {
         let phone = Device::new("Alice's Phone");
         let laptop = Device::new("Alice's Laptop");
 
-        let started = phone.driver.pair_new();
+        let started = phone.driver.pair_new(phone.identity()).unwrap();
         let token = started
             .commands
             .iter()
@@ -2871,8 +2847,9 @@ mod pair_channel_ffi_tests {
                 _ => None,
             })
             .expect("pair_new must send an offer");
-        laptop.driver.pair_confirm(started.code).unwrap();
+        laptop.driver.pair_confirm(laptop.identity(), started.code).unwrap();
         for device in [&phone, &laptop] {
+            *device.token.borrow_mut() = Some(token.clone());
             let cmds = device.driver.on_pair_ready(token.clone(), "wss://relay/pair".into());
             assert!(matches!(cmds.as_slice(), [PairChannelCommandDto::ConnectPair { .. }]));
         }
@@ -2887,7 +2864,7 @@ mod pair_channel_ffi_tests {
 
         let approved = laptop
             .driver
-            .pair_approve(&laptop.session, &laptop.ring, laptop.identity(), vec![], 0)
+            .pair_approve(&laptop.session, &laptop.ring, 0, vec![])
             .unwrap();
         exchange(&laptop, &phone, laptop.frames(approved));
 

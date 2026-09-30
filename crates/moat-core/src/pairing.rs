@@ -11,8 +11,9 @@
 //!    command-returning driver, mirroring the `DeviceRingState` /
 //!    `SyncSession` pattern already used in this crate: MLS operations
 //!    happen *inside* the driver (it takes `&MoatSession`), and the emitted
-//!    [`PairingCommand`]s cover host IO only (send frame, seed the KP pool,
-//!    surface the approval prompt, start sync).
+//!    [`PairingCommand`]s cover IO only (send frame, seed the KP pool,
+//!    start sync). The pending approval shows through
+//!    [`PairingSession::ui_state`].
 
 use aes_gcm::{
     aead::{Aead, KeyInit},
@@ -437,10 +438,6 @@ pub enum PairingCommand {
     /// `add_member` — the invite-lane-duplication.md §3 rule: deriving it
     /// after would tag the commit at the wrong (post-add) epoch.
     PublishRingCommit { tag: [u8; 16], ciphertext: Vec<u8> },
-    /// Existing device, on receiving `Enroll`: show the confirmation
-    /// screen naming the new device, gated on a user tap before
-    /// [`PairingSession::approve`] is called.
-    SurfaceApprovalPrompt { device_name: String, did: String },
     /// New device, on receiving `Admit`: the ring has been joined and
     /// should be persisted by the host under the given id.
     PersistRing { ring_id: Vec<u8> },
@@ -455,22 +452,6 @@ pub enum PairingCommand {
     /// [`PairingSession::transfer_channel`]. Always the last
     /// command of its batch.
     StartSync,
-}
-
-impl PairingCommand {
-    /// Short stable name for this command, for host debug logs — mirrors
-    /// `RingCommand::kind`.
-    pub fn kind(&self) -> &'static str {
-        match self {
-            PairingCommand::SendFrame { .. } => "send_frame",
-            PairingCommand::SeedKpPool { .. } => "seed_kp_pool",
-            PairingCommand::PublishRingCommit { .. } => "publish_ring_commit",
-            PairingCommand::SurfaceApprovalPrompt { .. } => "surface_approval_prompt",
-            PairingCommand::PersistRing { .. } => "persist_ring",
-            PairingCommand::RosterReceived { .. } => "roster_received",
-            PairingCommand::StartSync => "start_sync",
-        }
-    }
 }
 
 // ─── PairingSession state machine ────────────────────────────────────────────
@@ -586,9 +567,6 @@ pub struct PairingSession {
     ring_id: Option<Vec<u8>>,
     /// `None` for an existing-device session, which shows no code.
     displayed_code: Option<DisplayedCode>,
-    /// Retained (not just consumed by key derivation) so a host can tell a
-    /// `pair_closed` for this session from one for a superseded round.
-    rendezvous_token: [u8; PAIRING_TOKEN_LEN],
 }
 
 impl PairingSession {
@@ -611,7 +589,6 @@ impl PairingSession {
                 text: payload.to_text(),
                 uri: payload.to_uri(),
             }),
-            rendezvous_token: payload.token,
         }
     }
 
@@ -630,7 +607,6 @@ impl PairingSession {
             pending_enroll: None,
             ring_id: None,
             displayed_code: None,
-            rendezvous_token: *token,
         }
     }
 
@@ -861,11 +837,9 @@ impl PairingSession {
                         own_credential.did()
                     )));
                 }
-                let device_name = enroll.credential.device_name().to_string();
-                let did = enroll.credential.did().to_string();
                 self.pending_enroll = Some(enroll);
                 self.phase = Phase::ExistingDevice(ExistingDevicePhase::AwaitingApproval);
-                Ok(vec![PairingCommand::SurfaceApprovalPrompt { device_name, did }])
+                Ok(Vec::new())
             }
             (Phase::ExistingDevice(ExistingDevicePhase::AwaitingApproval), PairingMsg::Enroll(_)) => {
                 Err(Error::PairingProtocol(
@@ -925,11 +899,6 @@ impl PairingSession {
     /// see the field doc on `ring_id`.
     pub fn ring_id(&self) -> Option<&[u8]> {
         self.ring_id.as_deref()
-    }
-
-    /// See the field doc on `rendezvous_token`.
-    pub fn rendezvous_token(&self) -> &[u8; PAIRING_TOKEN_LEN] {
-        &self.rendezvous_token
     }
 
     /// Hand the pairing AEAD on to the history transfer. `None` before the
@@ -1080,3 +1049,6 @@ impl PairingSession {
         )
     }
 }
+
+#[cfg(test)]
+mod tests;

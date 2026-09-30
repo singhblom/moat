@@ -15,8 +15,8 @@ use rand::RngCore;
 
 use crate::device_ring::{DeviceId, DeviceRingState, SiblingStealth, KP_POOL_TARGET};
 use crate::pairing::{
-    PairingCommand, PairingPayload, PairingSession, PairingUiState, SiblingInfo, PAIRING_TOKEN_LEN,
-    PAIRING_URI_SCHEME,
+    PairingCommand, PairingFrameChannel, PairingPayload, PairingSession, PairingUiState,
+    SiblingInfo, PAIRING_TOKEN_LEN, PAIRING_URI_SCHEME,
 };
 use crate::sync::{
     decode_sync_msg, encode_sync_msg, ConvHistory, SyncOutput, SyncProgress, SyncSession, SyncTally,
@@ -24,9 +24,10 @@ use crate::sync::{
 use crate::sync_request::{
     encode_ring_msg, RingMsg, SyncFailure, SyncRequestSession, SyncRequestUiState,
 };
-use crate::{Error, Event, MoatCredential, MoatSession, PairingFrameChannel, Result, SyncMessage};
+use crate::{Error, Event, MoatCredential, MoatSession, Result, SyncMessage};
 
-/// Who this device is, for the steps that need its keys.
+/// Who this device is, for the steps that need its keys. A pairing keeps
+/// the identity it was started with.
 #[derive(Debug, Clone)]
 pub struct PairIdentity {
     pub credential: MoatCredential,
@@ -39,9 +40,6 @@ pub struct PairIdentity {
 pub struct PairEnv<'a> {
     pub mls: &'a MoatSession,
     pub ring: &'a mut DeviceRingState,
-    pub identity: &'a PairIdentity,
-    /// Other ring members' stealth addresses, for `Admit.roster`.
-    pub sibling_stealth: &'a [SiblingStealth],
     pub now_ms: i64,
 }
 
@@ -137,6 +135,12 @@ struct Rendezvous {
 }
 
 #[derive(Debug)]
+struct Pairing {
+    session: PairingSession,
+    identity: PairIdentity,
+}
+
+#[derive(Debug)]
 struct Transfer {
     channel: PairingFrameChannel,
     origin: Owner,
@@ -150,7 +154,7 @@ struct Transfer {
 #[derive(Debug, Default)]
 pub struct PairChannelDriver {
     /// Kept once terminal so its outcome stays reportable.
-    pairing: Option<PairingSession>,
+    pairing: Option<Pairing>,
     /// Kept once terminal so its outcome stays reportable.
     sync_request: Option<SyncRequestSession>,
     rendezvous: Option<Rendezvous>,
@@ -169,12 +173,12 @@ impl PairChannelDriver {
     pub fn pairing_ui_state(&self) -> PairingUiState {
         self.pairing
             .as_ref()
-            .map_or(PairingUiState::Idle, PairingSession::ui_state)
+            .map_or(PairingUiState::Idle, |p| p.session.ui_state())
     }
 
     /// The pairing's role: `Some(true)` for the new device.
     pub fn pairing_is_new_device(&self) -> Option<bool> {
-        self.pairing.as_ref().map(PairingSession::is_new_device)
+        self.pairing.as_ref().map(|p| p.session.is_new_device())
     }
 
     pub fn sync_request_ui_state(&self) -> SyncRequestUiState {
@@ -213,20 +217,27 @@ impl PairChannelDriver {
     // ── User gestures ────────────────────────────────────────────────────────
 
     /// New device: start a pairing and return the code to show.
-    pub fn pair_new(&mut self) -> (String, Vec<PairChannelCommand>) {
+    pub fn pair_new(&mut self, identity: PairIdentity) -> (String, Vec<PairChannelCommand>) {
         let mut cmds = self.supersede();
         let payload = PairingPayload {
             token: random_bytes(),
             secret: random_bytes(),
         };
         let code = payload.to_text();
-        self.pairing = Some(PairingSession::new_device(&payload));
+        self.pairing = Some(Pairing {
+            session: PairingSession::new_device(&payload),
+            identity,
+        });
         self.open_rendezvous(payload.token, true, Owner::Pairing, &mut cmds);
         (code, cmds)
     }
 
     /// Existing device: enter a code, in its text or `moat-pair:` form.
-    pub fn pair_confirm(&mut self, code: &str) -> Result<Vec<PairChannelCommand>> {
+    pub fn pair_confirm(
+        &mut self,
+        identity: PairIdentity,
+        code: &str,
+    ) -> Result<Vec<PairChannelCommand>> {
         let code = code.trim();
         let payload = if code.starts_with(PAIRING_URI_SCHEME) {
             PairingPayload::from_uri(code)?
@@ -234,10 +245,10 @@ impl PairChannelDriver {
             PairingPayload::from_text(code)?
         };
         let mut cmds = self.supersede();
-        self.pairing = Some(PairingSession::existing_device(
-            &payload.secret,
-            &payload.token,
-        ));
+        self.pairing = Some(Pairing {
+            session: PairingSession::existing_device(&payload.secret, &payload.token),
+            identity,
+        });
         self.open_rendezvous(payload.token, false, Owner::Pairing, &mut cmds);
         Ok(cmds)
     }
@@ -245,14 +256,20 @@ impl PairChannelDriver {
     /// Existing device: approve the pending `Enroll`. `Err` only when
     /// there is nothing to approve; a failure while approving fails the
     /// pairing, which [`pairing_ui_state`](Self::pairing_ui_state) reports.
-    pub fn pair_approve(&mut self, env: &mut PairEnv<'_>) -> Result<Vec<PairChannelCommand>> {
-        let session = self
+    /// `sibling_stealth` holds the other ring members' stealth addresses,
+    /// for `Admit.roster`.
+    pub fn pair_approve(
+        &mut self,
+        env: &mut PairEnv<'_>,
+        sibling_stealth: &[SiblingStealth],
+    ) -> Result<Vec<PairChannelCommand>> {
+        let Pairing { session, identity } = self
             .pairing
             .as_mut()
-            .filter(|s| s.pending_enroll().is_some())
+            .filter(|p| p.session.pending_enroll().is_some())
             .ok_or_else(|| Error::PairingProtocol("no pending Enroll to approve".to_string()))?;
         let existing_ring_id = env.ring.ring_id().map(<[u8]>::to_vec);
-        let known_siblings = known_siblings(env);
+        let known_siblings = known_siblings(env, sibling_stealth);
         // `approve` consumes the Enroll, and `Admit.roster` carries only
         // siblings already known, so the newcomer's address is taken here.
         let newcomer = session
@@ -260,9 +277,9 @@ impl PairChannelDriver {
             .map(|e| (*e.credential.device_id(), e.stealth_scan_pubkey));
         let result = session.approve(
             env.mls,
-            &env.identity.credential,
-            &env.identity.key_bundle,
-            env.identity.stealth_pubkey,
+            &identity.credential,
+            &identity.key_bundle,
+            identity.stealth_pubkey,
             &known_siblings,
             existing_ring_id.as_deref(),
         );
@@ -303,11 +320,11 @@ impl PairChannelDriver {
 
     /// Existing device: decline the pending `Enroll`.
     pub fn pair_reject(&mut self) -> Result<Vec<PairChannelCommand>> {
-        let session = self
+        let pairing = self
             .pairing
             .as_mut()
             .ok_or_else(|| Error::PairingProtocol("no active pairing session".to_string()))?;
-        session.reject()?;
+        pairing.session.reject()?;
         let mut cmds = Vec::new();
         self.close_rendezvous(Owner::Pairing, &mut cmds);
         Ok(cmds)
@@ -315,21 +332,23 @@ impl PairChannelDriver {
 
     /// Either role: abandon an in-flight pairing.
     pub fn pair_cancel(&mut self) -> Result<Vec<PairChannelCommand>> {
-        let session = self
+        let pairing = self
             .pairing
             .as_mut()
             .ok_or_else(|| Error::PairingProtocol("no active pairing session".to_string()))?;
-        session.cancel()?;
+        pairing.session.cancel()?;
         let mut cmds = Vec::new();
         self.close_rendezvous(Owner::Pairing, &mut cmds);
         Ok(cmds)
     }
 
     /// Ask the user's other devices for history. `target` names one
-    /// sibling; `None` asks them all.
+    /// sibling; `None` asks them all. `key_bundle` seals the request to the
+    /// ring.
     pub fn sync_request(
         &mut self,
         env: &mut PairEnv<'_>,
+        key_bundle: &[u8],
         target: Option<DeviceId>,
     ) -> Result<Vec<PairChannelCommand>> {
         let token = random_bytes();
@@ -339,7 +358,7 @@ impl PairChannelDriver {
             secret,
             target_device_id: target,
         };
-        let publish = seal_ring_msg(env, &msg)?;
+        let publish = seal_ring_msg(env, key_bundle, &msg)?;
         let mut cmds = self.supersede();
         self.sync_request = Some(SyncRequestSession::request(token, secret, env.now_ms));
         self.start_ring_rendezvous(token, publish, &mut cmds);
@@ -351,6 +370,7 @@ impl PairChannelDriver {
     pub fn sync_offer(
         &mut self,
         env: &mut PairEnv<'_>,
+        key_bundle: &[u8],
         target: DeviceId,
     ) -> Result<Vec<PairChannelCommand>> {
         if &target == env.mls.device_id() {
@@ -365,7 +385,7 @@ impl PairChannelDriver {
             secret,
             target_device_id: target,
         };
-        let publish = seal_ring_msg(env, &msg)?;
+        let publish = seal_ring_msg(env, key_bundle, &msg)?;
         let mut cmds = self.supersede();
         self.sync_request = Some(SyncRequestSession::request(token, secret, env.now_ms));
         self.start_ring_rendezvous(token, publish, &mut cmds);
@@ -503,17 +523,23 @@ impl PairChannelDriver {
         }
     }
 
-    /// The pair WS reported `paired`: both ends are attached.
-    pub fn on_paired(&mut self, env: &mut PairEnv<'_>) -> Vec<PairChannelCommand> {
+    /// The pair WS for `token` reported `paired`: both ends are attached.
+    pub fn on_paired(&mut self, env: &mut PairEnv<'_>, token: &[u8]) -> Vec<PairChannelCommand> {
         let mut cmds = Vec::new();
-        let Some(rendezvous) = self.rendezvous.as_ref() else {
-            cmds.push(Cmd::Log("pair: paired with no rendezvous live".into()));
+        let Some(rendezvous) = self
+            .rendezvous
+            .as_ref()
+            .filter(|r| r.token.as_slice() == token)
+        else {
+            cmds.push(Cmd::Log(
+                "pair: ignoring paired for a superseded rendezvous".into(),
+            ));
             return cmds;
         };
         let token = rendezvous.token;
         match rendezvous.owner {
             Owner::Pairing => {
-                let Some(session) = self.pairing.as_mut() else {
+                let Some(Pairing { session, identity }) = self.pairing.as_mut() else {
                     return cmds;
                 };
                 if !session.is_new_device() {
@@ -524,17 +550,17 @@ impl PairChannelDriver {
                     .ring
                     .mint_kp_batch(
                         env.mls,
-                        &env.identity.credential,
-                        &env.identity.key_bundle,
+                        &identity.credential,
+                        &identity.key_bundle,
                         KP_POOL_TARGET,
                     )
                     .unwrap_or_default();
                 cmds.push(Cmd::SaveRingState);
                 let result = session.start_enroll(
                     env.mls,
-                    &env.identity.credential,
-                    &env.identity.key_bundle,
-                    env.identity.stealth_pubkey,
+                    &identity.credential,
+                    &identity.key_bundle,
+                    identity.stealth_pubkey,
                     conv_kps,
                 );
                 cmds.push(Cmd::SaveMlsState);
@@ -568,9 +594,23 @@ impl PairChannelDriver {
         cmds
     }
 
-    /// A binary frame from the pair WS.
-    pub fn on_frame(&mut self, env: &mut PairEnv<'_>, data: Vec<u8>) -> Vec<PairChannelCommand> {
+    /// A binary frame from the pair WS for `token`.
+    pub fn on_frame(
+        &mut self,
+        env: &mut PairEnv<'_>,
+        token: &[u8],
+        data: Vec<u8>,
+    ) -> Vec<PairChannelCommand> {
         let mut cmds = Vec::new();
+        if self
+            .live_token()
+            .is_none_or(|live| live.as_slice() != token)
+        {
+            cmds.push(Cmd::Log(
+                "pair: ignoring a frame for a superseded rendezvous".into(),
+            ));
+            return cmds;
+        }
         if let Some(transfer) = self.transfer.as_mut() {
             if transfer.session.is_none() {
                 transfer.buffered.push(data);
@@ -583,15 +623,15 @@ impl PairChannelDriver {
             .rendezvous
             .as_ref()
             .is_some_and(|r| r.owner == Owner::Pairing);
-        let Some(session) = self
+        let Some(Pairing { session, identity }) = self
             .pairing
             .as_mut()
-            .filter(|s| !s.is_terminal() && owned_by_pairing)
+            .filter(|p| !p.session.is_terminal() && owned_by_pairing)
         else {
             cmds.push(Cmd::Log("pair: frame with nothing to receive it".into()));
             return cmds;
         };
-        let result = session.on_frame_received(env.mls, &env.identity.credential, &data);
+        let result = session.on_frame_received(env.mls, &identity.credential, &data);
         cmds.push(Cmd::SaveMlsState);
         match result {
             Ok(pairing_cmds) => self.apply_pairing(env, pairing_cmds, &mut cmds),
@@ -631,9 +671,10 @@ impl PairChannelDriver {
         cmds
     }
 
-    /// The pair channel for `token` ended: the pair WS closed, or the
-    /// relay's `pair_closed` came with no socket to wait for. A notice for
-    /// a superseded rendezvous is ignored.
+    /// The pair channel for `token` ended: the pair WS closed or failed to
+    /// connect, or the relay's `pair_closed` came with no socket to wait
+    /// for. `None` only when the relay omitted the token. A notice for a
+    /// superseded rendezvous is ignored.
     pub fn on_pair_closed(
         &mut self,
         token: Option<&[u8]>,
@@ -654,15 +695,6 @@ impl PairChannelDriver {
         }
         cmds.push(Cmd::Log(format!("pair: channel closed: {reason}")));
         self.end_channel(reason, &mut cmds);
-        cmds
-    }
-
-    /// Sending the offer or join, or connecting the pair WS, failed.
-    pub fn on_rendezvous_failed(&mut self, reason: String) -> Vec<PairChannelCommand> {
-        let mut cmds = vec![Cmd::Log(format!("pair: rendezvous failed: {reason}"))];
-        if self.rendezvous.is_some() {
-            self.end_channel(reason, &mut cmds);
-        }
         cmds
     }
 
@@ -752,8 +784,8 @@ impl PairChannelDriver {
                     }
                 }
                 Some(Owner::Pairing) => {
-                    if let Some(session) = self.pairing.as_mut() {
-                        let _ = session.cancel();
+                    if let Some(pairing) = self.pairing.as_mut() {
+                        let _ = pairing.session.cancel();
                     }
                 }
                 None => {}
@@ -778,8 +810,8 @@ impl PairChannelDriver {
                 }
             }
             Owner::Pairing => {
-                if let Some(session) = self.pairing.as_mut() {
-                    session.transfer_failed(&detail);
+                if let Some(pairing) = self.pairing.as_mut() {
+                    pairing.session.transfer_failed(&detail);
                 }
             }
         }
@@ -819,7 +851,6 @@ impl PairChannelDriver {
                 PairingCommand::PublishRingCommit { tag, ciphertext } => {
                     cmds.push(Cmd::PublishRingEvent { tag, ciphertext })
                 }
-                PairingCommand::SurfaceApprovalPrompt { .. } => {}
                 PairingCommand::PersistRing { ring_id } => {
                     if env.ring.ring_id() != Some(ring_id.as_slice()) {
                         if let Err(e) =
@@ -849,7 +880,7 @@ impl PairChannelDriver {
                     let channel = self
                         .pairing
                         .as_mut()
-                        .and_then(PairingSession::transfer_channel);
+                        .and_then(|p| p.session.transfer_channel());
                     if let (Some(channel), Some(token)) = (channel, token) {
                         self.start_transfer(channel, Owner::Pairing, token, cmds);
                     }
@@ -961,26 +992,28 @@ fn random_bytes<const N: usize>() -> [u8; N] {
 }
 
 /// Seal a ring message to the device ring, ready to publish.
-fn seal_ring_msg(env: &PairEnv<'_>, msg: &RingMsg) -> Result<([u8; 16], Vec<u8>)> {
+fn seal_ring_msg(
+    env: &PairEnv<'_>,
+    key_bundle: &[u8],
+    msg: &RingMsg,
+) -> Result<([u8; 16], Vec<u8>)> {
     let ring_id = env.ring.ring_id().ok_or_else(|| {
         Error::SyncRequestProtocol("no device ring — pair a device first".to_string())
     })?;
     let epoch = env.mls.get_group_epoch(ring_id)?.unwrap_or(0);
     let event = Event::ring_msg(ring_id.to_vec(), epoch, encode_ring_msg(msg));
-    let encrypted = env
-        .mls
-        .encrypt_event(ring_id, &env.identity.key_bundle, &event)?;
+    let encrypted = env.mls.encrypt_event(ring_id, key_bundle, &event)?;
     Ok((encrypted.tag, encrypted.ciphertext))
 }
 
 /// Already-known ring siblings, for `Admit.roster`: names from the ring's
 /// member credentials, stealth keys from the host's cache.
-fn known_siblings(env: &PairEnv<'_>) -> Vec<SiblingInfo> {
+fn known_siblings(env: &PairEnv<'_>, sibling_stealth: &[SiblingStealth]) -> Vec<SiblingInfo> {
     let Some(ring_id) = env.ring.ring_id() else {
         return Vec::new();
     };
     let members = env.mls.get_group_members(ring_id).unwrap_or_default();
-    env.sibling_stealth
+    sibling_stealth
         .iter()
         .filter_map(|s| {
             let device_name = members

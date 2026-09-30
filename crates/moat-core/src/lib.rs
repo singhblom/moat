@@ -29,12 +29,12 @@ pub(crate) mod error;
 pub(crate) mod event;
 pub mod message;
 pub(crate) mod padding;
-pub mod pair_channel;
-pub mod pairing;
+pub(crate) mod pair_channel;
+pub(crate) mod pairing;
 pub(crate) mod stealth;
 pub(crate) mod storage;
-pub mod sync;
-pub mod sync_request;
+pub(crate) mod sync;
+pub(crate) mod sync_request;
 pub mod inbox;
 pub(crate) mod tag;
 
@@ -78,23 +78,12 @@ pub use crate::tag::{
     derive_event_tag, generate_candidate_tags, prior_epoch_gap_limit, MAX_PRIOR_EPOCHS,
     TAG_EXPORT_SECRET_LABEL, TAG_EXPORT_SECRET_LEN, TAG_GAP_LIMIT,
 };
-pub use crate::sync::{
-    decode_sync_msg, encode_sync_msg, fit_hello_inventories, ConvHistory, ConvInventory, ConvState,
-    SyncMessage, SyncMsg, SyncOutput, SyncProgress, SyncReaction, SyncSession, SyncTally,
-    HELLO_INVENTORY_BUDGET_BYTES,
-};
+pub use crate::sync::{ConvHistory, SyncMessage, SyncProgress, SyncReaction, SyncTally};
 pub use crate::sync_request::{
-    decode_ring_msg, encode_ring_msg, RingMsg, SyncFailure, SyncRequestSession,
-    SyncRequestUiState, SYNC_REQUEST_TTL_MS,
+    decode_ring_msg, RingMsg, SyncFailure, SyncRequestUiState, SYNC_REQUEST_TTL_MS,
 };
 pub use crate::pair_channel::{PairChannelCommand, PairChannelDriver, PairEnv, PairIdentity};
-pub use crate::pairing::{
-    crockford_decode, crockford_encode, decode_pairing_msg, derive_pairing_keys,
-    encode_pairing_msg, open_frame, seal_frame, Admit, Enroll,
-    PairingChannelKeys, PairingCommand, PairingFrameChannel, PairingMsg, PairingPayload, PairingSession, PairingUiState,
-    SiblingInfo, CROCKFORD_ALPHABET, PAIRING_PAYLOAD_LEN, PAIRING_PAYLOAD_VERSION,
-    PAIRING_SECRET_LEN, PAIRING_TOKEN_LEN, PAIRING_URI_SCHEME,
-};
+pub use crate::pairing::{PairingUiState, PAIRING_TOKEN_LEN};
 
 /// The ciphersuite used by Moat
 pub const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;

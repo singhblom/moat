@@ -58,14 +58,16 @@ class DrawbridgeService {
   /// Called when the relay matches a pair token and emits `pair_ready`.
   void Function(DrawbridgePairReady)? onPairReady;
 
-  /// Called once the /pair WS reports `paired`.
-  void Function()? onPairConnected;
+  /// Called once the /pair WS for `token` reports `paired`.
+  void Function(Uint8List token)? onPairConnected;
 
-  /// Called for every binary frame received on /pair after `paired`.
-  void Function(Uint8List)? onPairFrame;
+  /// Called for every binary frame received on the /pair WS for `token`
+  /// after `paired`.
+  void Function(Uint8List token, Uint8List data)? onPairFrame;
 
-  /// Called when the /pair WS disconnects (cleanly or with an error).
-  void Function(String reason)? onPairClosed;
+  /// Called when the /pair WS for `token` fails to connect or disconnects
+  /// (cleanly or with an error).
+  void Function(Uint8List token, String reason)? onPairClosed;
 
   /// Called each time the own relay (re)authenticates, so an offer or
   /// join it has not acknowledged can be resent.
@@ -303,7 +305,7 @@ class DrawbridgeService {
       channel = WebSocketChannel.connect(Uri.parse(url));
       await channel.ready;
     } catch (e) {
-      onPairClosed?.call('connect failed: $e');
+      onPairClosed?.call(token, 'connect failed: $e');
       return;
     }
 
@@ -316,24 +318,24 @@ class DrawbridgeService {
     }));
 
     _pairSubscription = channel.stream.listen(
-      (data) => _handlePairMessage(data),
+      (data) => _handlePairMessage(token, data),
       onError: (error) {
         moatLog('DrawbridgeService: pair WS error: $error');
         _pairAttached = false;
         _pairChannel = null;
-        onPairClosed?.call('error: $error');
+        onPairClosed?.call(token, 'error: $error');
       },
       onDone: () {
         moatLog('DrawbridgeService: pair WS closed');
         final wasAttached = _pairAttached;
         _pairAttached = false;
         _pairChannel = null;
-        onPairClosed?.call(wasAttached ? 'remote closed' : 'closed before paired');
+        onPairClosed?.call(token, wasAttached ? 'remote closed' : 'closed before paired');
       },
     );
   }
 
-  void _handlePairMessage(dynamic data) {
+  void _handlePairMessage(Uint8List token, dynamic data) {
     if (data is String) {
       try {
         final msg = jsonDecode(data) as Map<String, dynamic>;
@@ -342,7 +344,7 @@ class DrawbridgeService {
           case 'paired':
             _pairAttached = true;
             moatLog('DrawbridgeService: pair WS paired');
-            onPairConnected?.call();
+            onPairConnected?.call(token);
           case 'error':
             final m = msg['message'];
             moatLog('DrawbridgeService: pair_attach error: $m');
@@ -368,7 +370,7 @@ class DrawbridgeService {
       moatLog('DrawbridgeService: pair frame unexpected type ${data.runtimeType}');
       return;
     }
-    onPairFrame?.call(bytes);
+    onPairFrame?.call(token, bytes);
   }
 
   /// Send a binary frame on the pair WS.

@@ -29,8 +29,8 @@ class PairChannelService {
 
   final ffi.PairChannelHandle _driver = ffi.PairChannelHandle.newDriver();
 
-  /// Driver calls run one at a time, in arrival order: most need identity
-  /// loaded asynchronously first, and a frame must not overtake the one
+  /// Driver calls run one at a time, in arrival order: some load keys or
+  /// history asynchronously first, and a frame must not overtake the one
   /// before it.
   Future<void> _queue = Future.value();
 
@@ -67,25 +67,20 @@ class PairChannelService {
         _messageStorage = messageStorage {
     _drawbridge.onPairReady = (ready) =>
         _run(() => _apply(_driver.onPairReady(token: ready.token, url: ready.pairUrl)));
-    _drawbridge.onPairConnected = () => _runWithEnv((e) => _driver.onPaired(
-          session: e.session,
-          ring: e.ring,
-          identity: e.identity,
-          siblingStealth: e.siblingStealth,
-          nowMs: e.nowMs,
-        ));
-    _drawbridge.onPairFrame = (data) => _runWithEnv((e) => _driver.onFrame(
-          session: e.session,
-          ring: e.ring,
-          identity: e.identity,
-          siblingStealth: e.siblingStealth,
-          nowMs: e.nowMs,
-          data: data,
-        ));
+    _drawbridge.onPairConnected = (token) => _run(() async {
+          final e = _env();
+          await _apply(await _driver.onPaired(
+              session: e.session, ring: e.ring, nowMs: _now(), token: token));
+        });
+    _drawbridge.onPairFrame = (token, data) => _run(() async {
+          final e = _env();
+          await _apply(await _driver.onFrame(
+              session: e.session, ring: e.ring, nowMs: _now(), token: token, data: data));
+        });
     // Queued behind frames, so a close never overtakes the frames the
     // peer sent before it — the last of which is usually its `Fin`.
-    _drawbridge.onPairClosed = (reason) =>
-        _run(() => _apply(_driver.onPairClosed(token: null, reason: reason)));
+    _drawbridge.onPairClosed = (token, reason) =>
+        _run(() => _apply(_driver.onPairClosed(token: token, reason: reason)));
     _drawbridge.onAuthenticated =
         () => _run(() => _apply(_driver.onRelayConnected()));
   }
@@ -104,26 +99,26 @@ class PairChannelService {
   /// New device: start a pairing and return the code to show. Render
   /// [pairingState]'s `showingCode` for both its text and QR forms.
   Future<String> startPairing() => _call(() async {
-        final started = _driver.pairNew();
+        final started = _driver.pairNew(identity: await _identity());
         await _apply(started.commands);
         return started.code;
       });
 
   /// Existing device: enter a code shown elsewhere, as text or as the
   /// `moat-pair:` URI a QR scan yields. Approval is a separate step.
-  Future<void> confirmPairingCode(String code) =>
-      _call(() => _apply(_driver.pairConfirm(code: code)));
+  Future<void> confirmPairingCode(String code) => _call(() async {
+        await _apply(_driver.pairConfirm(identity: await _identity(), code: code));
+      });
 
   /// Existing device: approve the pending `Enroll`. Throws if there was
   /// nothing to approve or approving failed; [pairingState] shows why.
   Future<void> approvePairing() => _call(() async {
-        final e = await _env();
+        final e = _env();
         await _apply(await _driver.pairApprove(
           session: e.session,
           ring: e.ring,
-          identity: e.identity,
-          siblingStealth: e.siblingStealth,
-          nowMs: e.nowMs,
+          nowMs: _now(),
+          siblingStealth: _ring.cachedSiblingStealth,
         ));
         final state = _driver.pairingUiState();
         if (state is ffi.PairingUiStateDto_Failed) {
@@ -144,13 +139,12 @@ class PairChannelService {
   /// Ask this user's other devices for history this one is missing;
   /// [targetDeviceId] names one of them.
   Future<void> requestSync({Uint8List? targetDeviceId}) => _call(() async {
-        final e = await _env();
+        final e = _env();
         await _apply(await _driver.syncRequest(
           session: e.session,
           ring: e.ring,
-          identity: e.identity,
-          siblingStealth: e.siblingStealth,
-          nowMs: e.nowMs,
+          nowMs: _now(),
+          keyBundle: await _keyBundle(),
           target: targetDeviceId,
         ));
       });
@@ -158,13 +152,12 @@ class PairChannelService {
   /// Send this device's history to [targetDeviceId], which joins without
   /// a prompt of its own.
   Future<void> offerSync(Uint8List targetDeviceId) => _call(() async {
-        final e = await _env();
+        final e = _env();
         await _apply(await _driver.syncOffer(
           session: e.session,
           ring: e.ring,
-          identity: e.identity,
-          siblingStealth: e.siblingStealth,
-          nowMs: e.nowMs,
+          nowMs: _now(),
+          keyBundle: await _keyBundle(),
           target: targetDeviceId,
         ));
       });
@@ -228,46 +221,34 @@ class PairChannelService {
     return done;
   }
 
-  void _runWithEnv(Future<List<ffi.PairChannelCommandDto>> Function(_Env e) step) {
-    _run(() async {
-      final _Env env;
-      try {
-        env = await _env();
-      } catch (e) {
-        await _apply(_driver.onRendezvousFailed(reason: '$e'));
-        return;
-      }
-      await _apply(await step(env));
-    });
-  }
-
-  Future<_Env> _env() async {
+  /// This device's session and ring driver; throws until logged in.
+  _Env _env() {
     final session = _auth.moatSession;
     final ring = _ring.driverHandle;
-    final did = _auth.did;
+    if (session == null || ring == null) throw StateError('not logged in');
+    return _Env(session: session, ring: ring);
+  }
+
+  Future<Uint8List> _keyBundle() async {
     final keyBundle = await _auth.secureStorage.loadKeyBundle();
+    if (keyBundle == null) throw StateError('no key bundle');
+    return keyBundle;
+  }
+
+  /// This device's identity, for a pairing to keep.
+  Future<ffi.PairIdentityDto> _identity() async {
+    final session = _env().session;
+    final did = _auth.did;
     final stealthPubkey = await _auth.secureStorage.loadStealthPublicKey();
-    if (session == null ||
-        ring == null ||
-        did == null ||
-        keyBundle == null ||
-        stealthPubkey == null) {
-      throw StateError('identity not ready');
-    }
-    return _Env(
-      session: session,
-      ring: ring,
-      identity: ffi.PairIdentityDto(
-        credential: ffi.CredentialDto(
-          did: did,
-          deviceId: session.deviceId(),
-          deviceName: _auth.deviceName ?? '',
-        ),
-        keyBundle: keyBundle,
-        stealthPubkey: stealthPubkey,
+    if (did == null || stealthPubkey == null) throw StateError('identity not ready');
+    return ffi.PairIdentityDto(
+      credential: ffi.CredentialDto(
+        did: did,
+        deviceId: session.deviceId(),
+        deviceName: _auth.deviceName ?? '',
       ),
-      siblingStealth: _ring.cachedSiblingStealth,
-      nowMs: _now(),
+      keyBundle: await _keyBundle(),
+      stealthPubkey: stealthPubkey,
     );
   }
 
@@ -291,13 +272,11 @@ class PairChannelService {
           await _publishRingEvent(tag, ciphertext);
         case ffi.PairChannelCommandDto_LoadHistory(:final token):
           final history = await loadSyncHistory(_convService, _messageStorage);
-          final e = await _env();
+          final e = _env();
           await _apply(await _driver.provideHistory(
             session: e.session,
             ring: e.ring,
-            identity: e.identity,
-            siblingStealth: e.siblingStealth,
-            nowMs: e.nowMs,
+            nowMs: _now(),
             token: token,
             history: history,
           ));
@@ -330,8 +309,6 @@ class PairChannelService {
               '${tally.messages} message(s) across ${tally.conversations} '
               'conversation(s), sent ${tally.sentMessages} across '
               '${tally.sentConversations}');
-          // A new device may already be owed conversations.
-          unawaited(_ring.tick());
         case ffi.PairChannelCommandDto_TransferFailed(:final detail):
           moatLog('PairChannelService: transfer failed: $detail');
         case ffi.PairChannelCommandDto_Log(:final line):
@@ -365,17 +342,8 @@ class PairChannelService {
 
 /// This device's local state, for the driver calls that need it.
 class _Env {
-  _Env({
-    required this.session,
-    required this.ring,
-    required this.identity,
-    required this.siblingStealth,
-    required this.nowMs,
-  });
+  _Env({required this.session, required this.ring});
 
   final ffi.MoatSessionHandle session;
   final ffi.RingDriverHandle ring;
-  final ffi.PairIdentityDto identity;
-  final List<ffi.SiblingStealthDto> siblingStealth;
-  final PlatformInt64 nowMs;
 }

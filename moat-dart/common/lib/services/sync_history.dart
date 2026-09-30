@@ -19,7 +19,6 @@ Future<List<ffi.ConvHistoryDto>> loadSyncHistory(
   for (final conv in convService.conversations) {
     out.add(ffi.ConvHistoryDto(
       groupId: conv.groupId,
-      convId: conv.groupIdHex,
       messages: await _loadSyncMessagesFor(messageStorage, conv.groupIdHex),
     ));
   }

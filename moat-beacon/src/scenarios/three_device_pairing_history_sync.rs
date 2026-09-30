@@ -5,13 +5,8 @@
 //! pairs in and must end up with that history; D3 then pairs in
 //! (against D1's now-existing ring) and must end up with it too.
 //!
-//! This is the pairing-based successor to the deleted
-//! `two_device_history_sync` / `three_device_history_sync` scenarios, and
-//! it is the scenario finding 1 of the Phase 0 review names directly:
-//! nothing before this asserted that `PairingCommand::StartSync` actually
-//! leads to messages arriving on the new device, only that the command was
-//! emitted (`moat-core/tests/pairing_simulation.rs` checks that much at the
-//! unit level).
+//! It asserts that pairing's hand-off to the history transfer actually
+//! delivers messages to the new device over real hosts.
 //!
 //! The runtime mix is a parameter (see [`run_with`]); the `_dr` and `_rd`
 //! cells are thin wrappers over it. `_dr` is the only coverage of

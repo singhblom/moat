@@ -8,7 +8,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'simple.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `commands_dto`, `credential_from_dto`, `device_id_from`, `from_core`, `into_core`, `push_media_label`, `push_plaintext_preview`, `to_core_sibling_stealth`, `token_from`, `with_env`
+// These functions are ignored because they are not marked as `pub`: `commands_dto`, `credential_from_dto`, `device_id_from`, `from_core`, `identity_from_dto`, `into_core`, `push_media_label`, `push_plaintext_preview`, `to_core_sibling_stealth`, `token_from`, `with_env`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `MoatError`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `try_from`
 
@@ -247,31 +247,29 @@ abstract class PairChannelHandle implements RustOpaqueInterface {
   static PairChannelHandle newDriver() =>
       RustLib.instance.api.crateApiSimplePairChannelHandleNewDriver();
 
+  /// A binary frame from the pair WS for `token`.
   Future<List<PairChannelCommandDto>> onFrame(
       {required MoatSessionHandle session,
       required RingDriverHandle ring,
-      required PairIdentityDto identity,
-      required List<SiblingStealthDto> siblingStealth,
       required PlatformInt64 nowMs,
+      required List<int> token,
       required List<int> data});
 
-  /// The pair channel for `token` ended.
+  /// The pair WS for `token` closed or failed to connect.
   List<PairChannelCommandDto> onPairClosed(
-      {Uint8List? token, required String reason});
+      {required List<int> token, required String reason});
 
   List<PairChannelCommandDto> onPairReady(
       {required List<int> token, required String url});
 
+  /// The pair WS for `token` reached `paired`.
   Future<List<PairChannelCommandDto>> onPaired(
       {required MoatSessionHandle session,
       required RingDriverHandle ring,
-      required PairIdentityDto identity,
-      required List<SiblingStealthDto> siblingStealth,
-      required PlatformInt64 nowMs});
+      required PlatformInt64 nowMs,
+      required List<int> token});
 
   List<PairChannelCommandDto> onRelayConnected();
-
-  List<PairChannelCommandDto> onRendezvousFailed({required String reason});
 
   /// A sibling's `ring.msg` payload. `sender_name` must come from the
   /// sender's MLS leaf credential.
@@ -289,17 +287,17 @@ abstract class PairChannelHandle implements RustOpaqueInterface {
   Future<List<PairChannelCommandDto>> pairApprove(
       {required MoatSessionHandle session,
       required RingDriverHandle ring,
-      required PairIdentityDto identity,
-      required List<SiblingStealthDto> siblingStealth,
-      required PlatformInt64 nowMs});
+      required PlatformInt64 nowMs,
+      required List<SiblingStealthDto> siblingStealth});
 
   List<PairChannelCommandDto> pairCancel();
 
   /// Existing device: enter a code, in its text or `moat-pair:` form.
-  List<PairChannelCommandDto> pairConfirm({required String code});
+  List<PairChannelCommandDto> pairConfirm(
+      {required PairIdentityDto identity, required String code});
 
   /// New device: start a pairing; the code is what the screen shows.
-  PairNewDto pairNew();
+  PairNewDto pairNew({required PairIdentityDto identity});
 
   List<PairChannelCommandDto> pairReject();
 
@@ -310,8 +308,6 @@ abstract class PairChannelHandle implements RustOpaqueInterface {
   Future<List<PairChannelCommandDto>> provideHistory(
       {required MoatSessionHandle session,
       required RingDriverHandle ring,
-      required PairIdentityDto identity,
-      required List<SiblingStealthDto> siblingStealth,
       required PlatformInt64 nowMs,
       required List<int> token,
       required List<ConvHistoryDto> history});
@@ -324,18 +320,17 @@ abstract class PairChannelHandle implements RustOpaqueInterface {
   Future<List<PairChannelCommandDto>> syncOffer(
       {required MoatSessionHandle session,
       required RingDriverHandle ring,
-      required PairIdentityDto identity,
-      required List<SiblingStealthDto> siblingStealth,
       required PlatformInt64 nowMs,
+      required List<int> keyBundle,
       required List<int> target});
 
   /// Ask the user's other devices for history; `target` names one.
+  /// `key_bundle` seals the request to the ring.
   Future<List<PairChannelCommandDto>> syncRequest(
       {required MoatSessionHandle session,
       required RingDriverHandle ring,
-      required PairIdentityDto identity,
-      required List<SiblingStealthDto> siblingStealth,
       required PlatformInt64 nowMs,
+      required List<int> keyBundle,
       Uint8List? target});
 
   SyncRequestUiStateDto syncRequestUiState();
@@ -468,17 +463,15 @@ class BlobEncryptResult {
 /// One conversation's settled messages, for a transfer's `Hello`.
 class ConvHistoryDto {
   final Uint8List groupId;
-  final String convId;
   final List<SyncMessageDto> messages;
 
   const ConvHistoryDto({
     required this.groupId,
-    required this.convId,
     required this.messages,
   });
 
   @override
-  int get hashCode => groupId.hashCode ^ convId.hashCode ^ messages.hashCode;
+  int get hashCode => groupId.hashCode ^ messages.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -486,7 +479,6 @@ class ConvHistoryDto {
       other is ConvHistoryDto &&
           runtimeType == other.runtimeType &&
           groupId == other.groupId &&
-          convId == other.convId &&
           messages == other.messages;
 }
 
@@ -923,7 +915,7 @@ sealed class PairChannelCommandDto with _$PairChannelCommandDto {
   }) = PairChannelCommandDto_Log;
 }
 
-/// This device's identity, for the driver steps that need its keys.
+/// This device's identity, which a pairing keeps for its steps.
 class PairIdentityDto {
   final CredentialDto credential;
   final Uint8List keyBundle;

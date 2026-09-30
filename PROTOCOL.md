@@ -577,7 +577,7 @@ A device drives one pair-channel session at a time: a pairing, a sync request or
 
 A pairing that has ended — `done`, `failed`, cancelled or rejected — holds nothing, even though its state stays readable. A sibling's `sync_request` or `sync_offer` that arrives while the channel is busy is ignored. A gesture of this user's own (showing or entering a code, requesting, offering or accepting a sync) supersedes whatever held the channel.
 
-`pair_closed` and a pair WS ending are matched against the live rendezvous's token; a notice for any other token is ignored. An offer or join the relay has not acknowledged with `pair_ready` is resent whenever the main WS reauthenticates.
+Every pair-channel event is matched against the live rendezvous's token — `pair_closed`, a pair WS reaching `paired`, each frame it carries, and its ending or failing to connect — and an event for any other token is ignored. An offer or join the relay has not acknowledged with `pair_ready` is resent whenever the main WS reauthenticates.
 
 A transfer's first frames can arrive before this device has loaded the history it will declare; they wait for it rather than being dropped.
 

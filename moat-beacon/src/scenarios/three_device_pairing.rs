@@ -6,14 +6,8 @@
 //! successor to the deleted `three_device_bootstrap` scenario's coord-group
 //! handshake.
 //!
-//! Unlike `two_device_pairing`, this scenario doesn't need to thread a ring
-//! id anywhere by hand: D1's own persisted ring state already remembers
-//! which ring it belongs to, so `pair_confirm` for D3's code re-uses it
-//! automatically. Contrast `moat-core/tests/pairing_simulation.rs`'s
-//! `three_device_pairing_converges_and_third_device_gets_history`, where
-//! the ring id *does* have to be threaded explicitly between calls — each
-//! simulated pairing there is a fresh, isolated `PairingSession` pair with
-//! no shared host state backing it.
+//! D1's persisted ring state remembers which ring it belongs to, so
+//! `pair_confirm` for D3's code adds D3 to the same ring.
 
 use std::future::Future;
 use std::pin::Pin;

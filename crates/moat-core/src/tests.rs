@@ -1327,3 +1327,19 @@ fn test_long_text_message_with_external_blob() {
         panic!("expected LongText payload after deserialization");
     }
 }
+
+/// A PDS record has no bucket to round an oversized payload up to.
+#[test]
+fn an_event_larger_than_the_largest_bucket_is_refused() {
+    let session = MoatSession::new();
+    let credential = MoatCredential::new("did:plc:alice", "laptop", [1u8; 16]);
+    let (_kp, key_bundle) = session.generate_key_package(&credential).unwrap();
+    let group_id = session.create_group(&credential, &key_bundle).unwrap();
+
+    let event = Event::ring_msg(group_id.clone(), 7, vec![0x42; 20_000]);
+    match session.encrypt_event(&group_id, &key_bundle, &event) {
+        Err(Error::PayloadTooLarge(_)) => {}
+        Err(other) => panic!("expected PayloadTooLarge, got {other:?}"),
+        Ok(_) => panic!("an oversized PDS record has no bucket to round up to"),
+    }
+}

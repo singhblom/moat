@@ -2,13 +2,13 @@
 //! its own driver, joined by an in-memory relay that plays Drawbridge's
 //! rendezvous and pair-WS forwarding.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use moat_core::sync_request::{decode_ring_msg, SyncRequestUiState};
 use moat_core::{
-    stealth_pubkey_from_privkey, ConvHistory, DeviceRingState, MoatCredential, MoatSession,
-    PairChannelCommand as Cmd, PairChannelDriver, PairEnv, PairIdentity, PairingUiState,
-    SiblingStealth, SyncMessage, SYNC_REQUEST_TTL_MS,
+    decode_ring_msg, stealth_pubkey_from_privkey, ConvHistory, DeviceId, DeviceRingState,
+    MoatCredential, MoatSession, PairChannelCommand as Cmd, PairChannelDriver, PairEnv,
+    PairIdentity, PairingUiState, SiblingStealth, SyncMessage, SyncRequestUiState,
+    SYNC_REQUEST_TTL_MS,
 };
 
 const DID: &str = "did:plc:alice";
@@ -22,8 +22,9 @@ struct Device {
     siblings: Vec<SiblingStealth>,
     driver: PairChannelDriver,
     history: BTreeMap<String, Vec<SyncMessage>>,
-    /// Ring events this device published, oldest first.
-    published: Vec<Vec<u8>>,
+    /// Ring events this device published, as `(tag, ciphertext)`, oldest
+    /// first.
+    published: Vec<([u8; 16], Vec<u8>)>,
     /// Hold `LoadHistory` until released, so frames arrive first.
     defer_history: bool,
     deferred_history: Option<[u8; 16]>,
@@ -72,11 +73,13 @@ impl Device {
         let mut env = PairEnv {
             mls: &self.mls,
             ring: &mut self.ring,
-            identity: &self.identity,
-            sibling_stealth: &self.siblings,
             now_ms,
         };
         f(&mut self.driver, &mut env)
+    }
+
+    fn device_id(&self) -> DeviceId {
+        *self.mls.device_id()
     }
 
     fn history_for_sync(&self) -> Vec<ConvHistory> {
@@ -84,7 +87,6 @@ impl Device {
             .iter()
             .map(|(conv_id, messages)| ConvHistory {
                 group_id: hex::decode(conv_id).unwrap(),
-                conv_id: conv_id.clone(),
                 messages: messages.clone(),
             })
             .collect()
@@ -124,8 +126,8 @@ fn message(rkey: &str) -> SyncMessage {
 
 enum Event {
     PairReady { token: [u8; 16] },
-    Paired,
-    Frame(Vec<u8>),
+    Paired { token: [u8; 16] },
+    Frame { token: [u8; 16], data: Vec<u8> },
     Closed { token: [u8; 16] },
 }
 
@@ -209,7 +211,7 @@ impl World {
                     if ends.len() == 2 {
                         let ends = ends.clone();
                         for end in ends {
-                            self.queue.push_back((end, Event::Paired));
+                            self.queue.push_back((end, Event::Paired { token }));
                         }
                     }
                 }
@@ -218,11 +220,11 @@ impl World {
                         .on_token
                         .expect("sending with no pair channel");
                     let peer = self.peer_of(&token, idx).expect("sending with no peer");
-                    self.queue.push_back((peer, Event::Frame(data)));
+                    self.queue.push_back((peer, Event::Frame { token, data }));
                 }
                 Cmd::ClosePair | Cmd::DropPair => self.leave(idx),
-                Cmd::PublishRingEvent { ciphertext, .. } => {
-                    self.devices[idx].published.push(ciphertext)
+                Cmd::PublishRingEvent { tag, ciphertext } => {
+                    self.devices[idx].published.push((tag, ciphertext))
                 }
                 Cmd::LoadHistory { token } => {
                     if self.devices[idx].defer_history {
@@ -285,9 +287,11 @@ impl World {
                 Event::PairReady { token } => self.devices[idx]
                     .driver
                     .on_pair_ready(&token, "wss://relay/pair".into()),
-                Event::Paired => self.devices[idx].with_env(now, |d, env| d.on_paired(env)),
-                Event::Frame(data) => {
-                    self.devices[idx].with_env(now, |d, env| d.on_frame(env, data))
+                Event::Paired { token } => {
+                    self.devices[idx].with_env(now, |d, env| d.on_paired(env, &token))
+                }
+                Event::Frame { token, data } => {
+                    self.devices[idx].with_env(now, |d, env| d.on_frame(env, &token, data))
                 }
                 Event::Closed { token } => self.devices[idx]
                     .driver
@@ -308,16 +312,49 @@ impl World {
         self.run();
     }
 
+    /// `idx` shows a pairing code.
+    fn show_code(&mut self, idx: usize) -> String {
+        let identity = self.devices[idx].identity.clone();
+        let (code, cmds) = self.devices[idx].driver.pair_new(identity);
+        self.apply(idx, cmds);
+        self.run();
+        code
+    }
+
+    /// `idx` enters a pairing code.
+    fn enter_code(&mut self, idx: usize, code: &str) {
+        let identity = self.devices[idx].identity.clone();
+        self.call(idx, |d, _| d.pair_confirm(identity, code).unwrap());
+    }
+
+    fn approve(&mut self, idx: usize) {
+        let siblings = self.devices[idx].siblings.clone();
+        self.call(idx, |d, env| d.pair_approve(env, &siblings).unwrap());
+    }
+
+    fn request(&mut self, idx: usize) {
+        let key_bundle = self.devices[idx].identity.key_bundle.clone();
+        self.call(idx, |d, env| {
+            d.sync_request(env, &key_bundle, None).unwrap()
+        });
+    }
+
+    fn offer(&mut self, idx: usize, target: DeviceId) {
+        let key_bundle = self.devices[idx].identity.key_bundle.clone();
+        self.call(idx, |d, env| {
+            d.sync_offer(env, &key_bundle, target).unwrap()
+        });
+    }
+
     /// `new_device` shows a code, `existing` enters and approves it.
     fn pair(&mut self, existing: usize, new_device: usize) {
-        let (code, cmds) = self.devices[new_device].driver.pair_new();
-        self.apply(new_device, cmds);
-        self.call(existing, |d, _| d.pair_confirm(&code).unwrap());
+        let code = self.show_code(new_device);
+        self.enter_code(existing, &code);
         assert!(matches!(
             self.devices[existing].driver.pairing_ui_state(),
             PairingUiState::AwaitingApproval { .. }
         ));
-        self.call(existing, |d, env| d.pair_approve(env).unwrap());
+        self.approve(existing);
         for idx in [existing, new_device] {
             assert!(
                 matches!(
@@ -333,7 +370,7 @@ impl World {
 
     /// Hand `from`'s newest ring event to `to`, as its poll would.
     fn deliver_ring_msg(&mut self, from: usize, to: usize) {
-        let ciphertext = self.devices[from].published.last().unwrap().clone();
+        let (_, ciphertext) = self.devices[from].published.last().unwrap().clone();
         let ring_id = self.devices[to].ring.ring_id().unwrap().to_vec();
         let decrypted = self.devices[to]
             .mls
@@ -352,9 +389,28 @@ impl World {
     fn sync_state(&self, idx: usize) -> SyncRequestUiState {
         self.devices[idx].driver.sync_request_ui_state()
     }
+
+    fn pairing_state(&self, idx: usize) -> PairingUiState {
+        self.devices[idx].driver.pairing_ui_state()
+    }
+
+    fn known_siblings(&self, idx: usize) -> BTreeSet<DeviceId> {
+        self.devices[idx]
+            .siblings
+            .iter()
+            .map(|s| s.device_id)
+            .collect()
+    }
 }
 
 const CONV: &str = "c0ffee";
+
+/// A code from a device outside the world, which never joins.
+fn stray_code() -> String {
+    PairChannelDriver::new()
+        .pair_new(Device::new("stray").identity)
+        .0
+}
 
 fn seed(world: &mut World, idx: usize, rkeys: &[&str]) {
     world.devices[idx]
@@ -409,7 +465,7 @@ fn a_requested_sync_delivers_history_and_names_the_donor() {
         .unwrap()
         .push(message("r5"));
 
-    world.call(1, |d, env| d.sync_request(env, None).unwrap());
+    world.request(1);
     world.deliver_ring_msg(1, 0);
     assert!(matches!(
         world.sync_state(0),
@@ -435,9 +491,9 @@ fn an_offer_is_joined_without_a_prompt() {
         .get_mut(CONV)
         .unwrap()
         .push(message("r5"));
-    let phone = *world.devices[1].mls.device_id();
+    let phone = world.devices[1].device_id();
 
-    world.call(0, |d, env| d.sync_offer(env, phone).unwrap());
+    world.offer(0, phone);
     world.deliver_ring_msg(0, 1);
 
     assert_eq!(world.devices[1].rkeys(CONV), ["r1", "r2", "r3", "r4", "r5"]);
@@ -451,15 +507,15 @@ fn an_offer_is_joined_without_a_prompt() {
 #[test]
 fn a_request_after_a_cancelled_pairing_prompts() {
     let mut world = paired_pair();
-    let (code, _) = PairChannelDriver::new().pair_new();
-    world.call(0, |d, _| d.pair_confirm(&code).unwrap());
+    let code = stray_code();
+    world.enter_code(0, &code);
     world.call(0, |d, _| d.pair_cancel().unwrap());
     assert!(matches!(
         world.devices[0].driver.pairing_ui_state(),
         PairingUiState::Failed { .. }
     ));
 
-    world.call(1, |d, env| d.sync_request(env, None).unwrap());
+    world.request(1);
     world.deliver_ring_msg(1, 0);
 
     assert!(matches!(
@@ -472,10 +528,10 @@ fn a_request_after_a_cancelled_pairing_prompts() {
 #[test]
 fn a_request_during_a_pairing_is_ignored() {
     let mut world = paired_pair();
-    let (code, _) = PairChannelDriver::new().pair_new();
-    world.call(0, |d, _| d.pair_confirm(&code).unwrap());
+    let code = stray_code();
+    world.enter_code(0, &code);
 
-    world.call(1, |d, env| d.sync_request(env, None).unwrap());
+    world.request(1);
     world.deliver_ring_msg(1, 0);
 
     assert_eq!(world.sync_state(0), SyncRequestUiState::Idle);
@@ -490,9 +546,9 @@ fn a_request_while_one_is_awaiting_approval_is_ignored() {
     let mut world = World::new(&["laptop", "phone", "tablet"]);
     world.pair(0, 1);
     world.pair(0, 2);
-    world.call(1, |d, env| d.sync_request(env, None).unwrap());
+    world.request(1);
     world.deliver_ring_msg(1, 0);
-    world.call(2, |d, env| d.sync_request(env, None).unwrap());
+    world.request(2);
     world.deliver_ring_msg(2, 0);
 
     match world.sync_state(0) {
@@ -506,7 +562,7 @@ fn an_expired_request_frees_the_channel() {
     let mut world = World::new(&["laptop", "phone", "tablet"]);
     world.pair(0, 1);
     world.pair(0, 2);
-    world.call(0, |d, env| d.sync_request(env, None).unwrap());
+    world.request(0);
 
     world.now_ms += SYNC_REQUEST_TTL_MS;
     let now = world.now_ms;
@@ -517,7 +573,7 @@ fn an_expired_request_frees_the_channel() {
         SyncRequestUiState::Failed { .. }
     ));
 
-    world.call(1, |d, env| d.sync_request(env, None).unwrap());
+    world.request(1);
     world.deliver_ring_msg(1, 0);
     assert!(matches!(
         world.sync_state(0),
@@ -528,11 +584,10 @@ fn an_expired_request_frees_the_channel() {
 #[test]
 fn a_close_for_a_superseded_rendezvous_is_ignored() {
     let mut world = paired_pair();
-    let (old_code, _) = PairChannelDriver::new().pair_new();
-    world.call(0, |d, _| d.pair_confirm(&old_code).unwrap());
+    world.enter_code(0, &stray_code());
     let old_token = world.devices[0].on_token.unwrap();
 
-    world.call(0, |d, env| d.sync_request(env, None).unwrap());
+    world.request(0);
     let cmds = world.devices[0]
         .driver
         .on_pair_closed(Some(&old_token), "peer_gone".into());
@@ -545,7 +600,7 @@ fn a_close_for_a_superseded_rendezvous_is_ignored() {
 fn a_close_mid_transfer_fails_the_request() {
     let mut world = paired_pair();
     world.devices[0].defer_history = true;
-    world.call(1, |d, env| d.sync_request(env, None).unwrap());
+    world.request(1);
     world.deliver_ring_msg(1, 0);
     world.call(0, |d, _| d.sync_accept().unwrap());
     assert!(world.devices[1].driver.is_transferring());
@@ -579,7 +634,7 @@ fn frames_before_the_history_is_loaded_wait_for_it() {
 fn an_unacknowledged_offer_is_resent_when_the_relay_comes_back() {
     let mut world = paired_pair();
     world.relay_down = true;
-    world.call(1, |d, env| d.sync_request(env, None).unwrap());
+    world.request(1);
     world.relay_down = false;
 
     let cmds = world.devices[1].driver.on_relay_connected();
@@ -590,12 +645,82 @@ fn an_unacknowledged_offer_is_resent_when_the_relay_comes_back() {
 fn a_new_gesture_supersedes_a_running_transfer() {
     let mut world = paired_pair();
     world.devices[0].defer_history = true;
-    world.call(1, |d, env| d.sync_request(env, None).unwrap());
+    world.request(1);
     world.deliver_ring_msg(1, 0);
     world.call(0, |d, _| d.sync_accept().unwrap());
 
-    let (_, cmds) = world.devices[0].driver.pair_new();
+    let identity = world.devices[0].identity.clone();
+    let (_, cmds) = world.devices[0].driver.pair_new(identity);
     assert!(matches!(cmds.first(), Some(Cmd::DropPair)));
     assert!(!world.devices[0].driver.is_transferring());
     assert_eq!(world.sync_state(0), SyncRequestUiState::Idle);
+}
+
+#[test]
+fn a_third_device_learns_every_existing_siblings_stealth_address() {
+    let mut world = World::new(&["laptop", "phone", "tablet"]);
+    world.pair(0, 1);
+    world.pair(0, 2);
+    let [laptop, phone, tablet] = [0, 1, 2].map(|i| world.devices[i].device_id());
+
+    assert_eq!(world.known_siblings(2), BTreeSet::from([laptop, phone]));
+    assert_eq!(world.known_siblings(0), BTreeSet::from([phone, tablet]));
+    assert_eq!(
+        world.devices[2].ring.ring_id(),
+        world.devices[0].ring.ring_id()
+    );
+}
+
+#[test]
+fn rejecting_a_pairing_fails_it_on_both_devices() {
+    let mut world = World::new(&["laptop", "phone"]);
+    let code = world.show_code(1);
+    world.enter_code(0, &code);
+
+    let cmds = world.devices[0].driver.pair_reject().unwrap();
+    world.apply(0, cmds);
+    world.run();
+
+    for idx in [0, 1] {
+        assert!(
+            matches!(world.pairing_state(idx), PairingUiState::Failed { .. }),
+            "{}: {:?}",
+            world.devices[idx].name,
+            world.pairing_state(idx)
+        );
+    }
+}
+
+#[test]
+fn a_failed_publish_fails_the_request_and_frees_the_channel() {
+    let mut world = paired_pair();
+    world.request(1);
+    let (tag, _) = *world.devices[1].published.last().unwrap();
+
+    let cmds = world.devices[1]
+        .driver
+        .on_ring_publish_failed(&tag, "pds down".into());
+    world.apply(1, cmds);
+
+    assert!(matches!(
+        world.sync_state(1),
+        SyncRequestUiState::Failed { .. }
+    ));
+    assert_eq!(world.devices[1].on_token, None);
+}
+
+/// A socket from a superseded rendezvous can still reach `paired` after a
+/// new gesture has taken the channel.
+#[test]
+fn a_stale_socket_reaching_paired_does_not_start_the_live_session() {
+    let mut world = paired_pair();
+    world.enter_code(0, &stray_code());
+    let stale = world.devices[0].on_token.unwrap();
+    world.request(0);
+
+    let cmds = world.devices[0].with_env(NOW, |d, env| d.on_paired(env, &stale));
+
+    assert!(cmds.iter().all(|c| matches!(c, Cmd::Log(_))), "{cmds:?}");
+    assert_eq!(world.sync_state(0), SyncRequestUiState::AwaitingPeer);
+    assert!(!world.devices[0].driver.is_transferring());
 }

@@ -4,8 +4,7 @@ import '../services/pair_channel_manager.dart';
 
 /// Existing device: shown the moment an incoming `Enroll` needs a user
 /// decision — pushed by a `state` listener in `main.dart`, mirroring
-/// `moat-cli`'s TUI switching straight to `Focus::PairApprove` when
-/// `SurfaceApprovalPrompt` arrives.
+/// `moat-cli`'s TUI opening its approval overlay on `AwaitingApproval`.
 ///
 /// Device name/DID come from [PairChannelService.pairingState]'s `AwaitingApproval`
 /// rather than a cached copy. On success (or a plain reject) this unwinds

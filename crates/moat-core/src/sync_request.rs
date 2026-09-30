@@ -258,11 +258,6 @@ impl SyncRequestSession {
         }
     }
 
-    /// The rendezvous token this session is bound to.
-    pub fn token(&self) -> &[u8; PAIRING_TOKEN_LEN] {
-        &self.token
-    }
-
     /// Render the state of an optional session, so hosts don't hand-roll
     /// the `None` case differently from each other.
     pub fn ui_state_of(session: Option<&Self>) -> SyncRequestUiState {
@@ -391,3 +386,6 @@ impl SyncRequestSession {
             && now_ms - self.started_at_ms >= SYNC_REQUEST_TTL_MS
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -398,7 +398,7 @@ impl DrawbridgeManager {
 
         self.pair_writer = Some(writer);
         self.pair_token = Some(token.to_vec());
-        let _ = self.bg_tx.send(BgEvent::PairConnected);
+        let _ = self.bg_tx.send(BgEvent::PairConnected { session_token: token.to_vec() });
         Ok(())
     }
 
@@ -617,8 +617,8 @@ async fn own_read_loop(
 /// and signals `PairClosed` on disconnect.
 ///
 /// `clear_pair()` aborts this task, but not instantaneously: an
-/// already-observed close can still be queued after the session is
-/// superseded, hence `session_token`.
+/// already-observed frame or close can still be queued after the session
+/// is superseded, hence `session_token`.
 async fn pair_read_loop(
     mut reader: futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>,
     bg_tx: mpsc::UnboundedSender<BgEvent>,
@@ -627,7 +627,10 @@ async fn pair_read_loop(
     loop {
         match reader.next().await {
             Some(Ok(Message::Binary(data))) => {
-                let _ = bg_tx.send(BgEvent::PairFrameReceived { data });
+                let _ = bg_tx.send(BgEvent::PairFrameReceived {
+                    session_token: session_token.clone(),
+                    data,
+                });
             }
             Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => continue,
             Some(Ok(Message::Close(_))) | None => {

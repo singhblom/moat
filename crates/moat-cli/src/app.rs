@@ -524,12 +524,15 @@ pub(crate) enum BgEvent {
     /// next 30 s poll.
     PublishRingEvent { tag: [u8; 16], ciphertext: Vec<u8> },
 
-    /// A binary frame arrived on the pair WS.
+    /// A binary frame arrived on the pair WS for `session_token`.
     PairFrameReceived {
+        session_token: Vec<u8>,
         data: Vec<u8>,
     },
-    /// Pair WS is fully attached (both sides present).
-    PairConnected,
+    /// The pair WS for `session_token` is fully attached (both sides present).
+    PairConnected {
+        session_token: Vec<u8>,
+    },
 }
 
 impl BgEvent {
@@ -572,7 +575,7 @@ impl BgEvent {
             | BgEvent::PairClosed { .. }
             | BgEvent::PairCloseOverdue { .. }
             | BgEvent::PairFrameReceived { .. }
-            | BgEvent::PairConnected => false,
+            | BgEvent::PairConnected { .. } => false,
         }
     }
 }
@@ -1315,10 +1318,8 @@ impl App {
     /// HTTP `POST /pair/new` — new device requests a pairing code and
     /// starts the rendezvous. Returns the text-form code.
     pub fn api_pair_new(&mut self) -> Result<String> {
-        if self.client.is_none() {
-            return Err(AppError::NotLoggedIn);
-        }
-        let (code, cmds) = self.pair_channel.pair_new();
+        let identity = self.pair_identity().ok_or(AppError::NotLoggedIn)?;
+        let (code, cmds) = self.pair_channel.pair_new(identity);
         self.apply_pair_commands(cmds);
         Ok(code)
     }
@@ -1328,10 +1329,8 @@ impl App {
     /// `GET /pair/status` for `awaiting_approval`, then `POST /pair/approve`
     /// or `/pair/reject`. No host auto-approves.
     pub fn api_pair_confirm(&mut self, code: &str) -> Result<()> {
-        if self.client.is_none() {
-            return Err(AppError::NotLoggedIn);
-        }
-        let cmds = self.pair_channel.pair_confirm(code).map_err(AppError::Mls)?;
+        let identity = self.pair_identity().ok_or(AppError::NotLoggedIn)?;
+        let cmds = self.pair_channel.pair_confirm(identity, code).map_err(AppError::Mls)?;
         self.apply_pair_commands(cmds);
         Ok(())
     }
@@ -2059,18 +2058,14 @@ impl App {
                 }
             }
 
-            BgEvent::PairConnected => {
-                let cmds = match self.with_pair_env(|d, env| d.on_paired(env)) {
-                    Some(cmds) => cmds,
-                    None => self.pair_channel.on_rendezvous_failed("identity not ready".into()),
-                };
+            BgEvent::PairConnected { session_token } => {
+                let cmds = self.with_pair_env(|d, env| d.on_paired(env, &session_token));
                 self.apply_pair_commands(cmds);
             }
 
-            BgEvent::PairFrameReceived { data } => {
-                if let Some(cmds) = self.with_pair_env(|d, env| d.on_frame(env, data)) {
-                    self.apply_pair_commands(cmds);
-                }
+            BgEvent::PairFrameReceived { session_token, data } => {
+                let cmds = self.with_pair_env(|d, env| d.on_frame(env, &session_token, data));
+                self.apply_pair_commands(cmds);
             }
         }
     }
@@ -2294,12 +2289,7 @@ impl App {
                     Ok(()) => {
                         self.debug_log.log("sync: pair WS connected, waiting for paired");
                     }
-                    Err(e) => {
-                        let cmds = self
-                            .pair_channel
-                            .on_rendezvous_failed(format!("pair WS connect failed: {e}"));
-                        self.apply_pair_commands(cmds);
-                    }
+                    Err(e) => self.on_pair_closed(Some(token), format!("pair WS connect failed: {e}")),
                 }
             }
             BgEvent::DrawbridgeSendPairBinary { data } => {
@@ -5607,8 +5597,8 @@ impl App {
 
     // ── Pair channel: pairing, sync requests and history transfer ─────────────
 
-    /// This device's credential, key bundle and stealth public key, or
-    /// `None` until logged in with keys loaded.
+    /// This device's credential, key bundle and stealth public key, for a
+    /// pairing to keep; `None` until logged in with keys loaded.
     fn pair_identity(&self) -> Option<PairIdentity> {
         let my_did = self.client.as_ref()?.did().to_string();
         let key_bundle = self.keys.load_identity_key().ok()?;
@@ -5621,21 +5611,25 @@ impl App {
         })
     }
 
-    /// Run `f` against the pair-channel driver with this device's local
-    /// state, or return `None` if the identity is not ready.
+    /// The key bundle that seals a sync request or offer to the ring.
+    fn sync_key_bundle(&self) -> Result<Vec<u8>> {
+        if self.client.is_none() {
+            return Err(AppError::NotLoggedIn);
+        }
+        Ok(self.keys.load_identity_key()?)
+    }
+
+    /// Run `f` against the pair-channel driver with this device's local state.
     fn with_pair_env<T>(
         &mut self,
         f: impl FnOnce(&mut PairChannelDriver, &mut PairEnv<'_>) -> T,
-    ) -> Option<T> {
-        let identity = self.pair_identity()?;
+    ) -> T {
         let mut env = PairEnv {
             mls: &self.mls,
             ring: &mut self.ring_driver,
-            identity: &identity,
-            sibling_stealth: &self.cached_sibling_stealth,
             now_ms: chrono::Utc::now().timestamp_millis(),
         };
-        Some(f(&mut self.pair_channel, &mut env))
+        f(&mut self.pair_channel, &mut env)
     }
 
     /// Carry out the driver's commands, in order.
@@ -5670,9 +5664,7 @@ impl App {
                 }
                 PairChannelCommand::LoadHistory { token } => {
                     let history = self.load_sync_history();
-                    let cmds = self
-                        .with_pair_env(|d, env| d.provide_history(env, &token, history))
-                        .unwrap_or_default();
+                    let cmds = self.with_pair_env(|d, env| d.provide_history(env, &token, history));
                     self.apply_pair_commands(cmds);
                 }
                 PairChannelCommand::StoreMessages { conv_id, messages } => {
@@ -5773,7 +5765,7 @@ impl App {
                     .filter(|m| m.rkey != "pending")
                     .map(|m| crate::sync::sync_message_from_stored(&m))
                     .collect();
-                Some(ConvHistory { group_id, conv_id: conv.id.clone(), messages })
+                Some(ConvHistory { group_id, messages })
             })
             .collect()
     }
@@ -5917,9 +5909,9 @@ impl App {
         &mut self,
         target_device_id: Option<moat_core::DeviceId>,
     ) -> Result<()> {
+        let key_bundle = self.sync_key_bundle()?;
         let cmds = self
-            .with_pair_env(|d, env| d.sync_request(env, target_device_id))
-            .ok_or(AppError::NotLoggedIn)?
+            .with_pair_env(|d, env| d.sync_request(env, &key_bundle, target_device_id))
             .map_err(AppError::Mls)?;
         self.apply_pair_commands(cmds);
         Ok(())
@@ -5928,9 +5920,9 @@ impl App {
     /// HTTP `POST /sync/offer` — send history to another device. This call
     /// is the human approval, so the target joins without a prompt.
     pub fn api_sync_offer(&mut self, target_device_id: moat_core::DeviceId) -> Result<()> {
+        let key_bundle = self.sync_key_bundle()?;
         let cmds = self
-            .with_pair_env(|d, env| d.sync_offer(env, target_device_id))
-            .ok_or(AppError::NotLoggedIn)?
+            .with_pair_env(|d, env| d.sync_offer(env, &key_bundle, target_device_id))
             .map_err(AppError::Mls)?;
         self.apply_pair_commands(cmds);
         Ok(())
@@ -5956,9 +5948,9 @@ impl App {
     /// Existing device: approve the pending `Enroll`, from the TUI or
     /// `POST /pair/approve`.
     fn approve_pending_pairing(&mut self) -> Result<()> {
+        let siblings = self.cached_sibling_stealth.clone();
         let cmds = self
-            .with_pair_env(|d, env| d.pair_approve(env))
-            .ok_or_else(|| AppError::Other("cannot approve — identity not ready".into()))?
+            .with_pair_env(|d, env| d.pair_approve(env, &siblings))
             .map_err(AppError::Mls)?;
         self.apply_pair_commands(cmds);
         match self.pairing_ui_state() {

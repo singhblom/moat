@@ -116,7 +116,6 @@ pub struct ConvState {
 #[derive(Debug, Clone)]
 pub struct ConvHistory {
     pub group_id: Vec<u8>,
-    pub conv_id: String,
     pub messages: Vec<SyncMessage>,
 }
 
@@ -349,7 +348,6 @@ enum Phase {
 #[derive(Debug)]
 struct ConvPlan {
     group_id: Vec<u8>,
-    conv_id: String,
     /// Our messages to send (donor side, backward sync).
     our_messages: Vec<SyncMessage>,
     /// Whether we expect to receive a batch from the peer.
@@ -376,9 +374,9 @@ pub struct SyncSession {
     /// arrived for. Counted here rather than in each host so both
     /// runtimes report the same number from the same events.
     received_messages: u64,
-    received_convs: HashSet<String>,
+    received_convs: HashSet<Vec<u8>>,
     sent_messages: u64,
-    sent_convs: HashSet<String>,
+    sent_convs: HashSet<Vec<u8>>,
     sent_fin: bool,
     received_fin: bool,
     peer_device_id: Option<DeviceId>,
@@ -422,7 +420,7 @@ impl SyncSession {
                 group_id: conv.group_id.clone(),
                 inventory: ConvInventory::of(rkeys),
             });
-            session.add_conv_plan(conv.group_id, conv.conv_id, conv.messages);
+            session.add_conv_plan(conv.group_id, conv.messages);
         }
         fit_hello_inventories(&mut convs);
         let outputs = session.on_paired(convs, device_id);
@@ -430,18 +428,12 @@ impl SyncSession {
     }
 
     /// Populate the plan for one conversation. `our_messages` is what this
-    /// side can serve to the peer. [`start`](Self::start) is the host entry
+    /// side can serve to the peer. [`start`](Self::start) is the entry
     /// point; this and [`on_paired`](Self::on_paired) let a test declare an
     /// inventory that differs from the plan.
-    pub fn add_conv_plan(
-        &mut self,
-        group_id: Vec<u8>,
-        conv_id: String,
-        our_messages: Vec<SyncMessage>,
-    ) {
+    pub fn add_conv_plan(&mut self, group_id: Vec<u8>, our_messages: Vec<SyncMessage>) {
         self.plans.push(ConvPlan {
             group_id,
-            conv_id,
             our_messages,
             expecting_batch: false,
             received_done: false,
@@ -626,10 +618,8 @@ impl SyncSession {
             if self.plans.iter().any(|p| p.group_id == peer_state.group_id) {
                 continue;
             }
-            let conv_id = hex::encode(&peer_state.group_id);
             self.plans.push(ConvPlan {
                 group_id: peer_state.group_id.clone(),
-                conv_id,
                 our_messages: Vec::new(),
                 expecting_batch: true,
                 received_done: false,
@@ -673,7 +663,7 @@ impl SyncSession {
 
         if !slice.is_empty() {
             self.sent_messages += slice.len() as u64;
-            self.sent_convs.insert(plan.conv_id.clone());
+            self.sent_convs.insert(plan.group_id.clone());
         }
 
         let next_idx = cursor_idx + slice.len();
@@ -718,11 +708,11 @@ impl SyncSession {
         plan.incoming_total = Some(total);
         if !messages.is_empty() {
             self.received_messages += messages.len() as u64;
-            self.received_convs.insert(plan.conv_id.clone());
+            self.received_convs.insert(plan.group_id.clone());
         }
 
         let mut outputs = vec![SyncOutput::Store {
-            conv_id: plan.conv_id.clone(),
+            conv_id: hex::encode(&plan.group_id),
             messages,
         }];
 
@@ -818,15 +808,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn encode_decode_roundtrip_hello() {
-        let msg = SyncMsg::Hello { convs: vec![], device_id: [42; 16] };
-        let decoded = decode_sync_msg(&encode_sync_msg(&msg)).unwrap();
-        assert!(matches!(decoded, SyncMsg::Hello { device_id, .. } if device_id == [42; 16]));
-    }
 
     #[test]
-    fn encode_decode_roundtrip_batch() {
+    fn a_batch_roundtrips_through_the_wire_encoding() {
         let msg = SyncMsg::Batch {
             group_id: vec![1, 2, 3],
             messages: vec![empty_msg("rk1", "hi")],
@@ -845,23 +829,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn encode_decode_roundtrip_done() {
-        let msg = SyncMsg::Done { group_id: vec![9u8; 32] };
-        let decoded = decode_sync_msg(&encode_sync_msg(&msg)).unwrap();
-        assert!(matches!(decoded, SyncMsg::Done { .. }));
-    }
 
-    #[test]
-    fn on_paired_emits_hello() {
-        let mut s = SyncSession::new();
-        let outs = s.on_paired(vec![], [7; 16]);
-        assert_eq!(outs.len(), 1);
-        assert!(matches!(
-            &outs[0],
-            SyncOutput::Send(SyncMsg::Hello { device_id, .. }) if *device_id == [7; 16]
-        ));
-    }
 
     /// Complete.
     #[test]
@@ -870,8 +838,8 @@ mod tests {
         let g2 = vec![2u8; 32];
 
         let mut s = SyncSession::new();
-        s.add_conv_plan(g1.clone(), hex::encode(&g1), vec![]);
-        s.add_conv_plan(g2.clone(), hex::encode(&g2), vec![]);
+        s.add_conv_plan(g1.clone(), vec![]);
+        s.add_conv_plan(g2.clone(), vec![]);
         let _ = s.on_paired(vec![], [0; 16]);
 
         // Receive peer's Hello — they have history for both.
@@ -924,11 +892,7 @@ mod tests {
     fn donor_serves_batch_and_completes() {
         let g = vec![3u8; 32];
         let mut s = SyncSession::new();
-        s.add_conv_plan(
-            g.clone(),
-            hex::encode(&g),
-            vec![empty_msg("r1", "a"), empty_msg("r2", "b")],
-        );
+        s.add_conv_plan(g.clone(), vec![empty_msg("r1", "a"), empty_msg("r2", "b")]);
         let _ = s.on_paired(vec![full_state(&g)], [0; 16]);
 
         // Peer's Hello (they have nothing).
@@ -982,7 +946,7 @@ mod tests {
     fn peer_fin_completes_without_unrequested_sends() {
         let g = vec![7u8; 32];
         let mut s = SyncSession::new();
-        s.add_conv_plan(g.clone(), hex::encode(&g), vec![empty_msg("r1", "x")]);
+        s.add_conv_plan(g.clone(), vec![empty_msg("r1", "x")]);
         let _ = s.on_paired(vec![], [0; 16]);
         let _ = s
             .on_message(SyncMsg::Hello { convs: vec![empty_state(&g)], device_id: [0; 16] })
@@ -998,7 +962,7 @@ mod tests {
     fn two_way_session_needs_both_fins() {
         let g = vec![8u8; 32];
         let mut s = SyncSession::new();
-        s.add_conv_plan(g.clone(), hex::encode(&g), vec![empty_msg("a1", "x")]);
+        s.add_conv_plan(g.clone(), vec![empty_msg("a1", "x")]);
         let _ = s.on_paired(vec![], [0; 16]);
         let peer = ConvState {
             group_id: g.clone(),
@@ -1063,16 +1027,11 @@ mod tests {
     #[test]
     fn progress_totals_are_exact_from_the_first_report() {
         let g = vec![6u8; 32];
-        let conv = hex::encode(&g);
         let rkeys: Vec<String> = (0..75).map(|i| format!("r{i:03}")).collect();
         let mut donor = SyncSession::new();
-        donor.add_conv_plan(
-            g.clone(),
-            conv.clone(),
-            rkeys.iter().map(|r| empty_msg(r, "x")).collect(),
-        );
+        donor.add_conv_plan(g.clone(), rkeys.iter().map(|r| empty_msg(r, "x")).collect());
         let mut joiner = SyncSession::new();
-        joiner.add_conv_plan(g.clone(), conv, Vec::new());
+        joiner.add_conv_plan(g.clone(), Vec::new());
 
         let mut seen = Vec::new();
         pump(
@@ -1103,7 +1062,7 @@ mod tests {
     fn bare_done_settles_the_receive_total() {
         let g = vec![7u8; 32];
         let mut s = SyncSession::new();
-        s.add_conv_plan(g.clone(), hex::encode(&g), Vec::new());
+        s.add_conv_plan(g.clone(), Vec::new());
         let _ = s.on_paired(vec![empty_state(&g)], [0; 16]);
         let _ = s
             .on_message(SyncMsg::Hello {
@@ -1128,17 +1087,11 @@ mod tests {
     #[test]
     fn a_span_inside_the_peers_is_never_counted_as_owed() {
         let g = vec![8u8; 32];
-        let conv = hex::encode(&g);
         let mut ranged = SyncSession::new();
-        ranged.add_conv_plan(
-            g.clone(),
-            conv.clone(),
-            vec![empty_msg("r2", "x"), empty_msg("r4", "x")],
-        );
+        ranged.add_conv_plan(g.clone(), vec![empty_msg("r2", "x"), empty_msg("r4", "x")]);
         let mut complete = SyncSession::new();
         complete.add_conv_plan(
             g.clone(),
-            conv,
             ["r1", "r3", "r5"].iter().map(|r| empty_msg(r, "x")).collect(),
         );
 
@@ -1181,7 +1134,7 @@ mod tests {
         let our_msgs: Vec<SyncMessage> = (0..75)
             .map(|i| empty_msg(&format!("r{i}"), "x"))
             .collect();
-        s.add_conv_plan(g.clone(), hex::encode(&g), our_msgs);
+        s.add_conv_plan(g.clone(), our_msgs);
         let _ = s.on_paired(vec![full_state(&g)], [0; 16]);
         let _ = s
             .on_message(SyncMsg::Hello { convs: vec![empty_state(&g)], device_id: [0; 16] })
@@ -1220,22 +1173,6 @@ mod tests {
             .any(|o| matches!(o, SyncOutput::Send(SyncMsg::Done { .. }))));
     }
 
-    /// Peer's Hello mentions a conv we don't have a plan for — auto-add it
-    /// and request its batch.
-    #[test]
-    fn unknown_peer_conv_auto_added() {
-        let g = vec![5u8; 32];
-        let mut s = SyncSession::new();
-        let _ = s.on_paired(vec![], [0; 16]);
-        let outs = s
-            .on_message(SyncMsg::Hello { convs: vec![full_state(&g)], device_id: [0; 16] })
-            .unwrap();
-        let batch_req = outs.iter().any(|o| matches!(
-            o,
-            SyncOutput::Send(SyncMsg::BatchReq { group_id, .. }) if *group_id == g
-        ));
-        assert!(batch_req, "expected BatchReq for auto-added conv");
-    }
 
     /// BatchReq for an unknown group → reply with empty Done so the peer
     /// can mark that conversation complete.
@@ -1255,9 +1192,8 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn default_equals_new() {
-        let s: SyncSession = Default::default();
-        assert!(!s.is_done());
-    }
+
 }
+
+#[cfg(test)]
+mod inventory_tests;

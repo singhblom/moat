@@ -6,7 +6,7 @@
 //! `StoredMessage <-> SyncMessage` conversions which depend on
 //! `crate::keystore` and therefore can't live in moat-core.
 
-pub use moat_core::sync::{SyncMessage, SyncReaction};
+pub use moat_core::{SyncMessage, SyncReaction};
 
 use crate::keystore::{StoredMessage, StoredReaction};
 
