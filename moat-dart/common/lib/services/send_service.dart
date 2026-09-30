@@ -77,13 +77,13 @@ class SendService {
 
     final rkey = _extractRkey(uri);
 
-    final relayUrls = DrawbridgeService.instance
-        .relayUrlsForParticipants(conversation.participants);
+    final drawbridgeUrls = DrawbridgeService.instance
+        .drawbridgeUrlsForParticipants(conversation.participants);
     DrawbridgeService.instance.notifyEventPosted(
       tag: result.tag,
       rkey: rkey,
       payload: result.ciphertext,
-      relayUrls: relayUrls,
+      drawbridgeUrls: drawbridgeUrls,
     );
 
     return Message(
@@ -192,13 +192,13 @@ class SendService {
     final rkey = _extractRkey(eventUri);
 
     // 7. Notify Drawbridge.
-    final relayUrls = DrawbridgeService.instance
-        .relayUrlsForParticipants(conversation.participants);
+    final drawbridgeUrls = DrawbridgeService.instance
+        .drawbridgeUrlsForParticipants(conversation.participants);
     DrawbridgeService.instance.notifyEventPosted(
       tag: result.tag,
       rkey: rkey,
       payload: result.ciphertext,
-      relayUrls: relayUrls,
+      drawbridgeUrls: drawbridgeUrls,
     );
 
     return Message(
@@ -274,13 +274,13 @@ class SendService {
     );
 
     final rkey = _extractRkey(uri);
-    final relayUrls = DrawbridgeService.instance
-        .relayUrlsForParticipants(conversation.participants);
+    final drawbridgeUrls = DrawbridgeService.instance
+        .drawbridgeUrlsForParticipants(conversation.participants);
     DrawbridgeService.instance.notifyEventPosted(
       tag: result.tag,
       rkey: rkey,
       payload: result.ciphertext,
-      relayUrls: relayUrls,
+      drawbridgeUrls: drawbridgeUrls,
     );
 
     moatLog('SendService: Reaction "$emoji" published');

@@ -88,8 +88,8 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // One explicit poll: Bob joins the group (receives Welcome) and picks up
-    // Alice's DrawbridgeHint so he connects as recipient.
+    // One explicit poll: Bob joins the group (receives Welcome) and reads
+    // Alice's Drawbridge records, so his sends reach her devices.
     let stats = bob.poll().await.expect("bob join poll");
     assert!(
         stats.new_conversations > 0,
@@ -105,7 +105,7 @@ pub async fn run(actions: Vec<Action>, verbose: bool) {
         stats.new_conversations
     );
 
-    // Give Bob time to send reciprocal DrawbridgeHint, then Alice picks it up.
+    // Let Bob's join settle, then have Alice poll so both are caught up.
     tokio::time::sleep(Duration::from_millis(500)).await;
     let _ = alice.poll().await;
     tokio::time::sleep(Duration::from_millis(500)).await;

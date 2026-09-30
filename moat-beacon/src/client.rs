@@ -139,6 +139,9 @@ pub struct PairNewResponse {
     /// hyphen-grouped). The `moat-pair:` URI / QR form is a client-side
     /// concern (Dart), not part of this HTTP surface.
     pub code: String,
+    /// The new device's Drawbridge, where the rendezvous happens. The other
+    /// device needs it beside the code.
+    pub drawbridge_url: String,
 }
 
 /// Response to `GET /pair/status` — a tagged mirror of
@@ -153,7 +156,7 @@ pub enum PairingUiState {
     /// No pairing in flight.
     Idle,
     /// New device: code generated, waiting for the peer to enter it.
-    ShowingCode { code: String, uri: String },
+    ShowingCode { code: String, drawbridge_url: String, uri: String },
     /// Existing device: code accepted, waiting for the peer's `Enroll`.
     AwaitingPeer,
     /// Existing device: `Enroll` received, waiting on the approve/reject
@@ -678,11 +681,11 @@ impl MoatCliClient {
     /// `POST /pair/confirm` — existing device: enter a pairing code
     /// (scanned or typed). No longer implies approval of the resulting
     /// `Enroll` — see `pair_approve`.
-    pub async fn pair_confirm(&self, code: &str) -> Result<()> {
+    pub async fn pair_confirm(&self, code: &str, drawbridge_url: &str) -> Result<()> {
         let resp = self
             .http
             .post(format!("{}/pair/confirm", self.base_url))
-            .json(&json!({ "code": code }))
+            .json(&json!({ "code": code, "drawbridge_url": drawbridge_url }))
             .send()
             .await
             .context("POST /pair/confirm")?;

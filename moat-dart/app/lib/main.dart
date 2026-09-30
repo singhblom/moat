@@ -204,7 +204,7 @@ const _devPdsUrl = String.fromEnvironment('MOAT_PDS_URL');
 // with `--dart-define-from-file=config/release.json`.
 const _isRelease = bool.fromEnvironment('dart.vm.product');
 // ignore: unused_element
-const _requireRelayInRelease =
+const _requireDrawbridgeInRelease =
     _isRelease && buildDrawbridgeUrl == '' ? 1 ~/ 0 : 0;
 
 class MoatApp extends StatelessWidget {

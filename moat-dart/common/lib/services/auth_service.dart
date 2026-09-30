@@ -118,7 +118,14 @@ class AuthService {
     await _initDrawbridge();
   }
 
-  /// Connect to Drawbridge and publish own relay URL.
+  /// This device's Drawbridge: the [drawbridgeUrl] override, else the one the
+  /// build was made for. Null when there is none.
+  String? get ownDrawbridgeUrl {
+    final url = drawbridgeUrl ?? buildDrawbridgeUrl;
+    return url.isEmpty ? null : url;
+  }
+
+  /// Connect to Drawbridge and publish its URL.
   ///
   /// The relay is [drawbridgeUrl] if given, else [buildDrawbridgeUrl]. With
   /// neither, the host polls only.
@@ -127,19 +134,22 @@ class AuthService {
   Future<void> _initDrawbridge() async {
     if (_did == null) return;
 
-    final url = drawbridgeUrl ?? buildDrawbridgeUrl;
-    if (url.isEmpty) {
-      moatLog('AuthService: no drawbridge relay configured, push delivery is off');
-      return;
-    }
-
     final session = _atprotoClient.session;
     if (session == null) return;
 
     final keyBundle = await _secureStorage.loadKeyBundle();
     if (keyBundle == null) return;
 
+    // Initialised even with no Drawbridge of our own: a rendezvous on a sibling's
+    // Drawbridge still needs this device's identity.
     DrawbridgeService.instance.init(did: _did!, keyBundle: keyBundle);
+
+    final url = ownDrawbridgeUrl;
+    if (url == null) {
+      moatLog('AuthService: no Drawbridge configured, push delivery is off');
+      return;
+    }
+
     unawaited(DrawbridgeService.instance.connectOwn(url));
     try {
       final deviceId = await _moatSession!.deviceId();

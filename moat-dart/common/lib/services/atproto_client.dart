@@ -407,7 +407,31 @@ class AtprotoClient {
     );
   }
 
-  /// The relays a user's devices sit on: every device's
+  /// The Drawbridge one device sits on: its `social.moat.drawbridgeConfig`
+  /// record, whose rkey is the hex MLS device id. Null if that device has
+  /// published none; throws if the PDS cannot be read.
+  Future<String?> fetchDrawbridgeUrlForDevice(String did, String deviceIdHex) async {
+    final pdsUrl = await resolvePdsEndpoint(did);
+    try {
+      final response = await _get(
+        '$pdsUrl/xrpc/com.atproto.repo.getRecord',
+        queryParams: {
+          'repo': did,
+          'collection': drawbridgeConfigNsid,
+          'rkey': deviceIdHex,
+        },
+      );
+      final value = response['value'];
+      final url = value is Map<String, dynamic> ? value['url'] : null;
+      return url is String && url.isNotEmpty ? url : null;
+    } on AtprotoException catch (e) {
+      // A record that is not there is a 400 (`RecordNotFound`) or a 404.
+      if (e.statusCode == 400 || e.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
+  /// The Drawbridges a user's devices sit on: every device's
   /// `social.moat.drawbridgeConfig` record, deduplicated. Throws if the PDS
   /// cannot be read, so a failure is not mistaken for "no relays".
   Future<List<String>> fetchDrawbridgeConfig(String did) async {

@@ -158,7 +158,7 @@ pub struct StealthAddressData {
     pub created_at: DateTime<Utc>,
 }
 
-/// One device's relay, stored on the PDS with rkey = the device's hex MLS
+/// One device's Drawbridge, stored on the PDS with rkey = the device's hex MLS
 /// device id.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DrawbridgeConfigRecord {

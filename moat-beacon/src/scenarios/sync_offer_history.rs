@@ -51,6 +51,28 @@ pub async fn run_with(
     cell: &str,
     verbose: bool,
 ) {
+    run_placed(offerer_kind, recipient_kind, cell, false, verbose).await
+}
+
+/// [`run_with`] with the recipient on a different Drawbridge from the offerer:
+/// the rendezvous is on the offerer's, so the recipient must find it from
+/// the offerer's `drawbridgeConfig` record and go there.
+pub async fn run_across_drawbridges(
+    offerer_kind: ParticipantKind,
+    recipient_kind: ParticipantKind,
+    cell: &str,
+    verbose: bool,
+) {
+    run_placed(offerer_kind, recipient_kind, cell, true, verbose).await
+}
+
+async fn run_placed(
+    offerer_kind: ParticipantKind,
+    recipient_kind: ParticipantKind,
+    cell: &str,
+    across_drawbridges: bool,
+    verbose: bool,
+) {
     macro_rules! vlog {
         ($($t:tt)*) => { if verbose { eprintln!($($t)*); } }
     }
@@ -70,10 +92,15 @@ pub async fn run_with(
     d1.login("alice.postern.test", "any-password").await.expect("d1 login");
     bob.login("bob.postern.test", "any-password").await.expect("bob login");
 
-    let d2 = world
-        .spawn_nth_device("alice-d2", recipient_kind)
-        .await
-        .expect("spawn d2");
+    let d2 = if across_drawbridges {
+        // Bob's Drawbridge is not Alice's first device's.
+        world
+            .spawn_nth_device_on_drawbridge("alice-d2", recipient_kind, "bob")
+            .await
+    } else {
+        world.spawn_nth_device("alice-d2", recipient_kind).await
+    }
+    .expect("spawn d2");
     d2.login("alice.postern.test", "any-password").await.expect("d2 login");
 
     vlog!("[pair] d1 <- d2...");

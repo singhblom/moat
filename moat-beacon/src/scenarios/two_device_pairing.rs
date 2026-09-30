@@ -83,11 +83,33 @@ pub async fn run_with(
     cell: &str,
     verbose: bool,
 ) {
+    run_placed(new_kind, existing_kind, cell, false, verbose).await
+}
+
+/// [`run_with`] with the new device on a different Drawbridge from the existing
+/// one: the rendezvous happens on the new device's, so the existing device
+/// must go there.
+pub async fn run_across_drawbridges(
+    new_kind: ParticipantKind,
+    existing_kind: ParticipantKind,
+    cell: &str,
+    verbose: bool,
+) {
+    run_placed(new_kind, existing_kind, cell, true, verbose).await
+}
+
+async fn run_placed(
+    new_kind: ParticipantKind,
+    existing_kind: ParticipantKind,
+    cell: &str,
+    across_drawbridges: bool,
+    verbose: bool,
+) {
     macro_rules! vlog {
         ($($t:tt)*) => { if verbose { eprintln!($($t)*); } }
     }
 
-    vlog!("=== Scenario: two-device-pairing ({cell}) ===");
+    vlog!("=== Scenario: two-device-pairing ({cell}, across drawbridges: {across_drawbridges}) ===");
 
     // ── Prologue ──────────────────────────────────────────────────────────────
     //
@@ -106,10 +128,15 @@ pub async fn run_with(
     let existing = world.client("alice").clone();
 
     vlog!("[setup] spawning the new device...");
-    let new_device = world
-        .spawn_nth_device("alice-d2", new_kind)
-        .await
-        .expect("spawn new device");
+    let new_device = if across_drawbridges {
+        world.add_drawbridge("elsewhere").await.expect("add a second Drawbridge");
+        world
+            .spawn_nth_device_on_drawbridge("alice-d2", new_kind, "elsewhere")
+            .await
+    } else {
+        world.spawn_nth_device("alice-d2", new_kind).await
+    }
+    .expect("spawn new device");
 
     existing
         .login("alice.postern.test", "any-password")
@@ -126,9 +153,23 @@ pub async fn run_with(
     // Login triggers the main-WS Drawbridge connect in the background; wait
     // for both devices to actually be attached before racing pair_offer /
     // pair_join against it.
-    world
-        .wait_for_drawbridge_connections(2, Duration::from_secs(5))
-        .await;
+    if across_drawbridges {
+        // One connection on each Drawbridge, not two on the first.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let connected = existing.status().await.expect("existing status").drawbridge_connected
+                && new_device.status().await.expect("new status").drawbridge_connected;
+            if connected {
+                break;
+            }
+            assert!(Instant::now() < deadline, "the devices never reached their drawbridges");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    } else {
+        world
+            .wait_for_drawbridge_connections(2, Duration::from_secs(5))
+            .await;
+    }
 
     // ── Pairing ───────────────────────────────────────────────────────────────
     //
@@ -141,7 +182,7 @@ pub async fn run_with(
 
     vlog!("[pair] existing device enters the code...");
     existing
-        .pair_confirm(&pair_new.code)
+        .pair_confirm(&pair_new.code, &pair_new.drawbridge_url)
         .await
         .expect("existing device pair_confirm");
 

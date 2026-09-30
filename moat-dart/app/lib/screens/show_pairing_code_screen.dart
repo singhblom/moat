@@ -148,7 +148,7 @@ class _ShowPairingCodeScreenState extends State<ShowPairingCodeScreen> {
       children: [
         Text(
           'On your other device, choose "Enter a pairing code" and '
-          'scan this QR code — or type the code below.',
+          'scan this QR code — or type the Drawbridge and code below.',
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -167,6 +167,15 @@ class _ShowPairingCodeScreenState extends State<ShowPairingCodeScreen> {
           ),
         ),
         const SizedBox(height: 24),
+        SelectableText(
+          uiState.drawbridgeUrl,
+          textAlign: TextAlign.center,
+          style: Theme.of(context)
+              .textTheme
+              .bodySmall
+              ?.copyWith(fontFamily: 'monospace'),
+        ),
+        const SizedBox(height: 8),
         SelectableText(
           uiState.code,
           textAlign: TextAlign.center,

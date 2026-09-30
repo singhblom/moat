@@ -1,11 +1,11 @@
 ---
 name: local-test
-description: Stand up a local Moat test environment (Postern PDS, Drawbridge relay, moat-cli and Flutter participants) and drive it for manual or exploratory testing. Use this whenever the user wants to try Moat by hand, reproduce a bug outside the test suite, test pairing or history sync end to end, generate conversation history at scale, check how something looks or reads in the TUI or the Flutter app, or asks to "run the app locally", "set up a test env", "seed some messages", or "let me try this myself".
+description: Stand up a local Moat test environment (Postern PDS, Drawbridge, moat-cli and Flutter participants) and drive it for manual or exploratory testing. Use this whenever the user wants to try Moat by hand, reproduce a bug outside the test suite, test pairing or history sync end to end, generate conversation history at scale, check how something looks or reads in the TUI or the Flutter app, or asks to "run the app locally", "set up a test env", "seed some messages", or "let me try this myself".
 ---
 
 # Local test environment
 
-Runs Moat against a local PDS and relay so no real accounts are involved, and
+Runs Moat against a local PDS and Drawbridge so no real accounts are involved, and
 drives it through the HTTP API — the same surface `moat-beacon` uses, so
 anything reproduced here can become a Beacon scenario.
 
@@ -61,7 +61,7 @@ cargo run -p moat-cli -- -s /tmp/moat-alice --pds-url http://127.0.0.1:4000 \
 ```
 
 HTTP devices start logged out; log in explicitly. Without `--drawbridge-url` a
-device has no relay and polls only. For Flutter and Android specifics see
+device has no Drawbridge and polls only. For Flutter and Android specifics see
 `references/flutter.md`.
 
 ## 3. Generate history
@@ -88,8 +88,9 @@ sender shows `[image — processing…]` until the blob lands.
 The HTTP API covers pairing, history sync, restart and push. `dev-stack.sh
 --help` has the full endpoint list. Three things that are easy to get wrong:
 
-**Pairing is two steps with a wait between them.** `/pair/confirm` only joins
-the rendezvous; the Enroll frame arrives over the pair WebSocket afterwards.
+**Pairing is two steps with a wait between them.** `/pair/new` returns the
+code and the Drawbridge it is on, and `/pair/confirm` needs both (the rendezvous is
+on the new device's Drawbridge). `/pair/confirm` only joins the rendezvous; the Enroll frame arrives over the pair WebSocket afterwards.
 Approving before it lands fails with "no pending Enroll". Poll `/pair/status`
 until `awaiting_approval`, then `/pair/approve`.
 

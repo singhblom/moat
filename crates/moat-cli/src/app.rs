@@ -416,8 +416,10 @@ pub(crate) enum BgEvent {
 
     /// Relay acknowledged our offer; waiting for a joiner.
     PairPending,
-    /// Both sides matched; open the `/pair` WS.
+    /// Both sides matched; open the `/pair` WS. `drawbridge_url` is the relay that
+    /// said so.
     PairReady {
+        drawbridge_url: String,
         pair_url: String,
         token: Vec<u8>,
     },
@@ -428,7 +430,7 @@ pub(crate) enum BgEvent {
         reason: String,
         /// `true` for the relay's `pair_closed` notice on the main WS,
         /// `false` for the pair socket itself ending.
-        via_relay: bool,
+        via_drawbridge: bool,
     },
     /// A relay `pair_closed` whose pair socket had not ended after
     /// [`PAIR_CLOSE_GRACE`](crate::drawbridge::PAIR_CLOSE_GRACE).
@@ -447,13 +449,37 @@ pub(crate) enum BgEvent {
     },
     /// Close the pair WS once the sends queued ahead of this have gone out.
     DrawbridgeClosePair,
-    /// Send `pair_offer{token}` on the main WS.
+    /// Send `pair_offer{token}` to `drawbridge_url`, connecting first if the
+    /// rendezvous is on a relay other than our own.
     DrawbridgeSendPairOffer {
+        drawbridge_url: String,
         token: Vec<u8>,
     },
-    /// Send `pair_join{token}` on the main WS.
+    /// Send `pair_join{token}` to `drawbridge_url`, connecting first if the
+    /// rendezvous is on a relay other than our own.
     DrawbridgeSendPairJoin {
+        drawbridge_url: String,
         token: Vec<u8>,
+    },
+    /// The rendezvous connection to `url` was lost.
+    RendezvousDisconnected {
+        url: String,
+        reason: String,
+    },
+    /// Reconnect the rendezvous connection to `drawbridge_url`, whose rendezvous is
+    /// still live, and resend what the relay may have lost.
+    DrawbridgeReconnectRendezvous {
+        drawbridge_url: String,
+    },
+    /// The pair channel has been idle for its grace period: close the
+    /// rendezvous connection unless a new rendezvous needs it.
+    RendezvousIdle,
+    /// A sibling's ring message, with the relay found for its sender.
+    RingMsgResolved {
+        msg: moat_core::RingMsg,
+        sender_name: String,
+        /// `None` when the sender's record could not be read.
+        drawbridge_url: Option<String>,
     },
     /// Existing device, right after admitting a new one: fan the newcomer
     /// into every pre-existing user conversation now rather than on the
@@ -499,6 +525,7 @@ impl BgEvent {
             | BgEvent::DrawbridgeClosePair
             | BgEvent::DrawbridgeSendPairOffer { .. }
             | BgEvent::DrawbridgeSendPairJoin { .. }
+            | BgEvent::DrawbridgeReconnectRendezvous { .. }
             | BgEvent::PollForNewDevicesNow
             | BgEvent::RingTickNow
             | BgEvent::PublishRingEvent { .. } => true,
@@ -519,6 +546,9 @@ impl BgEvent {
             | BgEvent::ImageUploaded { .. }
             | BgEvent::ImageBlobFetched { .. }
             | BgEvent::PairPending
+            | BgEvent::RendezvousDisconnected { .. }
+            | BgEvent::RendezvousIdle
+            | BgEvent::RingMsgResolved { .. }
             | BgEvent::PairReady { .. }
             | BgEvent::PairClosed { .. }
             | BgEvent::PairCloseOverdue { .. }
@@ -600,6 +630,10 @@ pub struct App {
     watched_dids: std::collections::HashSet<String>,
     pub watch_handle_input: String,
     pub pair_enter_code_input: String,
+    /// The relay typed beside the pairing code, and whether the code field
+    /// (rather than the relay field) has the keyboard.
+    pub pair_enter_drawbridge_input: String,
+    pub pair_enter_on_code: bool,
 
     // Background task channel
     bg_tx: mpsc::UnboundedSender<BgEvent>,
@@ -610,7 +644,7 @@ pub struct App {
 
     // Drawbridge connection manager
     pub(crate) drawbridge: DrawbridgeManager,
-    /// Drawbridge URL for this device (from --drawbridge-url or persisted state)
+    /// This device's relay: `--drawbridge-url`, else credentials.txt, else the build's
     pub(crate) drawbridge_url: Option<String>,
     /// Cache of partner relay configurations (DID -> relay URLs)
     drawbridge_config_cache: drawbridge::DrawbridgeConfigCache,
@@ -778,6 +812,8 @@ impl App {
             watched_dids: std::collections::HashSet::new(),
             watch_handle_input: String::new(),
             pair_enter_code_input: String::new(),
+            pair_enter_drawbridge_input: String::new(),
+            pair_enter_on_code: true,
             bg_tx,
             bg_rx,
             poll_in_flight: false,
@@ -1266,21 +1302,42 @@ impl App {
     }
 
     /// HTTP `POST /pair/new` — new device requests a pairing code and
-    /// starts the rendezvous. Returns the text-form code.
-    pub fn api_pair_new(&mut self) -> Result<String> {
+    /// starts the rendezvous. Returns the text-form code and the relay it
+    /// happens on, which the other device needs beside the code.
+    pub fn api_pair_new(&mut self) -> Result<(String, String)> {
         let identity = self.pair_identity().ok_or(AppError::NotLoggedIn)?;
-        let (code, cmds) = self.pair_channel.pair_new(identity);
+        let drawbridge_url = self.own_drawbridge_url()?;
+        let (code, cmds) = self
+            .pair_channel
+            .pair_new(identity, &drawbridge_url)
+            .map_err(AppError::Mls)?;
         self.apply_pair_commands(cmds);
-        Ok(code)
+        let drawbridge_url = match self.pair_channel.pairing_ui_state() {
+            PairingUiState::ShowingCode { drawbridge_url, .. } => drawbridge_url,
+            _ => drawbridge_url,
+        };
+        Ok((code, drawbridge_url))
+    }
+
+    /// This device's relay, where its rendezvous happen.
+    pub fn own_drawbridge_url(&self) -> Result<String> {
+        self.drawbridge_url.clone().ok_or_else(|| {
+            AppError::Other(
+                "this build has no Drawbridge relay, and pairing and sync need one".to_string(),
+            )
+        })
     }
 
     /// HTTP `POST /pair/confirm` — existing device enters a pairing code.
     /// Approving the resulting `Enroll` is a separate step: poll
     /// `GET /pair/status` for `awaiting_approval`, then `POST /pair/approve`
     /// or `/pair/reject`. No host auto-approves.
-    pub fn api_pair_confirm(&mut self, code: &str) -> Result<()> {
+    pub fn api_pair_confirm(&mut self, code: &str, drawbridge_url: Option<&str>) -> Result<()> {
         let identity = self.pair_identity().ok_or(AppError::NotLoggedIn)?;
-        let cmds = self.pair_channel.pair_confirm(identity, code).map_err(AppError::Mls)?;
+        let cmds = self
+            .pair_channel
+            .pair_confirm(identity, code, drawbridge_url)
+            .map_err(AppError::Mls)?;
         self.apply_pair_commands(cmds);
         Ok(())
     }
@@ -1970,6 +2027,7 @@ impl App {
             | BgEvent::DrawbridgeClosePair
             | BgEvent::DrawbridgeSendPairOffer { .. }
             | BgEvent::DrawbridgeSendPairJoin { .. }
+            | BgEvent::DrawbridgeReconnectRendezvous { .. }
             | BgEvent::PollForNewDevicesNow
             | BgEvent::RingTickNow
             | BgEvent::PublishRingEvent { .. } => {}
@@ -1978,18 +2036,60 @@ impl App {
                 self.debug_log.log("sync: pair offer registered, waiting for joiner");
             }
 
-            BgEvent::PairReady { pair_url, token } => {
-                let cmds = self.pair_channel.on_pair_ready(&token, pair_url);
+            BgEvent::PairReady { drawbridge_url, pair_url, token } => {
+                let cmds = self.pair_channel.on_pair_ready(&drawbridge_url, &token, pair_url);
                 self.apply_pair_commands(cmds);
             }
 
-            BgEvent::PairClosed { session_token, reason, via_relay } => {
+            BgEvent::RendezvousDisconnected { url, reason } => {
+                self.drawbridge.clear_rendezvous();
+                // Only a rendezvous still live on that relay is worth a
+                // reconnect; the resend on reconnect is what recovers an
+                // offer or join the relay lost.
+                let live = self.pair_channel.rendezvous_drawbridge_url().map(str::to_string);
+                if live.as_deref().is_some_and(|r| self.same_drawbridge(r, &url)) {
+                    self.debug_log.log(&format!(
+                        "pair: rendezvous connection to {url} lost: {reason} (reconnecting)"
+                    ));
+                    let bg_tx = self.bg_tx.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        let _ = bg_tx.send(BgEvent::DrawbridgeReconnectRendezvous { drawbridge_url: url });
+                    });
+                } else {
+                    self.debug_log.log(&format!(
+                        "pair: rendezvous connection to {url} closed: {reason}"
+                    ));
+                }
+            }
+
+            BgEvent::RendezvousIdle => {
+                let live = self.pair_channel.rendezvous_drawbridge_url().map(str::to_string);
+                if live.as_deref().is_none_or(|r| self.drawbridge.is_own_drawbridge_url(r)) {
+                    self.drawbridge.close_rendezvous();
+                }
+            }
+
+            BgEvent::RingMsgResolved { msg, sender_name, drawbridge_url } => {
+                let Some(drawbridge_url) = drawbridge_url else {
+                    self.debug_log.log(&format!(
+                        "sync: ignoring a ring message from {sender_name}: no relay record for that device"
+                    ));
+                    return;
+                };
+                let own = *self.mls.device_id();
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                let cmds = self.pair_channel.on_ring_msg(msg, sender_name, &drawbridge_url, &own, now_ms);
+                self.apply_pair_commands(cmds);
+            }
+
+            BgEvent::PairClosed { session_token, reason, via_drawbridge } => {
                 // Once the pair socket is open, its own end is the signal:
                 // it arrives behind every frame the peer sent, where the
                 // relay's notice on the main WS can overtake them. The
                 // notice still arms a deadline, so a socket that died
                 // without its end reaching us cannot hold the session open.
-                if via_relay && self.drawbridge.has_pair_socket(session_token.as_deref()) {
+                if via_drawbridge && self.drawbridge.has_pair_socket(session_token.as_deref()) {
                     self.debug_log.log(&format!(
                         "sync: pair_closed ({reason}) from relay; awaiting pair socket end"
                     ));
@@ -2195,7 +2295,7 @@ impl App {
                         // peer's `pair_offer` is rejected as connection-fatal
                         // "token not found", so an unacknowledged offer or
                         // join is resent on every reconnect.
-                        let cmds = self.pair_channel.on_relay_connected();
+                        let cmds = self.pair_channel.on_drawbridge_connected(&url);
                         self.apply_pair_commands(cmds);
                     }
                     Err(e) => {
@@ -2253,16 +2353,44 @@ impl App {
             }
             BgEvent::DrawbridgeClosePair => {
                 self.drawbridge.close_pair().await;
+                self.release_rendezvous_later();
             }
-            BgEvent::DrawbridgeSendPairOffer { token } => {
+            BgEvent::DrawbridgeSendPairOffer { drawbridge_url, token } => {
                 // Unsent offers and joins are resent on reconnect.
-                if let Err(e) = self.drawbridge.send_pair_offer(&token).await {
+                if let Err(e) = self.ensure_drawbridge_connection(&drawbridge_url).await {
+                    self.debug_log.log(&format!("pair: no connection to {drawbridge_url}: {e}"));
+                    return;
+                }
+                if let Err(e) = self.drawbridge.send_pair_offer(&drawbridge_url, &token).await {
                     self.debug_log.log(&format!("pair: send_pair_offer failed: {e}"));
                 }
             }
-            BgEvent::DrawbridgeSendPairJoin { token } => {
-                if let Err(e) = self.drawbridge.send_pair_join(&token).await {
+            BgEvent::DrawbridgeSendPairJoin { drawbridge_url, token } => {
+                if let Err(e) = self.ensure_drawbridge_connection(&drawbridge_url).await {
+                    self.debug_log.log(&format!("pair: no connection to {drawbridge_url}: {e}"));
+                    return;
+                }
+                if let Err(e) = self.drawbridge.send_pair_join(&drawbridge_url, &token).await {
                     self.debug_log.log(&format!("pair: send_pair_join failed: {e}"));
+                }
+            }
+            BgEvent::DrawbridgeReconnectRendezvous { drawbridge_url } => {
+                if self.pair_channel.rendezvous_drawbridge_url().is_none_or(|r| !self.same_drawbridge(r, &drawbridge_url)) {
+                    return;
+                }
+                match self.ensure_drawbridge_connection(&drawbridge_url).await {
+                    Ok(()) => {
+                        let cmds = self.pair_channel.on_drawbridge_connected(&drawbridge_url);
+                        self.apply_pair_commands(cmds);
+                    }
+                    Err(e) => {
+                        self.debug_log.log(&format!("pair: reconnect to {drawbridge_url} failed: {e}"));
+                        let bg_tx = self.bg_tx.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                            let _ = bg_tx.send(BgEvent::DrawbridgeReconnectRendezvous { drawbridge_url });
+                        });
+                    }
                 }
             }
             BgEvent::PollForNewDevicesNow => {
@@ -3755,12 +3883,25 @@ impl App {
                         } else {
                             match moat_core::decode_ring_msg(&decrypted.event.payload) {
                                 Ok(msg) => {
-                                    let own = *self.mls.device_id();
-                                    let now_ms = chrono::Utc::now().timestamp_millis();
-                                    let cmds = self
-                                        .pair_channel
-                                        .on_ring_msg(msg, sender_name, &own, now_ms);
-                                    self.apply_pair_commands(cmds);
+                                    // A sibling's rendezvous is on its own relay, which
+                                    // its `drawbridgeConfig` record names.
+                                    let sender_device = decrypted.sender.as_ref().map(|s| hex::encode(&s.device_id));
+                                    if let (Some(client), Some(device_hex)) = (self.client.clone(), sender_device) {
+                                        let did = my_did.to_string();
+                                        let tx = self.bg_tx.clone();
+                                        tokio::spawn(async move {
+                                            let drawbridge_url = client
+                                                .fetch_drawbridge_url_for_device(&did, &device_hex)
+                                                .await
+                                                .ok()
+                                                .flatten();
+                                            let _ = tx.send(BgEvent::RingMsgResolved {
+                                                msg,
+                                                sender_name,
+                                                drawbridge_url,
+                                            });
+                                        });
+                                    }
                                 }
                                 Err(e) => self
                                     .debug_log
@@ -4168,13 +4309,16 @@ impl App {
         Ok(false)
     }
 
-    /// Existing device: text-entry for a pairing code.
+    /// Existing device: text-entry for a pairing code and the relay shown
+    /// beside it. Tab switches field; a pasted `moat-pair:` URI carries its
+    /// own relay, so the relay field is ignored for it.
     fn handle_pair_enter_code_key(&mut self, key: KeyEvent) -> Result<bool> {
         match key.code {
             KeyCode::Enter => {
                 if !self.pair_enter_code_input.is_empty() {
                     let code = self.pair_enter_code_input.clone();
-                    match self.api_pair_confirm(&code) {
+                    let drawbridge_url = self.pair_enter_drawbridge_input.clone();
+                    match self.api_pair_confirm(&code, Some(&drawbridge_url)) {
                         Ok(()) => {
                             self.pair_enter_code_input.clear();
                             self.overlay = Overlay::None;
@@ -4183,11 +4327,14 @@ impl App {
                     }
                 }
             }
+            KeyCode::Tab | KeyCode::BackTab | KeyCode::Up | KeyCode::Down => {
+                self.pair_enter_on_code = !self.pair_enter_on_code;
+            }
             KeyCode::Char(c) => {
-                self.pair_enter_code_input.push(c);
+                self.pair_enter_field_mut().push(c);
             }
             KeyCode::Backspace => {
-                self.pair_enter_code_input.pop();
+                self.pair_enter_field_mut().pop();
             }
             KeyCode::Esc => {
                 self.overlay = Overlay::None;
@@ -4196,6 +4343,14 @@ impl App {
             _ => {}
         }
         Ok(false)
+    }
+
+    fn pair_enter_field_mut(&mut self) -> &mut String {
+        if self.pair_enter_on_code {
+            &mut self.pair_enter_code_input
+        } else {
+            &mut self.pair_enter_drawbridge_input
+        }
     }
 
     /// Existing device: confirmation screen naming the peer awaiting
@@ -4251,6 +4406,9 @@ impl App {
                 // Existing device: enter a pairing code shown elsewhere.
                 self.overlay = Overlay::PairEnterCode;
                 self.pair_enter_code_input.clear();
+                // Devices from one distribution share a relay: start there.
+                self.pair_enter_drawbridge_input = self.drawbridge_url.clone().unwrap_or_default();
+                self.pair_enter_on_code = true;
             }
             KeyCode::Char('g') => {
                 if let Err(e) = self.api_sync_request() {
@@ -5565,18 +5723,59 @@ impl App {
     }
 
     /// Carry out the driver's commands, in order.
+    /// Whether two spellings name one relay.
+    fn same_drawbridge(&self, a: &str, b: &str) -> bool {
+        match (moat_core::normalize_drawbridge_url(a), moat_core::normalize_drawbridge_url(b)) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => a == b,
+        }
+    }
+
+    /// An authenticated connection to `drawbridge_url`, for a rendezvous: our own if
+    /// that is our relay, else a rendezvous connection opened here.
+    async fn ensure_drawbridge_connection(&mut self, drawbridge_url: &str) -> std::result::Result<(), String> {
+        if self.drawbridge.is_connected_to_drawbridge(drawbridge_url) {
+            return Ok(());
+        }
+        if self.drawbridge_url.as_deref().is_some_and(|own| self.same_drawbridge(own, drawbridge_url)) {
+            // Our own connection is (re)established elsewhere; the offer or
+            // join is resent when it is.
+            return Err("own relay is not connected yet".to_string());
+        }
+        let did = self
+            .client
+            .as_ref()
+            .map(|c| c.did().to_string())
+            .ok_or("not logged in")?;
+        let key = self.keys.load_identity_key().map_err(|e| e.to_string())?;
+        self.debug_log
+            .log(&format!("pair: connecting to {drawbridge_url} for the rendezvous"));
+        self.drawbridge.connect_rendezvous(drawbridge_url, &did, &key).await
+    }
+
+    /// Close the rendezvous connection once the pair channel has been idle
+    /// for its grace period: a peer may still be reading the channel's last
+    /// frames through the relay.
+    fn release_rendezvous_later(&self) {
+        let bg_tx = self.bg_tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(crate::drawbridge::PAIR_CLOSE_GRACE).await;
+            let _ = bg_tx.send(BgEvent::RendezvousIdle);
+        });
+    }
+
     fn apply_pair_commands(&mut self, cmds: Vec<PairChannelCommand>) {
         for cmd in cmds {
             match cmd {
-                PairChannelCommand::SendPairOffer { token } => {
+                PairChannelCommand::SendPairOffer { drawbridge_url, token } => {
                     let _ = self
                         .bg_tx
-                        .send(BgEvent::DrawbridgeSendPairOffer { token: token.to_vec() });
+                        .send(BgEvent::DrawbridgeSendPairOffer { drawbridge_url, token: token.to_vec() });
                 }
-                PairChannelCommand::SendPairJoin { token } => {
+                PairChannelCommand::SendPairJoin { drawbridge_url, token } => {
                     let _ = self
                         .bg_tx
-                        .send(BgEvent::DrawbridgeSendPairJoin { token: token.to_vec() });
+                        .send(BgEvent::DrawbridgeSendPairJoin { drawbridge_url, token: token.to_vec() });
                 }
                 PairChannelCommand::ConnectPair { url, token } => {
                     let _ = self
@@ -5590,7 +5789,10 @@ impl App {
                 PairChannelCommand::ClosePair => {
                     let _ = self.bg_tx.send(BgEvent::DrawbridgeClosePair);
                 }
-                PairChannelCommand::DropPair => self.drawbridge.clear_pair(),
+                PairChannelCommand::DropPair => {
+                    self.drawbridge.clear_pair();
+                    self.release_rendezvous_later();
+                }
                 PairChannelCommand::PublishRingEvent { tag, ciphertext } => {
                     let _ = self.bg_tx.send(BgEvent::PublishRingEvent { tag, ciphertext });
                 }
@@ -5842,8 +6044,9 @@ impl App {
         target_device_id: Option<moat_core::DeviceId>,
     ) -> Result<()> {
         let key_bundle = self.sync_key_bundle()?;
+        let drawbridge_url = self.own_drawbridge_url()?;
         let cmds = self
-            .with_pair_env(|d, env| d.sync_request(env, &key_bundle, target_device_id))
+            .with_pair_env(|d, env| d.sync_request(env, &key_bundle, target_device_id, &drawbridge_url))
             .map_err(AppError::Mls)?;
         self.apply_pair_commands(cmds);
         Ok(())
@@ -5853,8 +6056,9 @@ impl App {
     /// is the human approval, so the target joins without a prompt.
     pub fn api_sync_offer(&mut self, target_device_id: moat_core::DeviceId) -> Result<()> {
         let key_bundle = self.sync_key_bundle()?;
+        let drawbridge_url = self.own_drawbridge_url()?;
         let cmds = self
-            .with_pair_env(|d, env| d.sync_offer(env, &key_bundle, target_device_id))
+            .with_pair_env(|d, env| d.sync_offer(env, &key_bundle, target_device_id, &drawbridge_url))
             .map_err(AppError::Mls)?;
         self.apply_pair_commands(cmds);
         Ok(())

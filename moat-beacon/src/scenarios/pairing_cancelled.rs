@@ -49,14 +49,22 @@ pub async fn run(verbose: bool) {
 
     let initial_state = new_device.pair_status().await.expect("pair_status");
     match &initial_state {
-        PairingUiState::ShowingCode { code, uri } => {
+        PairingUiState::ShowingCode { code, drawbridge_url, uri } => {
             assert_eq!(
                 code, &pair_new.code,
                 "the code in /pair/status must be the one /pair/new handed out"
             );
+            assert_eq!(
+                drawbridge_url, &pair_new.drawbridge_url,
+                "the Drawbridge in /pair/status must be the one /pair/new handed out"
+            );
             assert!(
                 uri.starts_with("moat-pair:"),
                 "the QR form must carry the moat-pair: scheme; got {uri}"
+            );
+            assert!(
+                uri.contains("drawbridge="),
+                "the QR form must name the Drawbridge; got {uri}"
             );
         }
         other => panic!("expected showing_code after pair_new, got {other:?}"),

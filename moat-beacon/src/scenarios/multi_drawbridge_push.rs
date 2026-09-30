@@ -1,14 +1,9 @@
 //! A user whose two devices sit on different relays hears every event on
 //! both, by push alone.
 //!
-//! Alice's devices pair on one relay, then D2 moves to another. Bob sits on
-//! a third. With polling
-//! off everywhere, Bob's message must reach both of Alice's devices, and
-//! each of Alice's devices must reach the other.
-//!
-//! A real device never changes relay; D2 is restarted onto a2 only because a
-//! pairing rendezvous cannot yet span relays. Once it can, spawn D2 on a2
-//! from the start and drop the move.
+//! Alice's devices sit on two Drawbridges (D2 on a2, having paired across them)
+//! and Bob on a third. With polling off everywhere, Bob's message must reach
+//! both of Alice's devices, and each of Alice's devices must reach the other.
 //!
 //! Parametrised over d1_kind × d2_kind (Bob is the Rust CLI).
 
@@ -29,7 +24,7 @@ pub async fn run(d1_kind: ParticipantKind, d2_kind: ParticipantKind, cell: &str,
         ($($t:tt)*) => { if verbose { eprintln!($($t)*); } }
     }
 
-    vlog!("=== Scenario: multi-relay-push ({cell}) ===");
+    vlog!("=== Scenario: multi-drawbridge-push ({cell}) ===");
 
     let mut world = TestWorld::new_with_kinds_and_drawbridge(
         &[("alice", "a1"), ("bob", "b")],
@@ -38,12 +33,12 @@ pub async fn run(d1_kind: ParticipantKind, d2_kind: ParticipantKind, cell: &str,
     )
     .await
     .expect("world setup");
-    world.add_relay("a2").await.expect("add relay a2");
+    world.add_drawbridge("a2").await.expect("add Drawbridge a2");
 
     let d1 = world.client("alice").clone();
     let bob = world.client("bob").clone();
     let d2 = world
-        .spawn_nth_device_on_relay("alice-d2", d2_kind, "a1")
+        .spawn_nth_device_on_drawbridge("alice-d2", d2_kind, "a2")
         .await
         .expect("spawn alice-d2");
 
@@ -51,25 +46,13 @@ pub async fn run(d1_kind: ParticipantKind, d2_kind: ParticipantKind, cell: &str,
     d2.login(ALICE_HANDLE, "any-password").await.expect("d2 login");
     bob.login(BOB_HANDLE, "any-password").await.expect("bob login");
 
-    // Both devices are on a1 while they pair: a rendezvous names one relay.
-    vlog!("[setup] pairing d2 into d1's ring on a1...");
+    // D2 shows its code and D1 goes to D2's Drawbridge, a2.
+    vlog!("[setup] pairing d2 into d1's ring across a1 and a2...");
     crate::scenarios::three_device_pairing::pair_devices(&d1, &d2, verbose).await;
 
-    // D2 moves to a2.
-    vlog!("[setup] moving d2 to relay a2...");
-    world.kill_participant("alice-d2").expect("kill d2");
-    world.set_participant_relay("alice-d2", "a2");
-    world.restart_participant("alice-d2").await.expect("restart d2");
-    let d2 = world.client("alice-d2").clone();
-    d2.login(ALICE_HANDLE, "any-password").await.expect("d2 re-login");
-
-    // A device reads its siblings' relays when it starts, so D1 restarts only
-    // once D2's record says a2.
-    wait_for_relay_records(&world, &["a1", "a2"]).await;
-    world.kill_participant("alice").expect("kill d1");
-    world.restart_participant("alice").await.expect("restart d1");
-    let d1 = world.client("alice").clone();
-    d1.login(ALICE_HANDLE, "any-password").await.expect("d1 re-login");
+    // The conversation reads each device's Drawbridge when it starts, so D2's
+    // record must be there first.
+    wait_for_drawbridge_records(&world, &["a1", "a2"]).await;
 
     d1.watch_handle(BOB_HANDLE).await.expect("d1 watch bob");
     bob.watch_handle(ALICE_HANDLE).await.expect("bob watch alice");
@@ -141,8 +124,8 @@ async fn assert_delivered(
 
 /// Wait until Alice's `drawbridgeConfig` records name exactly the relays
 /// labelled `labels`.
-async fn wait_for_relay_records(world: &TestWorld, labels: &[&str]) {
-    let mut want: Vec<String> = labels.iter().map(|l| world.relay_endpoint(l).to_string()).collect();
+async fn wait_for_drawbridge_records(world: &TestWorld, labels: &[&str]) {
+    let mut want: Vec<String> = labels.iter().map(|l| world.drawbridge_endpoint(l).to_string()).collect();
     want.sort();
     let url = format!(
         "{}/xrpc/com.atproto.repo.listRecords?repo={ALICE_DID}&collection=social.moat.drawbridgeConfig",

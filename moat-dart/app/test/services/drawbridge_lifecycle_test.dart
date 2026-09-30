@@ -46,7 +46,7 @@ void main() {
 
       db.reset();
       expect(db.isOwnConnected, false);
-      expect(db.relayUrlsForParticipants(['did:plc:bob']), isEmpty);
+      expect(db.drawbridgeUrlsForParticipants(['did:plc:bob']), isEmpty);
     });
 
     test('onNewEvent callback can be set and cleared', () {
@@ -80,7 +80,7 @@ void main() {
         tag: Uint8List.fromList([1, 2, 3]),
         rkey: 'rkey123',
         payload: Uint8List.fromList([4, 5, 6]),
-        relayUrls: ['wss://relay.example.com'],
+        drawbridgeUrls: ['wss://relay.example.com'],
       );
     });
 
@@ -136,17 +136,17 @@ void main() {
 
       db.disconnectAll();
       // Config cache survives disconnect (reconnect doesn't need to re-fetch)
-      // (Cannot directly verify internal state, but relayUrlsForParticipants works)
+      // (Cannot directly verify internal state, but drawbridgeUrlsForParticipants works)
 
       db.reset();
-      expect(db.relayUrlsForParticipants(['did:plc:bob']), isEmpty);
+      expect(db.drawbridgeUrlsForParticipants(['did:plc:bob']), isEmpty);
     });
 
     test('cacheDrawbridgeConfig overwrites previous entry', () {
       db.cacheDrawbridgeConfig('did:plc:bob', ['wss://old-relay.com']);
       db.cacheDrawbridgeConfig('did:plc:bob', ['wss://new-relay.com']);
 
-      final urls = db.relayUrlsForParticipants(['did:plc:bob']);
+      final urls = db.drawbridgeUrlsForParticipants(['did:plc:bob']);
       expect(urls, ['wss://new-relay.com']);
     });
   });

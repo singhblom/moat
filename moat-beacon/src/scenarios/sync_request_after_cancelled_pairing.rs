@@ -84,11 +84,13 @@ pub async fn run_with(kind: ParticipantKind, cell: &str, verbose: bool) {
         .await
         .expect("spawn d3");
     d3.login("alice.postern.test", "any-password").await.expect("d3 login");
-    let code = d3.pair_new().await.expect("d3 pair_new").code;
+    let d3_pair = d3.pair_new().await.expect("d3 pair_new");
 
     // ── A request that arrives mid-pairing is ignored ────────────────────────
     vlog!("[pair] d1 starts adding d3...");
-    d1.pair_confirm(&code).await.expect("d1 pair_confirm");
+    d1.pair_confirm(&d3_pair.code, &d3_pair.drawbridge_url)
+        .await
+        .expect("d1 pair_confirm");
 
     vlog!("[sync] d2 asks while d1 is pairing");
     d2.sync_request().await.expect("d2 first sync_request");

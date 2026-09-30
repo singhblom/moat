@@ -14,12 +14,12 @@ pub async fn run(verbose: bool) {
             ParticipantConfig {
                 handle: "alice",
                 kind: ParticipantKind::RustCli,
-                relay_label: Some("alice"),
+                drawbridge_label: Some("alice"),
             },
             ParticipantConfig {
                 handle: "bob",
                 kind: ParticipantKind::DartServer,
-                relay_label: Some("bob"),
+                drawbridge_label: Some("bob"),
             },
         ],
     };

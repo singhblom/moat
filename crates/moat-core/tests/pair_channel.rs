@@ -13,9 +13,16 @@ use moat_core::{
 
 const DID: &str = "did:plc:alice";
 const NOW: i64 = 1_000_000;
+const DRAWBRIDGE_A: &str = "wss://drawbridge-a.example.com/ws";
+const DRAWBRIDGE_B: &str = "wss://drawbridge-b.example.com/ws";
+
+/// A rendezvous as a Drawbridge knows it: the Drawbridge it is on, and its token.
+type Key = (String, [u8; 16]);
 
 struct Device {
     name: &'static str,
+    /// The Drawbridge this device's build carries.
+    drawbridge_url: &'static str,
     mls: MoatSession,
     ring: DeviceRingState,
     identity: PairIdentity,
@@ -28,15 +35,15 @@ struct Device {
     /// Hold `LoadHistory` until released, so frames arrive first.
     defer_history: bool,
     deferred_history: Option<[u8; 16]>,
-    /// The token of the rendezvous this device is on at the relay.
-    on_token: Option<[u8; 16]>,
+    /// The rendezvous this device is on at a relay.
+    on: Option<Key>,
     admitted: bool,
     joined: bool,
     transfers_completed: usize,
 }
 
 impl Device {
-    fn new(name: &'static str) -> Self {
+    fn new(name: &'static str, drawbridge_url: &'static str) -> Self {
         let mls = MoatSession::new();
         let credential = MoatCredential::new(DID, name, *mls.device_id());
         let (_kp, key_bundle) = mls.generate_key_package(&credential).unwrap();
@@ -49,6 +56,7 @@ impl Device {
         };
         Self {
             name,
+            drawbridge_url,
             mls,
             ring: DeviceRingState::new(),
             identity,
@@ -58,7 +66,7 @@ impl Device {
             published: Vec::new(),
             defer_history: false,
             deferred_history: None,
-            on_token: None,
+            on: None,
             admitted: false,
             joined: false,
             transfers_completed: 0,
@@ -125,7 +133,7 @@ fn message(rkey: &str) -> SyncMessage {
 }
 
 enum Event {
-    PairReady { token: [u8; 16] },
+    PairReady { drawbridge_url: String, token: [u8; 16] },
     Paired { token: [u8; 16] },
     Frame { token: [u8; 16], data: Vec<u8> },
     Closed { token: [u8; 16] },
@@ -135,31 +143,40 @@ enum Event {
 /// between the two attached ends, and tells the survivor when one leaves.
 struct World {
     devices: Vec<Device>,
-    offers: BTreeMap<[u8; 16], usize>,
-    joins: BTreeMap<[u8; 16], usize>,
-    attached: BTreeMap<[u8; 16], Vec<usize>>,
+    offers: BTreeMap<Key, usize>,
+    joins: BTreeMap<Key, usize>,
+    attached: BTreeMap<Key, Vec<usize>>,
     queue: VecDeque<(usize, Event)>,
     now_ms: i64,
+    /// The Drawbridge of the code `show_code` last displayed.
+    shown_drawbridge_url: &'static str,
     /// Drop offers and joins instead of registering them.
-    relay_down: bool,
+    drawbridge_down: bool,
 }
 
 impl World {
     fn new(names: &[&'static str]) -> Self {
+        let devices: Vec<_> = names.iter().map(|n| (*n, DRAWBRIDGE_A)).collect();
+        Self::on_drawbridges(&devices)
+    }
+
+    /// Devices, each on the Drawbridge its build carries.
+    fn on_drawbridges(devices: &[(&'static str, &'static str)]) -> Self {
         Self {
-            devices: names.iter().map(|n| Device::new(*n)).collect(),
+            devices: devices.iter().map(|(n, r)| Device::new(n, r)).collect(),
             offers: BTreeMap::new(),
             joins: BTreeMap::new(),
             attached: BTreeMap::new(),
             queue: VecDeque::new(),
             now_ms: NOW,
-            relay_down: false,
+            shown_drawbridge_url: DRAWBRIDGE_A,
+            drawbridge_down: false,
         }
     }
 
-    fn peer_of(&self, token: &[u8; 16], idx: usize) -> Option<usize> {
-        let offerer = self.offers.get(token).copied();
-        let joiner = self.joins.get(token).copied();
+    fn peer_of(&self, key: &Key, idx: usize) -> Option<usize> {
+        let offerer = self.offers.get(key).copied();
+        let joiner = self.joins.get(key).copied();
         match (offerer, joiner) {
             (Some(o), Some(j)) if o == idx => Some(j),
             (Some(o), Some(j)) if j == idx => Some(o),
@@ -168,45 +185,58 @@ impl World {
     }
 
     fn leave(&mut self, idx: usize) {
-        let Some(token) = self.devices[idx].on_token.take() else {
+        let Some(key) = self.devices[idx].on.take() else {
             return;
         };
-        if let Some(peer) = self.peer_of(&token, idx) {
-            if self.devices[peer].on_token == Some(token) {
-                self.queue.push_back((peer, Event::Closed { token }));
+        if let Some(peer) = self.peer_of(&key, idx) {
+            if self.devices[peer].on.as_ref() == Some(&key) {
+                self.queue
+                    .push_back((peer, Event::Closed { token: key.1 }));
             }
         }
-        self.offers.remove(&token);
-        self.joins.remove(&token);
-        self.attached.remove(&token);
+        self.offers.remove(&key);
+        self.joins.remove(&key);
+        self.attached.remove(&key);
     }
 
-    fn register(&mut self, idx: usize, token: [u8; 16], offer: bool) {
-        if self.relay_down {
+    fn register(&mut self, idx: usize, drawbridge_url: String, token: [u8; 16], offer: bool) {
+        if self.drawbridge_down {
             return;
         }
-        if self.devices[idx].on_token != Some(token) {
+        let key: Key = (drawbridge_url, token);
+        if self.devices[idx].on.as_ref() != Some(&key) {
             self.leave(idx);
         }
-        self.devices[idx].on_token = Some(token);
+        self.devices[idx].on = Some(key.clone());
         if offer {
-            self.offers.insert(token, idx);
+            self.offers.insert(key.clone(), idx);
         } else {
-            self.joins.insert(token, idx);
+            self.joins.insert(key.clone(), idx);
         }
-        if let (Some(&o), Some(&j)) = (self.offers.get(&token), self.joins.get(&token)) {
-            self.queue.push_back((o, Event::PairReady { token }));
-            self.queue.push_back((j, Event::PairReady { token }));
+        if let (Some(&o), Some(&j)) = (self.offers.get(&key), self.joins.get(&key)) {
+            for end in [o, j] {
+                self.queue.push_back((
+                    end,
+                    Event::PairReady {
+                        drawbridge_url: key.0.clone(),
+                        token,
+                    },
+                ));
+            }
         }
     }
 
     fn apply(&mut self, idx: usize, cmds: Vec<Cmd>) {
         for cmd in cmds {
             match cmd {
-                Cmd::SendPairOffer { token } => self.register(idx, token, true),
-                Cmd::SendPairJoin { token } => self.register(idx, token, false),
+                Cmd::SendPairOffer { drawbridge_url, token } => self.register(idx, drawbridge_url, token, true),
+                Cmd::SendPairJoin { drawbridge_url, token } => self.register(idx, drawbridge_url, token, false),
                 Cmd::ConnectPair { token, .. } => {
-                    let ends = self.attached.entry(token).or_default();
+                    let key = self.devices[idx]
+                        .on
+                        .clone()
+                        .expect("connecting a pair socket with no rendezvous");
+                    let ends = self.attached.entry(key).or_default();
                     ends.push(idx);
                     if ends.len() == 2 {
                         let ends = ends.clone();
@@ -216,11 +246,13 @@ impl World {
                     }
                 }
                 Cmd::SendFrame { data } => {
-                    let token = self.devices[idx]
-                        .on_token
+                    let key = self.devices[idx]
+                        .on
+                        .clone()
                         .expect("sending with no pair channel");
-                    let peer = self.peer_of(&token, idx).expect("sending with no peer");
-                    self.queue.push_back((peer, Event::Frame { token, data }));
+                    let peer = self.peer_of(&key, idx).expect("sending with no peer");
+                    self.queue
+                        .push_back((peer, Event::Frame { token: key.1, data }));
                 }
                 Cmd::ClosePair | Cmd::DropPair => self.leave(idx),
                 Cmd::PublishRingEvent { tag, ciphertext } => {
@@ -284,9 +316,9 @@ impl World {
             assert!(steps < 10_000, "the relay never went quiet");
             let now = self.now_ms;
             let cmds = match event {
-                Event::PairReady { token } => self.devices[idx]
+                Event::PairReady { drawbridge_url, token } => self.devices[idx]
                     .driver
-                    .on_pair_ready(&token, "wss://relay/pair".into()),
+                    .on_pair_ready(&drawbridge_url, &token, "wss://drawbridge/pair".into()),
                 Event::Paired { token } => {
                     self.devices[idx].with_env(now, |d, env| d.on_paired(env, &token))
                 }
@@ -315,7 +347,9 @@ impl World {
     /// `idx` shows a pairing code.
     fn show_code(&mut self, idx: usize) -> String {
         let identity = self.devices[idx].identity.clone();
-        let (code, cmds) = self.devices[idx].driver.pair_new(identity);
+        let drawbridge_url = self.devices[idx].drawbridge_url;
+        let (code, cmds) = self.devices[idx].driver.pair_new(identity, drawbridge_url).unwrap();
+        self.shown_drawbridge_url = drawbridge_url;
         self.apply(idx, cmds);
         self.run();
         code
@@ -324,7 +358,8 @@ impl World {
     /// `idx` enters a pairing code.
     fn enter_code(&mut self, idx: usize, code: &str) {
         let identity = self.devices[idx].identity.clone();
-        self.call(idx, |d, _| d.pair_confirm(identity, code).unwrap());
+        let drawbridge_url = self.shown_drawbridge_url;
+        self.call(idx, |d, _| d.pair_confirm(identity, code, Some(drawbridge_url)).unwrap());
     }
 
     fn approve(&mut self, idx: usize) {
@@ -334,15 +369,17 @@ impl World {
 
     fn request(&mut self, idx: usize) {
         let key_bundle = self.devices[idx].identity.key_bundle.clone();
+        let drawbridge_url = self.devices[idx].drawbridge_url;
         self.call(idx, |d, env| {
-            d.sync_request(env, &key_bundle, None).unwrap()
+            d.sync_request(env, &key_bundle, None, drawbridge_url).unwrap()
         });
     }
 
     fn offer(&mut self, idx: usize, target: DeviceId) {
         let key_bundle = self.devices[idx].identity.key_bundle.clone();
+        let drawbridge_url = self.devices[idx].drawbridge_url;
         self.call(idx, |d, env| {
-            d.sync_offer(env, &key_bundle, target).unwrap()
+            d.sync_offer(env, &key_bundle, target, drawbridge_url).unwrap()
         });
     }
 
@@ -381,7 +418,10 @@ impl World {
         let sender = decrypted.sender.unwrap().device_name;
         let own = *self.devices[to].mls.device_id();
         let now = self.now_ms;
-        let cmds = self.devices[to].driver.on_ring_msg(msg, sender, &own, now);
+        let drawbridge_url = self.devices[from].drawbridge_url;
+        let cmds = self.devices[to]
+            .driver
+            .on_ring_msg(msg, sender, drawbridge_url, &own, now);
         self.apply(to, cmds);
         self.run();
     }
@@ -408,7 +448,8 @@ const CONV: &str = "c0ffee";
 /// A code from a device outside the world, which never joins.
 fn stray_code() -> String {
     PairChannelDriver::new()
-        .pair_new(Device::new("stray").identity)
+        .pair_new(Device::new("stray", DRAWBRIDGE_A).identity, DRAWBRIDGE_A)
+        .unwrap()
         .0
 }
 
@@ -585,7 +626,7 @@ fn an_expired_request_frees_the_channel() {
 fn a_close_for_a_superseded_rendezvous_is_ignored() {
     let mut world = paired_pair();
     world.enter_code(0, &stray_code());
-    let old_token = world.devices[0].on_token.unwrap();
+    let old_token = world.devices[0].on.clone().unwrap().1;
 
     world.request(0);
     let cmds = world.devices[0]
@@ -631,13 +672,13 @@ fn frames_before_the_history_is_loaded_wait_for_it() {
 }
 
 #[test]
-fn an_unacknowledged_offer_is_resent_when_the_relay_comes_back() {
+fn an_unacknowledged_offer_is_resent_when_the_drawbridge_comes_back() {
     let mut world = paired_pair();
-    world.relay_down = true;
+    world.drawbridge_down = true;
     world.request(1);
-    world.relay_down = false;
+    world.drawbridge_down = false;
 
-    let cmds = world.devices[1].driver.on_relay_connected();
+    let cmds = world.devices[1].driver.on_drawbridge_connected(DRAWBRIDGE_A);
     assert!(matches!(cmds.as_slice(), [Cmd::SendPairOffer { .. }]));
 }
 
@@ -650,7 +691,7 @@ fn a_new_gesture_supersedes_a_running_transfer() {
     world.call(0, |d, _| d.sync_accept().unwrap());
 
     let identity = world.devices[0].identity.clone();
-    let (_, cmds) = world.devices[0].driver.pair_new(identity);
+    let (_, cmds) = world.devices[0].driver.pair_new(identity, DRAWBRIDGE_A).unwrap();
     assert!(matches!(cmds.first(), Some(Cmd::DropPair)));
     assert!(!world.devices[0].driver.is_transferring());
     assert_eq!(world.sync_state(0), SyncRequestUiState::Idle);
@@ -706,7 +747,7 @@ fn a_failed_publish_fails_the_request_and_frees_the_channel() {
         world.sync_state(1),
         SyncRequestUiState::Failed { .. }
     ));
-    assert_eq!(world.devices[1].on_token, None);
+    assert_eq!(world.devices[1].on, None);
 }
 
 /// A socket from a superseded rendezvous can still reach `paired` after a
@@ -715,7 +756,7 @@ fn a_failed_publish_fails_the_request_and_frees_the_channel() {
 fn a_stale_socket_reaching_paired_does_not_start_the_live_session() {
     let mut world = paired_pair();
     world.enter_code(0, &stray_code());
-    let stale = world.devices[0].on_token.unwrap();
+    let stale = world.devices[0].on.clone().unwrap().1;
     world.request(0);
 
     let cmds = world.devices[0].with_env(NOW, |d, env| d.on_paired(env, &stale));
@@ -723,4 +764,170 @@ fn a_stale_socket_reaching_paired_does_not_start_the_live_session() {
     assert!(cmds.iter().all(|c| matches!(c, Cmd::Log(_))), "{cmds:?}");
     assert_eq!(world.sync_state(0), SyncRequestUiState::AwaitingPeer);
     assert!(!world.devices[0].driver.is_transferring());
+}
+
+// ── Devices on different Drawbridges ──────────────────────────────────────────────
+
+/// A laptop on Drawbridge A and a phone on Drawbridge B, paired.
+fn paired_across_drawbridges() -> World {
+    let mut world = World::on_drawbridges(&[("laptop", DRAWBRIDGE_A), ("phone", DRAWBRIDGE_B)]);
+    seed(&mut world, 0, &["r1", "r2"]);
+    world.pair(0, 1);
+    world
+}
+
+#[test]
+fn pairing_happens_on_the_new_devices_drawbridge() {
+    let mut world = World::on_drawbridges(&[("laptop", DRAWBRIDGE_A), ("phone", DRAWBRIDGE_B)]);
+    let code = world.show_code(1);
+    world.enter_code(0, &code);
+
+    // Both ends are on B, though the laptop's own Drawbridge is A.
+    let on = |i: usize| world.devices[i].on.as_ref().map(|k| k.0.clone());
+    assert_eq!(on(0).as_deref(), Some(DRAWBRIDGE_B));
+    assert_eq!(on(1).as_deref(), Some(DRAWBRIDGE_B));
+}
+
+#[test]
+fn devices_on_different_drawbridges_pair_and_exchange_history() {
+    let world = paired_across_drawbridges();
+    assert!(world.devices[0].admitted);
+    assert!(world.devices[1].joined);
+    assert_eq!(world.devices[1].rkeys(CONV), ["r1", "r2"]);
+}
+
+#[test]
+fn a_sync_request_is_served_on_the_requesters_drawbridge() {
+    let mut world = paired_across_drawbridges();
+    world.devices[0]
+        .history
+        .get_mut(CONV)
+        .unwrap()
+        .push(message("r3"));
+
+    world.request(1);
+    world.deliver_ring_msg(1, 0);
+    match world.sync_state(0) {
+        SyncRequestUiState::AwaitingApproval { .. } => {}
+        other => panic!("expected the prompt, got {other:?}"),
+    }
+    let cmds = world.devices[0].driver.sync_accept().unwrap();
+    world.apply(0, cmds);
+    assert_eq!(
+        world.devices[0].on.as_ref().map(|k| k.0.as_str()),
+        Some(DRAWBRIDGE_B),
+        "the laptop must go to the phone's Drawbridge, not its own"
+    );
+    world.run();
+
+    assert_eq!(world.devices[1].rkeys(CONV), ["r1", "r2", "r3"]);
+}
+
+#[test]
+fn a_sync_offer_is_accepted_on_the_offerers_drawbridge() {
+    let mut world = paired_across_drawbridges();
+    world.devices[0]
+        .history
+        .get_mut(CONV)
+        .unwrap()
+        .push(message("r3"));
+    let phone = world.devices[1].device_id();
+
+    world.offer(0, phone);
+    world.deliver_ring_msg(0, 1);
+
+    assert_eq!(world.devices[1].rkeys(CONV), ["r1", "r2", "r3"]);
+    assert_eq!(world.devices[0].on, None, "the rendezvous is released");
+}
+
+#[test]
+fn a_pair_ready_from_another_drawbridge_is_ignored() {
+    let mut world = World::on_drawbridges(&[("laptop", DRAWBRIDGE_A)]);
+    world.drawbridge_down = true;
+    let code = world.show_code(0);
+    world.drawbridge_down = false;
+    assert!(!code.is_empty());
+    let token = {
+        let cmds = world.devices[0]
+            .driver
+            .on_drawbridge_connected(DRAWBRIDGE_A);
+        match cmds.as_slice() {
+            [Cmd::SendPairOffer { token, .. }] => *token,
+            other => panic!("expected the offer to be pending, got {other:?}"),
+        }
+    };
+
+    let ignored = world.devices[0]
+        .driver
+        .on_pair_ready(DRAWBRIDGE_B, &token, "wss://drawbridge-b.example.com/pair".into());
+    assert!(
+        !ignored.iter().any(|c| matches!(c, Cmd::ConnectPair { .. })),
+        "a Drawbridge that is not the rendezvous's must not open the pair socket: {ignored:?}"
+    );
+
+    let taken = world.devices[0]
+        .driver
+        .on_pair_ready(DRAWBRIDGE_A, &token, "wss://drawbridge-a.example.com/pair".into());
+    assert!(taken.iter().any(|c| matches!(c, Cmd::ConnectPair { .. })));
+}
+
+#[test]
+fn a_reconnect_to_another_drawbridge_resends_nothing() {
+    let mut world = World::on_drawbridges(&[("laptop", DRAWBRIDGE_A)]);
+    world.drawbridge_down = true;
+    world.show_code(0);
+
+    assert!(world.devices[0].driver.on_drawbridge_connected(DRAWBRIDGE_B).is_empty());
+    assert!(!world.devices[0].driver.on_drawbridge_connected(DRAWBRIDGE_A).is_empty());
+    // A different spelling of the same Drawbridge still matches.
+    assert!(!world.devices[0]
+        .driver
+        .on_drawbridge_connected("drawbridge-a.example.com")
+        .is_empty());
+}
+
+#[test]
+fn a_uri_names_its_drawbridge_and_a_bare_code_needs_one() {
+    let mut driver = PairChannelDriver::new();
+    let new_device = Device::new("phone", DRAWBRIDGE_B);
+    let (code, _) = driver
+        .pair_new(new_device.identity.clone(), DRAWBRIDGE_B)
+        .unwrap();
+    let uri = match driver.pairing_ui_state() {
+        PairingUiState::ShowingCode { uri, drawbridge_url, .. } => {
+            assert_eq!(drawbridge_url, DRAWBRIDGE_B);
+            uri
+        }
+        other => panic!("expected the code, got {other:?}"),
+    };
+
+    let laptop = Device::new("laptop", DRAWBRIDGE_A);
+    // The URI carries the Drawbridge; a different one typed beside it loses.
+    let mut existing = PairChannelDriver::new();
+    let cmds = existing
+        .pair_confirm(laptop.identity.clone(), &uri, Some(DRAWBRIDGE_A))
+        .unwrap();
+    assert!(matches!(&cmds[..], [Cmd::SendPairJoin { drawbridge_url, .. }] if drawbridge_url == DRAWBRIDGE_B));
+
+    // The bare code alone cannot say where to go.
+    let mut existing = PairChannelDriver::new();
+    assert!(existing
+        .pair_confirm(laptop.identity.clone(), &code, None)
+        .is_err());
+    assert!(existing
+        .pair_confirm(laptop.identity.clone(), &code, Some("  "))
+        .is_err());
+    // Typed beside it, a bare host is enough.
+    let cmds = existing
+        .pair_confirm(laptop.identity, &code, Some("drawbridge-b.example.com"))
+        .unwrap();
+    assert!(matches!(&cmds[..], [Cmd::SendPairJoin { drawbridge_url, .. }] if drawbridge_url == DRAWBRIDGE_B));
+}
+
+#[test]
+fn a_device_cannot_start_a_rendezvous_on_an_unusable_drawbridge() {
+    let mut driver = PairChannelDriver::new();
+    let identity = Device::new("phone", DRAWBRIDGE_A).identity;
+    assert!(driver.pair_new(identity, "https://drawbridge.example.com").is_err());
+    assert!(driver.pair_new(Device::new("x", DRAWBRIDGE_A).identity, "").is_err());
 }

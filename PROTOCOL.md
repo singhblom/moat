@@ -105,7 +105,7 @@ When an existing member (Alice) adds a new member (Carol) to a group that alread
 2. Process the Welcome to join the group; immediately upload a **fresh key package** (reusing the device's one signing key — see [Signing-key Identity](#signing-key-identity)) to the PDS so Carol can be re-invited in the future. MLS key packages are single-use: the init key is consumed and dropped from local storage once a Welcome uses it. The consumed *record* stays on the PDS, which is why consumers must take the newest
 3. Call `get_group_dids` to discover **all** current members (not just the Welcome author), and store the full member list
 4. Generate candidate tags for all members and register them
-5. Read each member's relays from their `social.moat.drawbridgeConfig` records (see [New Members and Relays](#new-members-and-relays))
+5. Read each member's Drawbridge URLs from their `social.moat.drawbridgeConfig` records (see [New Members and Drawbridges](#new-members-and-drawbridges))
 
 **Bob (existing member):**
 
@@ -297,13 +297,13 @@ A Drawbridge is a WebSocket relay that provides real-time push notifications for
 
 ### Selecting a Drawbridge URL
 
-An app binary carries the relay it was built for, set at build time (`MOAT_DRAWBRIDGE_URL`, as a Cargo environment variable or a Dart define). There is no discovery: the PDS is not asked, and there is no hardcoded fallback. A build with no relay does not connect to one and polls only. Release builds fail to compile without a relay.
+An app binary carries the Drawbridge it was built for, set at build time (`MOAT_DRAWBRIDGE_URL`, as a Cargo environment variable or a Dart define). There is no discovery: the PDS is not asked, and there is no hardcoded fallback. A build without one connects to none and polls only. Release builds fail to compile without a Drawbridge.
 
-The relay is tied to the binary because push delivery only works when the relay holds the APNs/FCM credentials for the signed app it notifies. Headless hosts (the CLI and the Dart server) also accept a `--drawbridge-url` override; they have no push, so the tie does not apply to them.
+The Drawbridge is tied to the binary because push delivery only works when the relay holds the APNs/FCM credentials for the signed app it notifies. Headless hosts (the CLI and the Dart server) also accept a `--drawbridge-url` override; they have no push, so the tie does not apply to them.
 
 ### Drawbridge Configuration Record
 
-Each device that connects to a Drawbridge publishes its relay as its own ATProto record, so that senders can find every relay a user's devices sit on:
+Each device that connects to a Drawbridge publishes its Drawbridge URL as its own ATProto record, so that senders can find every Drawbridge a user's devices sit on:
 
 ```
 Collection: social.moat.drawbridgeConfig
@@ -312,17 +312,17 @@ RKey: <hex MLS device id>
 { "url": "wss://drawbridge.moat.chat/ws" }
 ```
 
-A device writes only its own record (`putRecord`, overwritten on each connect), so devices on different relays never overwrite each other. The MLS device id already appears in the key packages a device publishes, so the rkey adds nothing new to what the PDS shows.
+A device writes only its own record (`putRecord`, overwritten on each connect), so devices on different Drawbridges never overwrite each other. The MLS device id already appears in the key packages a device publishes, so the rkey adds nothing new to what the PDS shows.
 
-A user's relays are the union of the URLs in `listRecords` on the collection. Clients cache that list per DID and re-read it when it is missing or older than 30 seconds, and whenever a conversation is created or joined.
+A user's Drawbridges are the union of the URLs in `listRecords` on the collection. Clients cache that list per DID and re-read it when it is missing or older than 30 seconds, and whenever a conversation is created or joined.
 
 ### Message Delivery
 
-When a sender posts an event, their client sends an envelope to their own Drawbridge containing the encrypted payload and the relay URLs to notify: the union of every conversation member's relays and the sender's own, less the relay the envelope is sent to (which routes to its own connected devices directly). Including the sender's own DID is what lets its other devices, on other relays, hear the event. The sender's Drawbridge fans out to each listed Drawbridge via `POST /relay/event`. Recipient Drawbridges deliver immediately to clients watching the matching tag.
+When a sender posts an event, their client sends an envelope to their own Drawbridge containing the encrypted payload and the Drawbridge URLs to notify: the union of every conversation member's Drawbridges and the sender's own, less the one the envelope is sent to, which routes to its own connected devices directly. Including the sender's own DID is what lets its other devices, on other Drawbridges, hear the event. The sender's Drawbridge fans out to each listed Drawbridge via `POST /relay/event`. Recipient Drawbridges deliver immediately to clients watching the matching tag.
 
-### New Members and Relays
+### New Members and Drawbridges
 
-A newly-added member learns each member's relays the same way a sender does: by listing their `social.moat.drawbridgeConfig` records. Nothing about relays travels with the Welcome, which is published as the raw MLS Welcome under stealth encryption.
+A newly-added member learns each member's Drawbridges the same way a sender does: by listing their `social.moat.drawbridgeConfig` records. Nothing about Drawbridges travels with the Welcome, which is published as the raw MLS Welcome under stealth encryption.
 
 ### Privacy Properties of Drawbridge
 
@@ -363,8 +363,8 @@ Each client uses two sockets simultaneously during a sync:
 
 #### Handshake
 
-1. Both clients are already authenticated on `/ws`.
-2. Both sides already share a token: it is carried in the pairing code the user scanned or typed (see [Live Pairing](#live-pairing)). The relay treats it as an opaque string.
+1. Both clients are authenticated on `/ws` **to the same Drawbridge**, the one the session names (see [Named Drawbridge](#named-drawbridge)). A device whose own Drawbridge is another opens a second authenticated `/ws` connection to the named one for the rendezvous alone, and closes it once the channel has ended.
+2. Both sides already share a token: it is carried in the pairing code the user scanned or typed (see [Live Pairing](#live-pairing)), or in a ring message for a sync. The relay treats it as an opaque string.
 3. On the main WS:
    - Offerer: `→ pair_offer{token}` / Relay: `→ pair_pending{token}`
    - Joiner: `→ pair_join{token}` / Relay: `→ pair_ready{token, pair_url}` (sent to both)
@@ -481,7 +481,17 @@ The secret is 128-bit rather than a short human-memorable code because the AEAD 
 
 The QR form is that same text behind a `moat-pair:` URI scheme, so a scanner can reject foreign QRs cheaply. Decoding is case-insensitive and ignores hyphens and whitespace, so a user retyping the text form need not reproduce the grouping.
 
-The code deliberately carries **no DID and no relay URL**. Both devices already know their own DID — equality is verified inside the encrypted channel — and the relay is discoverable from that DID's PDS.
+The code itself carries **no DID and no Drawbridge URL**. Both devices already know their own DID — equality is verified inside the encrypted channel. The Drawbridge's address travels beside the code, not in it (see [Named Drawbridge](#named-drawbridge)).
+
+#### Named Drawbridge
+
+Devices of one user may sit on different Drawbridges, and a device cannot choose another (its Drawbridge is built into the app). So every rendezvous happens on one named Drawbridge: **the one the device that opened it sits on**. The other device goes there, whichever Drawbridge is its own.
+
+- **Pairing.** The new device shows the code and opens the rendezvous, so its Drawbridge is the one named. The QR form carries it: `moat-pair:<code>?drawbridge=<percent-encoded url>`. For manual entry the new device shows its Drawbridge URL above the code, and the existing device types both. The URL field starts out as the existing device's own Drawbridge: devices from one distribution share one, so the common case needs only the code. The URL in a `moat-pair:` URI wins over a typed one.
+- **Sync.** A `sync_request` or `sync_offer` names no Drawbridge. The sender's is the one in the `social.moat.drawbridgeConfig` record whose rkey is the sender's device id, which the MLS leaf credential of the ring message already establishes. The receiving device reads that record from its own PDS repo before it prompts or joins; a message from a device with no record is ignored.
+- **Form.** A Drawbridge URL is written `ws://` or `wss://`, a host and a path. A bare host is read as `wss://<host>/ws` and a URL with no path as `<url>/ws`; two spellings of one Drawbridge are equal once written this way.
+
+A device authenticates to the named Drawbridge exactly as to its own (a DID challenge signed over the URL as dialled), so a Drawbridge must accept an authenticated DID it does not otherwise serve for the length of a rendezvous. A device with no Drawbridge of its own can still join a rendezvous on a sibling's, but cannot start one.
 
 #### Channel crypto
 
@@ -530,7 +540,7 @@ A pairing session exposes one projection of its state, which every host renders 
 | Phase | Meaning |
 |---|---|
 | `idle` | No pairing in flight |
-| `showing_code` | New device: code generated, awaiting the peer (carries both text and URI forms) |
+| `showing_code` | New device: code generated, awaiting the peer (carries the code, this device's Drawbridge, and the QR URI) |
 | `awaiting_peer` | Existing device: code accepted, awaiting `Enroll` |
 | `awaiting_approval` | Existing device: `Enroll` received, awaiting the approve/reject decision (carries the peer's device name and DID) |
 | `done` | Enroll/Admit complete (carries `ring_id`) |
@@ -548,7 +558,7 @@ A device drives one pair-channel session at a time: a pairing, a sync request or
 
 A pairing that has ended — `done`, `failed`, cancelled or rejected — holds nothing, even though its state stays readable. A sibling's `sync_request` or `sync_offer` that arrives while the channel is busy is ignored. A gesture of this user's own (showing or entering a code, requesting, offering or accepting a sync) supersedes whatever held the channel.
 
-Every pair-channel event is matched against the live rendezvous's token — `pair_closed`, a pair WS reaching `paired`, each frame it carries, and its ending or failing to connect — and an event for any other token is ignored. An offer or join the relay has not acknowledged with `pair_ready` is resent whenever the main WS reauthenticates.
+Every pair-channel event is matched against the live rendezvous's token — `pair_closed`, a pair WS reaching `paired`, each frame it carries, and its ending or failing to connect — and an event for any other token is ignored. `pair_ready` and a reauthentication are also matched against the rendezvous's Drawbridge, and one from any other Drawbridge is ignored. An offer or join the Drawbridge has not acknowledged with `pair_ready` is resent whenever the main WS to that Drawbridge reauthenticates, and the connection to a rendezvous Drawbridge other than the device's own is reopened if it drops while the rendezvous is live.
 
 A transfer's first frames can arrive before this device has loaded the history it will declare; they wait for it rather than being dropped.
 
@@ -569,7 +579,7 @@ election, no liveness detector, and no policy guessing which sibling holds
 the deepest history: the person holding the devices decides.
 
 1. The device that wants history mints a 16-byte rendezvous token and a
-   16-byte channel secret, registers the token with the relay
+   16-byte channel secret, registers the token with its own Drawbridge
    (`pair_offer`), and publishes
    `RingMsg::SyncRequest { token, secret, target_device_id }` as a `ring.msg`
    event on the device ring. Siblings watch the ring's tags with
@@ -581,7 +591,8 @@ the deepest history: the person holding the devices decides.
 2. Every sibling that decrypts it prompts its user, naming the requesting
    device **from its MLS leaf credential** — the payload carries only the
    token and secret. **No host auto-accepts**, matching pairing's rule.
-3. Whichever sibling the user approves calls `pair_join` with the token.
+3. Whichever sibling the user approves calls `pair_join` with the token,
+   on the requester's Drawbridge (see [Named Drawbridge](#named-drawbridge)).
    Both ends derive the [channel keys](#channel-crypto) from the secret and
    token — the side that published the ring message takes the new
    device's keys, the side that joined the existing device's — and run the

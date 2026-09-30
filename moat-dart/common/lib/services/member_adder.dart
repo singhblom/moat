@@ -101,8 +101,8 @@ Future<void> addMemberToConversation({
 
   // 14. Fetch new member's Drawbridge config.
   try {
-    final relayUrls = await client.fetchDrawbridgeConfig(newDid);
-    DrawbridgeService.instance.cacheDrawbridgeConfig(newDid, relayUrls);
+    final drawbridgeUrls = await client.fetchDrawbridgeConfig(newDid);
+    DrawbridgeService.instance.cacheDrawbridgeConfig(newDid, drawbridgeUrls);
   } catch (_) {}
 
   final groupIdHex = _bytesToHex(groupId);

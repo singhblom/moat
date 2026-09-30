@@ -7,7 +7,7 @@ use crate::records::{
 };
 use atrium_api::agent::{store::MemorySessionStore, AtpAgent};
 use atrium_api::com::atproto::repo::{
-    create_record, delete_record, list_records, put_record,
+    create_record, delete_record, get_record, list_records, put_record,
 };
 use atrium_api::com::atproto::server::create_session::OutputData as SessionData;
 use atrium_api::types::string::{AtIdentifier, Nsid};
@@ -760,10 +760,10 @@ impl MoatAtprotoClient {
         Ok(records)
     }
 
-    /// Publish (or update) this device's relay.
+    /// Publish (or update) this device's Drawbridge.
     ///
     /// The record's rkey is `device_id_hex`, so a device writes only its own
-    /// record and siblings on other relays keep theirs.
+    /// record and siblings on other Drawbridges keep theirs.
     ///
     /// Returns the AT-URI of the record.
     pub async fn publish_drawbridge_config(&self, device_id_hex: &str, url: &str) -> Result<String> {
@@ -811,11 +811,45 @@ impl MoatAtprotoClient {
         Ok(output.uri.to_string())
     }
 
-    /// The relays a user's devices sit on: every device's
+    /// The Drawbridge one device sits on: its `social.moat.drawbridgeConfig`
+    /// record, whose rkey is the hex MLS device id. `None` if that device
+    /// has published none.
+    pub async fn fetch_drawbridge_url_for_device(
+        &self,
+        did: &str,
+        device_id_hex: &str,
+    ) -> Result<Option<String>> {
+        let pds_url = self.resolve_pds_endpoint(did).await?;
+        let pds_agent = self.agent_for_pds(&pds_url);
+
+        let input = get_record::ParametersData {
+            collection: Nsid::new(DRAWBRIDGE_CONFIG_NSID.to_string())
+                .map_err(|e| Error::InvalidRecord(e.to_string()))?,
+            repo: AtIdentifier::Did(
+                did.parse()
+                    .map_err(|_| Error::InvalidDid(did.to_string()))?,
+            ),
+            rkey: device_id_hex.to_string(),
+            cid: None,
+        };
+
+        let output = match pds_agent.api.com.atproto.repo.get_record(input.into()).await {
+            Ok(output) => output,
+            Err(atrium_api::xrpc::Error::XrpcResponse(_)) => return Ok(None),
+            Err(e) => return Err(Error::Pds(e.to_string())),
+        };
+        let value = serde_json::to_value(&output.value)
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+        Ok(serde_json::from_value::<DrawbridgeConfigRecord>(value)
+            .ok()
+            .map(|r| r.url))
+    }
+
+    /// The Drawbridges a user's devices sit on: every device's
     /// `social.moat.drawbridgeConfig` record, deduplicated.
     ///
     /// Resolves the DID's PDS and lists the collection there. A user with no
-    /// records has no relay.
+    /// records has no Drawbridge.
     pub async fn fetch_drawbridge_urls(&self, did: &str) -> Result<Vec<String>> {
         let pds_url = self.resolve_pds_endpoint(did).await?;
         let pds_agent = self.agent_for_pds(&pds_url);

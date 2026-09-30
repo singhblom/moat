@@ -18,8 +18,10 @@ final _privateConstructorUsedError = UnsupportedError(
 mixin _$PairChannelCommandDto {
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List token) sendPairOffer,
-    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairOffer,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairJoin,
     required TResult Function(String url, Uint8List token) connectPair,
     required TResult Function(Uint8List data) sendFrame,
     required TResult Function() closePair,
@@ -42,8 +44,8 @@ mixin _$PairChannelCommandDto {
       throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List token)? sendPairOffer,
-    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult? Function(String url, Uint8List token)? connectPair,
     TResult? Function(Uint8List data)? sendFrame,
     TResult? Function()? closePair,
@@ -65,8 +67,8 @@ mixin _$PairChannelCommandDto {
       throw _privateConstructorUsedError;
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List token)? sendPairOffer,
-    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult Function(String url, Uint8List token)? connectPair,
     TResult Function(Uint8List data)? sendFrame,
     TResult Function()? closePair,
@@ -205,7 +207,7 @@ abstract class _$$PairChannelCommandDto_SendPairOfferImplCopyWith<$Res> {
           $Res Function(_$PairChannelCommandDto_SendPairOfferImpl) then) =
       __$$PairChannelCommandDto_SendPairOfferImplCopyWithImpl<$Res>;
   @useResult
-  $Res call({Uint8List token});
+  $Res call({String drawbridgeUrl, Uint8List token});
 }
 
 /// @nodoc
@@ -223,9 +225,14 @@ class __$$PairChannelCommandDto_SendPairOfferImplCopyWithImpl<$Res>
   @pragma('vm:prefer-inline')
   @override
   $Res call({
+    Object? drawbridgeUrl = null,
     Object? token = null,
   }) {
     return _then(_$PairChannelCommandDto_SendPairOfferImpl(
+      drawbridgeUrl: null == drawbridgeUrl
+          ? _value.drawbridgeUrl
+          : drawbridgeUrl // ignore: cast_nullable_to_non_nullable
+              as String,
       token: null == token
           ? _value.token
           : token // ignore: cast_nullable_to_non_nullable
@@ -238,15 +245,18 @@ class __$$PairChannelCommandDto_SendPairOfferImplCopyWithImpl<$Res>
 
 class _$PairChannelCommandDto_SendPairOfferImpl
     extends PairChannelCommandDto_SendPairOffer {
-  const _$PairChannelCommandDto_SendPairOfferImpl({required this.token})
+  const _$PairChannelCommandDto_SendPairOfferImpl(
+      {required this.drawbridgeUrl, required this.token})
       : super._();
 
+  @override
+  final String drawbridgeUrl;
   @override
   final Uint8List token;
 
   @override
   String toString() {
-    return 'PairChannelCommandDto.sendPairOffer(token: $token)';
+    return 'PairChannelCommandDto.sendPairOffer(drawbridgeUrl: $drawbridgeUrl, token: $token)';
   }
 
   @override
@@ -254,12 +264,14 @@ class _$PairChannelCommandDto_SendPairOfferImpl
     return identical(this, other) ||
         (other.runtimeType == runtimeType &&
             other is _$PairChannelCommandDto_SendPairOfferImpl &&
+            (identical(other.drawbridgeUrl, drawbridgeUrl) ||
+                other.drawbridgeUrl == drawbridgeUrl) &&
             const DeepCollectionEquality().equals(other.token, token));
   }
 
   @override
-  int get hashCode =>
-      Object.hash(runtimeType, const DeepCollectionEquality().hash(token));
+  int get hashCode => Object.hash(
+      runtimeType, drawbridgeUrl, const DeepCollectionEquality().hash(token));
 
   /// Create a copy of PairChannelCommandDto
   /// with the given fields replaced by the non-null parameter values.
@@ -274,8 +286,10 @@ class _$PairChannelCommandDto_SendPairOfferImpl
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List token) sendPairOffer,
-    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairOffer,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairJoin,
     required TResult Function(String url, Uint8List token) connectPair,
     required TResult Function(Uint8List data) sendFrame,
     required TResult Function() closePair,
@@ -295,14 +309,14 @@ class _$PairChannelCommandDto_SendPairOfferImpl
     required TResult Function(String detail, bool duringPairing) transferFailed,
     required TResult Function(String line) log,
   }) {
-    return sendPairOffer(token);
+    return sendPairOffer(drawbridgeUrl, token);
   }
 
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List token)? sendPairOffer,
-    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult? Function(String url, Uint8List token)? connectPair,
     TResult? Function(Uint8List data)? sendFrame,
     TResult? Function()? closePair,
@@ -321,14 +335,14 @@ class _$PairChannelCommandDto_SendPairOfferImpl
     TResult? Function(String detail, bool duringPairing)? transferFailed,
     TResult? Function(String line)? log,
   }) {
-    return sendPairOffer?.call(token);
+    return sendPairOffer?.call(drawbridgeUrl, token);
   }
 
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List token)? sendPairOffer,
-    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult Function(String url, Uint8List token)? connectPair,
     TResult Function(Uint8List data)? sendFrame,
     TResult Function()? closePair,
@@ -349,7 +363,7 @@ class _$PairChannelCommandDto_SendPairOfferImpl
     required TResult orElse(),
   }) {
     if (sendPairOffer != null) {
-      return sendPairOffer(token);
+      return sendPairOffer(drawbridgeUrl, token);
     }
     return orElse();
   }
@@ -457,10 +471,12 @@ class _$PairChannelCommandDto_SendPairOfferImpl
 abstract class PairChannelCommandDto_SendPairOffer
     extends PairChannelCommandDto {
   const factory PairChannelCommandDto_SendPairOffer(
-          {required final Uint8List token}) =
+          {required final String drawbridgeUrl,
+          required final Uint8List token}) =
       _$PairChannelCommandDto_SendPairOfferImpl;
   const PairChannelCommandDto_SendPairOffer._() : super._();
 
+  String get drawbridgeUrl;
   Uint8List get token;
 
   /// Create a copy of PairChannelCommandDto
@@ -478,7 +494,7 @@ abstract class _$$PairChannelCommandDto_SendPairJoinImplCopyWith<$Res> {
           $Res Function(_$PairChannelCommandDto_SendPairJoinImpl) then) =
       __$$PairChannelCommandDto_SendPairJoinImplCopyWithImpl<$Res>;
   @useResult
-  $Res call({Uint8List token});
+  $Res call({String drawbridgeUrl, Uint8List token});
 }
 
 /// @nodoc
@@ -496,9 +512,14 @@ class __$$PairChannelCommandDto_SendPairJoinImplCopyWithImpl<$Res>
   @pragma('vm:prefer-inline')
   @override
   $Res call({
+    Object? drawbridgeUrl = null,
     Object? token = null,
   }) {
     return _then(_$PairChannelCommandDto_SendPairJoinImpl(
+      drawbridgeUrl: null == drawbridgeUrl
+          ? _value.drawbridgeUrl
+          : drawbridgeUrl // ignore: cast_nullable_to_non_nullable
+              as String,
       token: null == token
           ? _value.token
           : token // ignore: cast_nullable_to_non_nullable
@@ -511,15 +532,18 @@ class __$$PairChannelCommandDto_SendPairJoinImplCopyWithImpl<$Res>
 
 class _$PairChannelCommandDto_SendPairJoinImpl
     extends PairChannelCommandDto_SendPairJoin {
-  const _$PairChannelCommandDto_SendPairJoinImpl({required this.token})
+  const _$PairChannelCommandDto_SendPairJoinImpl(
+      {required this.drawbridgeUrl, required this.token})
       : super._();
 
+  @override
+  final String drawbridgeUrl;
   @override
   final Uint8List token;
 
   @override
   String toString() {
-    return 'PairChannelCommandDto.sendPairJoin(token: $token)';
+    return 'PairChannelCommandDto.sendPairJoin(drawbridgeUrl: $drawbridgeUrl, token: $token)';
   }
 
   @override
@@ -527,12 +551,14 @@ class _$PairChannelCommandDto_SendPairJoinImpl
     return identical(this, other) ||
         (other.runtimeType == runtimeType &&
             other is _$PairChannelCommandDto_SendPairJoinImpl &&
+            (identical(other.drawbridgeUrl, drawbridgeUrl) ||
+                other.drawbridgeUrl == drawbridgeUrl) &&
             const DeepCollectionEquality().equals(other.token, token));
   }
 
   @override
-  int get hashCode =>
-      Object.hash(runtimeType, const DeepCollectionEquality().hash(token));
+  int get hashCode => Object.hash(
+      runtimeType, drawbridgeUrl, const DeepCollectionEquality().hash(token));
 
   /// Create a copy of PairChannelCommandDto
   /// with the given fields replaced by the non-null parameter values.
@@ -547,8 +573,10 @@ class _$PairChannelCommandDto_SendPairJoinImpl
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List token) sendPairOffer,
-    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairOffer,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairJoin,
     required TResult Function(String url, Uint8List token) connectPair,
     required TResult Function(Uint8List data) sendFrame,
     required TResult Function() closePair,
@@ -568,14 +596,14 @@ class _$PairChannelCommandDto_SendPairJoinImpl
     required TResult Function(String detail, bool duringPairing) transferFailed,
     required TResult Function(String line) log,
   }) {
-    return sendPairJoin(token);
+    return sendPairJoin(drawbridgeUrl, token);
   }
 
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List token)? sendPairOffer,
-    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult? Function(String url, Uint8List token)? connectPair,
     TResult? Function(Uint8List data)? sendFrame,
     TResult? Function()? closePair,
@@ -594,14 +622,14 @@ class _$PairChannelCommandDto_SendPairJoinImpl
     TResult? Function(String detail, bool duringPairing)? transferFailed,
     TResult? Function(String line)? log,
   }) {
-    return sendPairJoin?.call(token);
+    return sendPairJoin?.call(drawbridgeUrl, token);
   }
 
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List token)? sendPairOffer,
-    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult Function(String url, Uint8List token)? connectPair,
     TResult Function(Uint8List data)? sendFrame,
     TResult Function()? closePair,
@@ -622,7 +650,7 @@ class _$PairChannelCommandDto_SendPairJoinImpl
     required TResult orElse(),
   }) {
     if (sendPairJoin != null) {
-      return sendPairJoin(token);
+      return sendPairJoin(drawbridgeUrl, token);
     }
     return orElse();
   }
@@ -730,10 +758,12 @@ class _$PairChannelCommandDto_SendPairJoinImpl
 abstract class PairChannelCommandDto_SendPairJoin
     extends PairChannelCommandDto {
   const factory PairChannelCommandDto_SendPairJoin(
-          {required final Uint8List token}) =
+          {required final String drawbridgeUrl,
+          required final Uint8List token}) =
       _$PairChannelCommandDto_SendPairJoinImpl;
   const PairChannelCommandDto_SendPairJoin._() : super._();
 
+  String get drawbridgeUrl;
   Uint8List get token;
 
   /// Create a copy of PairChannelCommandDto
@@ -829,8 +859,10 @@ class _$PairChannelCommandDto_ConnectPairImpl
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List token) sendPairOffer,
-    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairOffer,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairJoin,
     required TResult Function(String url, Uint8List token) connectPair,
     required TResult Function(Uint8List data) sendFrame,
     required TResult Function() closePair,
@@ -856,8 +888,8 @@ class _$PairChannelCommandDto_ConnectPairImpl
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List token)? sendPairOffer,
-    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult? Function(String url, Uint8List token)? connectPair,
     TResult? Function(Uint8List data)? sendFrame,
     TResult? Function()? closePair,
@@ -882,8 +914,8 @@ class _$PairChannelCommandDto_ConnectPairImpl
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List token)? sendPairOffer,
-    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult Function(String url, Uint8List token)? connectPair,
     TResult Function(Uint8List data)? sendFrame,
     TResult Function()? closePair,
@@ -1101,8 +1133,10 @@ class _$PairChannelCommandDto_SendFrameImpl
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List token) sendPairOffer,
-    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairOffer,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairJoin,
     required TResult Function(String url, Uint8List token) connectPair,
     required TResult Function(Uint8List data) sendFrame,
     required TResult Function() closePair,
@@ -1128,8 +1162,8 @@ class _$PairChannelCommandDto_SendFrameImpl
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List token)? sendPairOffer,
-    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult? Function(String url, Uint8List token)? connectPair,
     TResult? Function(Uint8List data)? sendFrame,
     TResult? Function()? closePair,
@@ -1154,8 +1188,8 @@ class _$PairChannelCommandDto_SendFrameImpl
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List token)? sendPairOffer,
-    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult Function(String url, Uint8List token)? connectPair,
     TResult Function(Uint8List data)? sendFrame,
     TResult Function()? closePair,
@@ -1342,8 +1376,10 @@ class _$PairChannelCommandDto_ClosePairImpl
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List token) sendPairOffer,
-    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairOffer,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairJoin,
     required TResult Function(String url, Uint8List token) connectPair,
     required TResult Function(Uint8List data) sendFrame,
     required TResult Function() closePair,
@@ -1369,8 +1405,8 @@ class _$PairChannelCommandDto_ClosePairImpl
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List token)? sendPairOffer,
-    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult? Function(String url, Uint8List token)? connectPair,
     TResult? Function(Uint8List data)? sendFrame,
     TResult? Function()? closePair,
@@ -1395,8 +1431,8 @@ class _$PairChannelCommandDto_ClosePairImpl
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List token)? sendPairOffer,
-    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult Function(String url, Uint8List token)? connectPair,
     TResult Function(Uint8List data)? sendFrame,
     TResult Function()? closePair,
@@ -1574,8 +1610,10 @@ class _$PairChannelCommandDto_DropPairImpl
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List token) sendPairOffer,
-    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairOffer,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairJoin,
     required TResult Function(String url, Uint8List token) connectPair,
     required TResult Function(Uint8List data) sendFrame,
     required TResult Function() closePair,
@@ -1601,8 +1639,8 @@ class _$PairChannelCommandDto_DropPairImpl
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List token)? sendPairOffer,
-    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult? Function(String url, Uint8List token)? connectPair,
     TResult? Function(Uint8List data)? sendFrame,
     TResult? Function()? closePair,
@@ -1627,8 +1665,8 @@ class _$PairChannelCommandDto_DropPairImpl
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List token)? sendPairOffer,
-    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult Function(String url, Uint8List token)? connectPair,
     TResult Function(Uint8List data)? sendFrame,
     TResult Function()? closePair,
@@ -1849,8 +1887,10 @@ class _$PairChannelCommandDto_PublishRingEventImpl
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List token) sendPairOffer,
-    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairOffer,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairJoin,
     required TResult Function(String url, Uint8List token) connectPair,
     required TResult Function(Uint8List data) sendFrame,
     required TResult Function() closePair,
@@ -1876,8 +1916,8 @@ class _$PairChannelCommandDto_PublishRingEventImpl
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List token)? sendPairOffer,
-    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult? Function(String url, Uint8List token)? connectPair,
     TResult? Function(Uint8List data)? sendFrame,
     TResult? Function()? closePair,
@@ -1902,8 +1942,8 @@ class _$PairChannelCommandDto_PublishRingEventImpl
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List token)? sendPairOffer,
-    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult Function(String url, Uint8List token)? connectPair,
     TResult Function(Uint8List data)? sendFrame,
     TResult Function()? closePair,
@@ -2123,8 +2163,10 @@ class _$PairChannelCommandDto_LoadHistoryImpl
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List token) sendPairOffer,
-    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairOffer,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairJoin,
     required TResult Function(String url, Uint8List token) connectPair,
     required TResult Function(Uint8List data) sendFrame,
     required TResult Function() closePair,
@@ -2150,8 +2192,8 @@ class _$PairChannelCommandDto_LoadHistoryImpl
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List token)? sendPairOffer,
-    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult? Function(String url, Uint8List token)? connectPair,
     TResult? Function(Uint8List data)? sendFrame,
     TResult? Function()? closePair,
@@ -2176,8 +2218,8 @@ class _$PairChannelCommandDto_LoadHistoryImpl
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List token)? sendPairOffer,
-    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult Function(String url, Uint8List token)? connectPair,
     TResult Function(Uint8List data)? sendFrame,
     TResult Function()? closePair,
@@ -2410,8 +2452,10 @@ class _$PairChannelCommandDto_StoreMessagesImpl
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List token) sendPairOffer,
-    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairOffer,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairJoin,
     required TResult Function(String url, Uint8List token) connectPair,
     required TResult Function(Uint8List data) sendFrame,
     required TResult Function() closePair,
@@ -2437,8 +2481,8 @@ class _$PairChannelCommandDto_StoreMessagesImpl
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List token)? sendPairOffer,
-    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult? Function(String url, Uint8List token)? connectPair,
     TResult? Function(Uint8List data)? sendFrame,
     TResult? Function()? closePair,
@@ -2463,8 +2507,8 @@ class _$PairChannelCommandDto_StoreMessagesImpl
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List token)? sendPairOffer,
-    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult Function(String url, Uint8List token)? connectPair,
     TResult Function(Uint8List data)? sendFrame,
     TResult Function()? closePair,
@@ -2655,8 +2699,10 @@ class _$PairChannelCommandDto_SaveMlsStateImpl
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List token) sendPairOffer,
-    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairOffer,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairJoin,
     required TResult Function(String url, Uint8List token) connectPair,
     required TResult Function(Uint8List data) sendFrame,
     required TResult Function() closePair,
@@ -2682,8 +2728,8 @@ class _$PairChannelCommandDto_SaveMlsStateImpl
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List token)? sendPairOffer,
-    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult? Function(String url, Uint8List token)? connectPair,
     TResult? Function(Uint8List data)? sendFrame,
     TResult? Function()? closePair,
@@ -2708,8 +2754,8 @@ class _$PairChannelCommandDto_SaveMlsStateImpl
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List token)? sendPairOffer,
-    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult Function(String url, Uint8List token)? connectPair,
     TResult Function(Uint8List data)? sendFrame,
     TResult Function()? closePair,
@@ -2888,8 +2934,10 @@ class _$PairChannelCommandDto_SaveRingStateImpl
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List token) sendPairOffer,
-    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairOffer,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairJoin,
     required TResult Function(String url, Uint8List token) connectPair,
     required TResult Function(Uint8List data) sendFrame,
     required TResult Function() closePair,
@@ -2915,8 +2963,8 @@ class _$PairChannelCommandDto_SaveRingStateImpl
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List token)? sendPairOffer,
-    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult? Function(String url, Uint8List token)? connectPair,
     TResult? Function(Uint8List data)? sendFrame,
     TResult? Function()? closePair,
@@ -2941,8 +2989,8 @@ class _$PairChannelCommandDto_SaveRingStateImpl
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List token)? sendPairOffer,
-    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult Function(String url, Uint8List token)? connectPair,
     TResult Function(Uint8List data)? sendFrame,
     TResult Function()? closePair,
@@ -3151,8 +3199,10 @@ class _$PairChannelCommandDto_RingJoinedImpl
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List token) sendPairOffer,
-    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairOffer,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairJoin,
     required TResult Function(String url, Uint8List token) connectPair,
     required TResult Function(Uint8List data) sendFrame,
     required TResult Function() closePair,
@@ -3178,8 +3228,8 @@ class _$PairChannelCommandDto_RingJoinedImpl
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List token)? sendPairOffer,
-    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult? Function(String url, Uint8List token)? connectPair,
     TResult? Function(Uint8List data)? sendFrame,
     TResult? Function()? closePair,
@@ -3204,8 +3254,8 @@ class _$PairChannelCommandDto_RingJoinedImpl
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List token)? sendPairOffer,
-    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult Function(String url, Uint8List token)? connectPair,
     TResult Function(Uint8List data)? sendFrame,
     TResult Function()? closePair,
@@ -3423,8 +3473,10 @@ class _$PairChannelCommandDto_DeviceAdmittedImpl
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List token) sendPairOffer,
-    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairOffer,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairJoin,
     required TResult Function(String url, Uint8List token) connectPair,
     required TResult Function(Uint8List data) sendFrame,
     required TResult Function() closePair,
@@ -3450,8 +3502,8 @@ class _$PairChannelCommandDto_DeviceAdmittedImpl
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List token)? sendPairOffer,
-    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult? Function(String url, Uint8List token)? connectPair,
     TResult? Function(Uint8List data)? sendFrame,
     TResult? Function()? closePair,
@@ -3476,8 +3528,8 @@ class _$PairChannelCommandDto_DeviceAdmittedImpl
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List token)? sendPairOffer,
-    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult Function(String url, Uint8List token)? connectPair,
     TResult Function(Uint8List data)? sendFrame,
     TResult Function()? closePair,
@@ -3713,8 +3765,10 @@ class _$PairChannelCommandDto_SiblingStealthLearnedImpl
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List token) sendPairOffer,
-    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairOffer,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairJoin,
     required TResult Function(String url, Uint8List token) connectPair,
     required TResult Function(Uint8List data) sendFrame,
     required TResult Function() closePair,
@@ -3740,8 +3794,8 @@ class _$PairChannelCommandDto_SiblingStealthLearnedImpl
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List token)? sendPairOffer,
-    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult? Function(String url, Uint8List token)? connectPair,
     TResult? Function(Uint8List data)? sendFrame,
     TResult? Function()? closePair,
@@ -3766,8 +3820,8 @@ class _$PairChannelCommandDto_SiblingStealthLearnedImpl
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List token)? sendPairOffer,
-    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult Function(String url, Uint8List token)? connectPair,
     TResult Function(Uint8List data)? sendFrame,
     TResult Function()? closePair,
@@ -3988,8 +4042,10 @@ class _$PairChannelCommandDto_TransferCompleteImpl
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List token) sendPairOffer,
-    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairOffer,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairJoin,
     required TResult Function(String url, Uint8List token) connectPair,
     required TResult Function(Uint8List data) sendFrame,
     required TResult Function() closePair,
@@ -4015,8 +4071,8 @@ class _$PairChannelCommandDto_TransferCompleteImpl
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List token)? sendPairOffer,
-    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult? Function(String url, Uint8List token)? connectPair,
     TResult? Function(Uint8List data)? sendFrame,
     TResult? Function()? closePair,
@@ -4041,8 +4097,8 @@ class _$PairChannelCommandDto_TransferCompleteImpl
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List token)? sendPairOffer,
-    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult Function(String url, Uint8List token)? connectPair,
     TResult Function(Uint8List data)? sendFrame,
     TResult Function()? closePair,
@@ -4270,8 +4326,10 @@ class _$PairChannelCommandDto_TransferFailedImpl
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List token) sendPairOffer,
-    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairOffer,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairJoin,
     required TResult Function(String url, Uint8List token) connectPair,
     required TResult Function(Uint8List data) sendFrame,
     required TResult Function() closePair,
@@ -4297,8 +4355,8 @@ class _$PairChannelCommandDto_TransferFailedImpl
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List token)? sendPairOffer,
-    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult? Function(String url, Uint8List token)? connectPair,
     TResult? Function(Uint8List data)? sendFrame,
     TResult? Function()? closePair,
@@ -4323,8 +4381,8 @@ class _$PairChannelCommandDto_TransferFailedImpl
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List token)? sendPairOffer,
-    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult Function(String url, Uint8List token)? connectPair,
     TResult Function(Uint8List data)? sendFrame,
     TResult Function()? closePair,
@@ -4540,8 +4598,10 @@ class _$PairChannelCommandDto_LogImpl extends PairChannelCommandDto_Log {
   @override
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
-    required TResult Function(Uint8List token) sendPairOffer,
-    required TResult Function(Uint8List token) sendPairJoin,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairOffer,
+    required TResult Function(String drawbridgeUrl, Uint8List token)
+        sendPairJoin,
     required TResult Function(String url, Uint8List token) connectPair,
     required TResult Function(Uint8List data) sendFrame,
     required TResult Function() closePair,
@@ -4567,8 +4627,8 @@ class _$PairChannelCommandDto_LogImpl extends PairChannelCommandDto_Log {
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
-    TResult? Function(Uint8List token)? sendPairOffer,
-    TResult? Function(Uint8List token)? sendPairJoin,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult? Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult? Function(String url, Uint8List token)? connectPair,
     TResult? Function(Uint8List data)? sendFrame,
     TResult? Function()? closePair,
@@ -4593,8 +4653,8 @@ class _$PairChannelCommandDto_LogImpl extends PairChannelCommandDto_Log {
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
-    TResult Function(Uint8List token)? sendPairOffer,
-    TResult Function(Uint8List token)? sendPairJoin,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairOffer,
+    TResult Function(String drawbridgeUrl, Uint8List token)? sendPairJoin,
     TResult Function(String url, Uint8List token)? connectPair,
     TResult Function(Uint8List data)? sendFrame,
     TResult Function()? closePair,
@@ -4739,7 +4799,8 @@ mixin _$PairingUiStateDto {
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
     required TResult Function() idle,
-    required TResult Function(String code, String uri) showingCode,
+    required TResult Function(String code, String drawbridgeUrl, String uri)
+        showingCode,
     required TResult Function() awaitingPeer,
     required TResult Function(String deviceName, String did) awaitingApproval,
     required TResult Function(Uint8List ringId) done,
@@ -4749,7 +4810,8 @@ mixin _$PairingUiStateDto {
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
     TResult? Function()? idle,
-    TResult? Function(String code, String uri)? showingCode,
+    TResult? Function(String code, String drawbridgeUrl, String uri)?
+        showingCode,
     TResult? Function()? awaitingPeer,
     TResult? Function(String deviceName, String did)? awaitingApproval,
     TResult? Function(Uint8List ringId)? done,
@@ -4759,7 +4821,8 @@ mixin _$PairingUiStateDto {
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
     TResult Function()? idle,
-    TResult Function(String code, String uri)? showingCode,
+    TResult Function(String code, String drawbridgeUrl, String uri)?
+        showingCode,
     TResult Function()? awaitingPeer,
     TResult Function(String deviceName, String did)? awaitingApproval,
     TResult Function(Uint8List ringId)? done,
@@ -4870,7 +4933,8 @@ class _$PairingUiStateDto_IdleImpl extends PairingUiStateDto_Idle {
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
     required TResult Function() idle,
-    required TResult Function(String code, String uri) showingCode,
+    required TResult Function(String code, String drawbridgeUrl, String uri)
+        showingCode,
     required TResult Function() awaitingPeer,
     required TResult Function(String deviceName, String did) awaitingApproval,
     required TResult Function(Uint8List ringId) done,
@@ -4883,7 +4947,8 @@ class _$PairingUiStateDto_IdleImpl extends PairingUiStateDto_Idle {
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
     TResult? Function()? idle,
-    TResult? Function(String code, String uri)? showingCode,
+    TResult? Function(String code, String drawbridgeUrl, String uri)?
+        showingCode,
     TResult? Function()? awaitingPeer,
     TResult? Function(String deviceName, String did)? awaitingApproval,
     TResult? Function(Uint8List ringId)? done,
@@ -4896,7 +4961,8 @@ class _$PairingUiStateDto_IdleImpl extends PairingUiStateDto_Idle {
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
     TResult Function()? idle,
-    TResult Function(String code, String uri)? showingCode,
+    TResult Function(String code, String drawbridgeUrl, String uri)?
+        showingCode,
     TResult Function()? awaitingPeer,
     TResult Function(String deviceName, String did)? awaitingApproval,
     TResult Function(Uint8List ringId)? done,
@@ -4969,7 +5035,7 @@ abstract class _$$PairingUiStateDto_ShowingCodeImplCopyWith<$Res> {
           $Res Function(_$PairingUiStateDto_ShowingCodeImpl) then) =
       __$$PairingUiStateDto_ShowingCodeImplCopyWithImpl<$Res>;
   @useResult
-  $Res call({String code, String uri});
+  $Res call({String code, String drawbridgeUrl, String uri});
 }
 
 /// @nodoc
@@ -4988,12 +5054,17 @@ class __$$PairingUiStateDto_ShowingCodeImplCopyWithImpl<$Res>
   @override
   $Res call({
     Object? code = null,
+    Object? drawbridgeUrl = null,
     Object? uri = null,
   }) {
     return _then(_$PairingUiStateDto_ShowingCodeImpl(
       code: null == code
           ? _value.code
           : code // ignore: cast_nullable_to_non_nullable
+              as String,
+      drawbridgeUrl: null == drawbridgeUrl
+          ? _value.drawbridgeUrl
+          : drawbridgeUrl // ignore: cast_nullable_to_non_nullable
               as String,
       uri: null == uri
           ? _value.uri
@@ -5008,17 +5079,19 @@ class __$$PairingUiStateDto_ShowingCodeImplCopyWithImpl<$Res>
 class _$PairingUiStateDto_ShowingCodeImpl
     extends PairingUiStateDto_ShowingCode {
   const _$PairingUiStateDto_ShowingCodeImpl(
-      {required this.code, required this.uri})
+      {required this.code, required this.drawbridgeUrl, required this.uri})
       : super._();
 
   @override
   final String code;
   @override
+  final String drawbridgeUrl;
+  @override
   final String uri;
 
   @override
   String toString() {
-    return 'PairingUiStateDto.showingCode(code: $code, uri: $uri)';
+    return 'PairingUiStateDto.showingCode(code: $code, drawbridgeUrl: $drawbridgeUrl, uri: $uri)';
   }
 
   @override
@@ -5027,11 +5100,13 @@ class _$PairingUiStateDto_ShowingCodeImpl
         (other.runtimeType == runtimeType &&
             other is _$PairingUiStateDto_ShowingCodeImpl &&
             (identical(other.code, code) || other.code == code) &&
+            (identical(other.drawbridgeUrl, drawbridgeUrl) ||
+                other.drawbridgeUrl == drawbridgeUrl) &&
             (identical(other.uri, uri) || other.uri == uri));
   }
 
   @override
-  int get hashCode => Object.hash(runtimeType, code, uri);
+  int get hashCode => Object.hash(runtimeType, code, drawbridgeUrl, uri);
 
   /// Create a copy of PairingUiStateDto
   /// with the given fields replaced by the non-null parameter values.
@@ -5047,33 +5122,36 @@ class _$PairingUiStateDto_ShowingCodeImpl
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
     required TResult Function() idle,
-    required TResult Function(String code, String uri) showingCode,
+    required TResult Function(String code, String drawbridgeUrl, String uri)
+        showingCode,
     required TResult Function() awaitingPeer,
     required TResult Function(String deviceName, String did) awaitingApproval,
     required TResult Function(Uint8List ringId) done,
     required TResult Function(String reason) failed,
   }) {
-    return showingCode(code, uri);
+    return showingCode(code, drawbridgeUrl, uri);
   }
 
   @override
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
     TResult? Function()? idle,
-    TResult? Function(String code, String uri)? showingCode,
+    TResult? Function(String code, String drawbridgeUrl, String uri)?
+        showingCode,
     TResult? Function()? awaitingPeer,
     TResult? Function(String deviceName, String did)? awaitingApproval,
     TResult? Function(Uint8List ringId)? done,
     TResult? Function(String reason)? failed,
   }) {
-    return showingCode?.call(code, uri);
+    return showingCode?.call(code, drawbridgeUrl, uri);
   }
 
   @override
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
     TResult Function()? idle,
-    TResult Function(String code, String uri)? showingCode,
+    TResult Function(String code, String drawbridgeUrl, String uri)?
+        showingCode,
     TResult Function()? awaitingPeer,
     TResult Function(String deviceName, String did)? awaitingApproval,
     TResult Function(Uint8List ringId)? done,
@@ -5081,7 +5159,7 @@ class _$PairingUiStateDto_ShowingCodeImpl
     required TResult orElse(),
   }) {
     if (showingCode != null) {
-      return showingCode(code, uri);
+      return showingCode(code, drawbridgeUrl, uri);
     }
     return orElse();
   }
@@ -5137,10 +5215,12 @@ class _$PairingUiStateDto_ShowingCodeImpl
 abstract class PairingUiStateDto_ShowingCode extends PairingUiStateDto {
   const factory PairingUiStateDto_ShowingCode(
       {required final String code,
+      required final String drawbridgeUrl,
       required final String uri}) = _$PairingUiStateDto_ShowingCodeImpl;
   const PairingUiStateDto_ShowingCode._() : super._();
 
   String get code;
+  String get drawbridgeUrl;
   String get uri;
 
   /// Create a copy of PairingUiStateDto
@@ -5198,7 +5278,8 @@ class _$PairingUiStateDto_AwaitingPeerImpl
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
     required TResult Function() idle,
-    required TResult Function(String code, String uri) showingCode,
+    required TResult Function(String code, String drawbridgeUrl, String uri)
+        showingCode,
     required TResult Function() awaitingPeer,
     required TResult Function(String deviceName, String did) awaitingApproval,
     required TResult Function(Uint8List ringId) done,
@@ -5211,7 +5292,8 @@ class _$PairingUiStateDto_AwaitingPeerImpl
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
     TResult? Function()? idle,
-    TResult? Function(String code, String uri)? showingCode,
+    TResult? Function(String code, String drawbridgeUrl, String uri)?
+        showingCode,
     TResult? Function()? awaitingPeer,
     TResult? Function(String deviceName, String did)? awaitingApproval,
     TResult? Function(Uint8List ringId)? done,
@@ -5224,7 +5306,8 @@ class _$PairingUiStateDto_AwaitingPeerImpl
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
     TResult Function()? idle,
-    TResult Function(String code, String uri)? showingCode,
+    TResult Function(String code, String drawbridgeUrl, String uri)?
+        showingCode,
     TResult Function()? awaitingPeer,
     TResult Function(String deviceName, String did)? awaitingApproval,
     TResult Function(Uint8List ringId)? done,
@@ -5377,7 +5460,8 @@ class _$PairingUiStateDto_AwaitingApprovalImpl
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
     required TResult Function() idle,
-    required TResult Function(String code, String uri) showingCode,
+    required TResult Function(String code, String drawbridgeUrl, String uri)
+        showingCode,
     required TResult Function() awaitingPeer,
     required TResult Function(String deviceName, String did) awaitingApproval,
     required TResult Function(Uint8List ringId) done,
@@ -5390,7 +5474,8 @@ class _$PairingUiStateDto_AwaitingApprovalImpl
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
     TResult? Function()? idle,
-    TResult? Function(String code, String uri)? showingCode,
+    TResult? Function(String code, String drawbridgeUrl, String uri)?
+        showingCode,
     TResult? Function()? awaitingPeer,
     TResult? Function(String deviceName, String did)? awaitingApproval,
     TResult? Function(Uint8List ringId)? done,
@@ -5403,7 +5488,8 @@ class _$PairingUiStateDto_AwaitingApprovalImpl
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
     TResult Function()? idle,
-    TResult Function(String code, String uri)? showingCode,
+    TResult Function(String code, String drawbridgeUrl, String uri)?
+        showingCode,
     TResult Function()? awaitingPeer,
     TResult Function(String deviceName, String did)? awaitingApproval,
     TResult Function(Uint8List ringId)? done,
@@ -5554,7 +5640,8 @@ class _$PairingUiStateDto_DoneImpl extends PairingUiStateDto_Done {
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
     required TResult Function() idle,
-    required TResult Function(String code, String uri) showingCode,
+    required TResult Function(String code, String drawbridgeUrl, String uri)
+        showingCode,
     required TResult Function() awaitingPeer,
     required TResult Function(String deviceName, String did) awaitingApproval,
     required TResult Function(Uint8List ringId) done,
@@ -5567,7 +5654,8 @@ class _$PairingUiStateDto_DoneImpl extends PairingUiStateDto_Done {
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
     TResult? Function()? idle,
-    TResult? Function(String code, String uri)? showingCode,
+    TResult? Function(String code, String drawbridgeUrl, String uri)?
+        showingCode,
     TResult? Function()? awaitingPeer,
     TResult? Function(String deviceName, String did)? awaitingApproval,
     TResult? Function(Uint8List ringId)? done,
@@ -5580,7 +5668,8 @@ class _$PairingUiStateDto_DoneImpl extends PairingUiStateDto_Done {
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
     TResult Function()? idle,
-    TResult Function(String code, String uri)? showingCode,
+    TResult Function(String code, String drawbridgeUrl, String uri)?
+        showingCode,
     TResult Function()? awaitingPeer,
     TResult Function(String deviceName, String did)? awaitingApproval,
     TResult Function(Uint8List ringId)? done,
@@ -5728,7 +5817,8 @@ class _$PairingUiStateDto_FailedImpl extends PairingUiStateDto_Failed {
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
     required TResult Function() idle,
-    required TResult Function(String code, String uri) showingCode,
+    required TResult Function(String code, String drawbridgeUrl, String uri)
+        showingCode,
     required TResult Function() awaitingPeer,
     required TResult Function(String deviceName, String did) awaitingApproval,
     required TResult Function(Uint8List ringId) done,
@@ -5741,7 +5831,8 @@ class _$PairingUiStateDto_FailedImpl extends PairingUiStateDto_Failed {
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
     TResult? Function()? idle,
-    TResult? Function(String code, String uri)? showingCode,
+    TResult? Function(String code, String drawbridgeUrl, String uri)?
+        showingCode,
     TResult? Function()? awaitingPeer,
     TResult? Function(String deviceName, String did)? awaitingApproval,
     TResult? Function(Uint8List ringId)? done,
@@ -5754,7 +5845,8 @@ class _$PairingUiStateDto_FailedImpl extends PairingUiStateDto_Failed {
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
     TResult Function()? idle,
-    TResult Function(String code, String uri)? showingCode,
+    TResult Function(String code, String drawbridgeUrl, String uri)?
+        showingCode,
     TResult Function()? awaitingPeer,
     TResult Function(String deviceName, String did)? awaitingApproval,
     TResult Function(Uint8List ringId)? done,

@@ -5,6 +5,7 @@ import 'package:web_socket_channel/status.dart' as ws_status;
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../rust/api/simple.dart' as ffi;
 import 'debug_log.dart';
+import 'rendezvous_connection.dart';
 
 /// No dart:ui dependency — VoidCallback defined here.
 typedef VoidCallback = void Function();
@@ -31,16 +32,20 @@ class DrawbridgeNewEvent {
 /// Server-side notification that a pair token's matched its peer and the
 /// /pair WS is ready to accept attachers.
 class DrawbridgePairReady {
+  /// The Drawbridge that matched the rendezvous.
+  final String drawbridgeUrl;
   final String pairUrl;
   final Uint8List token;
-  DrawbridgePairReady({required this.pairUrl, required this.token});
+  DrawbridgePairReady({required this.drawbridgeUrl, required this.pairUrl, required this.token});
 }
 
-/// Manages a single WebSocket connection to the user's own Drawbridge relay.
+/// Manages the WebSocket connection to the user's own Drawbridge, and
+/// while a pairing or sync rendezvous is live on another Drawbridge, a
+/// [RendezvousConnection] to that one.
 ///
-/// After the ticket/partner architecture was removed, the client only connects
-/// to its **own** Drawbridge. Sending uses envelope-based fan-out (payload +
-/// relay_urls). Receiving uses tag-based routing on the own relay.
+/// Events and tags go only through the **own** Drawbridge. Sending uses
+/// envelope-based fan-out (payload + relay_urls). Receiving uses tag-based
+/// routing on the own relay.
 class DrawbridgeService {
   static final DrawbridgeService instance = DrawbridgeService._();
   DrawbridgeService._();
@@ -70,9 +75,15 @@ class DrawbridgeService {
   /// (cleanly or with an error).
   void Function(Uint8List token, String reason)? onPairClosed;
 
-  /// Called each time the own relay (re)authenticates, so an offer or
-  /// join it has not acknowledged can be resent.
-  void Function()? onAuthenticated;
+  /// Called each time a Drawbridge we hold a main WS to, our own or a rendezvous
+  /// connection's, (re)authenticates, so an offer or join it has not
+  /// acknowledged can be resent there.
+  void Function(String drawbridgeUrl)? onAuthenticated;
+
+  /// Called when the rendezvous connection to a Drawbridge ends from outside.
+  void Function(String drawbridgeUrl)? onRendezvousClosed;
+
+  RendezvousConnection? _rendezvous;
 
   WebSocketChannel? _pairChannel;
   StreamSubscription? _pairSubscription;
@@ -164,7 +175,8 @@ class DrawbridgeService {
           _ownAuthenticated = true;
           _sendWatchedTags();
           _sendPushRegistration();
-          onAuthenticated?.call();
+          final own = _ownUrl;
+          if (own != null) onAuthenticated?.call(own);
         case 'new_event':
           _handleNewEvent(msg);
         case 'pair_pending':
@@ -268,34 +280,85 @@ class DrawbridgeService {
     }
     moatLog('DrawbridgeService: pair_ready url=$pairUrl');
     // Rendezvous succeeded — no more resend-on-reconnect needed.
-    onPairReady?.call(DrawbridgePairReady(pairUrl: pairUrl, token: token));
+    onPairReady?.call(DrawbridgePairReady(
+        drawbridgeUrl: _ownUrl ?? '', pairUrl: pairUrl, token: token));
   }
 
   // -- Pair WS (sync-session transport) --------------------------------------
 
-  /// Send `pair_offer{token}` on the own WS. Caller is the offerer.
-  void sendPairOffer(Uint8List token) {
-    if (!_ownAuthenticated || _ownChannel == null) {
-      moatLog('DrawbridgeService: sendPairOffer dropped — own WS not ready');
-      return;
-    }
-    _ownChannel!.sink.add(jsonEncode({
-      'type': 'pair_offer',
-      'token': base64Encode(token),
-    }));
+  /// Send `pair_offer{token}` to [drawbridgeUrl]. Caller is the offerer.
+  void sendPairOffer(String drawbridgeUrl, Uint8List token) =>
+      _sendRendezvous(drawbridgeUrl, 'pair_offer', token);
+
+  /// Send `pair_join{token}` to [drawbridgeUrl]. Caller is the joiner.
+  void sendPairJoin(String drawbridgeUrl, Uint8List token) =>
+      _sendRendezvous(drawbridgeUrl, 'pair_join', token);
+
+  /// Whether [drawbridgeUrl] is the Drawbridge this device's own connection is to.
+  bool isOwnDrawbridge(String drawbridgeUrl) {
+    final own = _ownUrl;
+    return own != null && _sameDrawbridge(own, drawbridgeUrl);
   }
 
-  /// Send `pair_join{token}` on the own WS. Caller is the joiner.
-  void sendPairJoin(Uint8List token) {
-    if (!_ownAuthenticated || _ownChannel == null) {
-      moatLog('DrawbridgeService: sendPairJoin dropped — own WS not ready (authenticated=$_ownAuthenticated channel=${_ownChannel != null})');
+  static bool _sameDrawbridge(String a, String b) {
+    try {
+      return ffi.normalizeDrawbridgeUrl(url: a) == ffi.normalizeDrawbridgeUrl(url: b);
+    } catch (_) {
+      return a == b;
+    }
+  }
+
+  void _sendRendezvous(String drawbridgeUrl, String type, Uint8List token) {
+    if (isOwnDrawbridge(drawbridgeUrl)) {
+      if (!_ownAuthenticated || _ownChannel == null) {
+        moatLog('DrawbridgeService: $type dropped — own WS not ready');
+        return;
+      }
+      _ownChannel!.sink.add(jsonEncode({
+        'type': type,
+        'token': base64Encode(token),
+      }));
       return;
     }
-    moatLog('DrawbridgeService: sendPairJoin sending token=${base64Encode(token).substring(0, 8)}...');
-    _ownChannel!.sink.add(jsonEncode({
-      'type': 'pair_join',
-      'token': base64Encode(token),
-    }));
+    // Sent once the connection has authenticated: `onAuthenticated` then
+    // asks the driver to resend whatever is unacknowledged.
+    if (!ensureRendezvous(drawbridgeUrl).send(type, token)) {
+      moatLog('DrawbridgeService: $type waits for the rendezvous connection to $drawbridgeUrl');
+    }
+  }
+
+  /// The rendezvous connection to [drawbridgeUrl], opened if there is none yet.
+  RendezvousConnection ensureRendezvous(String drawbridgeUrl) {
+    final existing = _rendezvous;
+    if (existing != null && _sameDrawbridge(existing.url, drawbridgeUrl)) return existing;
+    unawaited(existing?.close());
+    final did = _did;
+    final keyBundle = _keyBundle;
+    if (did == null || keyBundle == null) {
+      throw StateError('drawbridge not initialised');
+    }
+    final connection = RendezvousConnection(
+      url: drawbridgeUrl,
+      did: did,
+      keyBundle: keyBundle,
+      onAuthenticated: (drawbridgeUrl) => onAuthenticated?.call(drawbridgeUrl),
+      onPairReady: (drawbridgeUrl, token, pairUrl) => onPairReady
+          ?.call(DrawbridgePairReady(drawbridgeUrl: drawbridgeUrl, pairUrl: pairUrl, token: token)),
+      onClosed: (drawbridgeUrl, reason) {
+        if (_rendezvous?.url == drawbridgeUrl) _rendezvous = null;
+        onRendezvousClosed?.call(drawbridgeUrl);
+      },
+    );
+    _rendezvous = connection;
+    unawaited(connection.connect());
+    return connection;
+  }
+
+  /// Close the rendezvous connection, if one is open.
+  Future<void> closeRendezvous() async {
+    final connection = _rendezvous;
+    _rendezvous = null;
+    await connection?.close();
   }
 
   /// Open the `/pair` WebSocket, send `pair_attach{token}`, and wait for `paired`.
@@ -526,7 +589,7 @@ class DrawbridgeService {
     required Uint8List tag,
     required String rkey,
     required Uint8List payload,
-    required List<String> relayUrls,
+    required List<String> drawbridgeUrls,
   }) {
     if (!_ownAuthenticated || _ownChannel == null) return;
     final tagHex = _bytesToHex(tag);
@@ -536,7 +599,7 @@ class DrawbridgeService {
       'tag': tagHex,
       'rkey': rkey,
       'payload': base64Encode(payload),
-      'relay_urls': relayUrls,
+      'relay_urls': drawbridgeUrls,
     }));
   }
 
@@ -559,7 +622,7 @@ class DrawbridgeService {
   /// Relay URLs to notify for an event: the union of [participantDids]' relays
   /// and this user's own, less our own relay, which already routed the event
   /// to the devices connected to it.
-  List<String> relayUrlsForParticipants(List<String> participantDids) {
+  List<String> drawbridgeUrlsForParticipants(List<String> participantDids) {
     final urls = <String>{};
     for (final did in {...participantDids, if (_did != null) _did!}) {
       final cached = _configCache[did];
@@ -610,6 +673,7 @@ class DrawbridgeService {
     disconnectAll();
     _watchedTagHexes.clear();
     _configCache.clear();
+    unawaited(closeRendezvous());
     _keyBundle = null;
     _did = null;
     _pushDeviceId = null;

@@ -6,6 +6,6 @@ mod latency;
 mod latency_dart;
 mod latency_mixed;
 mod latency_restart;
-mod multi_relay;
+mod multi_drawbridge;
 
 const WORLDS: usize = 1;

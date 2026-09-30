@@ -21,7 +21,7 @@ pub mod dart_push_latency;
 pub mod fcm_dispatch;
 pub mod lost_device_pairing;
 pub mod multi_device_chat;
-pub mod multi_relay_push;
+pub mod multi_drawbridge_push;
 pub mod dart_three_party_chat;
 pub mod dart_two_party_chat;
 pub mod mixed_push_latency;
@@ -477,7 +477,7 @@ pub async fn execute_action_n(
                 }
             }
 
-            // Exchange DrawbridgeHints
+            // One poll round so every participant has caught up with the change.
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             for client in clients.iter() {
                 let _ = client.poll().await;
@@ -799,7 +799,7 @@ pub static SCENARIOS: &[Scenario] = &[
     },
     Scenario {
         name: "same-drawbridge-local",
-        description: "Alice + Bob on shared relay, local delivery",
+        description: "Alice + Bob on a shared relay, local delivery",
         run_fn: same_drawbridge_local::run_boxed,
         gen_fn: generate_random_actions,
         seed_fn: actions_from_seed,

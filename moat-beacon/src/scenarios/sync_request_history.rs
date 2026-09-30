@@ -80,6 +80,7 @@ pub async fn run_after_idle(verbose: bool) {
         ParticipantKind::RustCli,
         "rr-idle",
         IDLE_TICKS,
+        false,
         verbose,
     )
     .await
@@ -92,6 +93,7 @@ pub async fn run_after_idle_dd(verbose: bool) {
         ParticipantKind::DartServer,
         "dd-idle",
         IDLE_TICKS,
+        false,
         verbose,
     )
     .await
@@ -183,7 +185,19 @@ pub async fn run_with(
     cell: &str,
     verbose: bool,
 ) {
-    run_with_idle(donor_kind, requester_kind, cell, 0, verbose).await
+    run_with_idle(donor_kind, requester_kind, cell, 0, false, verbose).await
+}
+
+/// [`run_with`] with the requester on a different Drawbridge from the donor: the
+/// donor must find the requester's Drawbridge from its `drawbridgeConfig` record
+/// and go there.
+pub async fn run_across_drawbridges(
+    donor_kind: ParticipantKind,
+    requester_kind: ParticipantKind,
+    cell: &str,
+    verbose: bool,
+) {
+    run_with_idle(donor_kind, requester_kind, cell, 0, true, verbose).await
 }
 
 /// [`run_with`] after `idle_ticks` ring ticks on both devices: the request
@@ -193,6 +207,7 @@ pub async fn run_with_idle(
     requester_kind: ParticipantKind,
     cell: &str,
     idle_ticks: usize,
+    across_drawbridges: bool,
     verbose: bool,
 ) {
     macro_rules! vlog {
@@ -217,10 +232,15 @@ pub async fn run_with_idle(
     d1.login("alice.postern.test", "any-password").await.expect("d1 login");
     bob.login("bob.postern.test", "any-password").await.expect("bob login");
 
-    let d2 = world
-        .spawn_nth_device("alice-d2", requester_kind)
-        .await
-        .expect("spawn d2");
+    let d2 = if across_drawbridges {
+        // Bob's Drawbridge is not Alice's first device's.
+        world
+            .spawn_nth_device_on_drawbridge("alice-d2", requester_kind, "bob")
+            .await
+    } else {
+        world.spawn_nth_device("alice-d2", requester_kind).await
+    }
+    .expect("spawn d2");
     d2.login("alice.postern.test", "any-password").await.expect("d2 login");
 
     vlog!("[pair] d1 <- d2...");

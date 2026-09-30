@@ -48,7 +48,7 @@ pub(crate) async fn pair_devices(
     let pair_new = new_device.pair_new().await.expect("new device pair_new");
     vlog!("[pair] code = {}", pair_new.code);
     existing
-        .pair_confirm(&pair_new.code)
+        .pair_confirm(&pair_new.code, &pair_new.drawbridge_url)
         .await
         .expect("existing device pair_confirm");
 

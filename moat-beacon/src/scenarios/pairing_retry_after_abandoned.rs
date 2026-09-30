@@ -66,7 +66,7 @@ pub async fn run(verbose: bool) {
     vlog!("[pair] attempt 1: requesting a code...");
     let first = new_device.pair_new().await.expect("first pair_new");
     existing
-        .pair_confirm(&first.code)
+        .pair_confirm(&first.code, &first.drawbridge_url)
         .await
         .expect("first pair_confirm");
 
@@ -92,7 +92,7 @@ pub async fn run(verbose: bool) {
     );
 
     existing
-        .pair_confirm(&second.code)
+        .pair_confirm(&second.code, &second.drawbridge_url)
         .await
         .expect("second pair_confirm");
     vlog!("[pair] attempt 2: approving...");

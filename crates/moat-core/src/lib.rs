@@ -83,7 +83,7 @@ pub use crate::sync_request::{
     decode_ring_msg, RingMsg, SyncFailure, SyncRequestUiState, SYNC_REQUEST_TTL_MS,
 };
 pub use crate::pair_channel::{PairChannelCommand, PairChannelDriver, PairEnv, PairIdentity};
-pub use crate::pairing::{PairingUiState, PAIRING_TOKEN_LEN};
+pub use crate::pairing::{normalize_drawbridge_url, PairingUiState, PAIRING_TOKEN_LEN};
 
 /// The ciphersuite used by Moat
 pub const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
@@ -2176,7 +2176,7 @@ impl MoatSession {
     /// Returns `(signature_bytes, public_key_bytes)` as raw bytes (64 and 32 bytes respectively).
     /// The caller is responsible for encoding these as needed (e.g., base64 for JSON transport).
     ///
-    /// The `message` is typically `"{nonce}\n{relay_url}\n{timestamp}\n"`.
+    /// The `message` is typically `"{nonce}\n{drawbridge_url}\n{timestamp}\n"`.
     pub fn sign_drawbridge_challenge(
         key_bundle: &[u8],
         message: &[u8],

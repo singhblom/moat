@@ -1,7 +1,7 @@
-//! A message to a user whose two devices sit on different relays reaches
+//! A message to a user whose two devices sit on different Drawbridges reaches
 //! both by push. One test per runtime mix of Alice's devices, `<d1><d2>`.
 
-use moat_beacon::scenarios::multi_relay_push::run;
+use moat_beacon::scenarios::multi_drawbridge_push::run;
 use moat_beacon::world::ParticipantKind::{DartServer as D, RustCli as R};
 
 macro_rules! cell {
@@ -18,7 +18,7 @@ macro_rules! cell {
     };
 }
 
-cell!(multi_relay_push_rr, R, R, "rr");
-cell!(multi_relay_push_dd, D, D, "dd");
-cell!(multi_relay_push_rd, R, D, "rd");
-cell!(multi_relay_push_dr, D, R, "dr");
+cell!(multi_drawbridge_push_rr, R, R, "rr");
+cell!(multi_drawbridge_push_dd, D, D, "dd");
+cell!(multi_drawbridge_push_rd, R, D, "rd");
+cell!(multi_drawbridge_push_dr, D, R, "dr");

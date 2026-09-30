@@ -32,7 +32,7 @@ void main() {
         tag: Uint8List.fromList([0x01, 0x02]),
         rkey: 'rkey123',
         payload: Uint8List.fromList([0x03, 0x04]),
-        relayUrls: [],
+        drawbridgeUrls: [],
       );
     });
 
@@ -54,7 +54,7 @@ void main() {
       service.cacheDrawbridgeConfig('did:plc:bob', ['wss://relay.example.com']);
       service.reset();
       expect(service.isOwnConnected, false);
-      expect(service.relayUrlsForParticipants(['did:plc:bob']), isEmpty);
+      expect(service.drawbridgeUrlsForParticipants(['did:plc:bob']), isEmpty);
     });
 
     test('disconnectAll marks as disposed', () {
@@ -82,26 +82,26 @@ void main() {
           'did:plc:bob', ['wss://relay-b.example.com']);
 
       final urls = service
-          .relayUrlsForParticipants(['did:plc:alice', 'did:plc:bob']);
+          .drawbridgeUrlsForParticipants(['did:plc:alice', 'did:plc:bob']);
       expect(urls, hasLength(2));
       expect(urls, contains('wss://relay-a.example.com'));
       expect(urls, contains('wss://relay-b.example.com'));
     });
 
-    test('relayUrlsForParticipants deduplicates', () {
+    test('drawbridgeUrlsForParticipants deduplicates', () {
       service.cacheDrawbridgeConfig(
           'did:plc:alice', ['wss://shared-relay.example.com']);
       service.cacheDrawbridgeConfig(
           'did:plc:bob', ['wss://shared-relay.example.com']);
 
       final urls = service
-          .relayUrlsForParticipants(['did:plc:alice', 'did:plc:bob']);
+          .drawbridgeUrlsForParticipants(['did:plc:alice', 'did:plc:bob']);
       expect(urls, hasLength(1));
       expect(urls.first, 'wss://shared-relay.example.com');
     });
 
-    test('relayUrlsForParticipants returns empty for unknown DIDs', () {
-      final urls = service.relayUrlsForParticipants(['did:plc:unknown']);
+    test('drawbridgeUrlsForParticipants returns empty for unknown DIDs', () {
+      final urls = service.drawbridgeUrlsForParticipants(['did:plc:unknown']);
       expect(urls, isEmpty);
     });
 
@@ -114,7 +114,7 @@ void main() {
           'did:plc:alice', ['wss://relay-a1.example.com', 'wss://relay-a2.example.com']);
       service.cacheDrawbridgeConfig('did:plc:bob', ['wss://relay-b.example.com']);
 
-      final urls = service.relayUrlsForParticipants(['did:plc:bob']);
+      final urls = service.drawbridgeUrlsForParticipants(['did:plc:bob']);
 
       expect(urls, hasLength(3));
       expect(urls, contains('wss://relay-a2.example.com'));
@@ -131,14 +131,14 @@ void main() {
       service.cacheDrawbridgeConfig('did:plc:alice', []);
 
       expect(service.staleConfigDids(['did:plc:alice']), isEmpty);
-      expect(service.relayUrlsForParticipants(['did:plc:alice']), isEmpty);
+      expect(service.drawbridgeUrlsForParticipants(['did:plc:alice']), isEmpty);
     });
 
     test('reset clears config cache', () {
       service.cacheDrawbridgeConfig(
           'did:plc:alice', ['wss://relay.example.com']);
       service.reset();
-      final urls = service.relayUrlsForParticipants(['did:plc:alice']);
+      final urls = service.drawbridgeUrlsForParticipants(['did:plc:alice']);
       expect(urls, isEmpty);
     });
   });

@@ -21,7 +21,7 @@ pub struct ParticipantConfig {
     pub kind: ParticipantKind,
     /// Relay group label.  `None` = no Drawbridge relay; participants with the
     /// same `Some(label)` share a single Drawbridge instance.
-    pub relay_label: Option<&'static str>,
+    pub drawbridge_label: Option<&'static str>,
 }
 
 /// Complete topology configuration for a test scenario.
@@ -33,7 +33,7 @@ pub struct WorldConfig {
 impl WorldConfig {
     /// Whether any participant has a relay (and therefore push delivery is active).
     pub fn push_mode(&self) -> bool {
-        self.participants.iter().any(|p| p.relay_label.is_some())
+        self.participants.iter().any(|p| p.drawbridge_label.is_some())
     }
 
     /// Number of participants.
@@ -50,17 +50,17 @@ impl WorldConfig {
                 ParticipantConfig {
                     handle: "alice",
                     kind: ParticipantKind::RustCli,
-                    relay_label: Some("a"),
+                    drawbridge_label: Some("a"),
                 },
                 ParticipantConfig {
                     handle: "bob",
                     kind: ParticipantKind::RustCli,
-                    relay_label: Some("b"),
+                    drawbridge_label: Some("b"),
                 },
                 ParticipantConfig {
                     handle: "carol",
                     kind: ParticipantKind::RustCli,
-                    relay_label: Some("c"),
+                    drawbridge_label: Some("c"),
                 },
             ],
         }
@@ -75,8 +75,8 @@ impl fmt::Display for WorldConfig {
                 write!(f, ", ")?;
             }
             write!(f, "{}({:?}", p.handle, p.kind)?;
-            if let Some(relay) = p.relay_label {
-                write!(f, ", relay={relay}")?;
+            if let Some(label) = p.drawbridge_label {
+                write!(f, ", drawbridge={label}")?;
             }
             write!(f, ")")?;
         }
@@ -103,16 +103,16 @@ impl fmt::Display for WorldConfig {
 /// Shrinking favours simpler topologies: relay index shrinks toward 0
 /// (all-none / polling), kind index shrinks toward 0 (all-Rust).
 pub fn world_config_3p() -> BoxedStrategy<WorldConfig> {
-    let relay_idx = 0..5usize;
+    let topology_idx = 0..5usize;
 
     #[cfg(feature = "dart")]
     let kind_idx = 0..3usize;
     #[cfg(not(feature = "dart"))]
     let kind_idx = 0..1usize;
 
-    (relay_idx, kind_idx)
-        .prop_map(|(relay, kind)| {
-            let labels: [Option<&'static str>; 3] = match relay {
+    (topology_idx, kind_idx)
+        .prop_map(|(topology, kind)| {
+            let labels: [Option<&'static str>; 3] = match topology {
                 0 => [None, None, None],
                 1 => [Some("a"), Some("a"), Some("a")],
                 2 => [Some("a"), Some("b"), Some("c")],
@@ -144,7 +144,7 @@ pub fn world_config_3p() -> BoxedStrategy<WorldConfig> {
                 .map(|((handle, label), kind)| ParticipantConfig {
                     handle,
                     kind: kind.clone(),
-                    relay_label: *label,
+                    drawbridge_label: *label,
                 })
                 .collect();
 
