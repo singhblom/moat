@@ -105,10 +105,33 @@ void main() {
       expect(urls, isEmpty);
     });
 
-    test('cacheDrawbridgeConfig ignores empty URLs', () {
+    test('the sender\'s own DID is notified too, for its devices on other relays', () {
+      service.init(
+        did: 'did:plc:alice',
+        keyBundle: Uint8List.fromList(List.filled(32, 0x42)),
+      );
+      service.cacheDrawbridgeConfig(
+          'did:plc:alice', ['wss://relay-a1.example.com', 'wss://relay-a2.example.com']);
+      service.cacheDrawbridgeConfig('did:plc:bob', ['wss://relay-b.example.com']);
+
+      final urls = service.relayUrlsForParticipants(['did:plc:bob']);
+
+      expect(urls, hasLength(3));
+      expect(urls, contains('wss://relay-a2.example.com'));
+    });
+
+    test('staleConfigDids lists DIDs that were never fetched', () {
+      service.cacheDrawbridgeConfig('did:plc:alice', ['wss://a.example.com']);
+
+      expect(service.staleConfigDids(['did:plc:alice', 'did:plc:bob']),
+          ['did:plc:bob']);
+    });
+
+    test('an empty fetched list is an answer, not a miss', () {
       service.cacheDrawbridgeConfig('did:plc:alice', []);
-      final urls = service.relayUrlsForParticipants(['did:plc:alice']);
-      expect(urls, isEmpty);
+
+      expect(service.staleConfigDids(['did:plc:alice']), isEmpty);
+      expect(service.relayUrlsForParticipants(['did:plc:alice']), isEmpty);
     });
 
     test('reset clears config cache', () {

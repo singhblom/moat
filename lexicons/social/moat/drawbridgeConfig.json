@@ -4,37 +4,17 @@
   "defs": {
     "main": {
       "type": "record",
-      "key": "literal:self",
-      "description": "User's Drawbridge configuration for real-time message delivery",
+      "key": "any",
+      "description": "The Drawbridge relay one device uses for real-time delivery. The record key is the device's hex MLS device id; a device writes only its own record, and senders notify the union of a user's records.",
       "record": {
         "type": "object",
-        "required": ["drawbridges"],
+        "required": ["url"],
         "properties": {
-          "drawbridges": {
-            "type": "array",
-            "description": "Ordered list of Drawbridge endpoints (highest priority first)",
-            "maxLength": 5,
-            "items": {
-              "type": "ref",
-              "ref": "#drawbridgeEntry"
-            }
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "WebSocket URL of the device's Drawbridge (e.g. wss://drawbridge.moat.chat/ws)"
           }
-        }
-      }
-    },
-    "drawbridgeEntry": {
-      "type": "object",
-      "required": ["url", "priority"],
-      "properties": {
-        "url": {
-          "type": "string",
-          "format": "uri",
-          "description": "WebSocket URL of the Drawbridge (e.g. wss://drawbridge.moat.chat)"
-        },
-        "priority": {
-          "type": "integer",
-          "description": "Priority order (1 = highest)",
-          "minimum": 1
         }
       }
     }

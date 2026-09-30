@@ -30,58 +30,6 @@ use tokio::sync::mpsc;
 /// Quick-reaction emojis (same as Flutter app)
 pub const QUICK_EMOJIS: &[&str] = &["👍", "❤️", "😂", "😮", "😢", "🙏"];
 
-// ── Welcome envelope (Welcome + Drawbridge hint bundle) ─────────────────────
-
-/// A Drawbridge hint bundled alongside a Welcome for the new member.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct HintBundleEntry {
-    did: String,
-    url: String,
-    device_id: Vec<u8>,
-    ticket: Vec<u8>,
-}
-
-/// Magic bytes identifying the envelope format (vs. raw MLS Welcome).
-const WELCOME_ENVELOPE_MAGIC: [u8; 4] = *b"MWE1";
-
-/// Encode a Welcome + hint bundle into an envelope.
-///
-/// Format: `[4-byte magic][4-byte welcome_len BE][welcome][hints_json]`
-fn encode_welcome_envelope(welcome: &[u8], hints: &[HintBundleEntry]) -> Vec<u8> {
-    let hints_json = serde_json::to_vec(&hints).unwrap_or_else(|_| b"[]".to_vec());
-    let mut buf = Vec::with_capacity(8 + welcome.len() + hints_json.len());
-    buf.extend_from_slice(&WELCOME_ENVELOPE_MAGIC);
-    buf.extend_from_slice(&(welcome.len() as u32).to_be_bytes());
-    buf.extend_from_slice(welcome);
-    buf.extend_from_slice(&hints_json);
-    buf
-}
-
-/// Decode a Welcome envelope, returning `(welcome_bytes, hints)`.
-///
-/// All Welcomes must use the envelope format (`[MWE1][len][welcome][hints]`).
-fn decode_welcome_envelope(data: &[u8]) -> Result<(Vec<u8>, Vec<HintBundleEntry>)> {
-    if data.len() < 8 || data[..4] != WELCOME_ENVELOPE_MAGIC {
-        return Err(AppError::Other(
-            "invalid welcome envelope: missing MWE1 magic".to_string(),
-        ));
-    }
-    let welcome_len =
-        u32::from_be_bytes(data[4..8].try_into().unwrap_or_default()) as usize;
-    if data.len() < 8 + welcome_len {
-        return Err(AppError::Other(
-            "invalid welcome envelope: truncated".to_string(),
-        ));
-    }
-    let welcome = data[8..8 + welcome_len].to_vec();
-    let hints: Vec<HintBundleEntry> = if data.len() > 8 + welcome_len {
-        serde_json::from_slice(&data[8 + welcome_len..]).unwrap_or_default()
-    } else {
-        vec![]
-    };
-    Ok((welcome, hints))
-}
-
 /// Thin wrapper around `Box<dyn StatefulProtocol>` that implements `Debug`
 /// (needed because `DisplayMessage` derives `Debug`).
 pub struct ImageProto(pub StatefulProtocol);
@@ -1600,6 +1548,7 @@ impl App {
         };
         self.poll_in_flight = true;
         let my_did = client.did().to_string();
+        self.refresh_stale_drawbridge_configs();
 
         // Collect DIDs and their last rkeys
         let mut dids_to_poll: HashMap<String, Vec<usize>> = HashMap::new();
@@ -1935,7 +1884,10 @@ impl App {
                     &did[..20.min(did.len())],
                     urls.len()
                 ));
-                self.drawbridge_config_cache.insert(did, drawbridge::CachedDrawbridgeConfig { urls });
+                self.drawbridge_config_cache.insert(
+                    did,
+                    drawbridge::CachedDrawbridgeConfig { urls, fetched_at: Instant::now() },
+                );
             }
             BgEvent::HandleResolved {
                 conv_id,
@@ -2231,8 +2183,9 @@ impl App {
                         if let Some(ref client) = self.client {
                             let client = client.clone();
                             let url = url.clone();
+                            let device_id_hex = hex::encode(self.mls.device_id());
                             tokio::spawn(async move {
-                                if let Err(e) = client.publish_drawbridge_config(&url).await {
+                                if let Err(e) = client.publish_drawbridge_config(&device_id_hex, &url).await {
                                     eprintln!("drawbridge: failed to publish relay config: {e}");
                                 }
                             });
@@ -2957,18 +2910,30 @@ impl App {
         }
     }
 
-    /// Collect relay URLs for all partner DIDs in a conversation.
-    fn drawbridge_urls_for_conversation(&self, conv_id: &str) -> Vec<String> {
-        let conv = match self.conversations.iter().find(|c| c.id == *conv_id) {
-            Some(c) => c,
-            None => return Vec::new(),
+    /// The DIDs whose devices must hear an event in a conversation: its
+    /// members and this user, whose other devices may sit on other relays.
+    fn drawbridge_dids_for_conversation(&self, conv_id: &str) -> Vec<String> {
+        let Some(conv) = self.conversations.iter().find(|c| c.id == *conv_id) else {
+            return Vec::new();
         };
+        let mut dids = conv.participant_dids.clone();
+        if let Some(own) = self.own_did() {
+            if !dids.iter().any(|d| d == own) {
+                dids.push(own.to_string());
+            }
+        }
+        dids
+    }
 
+    /// Relay URLs to notify for an event in a conversation: the union of its
+    /// members' and this user's relays, less our own, which already routed
+    /// the event to the devices connected to it.
+    fn drawbridge_urls_for_conversation(&self, conv_id: &str) -> Vec<String> {
         let mut urls = Vec::new();
-        for did in &conv.participant_dids {
-            if let Some(config) = self.drawbridge_config_cache.get(did) {
+        for did in self.drawbridge_dids_for_conversation(conv_id) {
+            if let Some(config) = self.drawbridge_config_cache.get(&did) {
                 for url in &config.urls {
-                    if !urls.contains(url) {
+                    if Some(url) != self.drawbridge_url.as_ref() && !urls.contains(url) {
                         urls.push(url.clone());
                     }
                 }
@@ -2977,30 +2942,39 @@ impl App {
         urls
     }
 
-    /// Fetch relay configs for all partner DIDs in a conversation (background).
+    /// Fetch relay lists for a conversation's members and this user (background).
     fn fetch_partner_drawbridge_configs(&self, conv_id: &str) {
-        let conv = match self.conversations.iter().find(|c| c.id == *conv_id) {
-            Some(c) => c,
-            None => return,
-        };
+        self.fetch_drawbridge_configs_for(self.drawbridge_dids_for_conversation(conv_id));
+    }
 
-        let client = match self.client.as_ref() {
-            Some(c) => c.clone(),
-            None => return,
-        };
+    /// Re-read the relay lists of every conversation's members and this user
+    /// that are missing or older than [`drawbridge::DRAWBRIDGE_CONFIG_TTL`].
+    fn refresh_stale_drawbridge_configs(&self) {
+        let mut dids: Vec<String> = self
+            .conversations
+            .iter()
+            .flat_map(|c| self.drawbridge_dids_for_conversation(&c.id))
+            .collect();
+        dids.sort();
+        dids.dedup();
+        dids.retain(|did| {
+            self.drawbridge_config_cache
+                .get(did)
+                .is_none_or(|c| c.fetched_at.elapsed() >= drawbridge::DRAWBRIDGE_CONFIG_TTL)
+        });
+        self.fetch_drawbridge_configs_for(dids);
+    }
 
-        for did in &conv.participant_dids {
-            let did = did.clone();
+    fn fetch_drawbridge_configs_for(&self, dids: Vec<String>) {
+        let Some(client) = self.client.as_ref().cloned() else {
+            return;
+        };
+        for did in dids {
             let client = client.clone();
             let tx = self.bg_tx.clone();
             tokio::spawn(async move {
-                if let Ok(Some(config)) = client.fetch_drawbridge_config(&did).await {
-                    let urls: Vec<String> = config.drawbridges.iter().map(|r| r.url.clone()).collect();
-                    // Send back to main loop for caching
-                    let _ = tx.send(BgEvent::DrawbridgeConfigFetched {
-                        did,
-                        urls,
-                    });
+                if let Ok(urls) = client.fetch_drawbridge_urls(&did).await {
+                    let _ = tx.send(BgEvent::DrawbridgeConfigFetched { did, urls });
                 }
             });
         }
@@ -3829,16 +3803,7 @@ impl App {
             }
         };
 
-        // Decode welcome envelope (may contain bundled Drawbridge hints)
-        let (welcome_bytes, _hint_bundle) = match decode_welcome_envelope(&plaintext) {
-            Ok(result) => result,
-            Err(e) => {
-                self.debug_log.log(&format!("try_welcome: {e}"));
-                return false;
-            }
-        };
-
-        let group_id = match self.mls.process_welcome(&welcome_bytes) {
+        let group_id = match self.mls.process_welcome(&plaintext) {
             Ok(id) => id,
             Err(e) => {
                 self.debug_log.log(&format!("try_welcome: MLS process_welcome failed: {e}"));
@@ -4472,9 +4437,8 @@ impl App {
 
         // 7. Encrypt Welcome for ALL of recipient's devices using key encapsulation
         // This allows any of their devices to decrypt and join the conversation
-        let envelope = encode_welcome_envelope(&welcome_result.welcome, &[]);
         let stealth_ciphertext =
-            encrypt_for_stealth(&recipient_stealth_pubkeys, &envelope)?;
+            encrypt_for_stealth(&recipient_stealth_pubkeys, &welcome_result.welcome)?;
 
         // 8. Publish with random tag (not group-derived, since recipient doesn't know group yet)
         let random_tag: [u8; 16] = rand::random();
@@ -4595,10 +4559,9 @@ impl App {
         let welcome_result = self.mls.add_member(&group_id, &key_bundle, &kp_bytes)?;
         self.save_mls_state()?;
 
-        // 8. Encrypt Welcome envelope for new member's stealth keys, publish with random tag
-        let envelope = encode_welcome_envelope(&welcome_result.welcome, &[]);
+        // 8. Encrypt Welcome for new member's stealth keys, publish with random tag
         let stealth_ciphertext =
-            moat_core::encrypt_for_stealth(&stealth_pubkeys, &envelope)?;
+            moat_core::encrypt_for_stealth(&stealth_pubkeys, &welcome_result.welcome)?;
         let random_tag: [u8; 16] = rand::random();
         client
             .publish_event(&random_tag, &stealth_ciphertext, None)

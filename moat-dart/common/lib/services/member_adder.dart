@@ -5,7 +5,6 @@ import 'conversations_service.dart';
 import 'drawbridge_service.dart';
 import 'debug_log.dart';
 import '../rust/api/simple.dart';
-import '../utils/welcome_envelope.dart';
 
 /// Add a member to an existing conversation.
 ///
@@ -70,12 +69,10 @@ Future<void> addMemberToConversation({
     newMemberKeyPackage: newMemberKeyPackage,
   );
 
-  // 9. Encode Welcome in envelope (matches Rust CLI's add_member_to_group),
-  //    then encrypt for new member's stealth keys. Publish with random tag.
-  final envelope = encodeWelcomeEnvelope(welcomeResult.welcome);
+  // 9. Encrypt Welcome for new member's stealth keys. Publish with random tag.
   final stealthCiphertext = await encryptForStealth(
     recipientScanPubkeys: stealthPubkeys,
-    welcomeBytes: envelope,
+    welcomeBytes: welcomeResult.welcome,
   );
   final random = Random.secure();
   final randomTag = Uint8List(16);

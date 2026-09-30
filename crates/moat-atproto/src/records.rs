@@ -158,17 +158,11 @@ pub struct StealthAddressData {
     pub created_at: DateTime<Utc>,
 }
 
-/// Drawbridge configuration record stored on PDS (singleton, rkey = "self")
+/// One device's relay, stored on the PDS with rkey = the device's hex MLS
+/// device id.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DrawbridgeConfigRecord {
-    pub drawbridges: Vec<DrawbridgeEntry>,
-}
-
-/// A single Drawbridge endpoint in a configuration record
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DrawbridgeEntry {
     pub url: String,
-    pub priority: u32,
 }
 
 /// Helper module for ATProto IPLD bytes encoding of byte vectors.
@@ -400,32 +394,12 @@ mod tests {
     #[test]
     fn test_drawbridge_config_serialization() {
         let data = DrawbridgeConfigRecord {
-            drawbridges: vec![
-                DrawbridgeEntry {
-                    url: "wss://drawbridge.moat.chat".to_string(),
-                    priority: 1,
-                },
-                DrawbridgeEntry {
-                    url: "wss://backup.example.com".to_string(),
-                    priority: 2,
-                },
-            ],
+            url: "wss://drawbridge.moat.chat/ws".to_string(),
         };
 
         let json = serde_json::to_string(&data).unwrap();
+        assert_eq!(json, r#"{"url":"wss://drawbridge.moat.chat/ws"}"#);
         let parsed: DrawbridgeConfigRecord = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(parsed.drawbridges.len(), 2);
-        assert_eq!(parsed.drawbridges[0].url, "wss://drawbridge.moat.chat");
-        assert_eq!(parsed.drawbridges[0].priority, 1);
-        assert_eq!(parsed.drawbridges[1].url, "wss://backup.example.com");
-        assert_eq!(parsed.drawbridges[1].priority, 2);
-    }
-
-    #[test]
-    fn test_drawbridge_config_empty() {
-        let json = r#"{"drawbridges":[]}"#;
-        let parsed: DrawbridgeConfigRecord = serde_json::from_str(json).unwrap();
-        assert!(parsed.drawbridges.is_empty());
+        assert_eq!(parsed.url, data.url);
     }
 }

@@ -432,6 +432,58 @@ void main() {
     });
   });
 
+  group('drawbridge config records', () {
+    test('publishDrawbridgeConfig writes the record under the device id', () async {
+      late Map<String, dynamic> body;
+      final mockClient = MockClient((request) async {
+        expect(request.url.path, '/xrpc/com.atproto.repo.putRecord');
+        body = jsonDecode(request.body) as Map<String, dynamic>;
+        return http.Response(_createRecordResponse(), 200);
+      });
+      final client = AtprotoClient(httpClient: mockClient);
+      client.restoreSession(_testSession());
+
+      await client.publishDrawbridgeConfig('ab12', 'wss://relay.example.com/ws');
+
+      expect(body['collection'], 'social.moat.drawbridgeConfig');
+      expect(body['rkey'], 'ab12');
+      expect(body['record'], {'url': 'wss://relay.example.com/ws'});
+    });
+
+    test('fetchDrawbridgeConfig returns the deduplicated union of every device', () async {
+      final mockClient = MockClient((request) async {
+        expect(request.url.path, '/xrpc/com.atproto.repo.listRecords');
+        expect(request.url.queryParameters['collection'],
+            'social.moat.drawbridgeConfig');
+        return http.Response(
+          jsonEncode({
+            'records': [
+              {'uri': 'at://d/c/aa', 'value': {'url': 'wss://a.example.com/ws'}},
+              {'uri': 'at://d/c/bb', 'value': {'url': 'wss://b.example.com/ws'}},
+              {'uri': 'at://d/c/cc', 'value': {'url': 'wss://a.example.com/ws'}},
+              {'uri': 'at://d/c/dd', 'value': {'nonsense': true}},
+            ],
+          }),
+          200,
+        );
+      });
+      final client = AtprotoClient(
+          httpClient: mockClient, pdsOverride: 'https://pds.example.com');
+
+      final urls = await client.fetchDrawbridgeConfig('did:plc:bob');
+
+      expect(urls, ['wss://a.example.com/ws', 'wss://b.example.com/ws']);
+    });
+
+    test('fetchDrawbridgeConfig throws rather than reporting no relays', () async {
+      final mockClient = MockClient((request) async => http.Response('boom', 500));
+      final client = AtprotoClient(
+          httpClient: mockClient, pdsOverride: 'https://pds.example.com');
+
+      expect(client.fetchDrawbridgeConfig('did:plc:bob'), throwsA(anything));
+    });
+  });
+
   group('publishEvent with blob ref', () {
     test('includes blob field in record when blobRef is provided', () async {
       Map<String, dynamic> capturedRecord = {};

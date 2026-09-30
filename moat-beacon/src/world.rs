@@ -107,6 +107,8 @@ pub struct TestWorld {
     /// WS endpoint of the first relay, given to devices added with
     /// [`TestWorld::spawn_nth_device`].
     default_relay: Option<String>,
+    /// WS endpoint of every relay, by label.
+    relay_endpoints: HashMap<String, String>,
     /// Path to the `moat` CLI binary; reused when restarting participants.
     moat_cli_bin: PathBuf,
     /// Path to the compiled Dart server binary; reused when restarting participants.
@@ -321,7 +323,7 @@ impl TestWorld {
         // instances to spawn.
         let has_drawbridge = participants.iter().any(|(_, label)| label.is_some());
 
-        let (drawbridges, db_verify_proxy, drawbridge_ws_endpoints) = if has_drawbridge {
+        let (drawbridges, db_verify_proxy, drawbridge_ws_endpoints, relay_endpoints) = if has_drawbridge {
             // proxy-db-verify routes Drawbridge → Postern so we can fault-inject
             // Drawbridge's DID resolution and key-package verification calls.
             let db_verify = toxiproxy
@@ -363,10 +365,14 @@ impl TestWorld {
                 .map(|(_, label)| label.map(|l| label_to_ws[l].clone()))
                 .collect();
 
-            (dbs, Some(db_verify), endpoints)
+            let relay_endpoints: HashMap<String, String> = label_to_ws
+                .into_iter()
+                .map(|(label, ws)| (label.to_string(), ws))
+                .collect();
+            (dbs, Some(db_verify), endpoints, relay_endpoints)
         } else {
             let endpoints: Vec<Option<String>> = participants.iter().map(|_| None).collect();
-            (vec![], None, endpoints)
+            (vec![], None, endpoints, HashMap::new())
         };
 
         // Resolve the moat binary once for the whole world (also triggers
@@ -527,6 +533,7 @@ impl TestWorld {
             db_verify_proxy,
             participants: HashMap::new(),
             default_relay: drawbridge_ws_endpoints.iter().flatten().next().cloned(),
+            relay_endpoints,
             moat_cli_bin,
             dart_server_bin,
             rust_lib_path: dart_lib_path,
@@ -625,6 +632,40 @@ impl TestWorld {
         Ok(())
     }
 
+    /// Start another Drawbridge relay under `label`, for devices to be moved
+    /// to or spawned on. Needs a world created with at least one relay.
+    pub async fn add_relay(&mut self, label: &str) -> Result<()> {
+        let plc = self
+            .db_verify_proxy
+            .as_ref()
+            .context("add_relay needs a world with a Drawbridge")?
+            .url
+            .clone();
+        let db = DrawbridgeProcess::spawn(&plc, self.process_group.pgid())
+            .await
+            .with_context(|| format!("spawn drawbridge for relay {label}"))?;
+        self.relay_endpoints.insert(label.to_string(), db.ws_endpoint());
+        self.drawbridges.push(db);
+        Ok(())
+    }
+
+    /// WS endpoint of the relay labelled `label`.
+    pub fn relay_endpoint(&self, label: &str) -> &str {
+        &self.relay_endpoints[label]
+    }
+
+    /// Point a killed participant at another relay, as if reinstalled from a
+    /// build made for it. Call between [`kill_participant`] and
+    /// [`restart_participant`].
+    pub fn set_participant_relay(&mut self, handle: &str, relay_label: &str) {
+        let ws = self.relay_endpoints[relay_label].clone();
+        let args = &mut self.participants.get_mut(handle).expect("unknown participant").spawn_args;
+        match args.iter().position(|a| a == "--drawbridge-url") {
+            Some(i) => args[i + 1] = ws,
+            None => args.extend(["--drawbridge-url".to_string(), ws]),
+        }
+    }
+
     /// Spawn an additional process for an existing Postern account.
     ///
     /// Use this to simulate any additional device (second, third, …) for an
@@ -642,6 +683,27 @@ impl TestWorld {
         label: &str,
         kind: ParticipantKind,
     ) -> Result<MoatCliClient> {
+        let relay = self.default_relay.clone();
+        self.spawn_device_on(label, kind, relay).await
+    }
+
+    /// Like [`spawn_nth_device`], on the relay labelled `relay_label`.
+    pub async fn spawn_nth_device_on_relay(
+        &mut self,
+        label: &str,
+        kind: ParticipantKind,
+        relay_label: &str,
+    ) -> Result<MoatCliClient> {
+        let relay = Some(self.relay_endpoints[relay_label].clone());
+        self.spawn_device_on(label, kind, relay).await
+    }
+
+    async fn spawn_device_on(
+        &mut self,
+        label: &str,
+        kind: ParticipantKind,
+        relay: Option<String>,
+    ) -> Result<MoatCliClient> {
         let mut http_port = reserve_port()?;
         let http_addr = format!("127.0.0.1:{}", http_port.port());
         let storage = make_storage_dir(label)?;
@@ -654,9 +716,9 @@ impl TestWorld {
             "--http".to_string(),
             http_addr.clone(),
         ];
-        if let Some(ref relay) = self.default_relay {
+        if let Some(relay) = relay {
             args.push("--drawbridge-url".to_string());
-            args.push(relay.clone());
+            args.push(relay);
         }
 
         let bin = match kind {

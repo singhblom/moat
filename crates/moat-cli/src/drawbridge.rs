@@ -13,7 +13,7 @@ use crate::app::BgEvent;
 use crate::keystore::hex;
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -60,12 +60,17 @@ struct OwnDrawbridge {
     url: String,
 }
 
-/// Cached Drawbridge configuration for a conversation partner.
+/// A user's relays, as last read from their `social.moat.drawbridgeConfig` records.
 #[derive(Debug, Clone)]
 pub struct CachedDrawbridgeConfig {
-    /// Drawbridge URLs for this DID, in priority order
+    /// One URL per distinct relay the user's devices sit on
     pub urls: Vec<String>,
+    /// When the records were read
+    pub fetched_at: Instant,
 }
+
+/// How long a user's relay list is trusted before a poll re-reads it.
+pub const DRAWBRIDGE_CONFIG_TTL: Duration = Duration::from_secs(30);
 
 /// In-memory cache of partner Drawbridge configs (DID -> URLs).
 /// Not persisted — refetched on login.

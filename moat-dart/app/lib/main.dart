@@ -511,7 +511,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
     // Fetch partner drawbridge configs for all conversations.
     final conversations = context.read<ConversationsProvider>().conversations;
     final client = auth.service.atprotoClient;
-    final participantDids = <String>{};
+    final participantDids = <String>{if (auth.service.did != null) auth.service.did!};
     for (final conv in conversations) {
       participantDids.addAll(conv.participants);
     }

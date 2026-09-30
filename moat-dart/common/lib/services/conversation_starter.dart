@@ -61,9 +61,11 @@ Future<Conversation> startConversation({
   final groupIdHex = _bytesToHex(result.groupId);
 
   // 9. Fetch recipient's Drawbridge config and cache it.
-  final recipientRelayUrls = await client.fetchDrawbridgeConfig(recipientDid);
-  DrawbridgeService.instance
-      .cacheDrawbridgeConfig(recipientDid, recipientRelayUrls);
+  try {
+    final recipientRelayUrls = await client.fetchDrawbridgeConfig(recipientDid);
+    DrawbridgeService.instance
+        .cacheDrawbridgeConfig(recipientDid, recipientRelayUrls);
+  } catch (_) {}
 
   // 10. Save conversation.
   final conversation = Conversation(

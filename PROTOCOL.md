@@ -98,16 +98,14 @@ When an existing member (Alice) adds a new member (Carol) to a group that alread
 3. Call MLS `add_member` → produces a Welcome (for Carol) and a Commit (for existing members). The epoch advances.
 4. Stealth-encrypt the Welcome for Carol's devices, publish with a **random** tag (same as the initial invite flow)
 5. Publish the raw Commit with the **pre-advance tag** so existing members (Bob) can find and process it
-6. Publish a Drawbridge hint bundle alongside the Welcome — this contains the Drawbridge hints of all existing group members (see [Drawbridge Hints for New Members](#drawbridge-hints-for-new-members)). Carol can use these to immediately connect to every existing member's relay without waiting for them to come online.
 
 **Carol (new member):**
 
 1. Detect the Welcome via stealth decryption while polling Alice's PDS
 2. Process the Welcome to join the group; immediately upload a **fresh key package** (reusing the device's one signing key — see [Signing-key Identity](#signing-key-identity)) to the PDS so Carol can be re-invited in the future. MLS key packages are single-use: the init key is consumed and dropped from local storage once a Welcome uses it. The consumed *record* stays on the PDS, which is why consumers must take the newest
 3. Call `get_group_dids` to discover **all** current members (not just the Welcome author), and store the full member list
-4. Process the Drawbridge hint bundle from Alice to connect to all existing members' relays
-5. Generate candidate tags for all members and register them
-6. Send a reciprocal Drawbridge hint (encrypted as a group event, visible to all members) so existing members can discover Carol's relay
+4. Generate candidate tags for all members and register them
+5. Read each member's relays from their `social.moat.drawbridgeConfig` records (see [New Members and Relays](#new-members-and-relays))
 
 **Bob (existing member):**
 
@@ -115,9 +113,8 @@ When an existing member (Alice) adds a new member (Carol) to a group that alread
 2. Process the Commit — MLS advances the epoch, the new member appears in the group roster
 3. Update the local member list by querying MLS for all group DIDs
 4. Regenerate candidate tags for the new epoch (now includes Carol's tags)
-5. Receive Carol's reciprocal Drawbridge hint via normal group event scanning — no action required from Bob
 
-**Event count:** Adding a member produces exactly 3 published events regardless of group size: the stealth-encrypted Welcome (with hint bundle), the Commit, and Carol's reciprocal hint. Existing members publish nothing.
+**Event count:** Adding a member produces exactly 2 published events regardless of group size: the stealth-encrypted Welcome and the Commit. Existing members publish nothing.
 
 ## Privacy Properties
 
@@ -306,38 +303,26 @@ The relay is tied to the binary because push delivery only works when the relay 
 
 ### Drawbridge Configuration Record
 
-Once a client has connected to a Drawbridge, it publishes that URL as an ATProto record so that conversation partners can discover it for fan-out delivery:
+Each device that connects to a Drawbridge publishes its relay as its own ATProto record, so that senders can find every relay a user's devices sit on:
 
 ```
 Collection: social.moat.drawbridgeConfig
-RKey: self
+RKey: <hex MLS device id>
 
-{
-  "drawbridges": [
-    { "url": "wss://drawbridge.moat.chat", "priority": 1 }
-  ]
-}
+{ "url": "wss://drawbridge.moat.chat/ws" }
 ```
 
-This is a singleton record (upserted via `putRecord`). Clients fetch partner Drawbridge configs via `getRecord` and cache them in memory.
+A device writes only its own record (`putRecord`, overwritten on each connect), so devices on different relays never overwrite each other. The MLS device id already appears in the key packages a device publishes, so the rkey adds nothing new to what the PDS shows.
+
+A user's relays are the union of the URLs in `listRecords` on the collection. Clients cache that list per DID and re-read it when it is missing or older than 30 seconds, and whenever a conversation is created or joined.
 
 ### Message Delivery
 
-When a sender posts an event, their client sends an envelope to their own Drawbridge containing the encrypted payload and the recipient Drawbridge URLs (discovered from `social.moat.drawbridgeConfig`). The sender's Drawbridge fans out to each recipient's Drawbridge via `POST /relay/event`. Recipient Drawbridges deliver immediately to clients watching the matching tag.
+When a sender posts an event, their client sends an envelope to their own Drawbridge containing the encrypted payload and the relay URLs to notify: the union of every conversation member's relays and the sender's own, less the relay the envelope is sent to (which routes to its own connected devices directly). Including the sender's own DID is what lets its other devices, on other relays, hear the event. The sender's Drawbridge fans out to each listed Drawbridge via `POST /relay/event`. Recipient Drawbridges deliver immediately to clients watching the matching tag.
 
-### Drawbridge Hints for New Members
+### New Members and Relays
 
-`social.moat.drawbridgeConfig` lets a member discover a *contact's* relay, but a newly-added member would have to wait for each existing member to come online before learning where to reach them. To avoid that, the adder bundles the relay coordinates of every existing member alongside the Welcome, inside the same stealth-encrypted payload.
-
-The Welcome is wrapped in an envelope rather than published raw:
-
-```
-[4-byte magic "MWE1"][4-byte welcome_len BE][welcome][hints_json]
-```
-
-`hints_json` is an array of `{ did, url, device_id, ticket }` — one entry per existing member device. A decoder that finds no trailing bytes treats the payload as a bare Welcome, so the envelope is backward-compatible with raw-Welcome publishers.
-
-The new member decodes the bundle, connects to each listed relay, and then publishes a **reciprocal hint** as an ordinary group event so existing members learn their relay through normal tag scanning. This is why adding a member costs exactly three published events regardless of group size: the Welcome-with-bundle, the Commit, and the reciprocal hint.
+A newly-added member learns each member's relays the same way a sender does: by listing their `social.moat.drawbridgeConfig` records. Nothing about relays travels with the Welcome, which is published as the raw MLS Welcome under stealth encryption.
 
 ### Privacy Properties of Drawbridge
 

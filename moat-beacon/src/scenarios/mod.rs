@@ -21,6 +21,7 @@ pub mod dart_push_latency;
 pub mod fcm_dispatch;
 pub mod lost_device_pairing;
 pub mod multi_device_chat;
+pub mod multi_relay_push;
 pub mod dart_three_party_chat;
 pub mod dart_two_party_chat;
 pub mod mixed_push_latency;

@@ -94,8 +94,11 @@ class DrawbridgeService {
   String? _pushToken;
   String? _pushPlatform;
 
-  /// Drawbridge config cache: DID → list of relay URLs.
-  final Map<String, List<String>> _configCache = {};
+  /// Drawbridge config cache: DID → the relays its devices sit on.
+  final Map<String, _CachedConfig> _configCache = {};
+
+  /// How long a DID's relay list is trusted before a poll re-reads it.
+  static const configTtl = Duration(seconds: 30);
 
   void init({
     required String did,
@@ -539,23 +542,32 @@ class DrawbridgeService {
 
   // -- Drawbridge config cache -----------------------------------------------
 
-  /// Cache a DID's Drawbridge relay URLs.
+  /// Cache the relay URLs a DID's devices sit on, as just read from its PDS.
   void cacheDrawbridgeConfig(String did, List<String> urls) {
-    if (urls.isNotEmpty) {
-      _configCache[did] = urls;
-    }
+    _configCache[did] = _CachedConfig(urls, DateTime.now());
   }
 
-  /// Get cached relay URLs for a list of participant DIDs.
-  /// Returns a flat, deduplicated list of relay URLs.
+  /// The DIDs among [dids] whose relay list is missing or older than [configTtl].
+  List<String> staleConfigDids(Iterable<String> dids) {
+    final now = DateTime.now();
+    return dids.toSet().where((did) {
+      final cached = _configCache[did];
+      return cached == null || now.difference(cached.fetchedAt) >= configTtl;
+    }).toList();
+  }
+
+  /// Relay URLs to notify for an event: the union of [participantDids]' relays
+  /// and this user's own, less our own relay, which already routed the event
+  /// to the devices connected to it.
   List<String> relayUrlsForParticipants(List<String> participantDids) {
     final urls = <String>{};
-    for (final did in participantDids) {
+    for (final did in {...participantDids, if (_did != null) _did!}) {
       final cached = _configCache[did];
       if (cached != null) {
-        urls.addAll(cached);
+        urls.addAll(cached.urls);
       }
     }
+    urls.remove(_ownUrl);
     return urls.toList();
   }
 
@@ -610,4 +622,11 @@ class DrawbridgeService {
   static String _bytesToHex(Uint8List bytes) {
     return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   }
+}
+
+class _CachedConfig {
+  final List<String> urls;
+  final DateTime fetchedAt;
+
+  _CachedConfig(this.urls, this.fetchedAt);
 }

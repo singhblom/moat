@@ -6,7 +6,6 @@ import 'drawbridge_service.dart';
 import 'secure_storage.dart';
 import 'debug_log.dart';
 import '../rust/api/simple.dart';
-import '../utils/welcome_envelope.dart';
 
 /// Authentication state
 enum AuthState {
@@ -143,7 +142,8 @@ class AuthService {
     DrawbridgeService.instance.init(did: _did!, keyBundle: keyBundle);
     unawaited(DrawbridgeService.instance.connectOwn(url));
     try {
-      await _atprotoClient.publishDrawbridgeConfig(url);
+      final deviceId = await _moatSession!.deviceId();
+      await _atprotoClient.publishDrawbridgeConfig(_bytesToHex(deviceId), url);
     } catch (e) {
       moatLog('AuthService: Failed to publish drawbridge config: $e');
     }
@@ -336,10 +336,9 @@ class AuthService {
       newMemberKeyPackage: recipientKeyPackage,
     );
 
-    final envelope = encodeWelcomeEnvelope(welcomeResult.welcome);
     final stealthCiphertext = await encryptForStealth(
       recipientScanPubkeys: recipientStealthPubkeys,
-      welcomeBytes: envelope,
+      welcomeBytes: welcomeResult.welcome,
     );
 
     final random = Random.secure();

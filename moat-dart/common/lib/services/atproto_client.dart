@@ -391,59 +391,45 @@ class AtprotoClient {
     return response['uri'] as String;
   }
 
-  /// Publish (upsert) our Drawbridge config record.
-  Future<void> publishDrawbridgeConfig(String url) async {
+  /// Publish (upsert) this device's relay. The rkey is the device id, so
+  /// siblings on other relays keep their own records.
+  Future<void> publishDrawbridgeConfig(String deviceIdHex, String url) async {
     _requireSession();
-
-    final record = {
-      'drawbridges': [
-        {'url': url, 'priority': 1},
-      ],
-    };
 
     await _authedPost(
       '${_session!.pdsUrl}/xrpc/com.atproto.repo.putRecord',
       body: {
         'repo': _session!.did,
         'collection': drawbridgeConfigNsid,
-        'rkey': 'self',
-        'record': record,
+        'rkey': deviceIdHex,
+        'record': {'url': url},
       },
     );
   }
 
-  /// Fetch a user's Drawbridge config. Returns relay URLs in priority order,
-  /// or empty list if not published.
+  /// The relays a user's devices sit on: every device's
+  /// `social.moat.drawbridgeConfig` record, deduplicated. Throws if the PDS
+  /// cannot be read, so a failure is not mistaken for "no relays".
   Future<List<String>> fetchDrawbridgeConfig(String did) async {
-    try {
-      final pdsUrl = await resolvePdsEndpoint(did);
-      final response = await _get(
-        '$pdsUrl/xrpc/com.atproto.repo.getRecord',
-        queryParams: {
-          'repo': did,
-          'collection': drawbridgeConfigNsid,
-          'rkey': 'self',
-        },
-      );
+    final pdsUrl = await resolvePdsEndpoint(did);
+    final response = await _get(
+      '$pdsUrl/xrpc/com.atproto.repo.listRecords',
+      queryParams: {
+        'repo': did,
+        'collection': drawbridgeConfigNsid,
+        'limit': '100',
+      },
+    );
 
-      final value = response['value'] as Map<String, dynamic>?;
-      if (value == null) return [];
-
-      final drawbridges = value['drawbridges'] as List<dynamic>? ?? [];
-      final entries = drawbridges
-          .map((e) => e as Map<String, dynamic>)
-          .toList()
-        ..sort((a, b) =>
-            (a['priority'] as int? ?? 99)
-                .compareTo(b['priority'] as int? ?? 99));
-
-      return entries
-          .map((e) => e['url'] as String)
-          .toList();
-    } catch (e) {
-      moatLog('Failed to fetch drawbridge config for $did: $e');
-      return [];
+    final urls = <String>[];
+    for (final record in response['records'] as List<dynamic>? ?? []) {
+      final value = (record as Map<String, dynamic>)['value'];
+      final url = value is Map<String, dynamic> ? value['url'] : null;
+      if (url is String && url.isNotEmpty && !urls.contains(url)) {
+        urls.add(url);
+      }
     }
+    return urls;
   }
 
   Future<List<StealthAddressRecord>> fetchStealthAddresses(String did) async {
