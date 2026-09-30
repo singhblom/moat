@@ -8,7 +8,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'simple.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `commands_dto`, `credential_from_dto`, `device_id_from`, `from_core`, `identity_from_dto`, `into_core`, `push_media_label`, `push_plaintext_preview`, `to_core_sibling_stealth`, `token_from`, `with_env`
+// These functions are ignored because they are not marked as `pub`: `commands_dto`, `credential_from_dto`, `device_id_from`, `drawbridge_url_from`, `from_core`, `identity_from_dto`, `into_core`, `push_media_label`, `push_plaintext_preview`, `to_core_sibling_stealth`, `token_from`, `with_env`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `MoatError`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `try_from`
 
@@ -59,12 +59,14 @@ Future<DrawbridgeChallengeSignature> signDrawbridgeChallenge(
     RustLib.instance.api.crateApiSimpleSignDrawbridgeChallenge(
         keyBundle: keyBundle, message: message);
 
-/// A Drawbridge URL as typed or scanned, in the form a device connects to and
-/// signs: `ws://` or `wss://`, a host and a path. A bare host becomes
-/// `wss://<host>/ws`. Two spellings of one Drawbridge compare equal once
-/// normalised.
+/// A Drawbridge URL as configured or found in a record, in the one form a
+/// device dials, signs and compares (see `moat_core::DrawbridgeUrl`). Two
+/// spellings of one Drawbridge are equal strings once normalised.
 String normalizeDrawbridgeUrl({required String url}) =>
     RustLib.instance.api.crateApiSimpleNormalizeDrawbridgeUrl(url: url);
+
+/// `moat_core::PAIR_CLOSE_GRACE`, in milliseconds.
+int pairCloseGraceMs() => RustLib.instance.api.crateApiSimplePairCloseGraceMs();
 
 /// Pad plaintext to bucket size (512, 1024, or 4096 bytes).
 ///
@@ -258,6 +260,11 @@ abstract class PairChannelHandle implements RustOpaqueInterface {
   List<PairChannelCommandDto> onDrawbridgeConnected(
       {required String drawbridgeUrl});
 
+  /// No authenticated main WS to `drawbridge_url` could be opened: a
+  /// rendezvous there fails with `detail`.
+  List<PairChannelCommandDto> onDrawbridgeUnreachable(
+      {required String drawbridgeUrl, required String detail});
+
   /// A binary frame from the pair WS for `token`.
   Future<List<PairChannelCommandDto>> onFrame(
       {required MoatSessionHandle session,
@@ -270,11 +277,9 @@ abstract class PairChannelHandle implements RustOpaqueInterface {
   List<PairChannelCommandDto> onPairClosed(
       {required List<int> token, required String reason});
 
-  /// `pair_ready` from `drawbridge_url`.
+  /// `pair_ready` from the Drawbridge.
   List<PairChannelCommandDto> onPairReady(
-      {required String drawbridgeUrl,
-      required List<int> token,
-      required String url});
+      {required List<int> token, required String url});
 
   /// The pair WS for `token` reached `paired`.
   Future<List<PairChannelCommandDto>> onPaired(
@@ -1168,6 +1173,12 @@ sealed class SyncFailureDto with _$SyncFailureDto {
   const factory SyncFailureDto.publishFailed({
     required String detail,
   }) = SyncFailureDto_PublishFailed;
+
+  /// The rendezvous Drawbridge could not be reached.
+  const factory SyncFailureDto.drawbridgeUnreachable({
+    required String drawbridgeUrl,
+    required String detail,
+  }) = SyncFailureDto_DrawbridgeUnreachable;
 }
 
 class SyncMessageDto {

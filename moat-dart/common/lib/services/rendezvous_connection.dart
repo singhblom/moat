@@ -23,10 +23,11 @@ class RendezvousConnection {
   final void Function(String drawbridgeUrl) onAuthenticated;
 
   /// The Drawbridge matched a rendezvous token and named the pair WS.
-  final void Function(String drawbridgeUrl, Uint8List token, String pairUrl) onPairReady;
+  final void Function(Uint8List token, String pairUrl) onPairReady;
 
   /// The connection ended, whether the Drawbridge closed it or it failed.
-  final void Function(String drawbridgeUrl, String reason) onClosed;
+  /// `wasAuthenticated` is false when it never got that far.
+  final void Function(String drawbridgeUrl, String reason, bool wasAuthenticated) onClosed;
 
   WebSocketChannel? _channel;
   StreamSubscription? _subscription;
@@ -105,7 +106,7 @@ class RendezvousConnection {
           final pairUrl = msg['pair_url'] as String?;
           final tokenB64 = msg['token'] as String?;
           if (pairUrl == null || tokenB64 == null) return;
-          onPairReady(url, base64Decode(tokenB64), pairUrl);
+          onPairReady(base64Decode(tokenB64), pairUrl);
         case 'pair_pending':
           moatLog('RendezvousConnection: pair_pending on $url');
         case 'error':
@@ -144,11 +145,15 @@ class RendezvousConnection {
   void _end(String reason) {
     if (_closed) return;
     _closed = true;
+    final wasAuthenticated = _authenticated;
     _authenticated = false;
     unawaited(_subscription?.cancel());
     _subscription = null;
+    // An `error` from the Drawbridge ends the connection with its socket
+    // still open.
+    unawaited(_channel?.sink.close());
     _channel = null;
     moatLog('RendezvousConnection: $url ended: $reason');
-    onClosed(url, reason);
+    onClosed(url, reason, wasAuthenticated);
   }
 }

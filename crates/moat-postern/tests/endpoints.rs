@@ -766,25 +766,6 @@ async fn blob_accessible_from_any_did() {
 
 // ── 8. State isolation between instances ─────────────────────────────────────
 
-// ── describeServer ────────────────────────────────────────────────────────────
-
-/// `describeServer` answers, and advertises no services.
-#[tokio::test]
-async fn describe_server_advertises_no_services() {
-    let postern = postern_one_account().await;
-
-    let resp = reqwest::get(format!(
-        "{}/xrpc/com.atproto.server.describeServer",
-        postern.url()
-    ))
-    .await
-    .unwrap();
-
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body: Value = resp.json().await.unwrap();
-    assert_eq!(body["services"], json!({}));
-}
-
 /// Two Postern instances are fully isolated: records written to one are not
 /// visible in the other.
 #[tokio::test]

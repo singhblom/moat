@@ -63,15 +63,8 @@ class _EnterPairingCodeScreenState extends State<EnterPairingCodeScreen> {
       MaterialPageRoute(builder: (_) => const _QrScanScreen()),
     );
     if (code != null && mounted) {
-      // The QR is `moat-pair:<code>?drawbridge=<url>`: scanning fills both fields.
-      final uri = Uri.tryParse(code);
-      if (uri != null && uri.scheme == 'moat-pair') {
-        _codeController.text = uri.path;
-        final drawbridgeUrl = uri.queryParameters['drawbridge'];
-        if (drawbridgeUrl != null && drawbridgeUrl.isNotEmpty) _drawbridgeController.text = drawbridgeUrl;
-      } else {
-        _codeController.text = code;
-      }
+      // A `moat-pair:` URI names its own Drawbridge, which wins over the field.
+      _codeController.text = code;
       unawaited(_confirm());
     }
   }

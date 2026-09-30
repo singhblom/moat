@@ -464,7 +464,7 @@ struct PairConfirmRequest {
 async fn post_pair_new(State(state): State<Arc<ServerState>>) -> HandlerResult<Json<Value>> {
     let mut app = state.app.lock().await;
     let (code, drawbridge_url) = app.api_pair_new().map_err(app_err)?;
-    Ok(Json(json!({ "code": code, "drawbridge_url": drawbridge_url })))
+    Ok(Json(json!({ "code": code, "drawbridge_url": drawbridge_url.as_str() })))
 }
 
 async fn post_pair_confirm(

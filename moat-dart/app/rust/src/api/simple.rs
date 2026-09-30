@@ -662,13 +662,22 @@ pub fn sign_drawbridge_challenge(
     })
 }
 
-/// A Drawbridge URL as typed or scanned, in the form a device connects to and
-/// signs: `ws://` or `wss://`, a host and a path. A bare host becomes
-/// `wss://<host>/ws`. Two spellings of one Drawbridge compare equal once
-/// normalised.
+/// A Drawbridge URL as configured or found in a record, in the one form a
+/// device dials, signs and compares (see `moat_core::DrawbridgeUrl`). Two
+/// spellings of one Drawbridge are equal strings once normalised.
 #[frb(sync)]
 pub fn normalize_drawbridge_url(url: String) -> Result<String, String> {
-    moat_core::normalize_drawbridge_url(&url).map_err(|e| e.to_string())
+    drawbridge_url_from(&url).map(|u| u.to_string())
+}
+
+/// `moat_core::PAIR_CLOSE_GRACE`, in milliseconds.
+#[frb(sync)]
+pub fn pair_close_grace_ms() -> u32 {
+    moat_core::PAIR_CLOSE_GRACE.as_millis() as u32
+}
+
+fn drawbridge_url_from(url: &str) -> Result<moat_core::DrawbridgeUrl, String> {
+    moat_core::DrawbridgeUrl::parse(url).map_err(|e| e.to_string())
 }
 
 /// Result of signing a Drawbridge challenge.
@@ -1486,6 +1495,8 @@ pub enum SyncFailureDto {
     ChannelClosed { detail: String },
     /// The request could not be published to the ring at all.
     PublishFailed { detail: String },
+    /// The rendezvous Drawbridge could not be reached.
+    DrawbridgeUnreachable { drawbridge_url: String, detail: String },
 }
 
 impl From<moat_core::SyncFailure> for SyncFailureDto {
@@ -1497,6 +1508,9 @@ impl From<moat_core::SyncFailure> for SyncFailureDto {
             F::Declined => SyncFailureDto::Declined,
             F::ChannelClosed { detail } => SyncFailureDto::ChannelClosed { detail },
             F::PublishFailed { detail } => SyncFailureDto::PublishFailed { detail },
+            F::DrawbridgeUnreachable { drawbridge_url, detail } => {
+                SyncFailureDto::DrawbridgeUnreachable { drawbridge_url, detail }
+            }
         }
     }
 }
@@ -1609,8 +1623,12 @@ impl From<moat_core::PairChannelCommand> for PairChannelCommandDto {
     fn from(c: moat_core::PairChannelCommand) -> Self {
         use moat_core::PairChannelCommand as C;
         match c {
-            C::SendPairOffer { drawbridge_url, token } => Self::SendPairOffer { drawbridge_url, token: token.to_vec() },
-            C::SendPairJoin { drawbridge_url, token } => Self::SendPairJoin { drawbridge_url, token: token.to_vec() },
+            C::SendPairOffer { drawbridge_url, token } => {
+                Self::SendPairOffer { drawbridge_url: drawbridge_url.to_string(), token: token.to_vec() }
+            }
+            C::SendPairJoin { drawbridge_url, token } => {
+                Self::SendPairJoin { drawbridge_url: drawbridge_url.to_string(), token: token.to_vec() }
+            }
             C::ConnectPair { url, token } => Self::ConnectPair { url, token: token.to_vec() },
             C::SendFrame { data } => Self::SendFrame { data },
             C::ClosePair => Self::ClosePair,
@@ -1704,7 +1722,7 @@ impl PairChannelHandle {
     /// The Drawbridge the live rendezvous is on, if there is one.
     #[frb(sync)]
     pub fn rendezvous_drawbridge_url(&self) -> Option<String> {
-        self.inner.lock().unwrap().rendezvous_drawbridge_url().map(str::to_string)
+        self.inner.lock().unwrap().rendezvous_drawbridge_url().map(ToString::to_string)
     }
 
     #[frb(sync)]
@@ -1717,12 +1735,8 @@ impl PairChannelHandle {
     #[frb(sync)]
     pub fn pair_new(&self, identity: PairIdentityDto, drawbridge_url: String) -> Result<PairNewDto, String> {
         let identity = identity_from_dto(identity)?;
-        let (code, cmds) = self
-            .inner
-            .lock()
-            .unwrap()
-            .pair_new(identity, &drawbridge_url)
-            .map_err(|e| e.to_string())?;
+        let drawbridge_url = drawbridge_url_from(&drawbridge_url)?;
+        let (code, cmds) = self.inner.lock().unwrap().pair_new(identity, drawbridge_url);
         Ok(PairNewDto { code, commands: commands_dto(cmds) })
     }
 
@@ -1782,8 +1796,9 @@ impl PairChannelHandle {
         drawbridge_url: String,
     ) -> Result<Vec<PairChannelCommandDto>, String> {
         let target = target.as_deref().map(device_id_from).transpose()?;
+        let drawbridge_url = drawbridge_url_from(&drawbridge_url)?;
         self.with_env(session, ring, now_ms, |d, env| {
-            d.sync_request(env, &key_bundle, target, &drawbridge_url)
+            d.sync_request(env, &key_bundle, target, drawbridge_url)
         })
             .map(commands_dto)
             .map_err(|e| e.to_string())
@@ -1800,8 +1815,9 @@ impl PairChannelHandle {
         drawbridge_url: String,
     ) -> Result<Vec<PairChannelCommandDto>, String> {
         let target = device_id_from(&target)?;
+        let drawbridge_url = drawbridge_url_from(&drawbridge_url)?;
         self.with_env(session, ring, now_ms, |d, env| {
-            d.sync_offer(env, &key_bundle, target, &drawbridge_url)
+            d.sync_offer(env, &key_bundle, target, drawbridge_url)
         })
             .map(commands_dto)
             .map_err(|e| e.to_string())
@@ -1831,11 +1847,12 @@ impl PairChannelHandle {
     ) -> Result<Vec<PairChannelCommandDto>, String> {
         let msg = moat_core::decode_ring_msg(&payload).map_err(|e| e.to_string())?;
         let own = device_id_from(&own_device_id)?;
+        let sender_drawbridge_url = drawbridge_url_from(&sender_drawbridge_url)?;
         Ok(commands_dto(
             self.inner
                 .lock()
                 .unwrap()
-                .on_ring_msg(msg, sender_name, &sender_drawbridge_url, &own, now_ms),
+                .on_ring_msg(msg, sender_name, sender_drawbridge_url, &own, now_ms),
         ))
     }
 
@@ -1851,19 +1868,32 @@ impl PairChannelHandle {
 
     /// The main WS to `drawbridge_url` (re)authenticated.
     #[frb(sync)]
-    pub fn on_drawbridge_connected(&self, drawbridge_url: String) -> Vec<PairChannelCommandDto> {
-        commands_dto(self.inner.lock().unwrap().on_drawbridge_connected(&drawbridge_url))
-    }
-
-    /// `pair_ready` from `drawbridge_url`.
-    #[frb(sync)]
-    pub fn on_pair_ready(
+    pub fn on_drawbridge_connected(
         &self,
         drawbridge_url: String,
-        token: Vec<u8>,
-        url: String,
-    ) -> Vec<PairChannelCommandDto> {
-        commands_dto(self.inner.lock().unwrap().on_pair_ready(&drawbridge_url, &token, url))
+    ) -> Result<Vec<PairChannelCommandDto>, String> {
+        let drawbridge_url = drawbridge_url_from(&drawbridge_url)?;
+        Ok(commands_dto(self.inner.lock().unwrap().on_drawbridge_connected(&drawbridge_url)))
+    }
+
+    /// No authenticated main WS to `drawbridge_url` could be opened: a
+    /// rendezvous there fails with `detail`.
+    #[frb(sync)]
+    pub fn on_drawbridge_unreachable(
+        &self,
+        drawbridge_url: String,
+        detail: String,
+    ) -> Result<Vec<PairChannelCommandDto>, String> {
+        let drawbridge_url = drawbridge_url_from(&drawbridge_url)?;
+        Ok(commands_dto(
+            self.inner.lock().unwrap().on_drawbridge_unreachable(&drawbridge_url, detail),
+        ))
+    }
+
+    /// `pair_ready` from the Drawbridge.
+    #[frb(sync)]
+    pub fn on_pair_ready(&self, token: Vec<u8>, url: String) -> Vec<PairChannelCommandDto> {
+        commands_dto(self.inner.lock().unwrap().on_pair_ready(&token, url))
     }
 
     /// The pair WS for `token` reached `paired`.
@@ -2899,11 +2929,9 @@ mod pair_channel_ffi_tests {
             .unwrap();
         for device in [&phone, &laptop] {
             *device.token.borrow_mut() = Some(token.clone());
-            let cmds = device.driver.on_pair_ready(
-                "wss://drawbridge.example.com/ws".into(),
-                token.clone(),
-                "wss://drawbridge.example.com/pair".into(),
-            );
+            let cmds = device
+                .driver
+                .on_pair_ready(token.clone(), "wss://drawbridge.example.com/pair".into());
             assert!(matches!(cmds.as_slice(), [PairChannelCommandDto::ConnectPair { .. }]));
         }
 

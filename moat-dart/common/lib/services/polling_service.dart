@@ -134,14 +134,8 @@ class PollingService {
       for (final conv in _conversationsService.conversations) ...conv.participants,
     };
     final db = DrawbridgeService.instance;
-    for (final did in db.staleConfigDids(dids)) {
-      try {
-        db.cacheDrawbridgeConfig(
-            did, await _authService.atprotoClient.fetchDrawbridgeConfig(did));
-      } catch (e) {
-        moatLog('PollingService: Failed to fetch drawbridge config for $did: $e');
-      }
-    }
+    await db.refreshDrawbridgeConfigs(
+        _authService.atprotoClient, db.staleConfigDids(dids));
   }
 
   /// Poll our own DID for incoming welcome messages.
@@ -533,14 +527,9 @@ class PollingService {
           if (membersChanged) {
             await _conversationsService.saveConversation(conversation);
             // Fetch Drawbridge configs for new members.
-            for (final did in otherDids) {
-              if (!currentParticipants.contains(did)) {
-                try {
-                  final urls = await _authService.atprotoClient.fetchDrawbridgeConfig(did);
-                  DrawbridgeService.instance.cacheDrawbridgeConfig(did, urls);
-                } catch (_) {}
-              }
-            }
+            await DrawbridgeService.instance.refreshDrawbridgeConfigs(
+                _authService.atprotoClient,
+                otherDids.where((did) => !currentParticipants.contains(did)));
           }
 
           await _authService.populateConversationTags(conversation.groupId);
@@ -668,17 +657,10 @@ class PollingService {
 
     await _conversationsService.saveConversation(conversation);
 
-    // Fetch partner config.
-    final db = DrawbridgeService.instance;
-
-    for (final did in otherDids) {
-      try {
-        final urls = await _authService.atprotoClient.fetchDrawbridgeConfig(did);
-        db.cacheDrawbridgeConfig(did, urls);
-      } catch (e) {
-        moatLog('PollingService: Failed to fetch drawbridge config for $did: $e');
-      }
-    }
+    // Fetch the Drawbridges of the members and of our own other devices.
+    await DrawbridgeService.instance.refreshDrawbridgeConfigs(
+        _authService.atprotoClient,
+        [...otherDids, if (_authService.did != null) _authService.did!]);
   }
 
   void dispose() {

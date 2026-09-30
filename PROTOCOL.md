@@ -489,7 +489,8 @@ Devices of one user may sit on different Drawbridges, and a device cannot choose
 
 - **Pairing.** The new device shows the code and opens the rendezvous, so its Drawbridge is the one named. The QR form carries it: `moat-pair:<code>?drawbridge=<percent-encoded url>`. For manual entry the new device shows its Drawbridge URL above the code, and the existing device types both. The URL field starts out as the existing device's own Drawbridge: devices from one distribution share one, so the common case needs only the code. The URL in a `moat-pair:` URI wins over a typed one.
 - **Sync.** A `sync_request` or `sync_offer` names no Drawbridge. The sender's is the one in the `social.moat.drawbridgeConfig` record whose rkey is the sender's device id, which the MLS leaf credential of the ring message already establishes. The receiving device reads that record from its own PDS repo before it prompts or joins; a message from a device with no record is ignored.
-- **Form.** A Drawbridge URL is written `ws://` or `wss://`, a host and a path. A bare host is read as `wss://<host>/ws` and a URL with no path as `<url>/ws`; two spellings of one Drawbridge are equal once written this way.
+- **Form.** A Drawbridge URL is written `ws://` or `wss://`, a lowercase host without the scheme's default port, and a path; it has no user info, query or fragment. A bare host is read as `wss://<host>/ws` and a URL with no path as `<url>/ws`. Every Drawbridge URL a device dials, signs, publishes or compares is in this form, read so from configuration, typing, a QR code or a record, so two spellings of one Drawbridge are equal strings.
+- **Unreachable.** A device that cannot open an authenticated main WS to the named Drawbridge fails the pairing or sync, naming the Drawbridge and why (a sync fails with `drawbridge_unreachable`); the user can start again, with the URL corrected if it was typed. A rendezvous connection that drops after authenticating is reopened once, and failing to reopen it fails the same way. A device waiting on its own Drawbridge does not fail: its own connection reconnects on its own schedule and resends.
 
 A device authenticates to the named Drawbridge exactly as to its own (a DID challenge signed over the URL as dialled), so a Drawbridge must accept an authenticated DID it does not otherwise serve for the length of a rendezvous. A device with no Drawbridge of its own can still join a rendezvous on a sibling's, but cannot start one.
 
@@ -558,7 +559,7 @@ A device drives one pair-channel session at a time: a pairing, a sync request or
 
 A pairing that has ended — `done`, `failed`, cancelled or rejected — holds nothing, even though its state stays readable. A sibling's `sync_request` or `sync_offer` that arrives while the channel is busy is ignored. A gesture of this user's own (showing or entering a code, requesting, offering or accepting a sync) supersedes whatever held the channel.
 
-Every pair-channel event is matched against the live rendezvous's token — `pair_closed`, a pair WS reaching `paired`, each frame it carries, and its ending or failing to connect — and an event for any other token is ignored. `pair_ready` and a reauthentication are also matched against the rendezvous's Drawbridge, and one from any other Drawbridge is ignored. An offer or join the Drawbridge has not acknowledged with `pair_ready` is resent whenever the main WS to that Drawbridge reauthenticates, and the connection to a rendezvous Drawbridge other than the device's own is reopened if it drops while the rendezvous is live.
+Every pair-channel event is matched against the live rendezvous's token — `pair_closed`, a pair WS reaching `paired`, each frame it carries, and its ending or failing to connect — and an event for any other token is ignored. A reauthentication is also matched against the rendezvous's Drawbridge: an offer or join the Drawbridge has not acknowledged with `pair_ready` is resent whenever the main WS to that Drawbridge reauthenticates, and a reauthentication anywhere else resends nothing. `pair_ready` needs no such match, since the token is registered on one Drawbridge only.
 
 A transfer's first frames can arrive before this device has loaded the history it will declare; they wait for it rather than being dropped.
 
@@ -637,6 +638,7 @@ A failure carries a **structured reason**, not a message:
 | `declined` | This device's user refused a sibling's request |
 | `channel_closed` | The pair channel dropped before the transfer finished |
 | `publish_failed` | The request never reached the ring |
+| `drawbridge_unreachable` | The rendezvous Drawbridge could not be reached (carries its URL) |
 
 The same underlying event reads differently depending on which device is
 looking at it — a rendezvous nobody joined is "no device answered" to the

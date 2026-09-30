@@ -17,6 +17,7 @@
 use crate::app::BgEvent;
 use crate::keystore::hex;
 use futures_util::{SinkExt, StreamExt};
+use moat_core::DrawbridgeUrl;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -51,6 +52,10 @@ pub struct DrawbridgeManager {
     /// Number of consecutive reconnect attempts (reset on successful connect)
     reconnect_attempt: u32,
 
+    /// Id for the next main-WS connection, so a disconnect is matched to the
+    /// connection it came from and never clears a later one.
+    next_connection_id: u64,
+
     /// Write half of the active pair WebSocket, if one is open.
     pair_writer: Option<PairWsWriter>,
 
@@ -66,21 +71,31 @@ pub struct DrawbridgeManager {
 /// An authenticated main-WS connection to one Drawbridge: our own, or the
 /// one held for a rendezvous.
 struct DrawbridgeConnection {
+    id: u64,
     writer: WsWriter,
     /// Aborting closes the socket without the read loop reporting a disconnect.
     read_task: tokio::task::AbortHandle,
-    /// The relay this connection is to.
-    url: String,
+    url: DrawbridgeUrl,
 }
 
 /// A user's relays, as last read from their `social.moat.drawbridgeConfig` records.
 #[derive(Debug, Clone)]
 pub struct CachedDrawbridgeConfig {
     /// One URL per distinct relay the user's devices sit on
-    pub urls: Vec<String>,
+    pub urls: Vec<DrawbridgeUrl>,
     /// When the records were read
     pub fetched_at: Instant,
 }
+
+/// Drawbridge this binary was built for, from `MOAT_DRAWBRIDGE_URL`.
+/// `None` means no Drawbridge: the host polls only.
+pub const BUILD_DRAWBRIDGE_URL: Option<&str> = option_env!("MOAT_DRAWBRIDGE_URL");
+
+#[cfg(not(debug_assertions))]
+const _: () = assert!(
+    BUILD_DRAWBRIDGE_URL.is_some(),
+    "release builds need MOAT_DRAWBRIDGE_URL (see config/release.env)"
+);
 
 /// How long a user's relay list is trusted before a poll re-reads it.
 pub const DRAWBRIDGE_CONFIG_TTL: Duration = Duration::from_secs(30);
@@ -88,10 +103,6 @@ pub const DRAWBRIDGE_CONFIG_TTL: Duration = Duration::from_secs(30);
 /// In-memory cache of partner Drawbridge configs (DID -> URLs).
 /// Not persisted — refetched on login.
 pub type DrawbridgeConfigCache = HashMap<String, CachedDrawbridgeConfig>;
-
-/// How long a closing pair WS waits for its end to be confirmed: our own
-/// close for the peer's reply, a relay `pair_closed` for the socket to end.
-pub const PAIR_CLOSE_GRACE: Duration = Duration::from_secs(5);
 
 /// Backoff schedule for reconnection attempts.
 fn backoff_duration(attempt: u32) -> Duration {
@@ -112,6 +123,7 @@ impl DrawbridgeManager {
             rendezvous: None,
             bg_tx,
             reconnect_attempt: 0,
+            next_connection_id: 0,
             pair_writer: None,
             pair_token: None,
             pair_read_task: None,
@@ -121,29 +133,14 @@ impl DrawbridgeManager {
     /// Connect to our own Drawbridge (DID challenge-response).
     pub async fn connect_own(
         &mut self,
-        url: &str,
+        url: &DrawbridgeUrl,
         did: &str,
         identity_key_bundle: &[u8],
     ) -> Result<(), String> {
         // Replace an existing connection rather than duplicate it.
         self.close_own();
-
-        let (writer, reader) = authenticate(url, did, identity_key_bundle).await?;
-
-        let bg_tx = self.bg_tx.clone();
-        let url_clone = url.to_string();
-        let read_task = tokio::spawn(async move {
-            read_loop(reader, bg_tx, url_clone, Role::Own).await;
-        })
-        .abort_handle();
-
-        self.own = Some(DrawbridgeConnection {
-            writer,
-            read_task,
-            url: url.to_string(),
-        });
+        self.own = Some(self.connect(url, did, identity_key_bundle, Role::Own).await?);
         self.reconnect_attempt = 0;
-
         Ok(())
     }
 
@@ -152,27 +149,37 @@ impl DrawbridgeManager {
     /// and their replies. Replaces any earlier rendezvous connection.
     pub async fn connect_rendezvous(
         &mut self,
-        url: &str,
+        url: &DrawbridgeUrl,
         did: &str,
         identity_key_bundle: &[u8],
     ) -> Result<(), String> {
         self.close_rendezvous();
+        self.rendezvous = Some(self.connect(url, did, identity_key_bundle, Role::Rendezvous).await?);
+        Ok(())
+    }
 
+    async fn connect(
+        &mut self,
+        url: &DrawbridgeUrl,
+        did: &str,
+        identity_key_bundle: &[u8],
+        role: Role,
+    ) -> Result<DrawbridgeConnection, String> {
         let (writer, reader) = authenticate(url, did, identity_key_bundle).await?;
-
+        let id = self.next_connection_id;
+        self.next_connection_id += 1;
         let bg_tx = self.bg_tx.clone();
-        let url_clone = url.to_string();
+        let url_clone = url.clone();
         let read_task = tokio::spawn(async move {
-            read_loop(reader, bg_tx, url_clone, Role::Rendezvous).await;
+            read_loop(reader, bg_tx, url_clone, role, id).await;
         })
         .abort_handle();
-
-        self.rendezvous = Some(DrawbridgeConnection {
+        Ok(DrawbridgeConnection {
+            id,
             writer,
             read_task,
-            url: url.to_string(),
-        });
-        Ok(())
+            url: url.clone(),
+        })
     }
 
     /// Send event_posted envelope to our own Drawbridge with payload and relay URLs.
@@ -271,19 +278,19 @@ impl DrawbridgeManager {
 
     /// Send `pair_offer{token}` to `drawbridge_url`. Called by the device that
     /// opened the rendezvous.
-    pub async fn send_pair_offer(&mut self, drawbridge_url: &str, token: &[u8]) -> Result<(), String> {
+    pub async fn send_pair_offer(&mut self, drawbridge_url: &DrawbridgeUrl, token: &[u8]) -> Result<(), String> {
         self.send_rendezvous_msg(drawbridge_url, "pair_offer", token).await
     }
 
     /// Send `pair_join{token}` to `drawbridge_url`. Called by the device joining a
     /// rendezvous opened elsewhere.
-    pub async fn send_pair_join(&mut self, drawbridge_url: &str, token: &[u8]) -> Result<(), String> {
+    pub async fn send_pair_join(&mut self, drawbridge_url: &DrawbridgeUrl, token: &[u8]) -> Result<(), String> {
         self.send_rendezvous_msg(drawbridge_url, "pair_join", token).await
     }
 
     async fn send_rendezvous_msg(
         &mut self,
-        drawbridge_url: &str,
+        drawbridge_url: &DrawbridgeUrl,
         kind: &str,
         token: &[u8],
     ) -> Result<(), String> {
@@ -302,31 +309,27 @@ impl DrawbridgeManager {
 
     /// The authenticated connection to `drawbridge_url`: our own if it is our
     /// Drawbridge, else the rendezvous connection.
-    fn connection_to(&mut self, drawbridge_url: &str) -> Option<&mut DrawbridgeConnection> {
-        if self.own.as_ref().is_some_and(|c| same_drawbridge(&c.url, drawbridge_url)) {
+    fn connection_to(&mut self, drawbridge_url: &DrawbridgeUrl) -> Option<&mut DrawbridgeConnection> {
+        if self.own.as_ref().is_some_and(|c| &c.url == drawbridge_url) {
             self.own.as_mut()
         } else {
-            self.rendezvous
-                .as_mut()
-                .filter(|c| same_drawbridge(&c.url, drawbridge_url))
+            self.rendezvous.as_mut().filter(|c| &c.url == drawbridge_url)
         }
     }
 
-    /// Whether an authenticated connection to `drawbridge_url` is open, own or
-    /// rendezvous.
-    pub fn is_connected_to_drawbridge(&self, drawbridge_url: &str) -> bool {
-        self.own.as_ref().is_some_and(|c| same_drawbridge(&c.url, drawbridge_url))
-            || self.rendezvous.as_ref().is_some_and(|c| same_drawbridge(&c.url, drawbridge_url))
+    /// Whether the rendezvous connection is open to `drawbridge_url`.
+    pub fn has_rendezvous_connection(&self, drawbridge_url: &DrawbridgeUrl) -> bool {
+        self.rendezvous.as_ref().is_some_and(|c| &c.url == drawbridge_url)
     }
 
-    /// Whether `drawbridge_url` is the one this device's own connection is to.
-    pub fn is_own_drawbridge_url(&self, drawbridge_url: &str) -> bool {
-        self.own.as_ref().is_some_and(|c| same_drawbridge(&c.url, drawbridge_url))
-    }
-
-    /// Forget a rendezvous connection that dropped.
-    pub fn clear_rendezvous(&mut self) {
-        self.rendezvous = None;
+    /// Forget the rendezvous connection `id`, whose read loop has ended.
+    /// `false` if a later connection has replaced it.
+    pub fn forget_rendezvous(&mut self, id: u64) -> bool {
+        let current = self.rendezvous.as_ref().is_some_and(|c| c.id == id);
+        if current {
+            self.rendezvous = None;
+        }
+        current
     }
 
     /// Close the rendezvous connection, if one is open.
@@ -427,7 +430,7 @@ impl DrawbridgeManager {
         }
         if let Some(handle) = self.pair_read_task.take() {
             tokio::spawn(async move {
-                tokio::time::sleep(PAIR_CLOSE_GRACE).await;
+                tokio::time::sleep(moat_core::PAIR_CLOSE_GRACE).await;
                 handle.abort();
             });
         }
@@ -451,13 +454,18 @@ impl DrawbridgeManager {
     }
 
     /// Whether this device is connected to its own relay at [url].
-    pub fn is_connected_to(&self, url: &str) -> bool {
-        self.own.as_ref().is_some_and(|own| own.url == url)
+    pub fn is_connected_to(&self, url: &DrawbridgeUrl) -> bool {
+        self.own.as_ref().is_some_and(|own| &own.url == url)
     }
 
-    /// Mark the connection as dropped (called on disconnect).
-    pub fn clear_connection(&mut self) {
-        self.own = None;
+    /// Forget our own connection `id`, whose read loop has ended. `false` if
+    /// a later connection has replaced it.
+    pub fn forget_own(&mut self, id: u64) -> bool {
+        let current = self.own.as_ref().is_some_and(|c| c.id == id);
+        if current {
+            self.own = None;
+        }
+        current
     }
 
     /// Close the connection to our own relay, if one is open.
@@ -482,14 +490,6 @@ enum Role {
     Rendezvous,
 }
 
-/// Whether two spellings name one Drawbridge.
-fn same_drawbridge(a: &str, b: &str) -> bool {
-    match (moat_core::normalize_drawbridge_url(a), moat_core::normalize_drawbridge_url(b)) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => a == b,
-    }
-}
-
 type WsReader = futures_util::stream::SplitStream<
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
 >;
@@ -503,11 +503,11 @@ type WsReader = futures_util::stream::SplitStream<
 /// 5. Send challenge_response{did, signature, timestamp, public_key}
 /// 6. Receive authenticated
 async fn authenticate(
-    url: &str,
+    url: &DrawbridgeUrl,
     did: &str,
     identity_key_bundle: &[u8],
 ) -> Result<(WsWriter, WsReader), String> {
-    let (ws_stream, _) = tokio_tungstenite::connect_async(url)
+    let (ws_stream, _) = tokio_tungstenite::connect_async(url.as_str())
         .await
         .map_err(|e| format!("WebSocket connect failed: {e}"))?;
 
@@ -601,15 +601,19 @@ async fn read_json_msg(
 /// - `new_event` with inline payload (from relay-to-relay or local multi-device)
 /// - `pair_pending`, `pair_ready`, `pair_closed` pairing control messages
 /// - Connection lifecycle (errors, disconnects)
+///
+/// Reports the end of the connection exactly once, and returns: an `error`
+/// from the Drawbridge ends it too, closing the socket.
 async fn read_loop(
     mut reader: WsReader,
     bg_tx: mpsc::UnboundedSender<BgEvent>,
-    url: String,
+    url: DrawbridgeUrl,
     role: Role,
+    connection: u64,
 ) {
     let disconnected = |reason: String| match role {
-        Role::Own => BgEvent::DrawbridgeDisconnected { url: url.clone(), reason },
-        Role::Rendezvous => BgEvent::RendezvousDisconnected { url: url.clone(), reason },
+        Role::Own => BgEvent::DrawbridgeDisconnected { url: url.clone(), reason, connection },
+        Role::Rendezvous => BgEvent::RendezvousDisconnected { url: url.clone(), reason, connection },
     };
     loop {
         match reader.next().await {
@@ -655,7 +659,6 @@ async fn read_loop(
                             ) {
                                 if let Some(token) = base64_decode(token_b64) {
                                     let _ = bg_tx.send(BgEvent::PairReady {
-                                        drawbridge_url: url.clone(),
                                         pair_url: pair_url.to_string(),
                                         token,
                                     });
@@ -684,6 +687,7 @@ async fn read_loop(
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("unknown");
                             let _ = bg_tx.send(disconnected(format!("server error: {err}")));
+                            return;
                         }
                         _ => {}
                     }
@@ -762,7 +766,7 @@ mod tests {
     fn a_manager_with_no_connection_is_connected_to_nothing() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let mgr = DrawbridgeManager::new(tx);
-        assert!(!mgr.is_connected_to("wss://relay.example.com/ws"));
+        assert!(!mgr.is_connected_to(&DrawbridgeUrl::parse("wss://relay.example.com/ws").unwrap()));
     }
 
     #[test]

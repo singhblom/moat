@@ -62,13 +62,8 @@ Future<Conversation> startConversation({
 
   // 9. Fetch the Drawbridges of the recipient's devices and of our
   //    own other devices, and cache them.
-  for (final did in [recipientDid, authService.did]) {
-    if (did == null) continue;
-    try {
-      DrawbridgeService.instance
-          .cacheDrawbridgeConfig(did, await client.fetchDrawbridgeConfig(did));
-    } catch (_) {}
-  }
+  await DrawbridgeService.instance
+      .refreshDrawbridgeConfigs(client, [recipientDid, if (authService.did != null) authService.did!]);
 
   // 10. Save conversation.
   final conversation = Conversation(

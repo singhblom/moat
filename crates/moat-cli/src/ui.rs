@@ -1134,7 +1134,7 @@ fn draw_status_screen(frame: &mut Frame, app: &App, area: Rect) {
     lines.push(section("Drawbridge"));
     lines.push(field(
         "url",
-        app.drawbridge_url.clone().unwrap_or_else(|| "none".to_string()),
+        app.drawbridge_url.as_ref().map_or_else(|| "none".to_string(), ToString::to_string),
     ));
     lines.push(field(
         "connections",
@@ -1352,6 +1352,9 @@ fn responder_failure_text(reason: &SyncFailure) -> String {
         SyncFailure::PublishFailed { detail } => {
             format!("The request could not be sent ({detail}).")
         }
+        SyncFailure::DrawbridgeUnreachable { drawbridge_url, detail } => {
+            format!("Could not reach the Drawbridge at {drawbridge_url} ({detail}).")
+        }
     }
 }
 
@@ -1368,6 +1371,9 @@ fn requester_failure_text(reason: &SyncFailure) -> String {
         }
         SyncFailure::PublishFailed { detail } => {
             format!("The request could not be sent ({detail}).")
+        }
+        SyncFailure::DrawbridgeUnreachable { drawbridge_url, detail } => {
+            format!("Could not reach the Drawbridge at {drawbridge_url} ({detail}).")
         }
         // Responder-side outcomes; see the note in `responder_failure_text`.
         SyncFailure::RequestExpired => "This request expired.".to_string(),

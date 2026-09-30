@@ -37,6 +37,7 @@ pub enum ErrorCode {
     CiphertextHashMismatch = 119,
     BlobDecryptionFailed = 120,
     ContentHashMismatch = 121,
+    InvalidDrawbridgeUrl = 122,
     // Transcript integrity error codes
     StateVersionMismatch = 200,
     StaleCommit = 201,
@@ -136,6 +137,9 @@ pub enum Error {
     #[error("blob content hash mismatch: {0}")]
     ContentHashMismatch(String),
 
+    #[error("invalid Drawbridge URL: {0}")]
+    InvalidDrawbridgeUrl(String),
+
     #[error("pairing channel error: {0}")]
     PairingCrypto(String),
 
@@ -197,6 +201,7 @@ impl Error {
             Error::CiphertextHashMismatch(_) => ErrorCode::CiphertextHashMismatch,
             Error::BlobDecryptionFailed(_) => ErrorCode::BlobDecryptionFailed,
             Error::ContentHashMismatch(_) => ErrorCode::ContentHashMismatch,
+            Error::InvalidDrawbridgeUrl(_) => ErrorCode::InvalidDrawbridgeUrl,
             Error::PairingCrypto(_) => ErrorCode::PairingCrypto,
             Error::PairingProtocol(_) => ErrorCode::PairingProtocol,
             Error::SyncRequestProtocol(_) => ErrorCode::SyncRequestProtocol,
@@ -233,6 +238,7 @@ impl Error {
             | Error::ConflictUnresolved(msg)
             | Error::InvalidBlobUri(msg)
             | Error::CiphertextHashMismatch(msg)
+            | Error::InvalidDrawbridgeUrl(msg)
             | Error::BlobDecryptionFailed(msg)
             | Error::ContentHashMismatch(msg)
             | Error::PairingCrypto(msg)

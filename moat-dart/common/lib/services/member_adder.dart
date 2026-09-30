@@ -100,10 +100,7 @@ Future<void> addMemberToConversation({
   await authService.populateConversationTags(groupId);
 
   // 14. Fetch new member's Drawbridge config.
-  try {
-    final drawbridgeUrls = await client.fetchDrawbridgeConfig(newDid);
-    DrawbridgeService.instance.cacheDrawbridgeConfig(newDid, drawbridgeUrls);
-  } catch (_) {}
+  await DrawbridgeService.instance.refreshDrawbridgeConfigs(client, [newDid]);
 
   final groupIdHex = _bytesToHex(groupId);
   moatLog('addMemberToConversation: added $memberHandle to group $groupIdHex');

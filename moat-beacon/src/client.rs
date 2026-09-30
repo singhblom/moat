@@ -215,6 +215,7 @@ pub enum SyncFailure {
     Declined,
     ChannelClosed { detail: String },
     PublishFailed { detail: String },
+    DrawbridgeUnreachable { drawbridge_url: String, detail: String },
 }
 
 impl SyncRequestUiState {

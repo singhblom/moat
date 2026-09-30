@@ -471,7 +471,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       _pollingService!.startPolling();
       debugPrint('PollingService started');
 
-      _initDrawbridge(auth);
+      _initDrawbridge();
       _initPush();
     } else if (!auth.isAuthenticated && _pollingStarted) {
       _pollingService?.dispose();
@@ -499,29 +499,15 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
     await pushService.init();
   }
 
-  Future<void> _initDrawbridge(AuthProvider auth) async {
-    // Poll on push. PollingService registers conversation tags itself.
-    // AuthService handles the Drawbridge connection itself (via login/resume).
+  void _initDrawbridge() {
+    // Poll on push. PollingService registers conversation tags and reads
+    // every conversation's Drawbridges itself; AuthService handles the
+    // Drawbridge connection (via login/resume).
     DrawbridgeService.instance.onNewEvent = (event) {
       // For now, trigger a poll on any new event notification.
       // Inline decryption using event.payload can be added later.
       _pollingService?.poll();
     };
-
-    // Fetch partner drawbridge configs for all conversations.
-    final conversations = context.read<ConversationsProvider>().conversations;
-    final client = auth.service.atprotoClient;
-    final participantDids = <String>{if (auth.service.did != null) auth.service.did!};
-    for (final conv in conversations) {
-      participantDids.addAll(conv.participants);
-    }
-    for (final did in participantDids) {
-      if (!mounted) return;
-      try {
-        final urls = await client.fetchDrawbridgeConfig(did);
-        DrawbridgeService.instance.cacheDrawbridgeConfig(did, urls);
-      } catch (_) {}
-    }
   }
 
   @override

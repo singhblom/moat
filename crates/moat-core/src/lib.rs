@@ -25,6 +25,7 @@
 pub mod blob;
 pub(crate) mod credential;
 pub(crate) mod device_ring;
+pub(crate) mod drawbridge_url;
 pub(crate) mod error;
 pub(crate) mod event;
 pub mod message;
@@ -82,8 +83,11 @@ pub use crate::sync::{ConvHistory, SyncMessage, SyncProgress, SyncReaction, Sync
 pub use crate::sync_request::{
     decode_ring_msg, RingMsg, SyncFailure, SyncRequestUiState, SYNC_REQUEST_TTL_MS,
 };
-pub use crate::pair_channel::{PairChannelCommand, PairChannelDriver, PairEnv, PairIdentity};
-pub use crate::pairing::{normalize_drawbridge_url, PairingUiState, PAIRING_TOKEN_LEN};
+pub use crate::drawbridge_url::DrawbridgeUrl;
+pub use crate::pair_channel::{
+    PairChannelCommand, PairChannelDriver, PairEnv, PairIdentity, PAIR_CLOSE_GRACE,
+};
+pub use crate::pairing::{PairingUiState, PAIRING_TOKEN_LEN};
 
 /// The ciphersuite used by Moat
 pub const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;

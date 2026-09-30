@@ -25,6 +25,7 @@ use serde_with::{base64::Base64, serde_as};
 use sha2::Sha256;
 
 use crate::device_ring::{DeviceId, OfferedKp};
+use crate::drawbridge_url::DrawbridgeUrl;
 use crate::{Error, MoatCredential, MoatSession, Result};
 
 // ─── Wire payload (the code itself) ─────────────────────────────────────────
@@ -55,10 +56,10 @@ pub const CROCKFORD_ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 /// The decoded contents of a pairing code: enough for the new device to
 /// register a Drawbridge rendezvous token and for both sides to derive the
-/// channel AEAD keys. Deliberately excludes the DID and relay URL: both devices already
+/// channel AEAD keys. Deliberately excludes the DID: both devices already
 /// know it (equality is verified inside the encrypted channel). The Drawbridge
 /// the rendezvous happens on travels beside the code, not in it: see
-/// [`to_uri`](Self::to_uri) and [`normalize_drawbridge_url`].
+/// [`to_uri`](Self::to_uri).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairingPayload {
     pub token: [u8; PAIRING_TOKEN_LEN],
@@ -123,17 +124,17 @@ impl PairingPayload {
     /// Encode to the `moat-pair:<text-form>?drawbridge=<url>` URI used for the QR
     /// payload, so the app can register a URI handler and reject foreign QRs
     /// cheaply. `drawbridge_url` is the new device's Drawbridge, where the rendezvous is.
-    pub fn to_uri(&self, drawbridge_url: &str) -> String {
+    pub fn to_uri(&self, drawbridge_url: &DrawbridgeUrl) -> String {
         format!(
             "{PAIRING_URI_SCHEME}{}?drawbridge={}",
             self.to_text(),
-            percent_encode(drawbridge_url)
+            percent_encode(drawbridge_url.as_str())
         )
     }
 
     /// Decode from the `moat-pair:` URI form, returning the Drawbridge it names
     /// if it names one. Rejects a missing/foreign scheme.
-    pub fn from_uri(s: &str) -> Result<(Self, Option<String>)> {
+    pub fn from_uri(s: &str) -> Result<(Self, Option<DrawbridgeUrl>)> {
         let rest = s.strip_prefix(PAIRING_URI_SCHEME).ok_or_else(|| {
             Error::PairingProtocol(format!(
                 "pairing uri must start with {PAIRING_URI_SCHEME}, got: {s}"
@@ -143,35 +144,10 @@ impl PairingPayload {
         let drawbridge_url = query
             .split('&')
             .find_map(|pair| pair.strip_prefix("drawbridge="))
-            .map(|v| normalize_drawbridge_url(&percent_decode(v)?))
+            .map(|v| DrawbridgeUrl::parse(&percent_decode(v)?))
             .transpose()?;
         Ok((Self::from_text(text)?, drawbridge_url))
     }
-}
-
-/// Normalise a Drawbridge URL as typed, scanned or configured, to the form a
-/// device connects to and signs: `ws://` or `wss://`, a host, and a path.
-/// A bare host becomes `wss://<host>/ws`; a URL with no path gets `/ws`.
-/// Two spellings of one Drawbridge compare equal once normalised.
-pub fn normalize_drawbridge_url(input: &str) -> Result<String> {
-    let bad = |why: &str| Error::PairingProtocol(format!("Drawbridge URL {input:?}: {why}"));
-    let input = input.trim();
-    let (scheme, rest) = match input.split_once("://") {
-        Some((scheme, rest)) => (scheme.to_ascii_lowercase(), rest),
-        None => ("wss".to_string(), input),
-    };
-    if scheme != "ws" && scheme != "wss" {
-        return Err(bad("must start with ws:// or wss://"));
-    }
-    let (host, path) = match rest.find('/') {
-        Some(i) => rest.split_at(i),
-        None => (rest, ""),
-    };
-    if host.is_empty() || host.chars().any(|c| c.is_whitespace() || c == '@') {
-        return Err(bad("has no usable host"));
-    }
-    let path = if path.is_empty() || path == "/" { "/ws" } else { path };
-    Ok(format!("{scheme}://{host}{path}"))
 }
 
 /// Percent-encode everything but RFC 3986 unreserved characters.
@@ -647,7 +623,7 @@ impl PairingSession {
     /// [`PairingPayload::to_text`]/[`to_uri`](PairingPayload::to_uri) off it
     /// once here, so hosts don't need a second copy of the code alongside
     /// the session.
-    pub fn new_device(payload: &PairingPayload, drawbridge_url: &str) -> Self {
+    pub fn new_device(payload: &PairingPayload, drawbridge_url: &DrawbridgeUrl) -> Self {
         Self {
             phase: Phase::NewDevice(NewDevicePhase::Idle),
             channel: Some(PairingFrameChannel::new(
@@ -698,7 +674,7 @@ impl PairingSession {
     /// Move to `Failed { reason }` unless already terminal — a stray
     /// failure must not erase a real `Done`, and an existing `Failed` keeps
     /// its original reason.
-    fn fail(&mut self, reason: String) {
+    pub(crate) fn fail(&mut self, reason: String) {
         if !self.is_terminal() {
             self.phase = Phase::Failed { reason };
         }

@@ -68,6 +68,11 @@ Map<String, dynamic> _syncFailureJson(SyncFailureDto reason) {
     declined: () => {'kind': 'declined'},
     channelClosed: (detail) => {'kind': 'channel_closed', 'detail': detail},
     publishFailed: (detail) => {'kind': 'publish_failed', 'detail': detail},
+    drawbridgeUnreachable: (drawbridgeUrl, detail) => {
+      'kind': 'drawbridge_unreachable',
+      'drawbridge_url': drawbridgeUrl,
+      'detail': detail,
+    },
   );
 }
 
@@ -566,10 +571,8 @@ Handler buildRouter({
   router.post('/pair/new', (Request request) async {
     try {
       final code = await pairChannel.startPairing();
-      final state = pairChannel.pairingState.value;
-      final drawbridgeUrl =
-          state is PairingUiStateDto_ShowingCode ? state.drawbridgeUrl : null;
-      return Response.ok(jsonEncode({'code': code, 'drawbridge_url': drawbridgeUrl}),
+      return Response.ok(
+          jsonEncode({'code': code, 'drawbridge_url': pairChannel.ownDrawbridgeUrl}),
           headers: _jsonHeaders);
     } catch (e) {
       moatLog('Server: pair/new error: $e');

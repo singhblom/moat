@@ -118,11 +118,11 @@ class AuthService {
     await _initDrawbridge();
   }
 
-  /// This device's Drawbridge: the [drawbridgeUrl] override, else the one the
-  /// build was made for. Null when there is none.
+  /// This device's Drawbridge, normalised: the [drawbridgeUrl] override, else
+  /// the one the build was made for. Null when there is none, or it is unusable.
   String? get ownDrawbridgeUrl {
     final url = drawbridgeUrl ?? buildDrawbridgeUrl;
-    return url.isEmpty ? null : url;
+    return url.isEmpty ? null : normalizedDrawbridgeUrl(url);
   }
 
   /// Connect to Drawbridge and publish its URL.

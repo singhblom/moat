@@ -65,8 +65,8 @@ class PairChannelService {
         _ring = ring,
         _convService = conversationsService,
         _messageStorage = messageStorage {
-    _drawbridge.onPairReady = (ready) => _run(() => _apply(_driver.onPairReady(
-        drawbridgeUrl: ready.drawbridgeUrl, token: ready.token, url: ready.pairUrl)));
+    _drawbridge.onPairReady =
+        (ready) => _run(() => _apply(_driver.onPairReady(token: ready.token, url: ready.pairUrl)));
     _drawbridge.onPairConnected = (token) => _run(() async {
           final e = _env();
           await _apply(await _driver.onPaired(
@@ -84,20 +84,17 @@ class PairChannelService {
     _drawbridge.onAuthenticated =
         (drawbridgeUrl) => _run(() => _apply(_driver.onDrawbridgeConnected(drawbridgeUrl: drawbridgeUrl)));
     // A rendezvous connection that drops mid-rendezvous is reopened, and the
-    // unacknowledged offer or join resent once it authenticates.
+    // unacknowledged offer or join resent once it authenticates. One that
+    // cannot be opened fails the rendezvous.
     _drawbridge.onRendezvousClosed = (drawbridgeUrl) {
-      if (_driver.rendezvousDrawbridgeUrl() == null) return;
       Timer(const Duration(seconds: 3), () {
-        final live = _driver.rendezvousDrawbridgeUrl();
-        if (live != null && !_drawbridge.isOwnDrawbridge(live)) {
-          try {
-            _drawbridge.ensureRendezvous(live);
-          } catch (e) {
-            moatLog('PairChannelService: rendezvous reconnect failed: $e');
-          }
+        if (_driver.rendezvousDrawbridgeUrl() == drawbridgeUrl) {
+          _drawbridge.ensureRendezvous(drawbridgeUrl);
         }
       });
     };
+    _drawbridge.onRendezvousUnreachable = (drawbridgeUrl, reason) => _run(() => _apply(
+        _driver.onDrawbridgeUnreachable(drawbridgeUrl: drawbridgeUrl, detail: reason)));
   }
 
   void dispose() {
@@ -107,6 +104,7 @@ class PairChannelService {
     _drawbridge.onPairClosed = null;
     _drawbridge.onAuthenticated = null;
     _drawbridge.onRendezvousClosed = null;
+    _drawbridge.onRendezvousUnreachable = null;
     unawaited(_drawbridge.clearPair());
     unawaited(_drawbridge.closeRendezvous());
   }
@@ -376,11 +374,12 @@ class PairChannelService {
   }
 
   /// Close the rendezvous connection once the pair channel has been idle
-  /// for a grace period: a peer may still be reading its last frames.
+  /// for a grace period, unless a new rendezvous needs it: a peer may still
+  /// be reading its last frames.
   void _releaseRendezvousLater() {
-    Timer(const Duration(seconds: 5), () {
+    Timer(pairCloseGrace, () {
       final live = _driver.rendezvousDrawbridgeUrl();
-      if (live == null || _drawbridge.isOwnDrawbridge(live)) {
+      if (live == null || !_drawbridge.hasRendezvousConnection(live)) {
         unawaited(_drawbridge.closeRendezvous());
       }
     });

@@ -854,37 +854,47 @@ impl MoatAtprotoClient {
         let pds_url = self.resolve_pds_endpoint(did).await?;
         let pds_agent = self.agent_for_pds(&pds_url);
 
-        let input = list_records::ParametersData {
-            collection: Nsid::new(DRAWBRIDGE_CONFIG_NSID.to_string())
-                .map_err(|e| Error::InvalidRecord(e.to_string()))?,
-            cursor: None,
-            limit: Some(100.try_into().unwrap()),
-            repo: AtIdentifier::Did(
-                did.parse()
-                    .map_err(|_| Error::InvalidDid(did.to_string()))?,
-            ),
-            reverse: None,
-            rkey_start: None,
-            rkey_end: None,
-        };
-
-        let output = pds_agent
-            .api
-            .com
-            .atproto
-            .repo
-            .list_records(input.into())
-            .await
-            .map_err(|e| Error::Pds(e.to_string()))?;
-
         let mut urls: Vec<String> = Vec::new();
-        for item in &output.records {
-            let value = serde_json::to_value(&item.value)
-                .map_err(|e| Error::Serialization(e.to_string()))?;
-            if let Ok(record) = serde_json::from_value::<DrawbridgeConfigRecord>(value) {
-                if !urls.contains(&record.url) {
-                    urls.push(record.url);
+        let mut cursor: Option<String> = None;
+        loop {
+            let input = list_records::ParametersData {
+                collection: Nsid::new(DRAWBRIDGE_CONFIG_NSID.to_string())
+                    .map_err(|e| Error::InvalidRecord(e.to_string()))?,
+                cursor: cursor.clone(),
+                limit: Some(100.try_into().unwrap()),
+                repo: AtIdentifier::Did(
+                    did.parse()
+                        .map_err(|_| Error::InvalidDid(did.to_string()))?,
+                ),
+                reverse: None,
+                rkey_start: None,
+                rkey_end: None,
+            };
+
+            let output = pds_agent
+                .api
+                .com
+                .atproto
+                .repo
+                .list_records(input.into())
+                .await
+                .map_err(|e| Error::Pds(e.to_string()))?;
+
+            for item in &output.records {
+                let value = serde_json::to_value(&item.value)
+                    .map_err(|e| Error::Serialization(e.to_string()))?;
+                if let Ok(record) = serde_json::from_value::<DrawbridgeConfigRecord>(value) {
+                    if !urls.contains(&record.url) {
+                        urls.push(record.url);
+                    }
                 }
+            }
+
+            match &output.cursor {
+                Some(next_cursor) if !output.records.is_empty() => {
+                    cursor = Some(next_cursor.clone());
+                }
+                _ => break,
             }
         }
         Ok(urls)

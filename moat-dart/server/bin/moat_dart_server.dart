@@ -37,6 +37,11 @@ Future<void> main(List<String> args) async {
   await RustLib.init(externalLibrary: ExternalLibrary.open(libPath));
   moatLog('Server: Rust FFI initialized from $libPath');
 
+  if (drawbridgeUrl != null && normalizedDrawbridgeUrl(drawbridgeUrl) == null) {
+    stderr.writeln('Error: --drawbridge-url $drawbridgeUrl is not a Drawbridge URL');
+    exit(1);
+  }
+
   // Set up storage.
   final storageBackend = FileStorageBackend(storageDir);
   final secureStorage = SecureStorageService(storage: storageBackend);

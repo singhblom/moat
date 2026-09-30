@@ -7,6 +7,8 @@ String requesterFailureText(ffi.SyncFailureDto reason) {
     channelClosed: (detail) =>
         'The connection closed before the transfer finished ($detail).',
     publishFailed: (detail) => 'The request could not be sent ($detail).',
+    drawbridgeUnreachable: (drawbridgeUrl, detail) =>
+        'Could not reach the Drawbridge at $drawbridgeUrl ($detail).',
     // Responder-side outcomes. Rendered rather than hidden so a logic slip
     // surfaces instead of showing a blank failure.
     requestExpired: () => 'This request expired.',
@@ -23,6 +25,8 @@ String responderFailureText(ffi.SyncFailureDto reason) {
     // Cannot arise on this side; see the note above.
     noAnswer: () => 'The other device stopped waiting.',
     publishFailed: (detail) => 'The request could not be sent ($detail).',
+    drawbridgeUnreachable: (drawbridgeUrl, detail) =>
+        'Could not reach the Drawbridge at $drawbridgeUrl ($detail).',
   );
 }
 

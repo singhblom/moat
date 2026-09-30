@@ -6653,6 +6653,8 @@ mixin _$SyncFailureDto {
     required TResult Function() declined,
     required TResult Function(String detail) channelClosed,
     required TResult Function(String detail) publishFailed,
+    required TResult Function(String drawbridgeUrl, String detail)
+        drawbridgeUnreachable,
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
@@ -6662,6 +6664,8 @@ mixin _$SyncFailureDto {
     TResult? Function()? declined,
     TResult? Function(String detail)? channelClosed,
     TResult? Function(String detail)? publishFailed,
+    TResult? Function(String drawbridgeUrl, String detail)?
+        drawbridgeUnreachable,
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
@@ -6671,6 +6675,8 @@ mixin _$SyncFailureDto {
     TResult Function()? declined,
     TResult Function(String detail)? channelClosed,
     TResult Function(String detail)? publishFailed,
+    TResult Function(String drawbridgeUrl, String detail)?
+        drawbridgeUnreachable,
     required TResult orElse(),
   }) =>
       throw _privateConstructorUsedError;
@@ -6682,6 +6688,8 @@ mixin _$SyncFailureDto {
     required TResult Function(SyncFailureDto_Declined value) declined,
     required TResult Function(SyncFailureDto_ChannelClosed value) channelClosed,
     required TResult Function(SyncFailureDto_PublishFailed value) publishFailed,
+    required TResult Function(SyncFailureDto_DrawbridgeUnreachable value)
+        drawbridgeUnreachable,
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
@@ -6691,6 +6699,8 @@ mixin _$SyncFailureDto {
     TResult? Function(SyncFailureDto_Declined value)? declined,
     TResult? Function(SyncFailureDto_ChannelClosed value)? channelClosed,
     TResult? Function(SyncFailureDto_PublishFailed value)? publishFailed,
+    TResult? Function(SyncFailureDto_DrawbridgeUnreachable value)?
+        drawbridgeUnreachable,
   }) =>
       throw _privateConstructorUsedError;
   @optionalTypeArgs
@@ -6700,6 +6710,8 @@ mixin _$SyncFailureDto {
     TResult Function(SyncFailureDto_Declined value)? declined,
     TResult Function(SyncFailureDto_ChannelClosed value)? channelClosed,
     TResult Function(SyncFailureDto_PublishFailed value)? publishFailed,
+    TResult Function(SyncFailureDto_DrawbridgeUnreachable value)?
+        drawbridgeUnreachable,
     required TResult orElse(),
   }) =>
       throw _privateConstructorUsedError;
@@ -6775,6 +6787,8 @@ class _$SyncFailureDto_NoAnswerImpl extends SyncFailureDto_NoAnswer {
     required TResult Function() declined,
     required TResult Function(String detail) channelClosed,
     required TResult Function(String detail) publishFailed,
+    required TResult Function(String drawbridgeUrl, String detail)
+        drawbridgeUnreachable,
   }) {
     return noAnswer();
   }
@@ -6787,6 +6801,8 @@ class _$SyncFailureDto_NoAnswerImpl extends SyncFailureDto_NoAnswer {
     TResult? Function()? declined,
     TResult? Function(String detail)? channelClosed,
     TResult? Function(String detail)? publishFailed,
+    TResult? Function(String drawbridgeUrl, String detail)?
+        drawbridgeUnreachable,
   }) {
     return noAnswer?.call();
   }
@@ -6799,6 +6815,8 @@ class _$SyncFailureDto_NoAnswerImpl extends SyncFailureDto_NoAnswer {
     TResult Function()? declined,
     TResult Function(String detail)? channelClosed,
     TResult Function(String detail)? publishFailed,
+    TResult Function(String drawbridgeUrl, String detail)?
+        drawbridgeUnreachable,
     required TResult orElse(),
   }) {
     if (noAnswer != null) {
@@ -6816,6 +6834,8 @@ class _$SyncFailureDto_NoAnswerImpl extends SyncFailureDto_NoAnswer {
     required TResult Function(SyncFailureDto_Declined value) declined,
     required TResult Function(SyncFailureDto_ChannelClosed value) channelClosed,
     required TResult Function(SyncFailureDto_PublishFailed value) publishFailed,
+    required TResult Function(SyncFailureDto_DrawbridgeUnreachable value)
+        drawbridgeUnreachable,
   }) {
     return noAnswer(this);
   }
@@ -6828,6 +6848,8 @@ class _$SyncFailureDto_NoAnswerImpl extends SyncFailureDto_NoAnswer {
     TResult? Function(SyncFailureDto_Declined value)? declined,
     TResult? Function(SyncFailureDto_ChannelClosed value)? channelClosed,
     TResult? Function(SyncFailureDto_PublishFailed value)? publishFailed,
+    TResult? Function(SyncFailureDto_DrawbridgeUnreachable value)?
+        drawbridgeUnreachable,
   }) {
     return noAnswer?.call(this);
   }
@@ -6840,6 +6862,8 @@ class _$SyncFailureDto_NoAnswerImpl extends SyncFailureDto_NoAnswer {
     TResult Function(SyncFailureDto_Declined value)? declined,
     TResult Function(SyncFailureDto_ChannelClosed value)? channelClosed,
     TResult Function(SyncFailureDto_PublishFailed value)? publishFailed,
+    TResult Function(SyncFailureDto_DrawbridgeUnreachable value)?
+        drawbridgeUnreachable,
     required TResult orElse(),
   }) {
     if (noAnswer != null) {
@@ -6905,6 +6929,8 @@ class _$SyncFailureDto_RequestExpiredImpl
     required TResult Function() declined,
     required TResult Function(String detail) channelClosed,
     required TResult Function(String detail) publishFailed,
+    required TResult Function(String drawbridgeUrl, String detail)
+        drawbridgeUnreachable,
   }) {
     return requestExpired();
   }
@@ -6917,6 +6943,8 @@ class _$SyncFailureDto_RequestExpiredImpl
     TResult? Function()? declined,
     TResult? Function(String detail)? channelClosed,
     TResult? Function(String detail)? publishFailed,
+    TResult? Function(String drawbridgeUrl, String detail)?
+        drawbridgeUnreachable,
   }) {
     return requestExpired?.call();
   }
@@ -6929,6 +6957,8 @@ class _$SyncFailureDto_RequestExpiredImpl
     TResult Function()? declined,
     TResult Function(String detail)? channelClosed,
     TResult Function(String detail)? publishFailed,
+    TResult Function(String drawbridgeUrl, String detail)?
+        drawbridgeUnreachable,
     required TResult orElse(),
   }) {
     if (requestExpired != null) {
@@ -6946,6 +6976,8 @@ class _$SyncFailureDto_RequestExpiredImpl
     required TResult Function(SyncFailureDto_Declined value) declined,
     required TResult Function(SyncFailureDto_ChannelClosed value) channelClosed,
     required TResult Function(SyncFailureDto_PublishFailed value) publishFailed,
+    required TResult Function(SyncFailureDto_DrawbridgeUnreachable value)
+        drawbridgeUnreachable,
   }) {
     return requestExpired(this);
   }
@@ -6958,6 +6990,8 @@ class _$SyncFailureDto_RequestExpiredImpl
     TResult? Function(SyncFailureDto_Declined value)? declined,
     TResult? Function(SyncFailureDto_ChannelClosed value)? channelClosed,
     TResult? Function(SyncFailureDto_PublishFailed value)? publishFailed,
+    TResult? Function(SyncFailureDto_DrawbridgeUnreachable value)?
+        drawbridgeUnreachable,
   }) {
     return requestExpired?.call(this);
   }
@@ -6970,6 +7004,8 @@ class _$SyncFailureDto_RequestExpiredImpl
     TResult Function(SyncFailureDto_Declined value)? declined,
     TResult Function(SyncFailureDto_ChannelClosed value)? channelClosed,
     TResult Function(SyncFailureDto_PublishFailed value)? publishFailed,
+    TResult Function(SyncFailureDto_DrawbridgeUnreachable value)?
+        drawbridgeUnreachable,
     required TResult orElse(),
   }) {
     if (requestExpired != null) {
@@ -7034,6 +7070,8 @@ class _$SyncFailureDto_DeclinedImpl extends SyncFailureDto_Declined {
     required TResult Function() declined,
     required TResult Function(String detail) channelClosed,
     required TResult Function(String detail) publishFailed,
+    required TResult Function(String drawbridgeUrl, String detail)
+        drawbridgeUnreachable,
   }) {
     return declined();
   }
@@ -7046,6 +7084,8 @@ class _$SyncFailureDto_DeclinedImpl extends SyncFailureDto_Declined {
     TResult? Function()? declined,
     TResult? Function(String detail)? channelClosed,
     TResult? Function(String detail)? publishFailed,
+    TResult? Function(String drawbridgeUrl, String detail)?
+        drawbridgeUnreachable,
   }) {
     return declined?.call();
   }
@@ -7058,6 +7098,8 @@ class _$SyncFailureDto_DeclinedImpl extends SyncFailureDto_Declined {
     TResult Function()? declined,
     TResult Function(String detail)? channelClosed,
     TResult Function(String detail)? publishFailed,
+    TResult Function(String drawbridgeUrl, String detail)?
+        drawbridgeUnreachable,
     required TResult orElse(),
   }) {
     if (declined != null) {
@@ -7075,6 +7117,8 @@ class _$SyncFailureDto_DeclinedImpl extends SyncFailureDto_Declined {
     required TResult Function(SyncFailureDto_Declined value) declined,
     required TResult Function(SyncFailureDto_ChannelClosed value) channelClosed,
     required TResult Function(SyncFailureDto_PublishFailed value) publishFailed,
+    required TResult Function(SyncFailureDto_DrawbridgeUnreachable value)
+        drawbridgeUnreachable,
   }) {
     return declined(this);
   }
@@ -7087,6 +7131,8 @@ class _$SyncFailureDto_DeclinedImpl extends SyncFailureDto_Declined {
     TResult? Function(SyncFailureDto_Declined value)? declined,
     TResult? Function(SyncFailureDto_ChannelClosed value)? channelClosed,
     TResult? Function(SyncFailureDto_PublishFailed value)? publishFailed,
+    TResult? Function(SyncFailureDto_DrawbridgeUnreachable value)?
+        drawbridgeUnreachable,
   }) {
     return declined?.call(this);
   }
@@ -7099,6 +7145,8 @@ class _$SyncFailureDto_DeclinedImpl extends SyncFailureDto_Declined {
     TResult Function(SyncFailureDto_Declined value)? declined,
     TResult Function(SyncFailureDto_ChannelClosed value)? channelClosed,
     TResult Function(SyncFailureDto_PublishFailed value)? publishFailed,
+    TResult Function(SyncFailureDto_DrawbridgeUnreachable value)?
+        drawbridgeUnreachable,
     required TResult orElse(),
   }) {
     if (declined != null) {
@@ -7191,6 +7239,8 @@ class _$SyncFailureDto_ChannelClosedImpl extends SyncFailureDto_ChannelClosed {
     required TResult Function() declined,
     required TResult Function(String detail) channelClosed,
     required TResult Function(String detail) publishFailed,
+    required TResult Function(String drawbridgeUrl, String detail)
+        drawbridgeUnreachable,
   }) {
     return channelClosed(detail);
   }
@@ -7203,6 +7253,8 @@ class _$SyncFailureDto_ChannelClosedImpl extends SyncFailureDto_ChannelClosed {
     TResult? Function()? declined,
     TResult? Function(String detail)? channelClosed,
     TResult? Function(String detail)? publishFailed,
+    TResult? Function(String drawbridgeUrl, String detail)?
+        drawbridgeUnreachable,
   }) {
     return channelClosed?.call(detail);
   }
@@ -7215,6 +7267,8 @@ class _$SyncFailureDto_ChannelClosedImpl extends SyncFailureDto_ChannelClosed {
     TResult Function()? declined,
     TResult Function(String detail)? channelClosed,
     TResult Function(String detail)? publishFailed,
+    TResult Function(String drawbridgeUrl, String detail)?
+        drawbridgeUnreachable,
     required TResult orElse(),
   }) {
     if (channelClosed != null) {
@@ -7232,6 +7286,8 @@ class _$SyncFailureDto_ChannelClosedImpl extends SyncFailureDto_ChannelClosed {
     required TResult Function(SyncFailureDto_Declined value) declined,
     required TResult Function(SyncFailureDto_ChannelClosed value) channelClosed,
     required TResult Function(SyncFailureDto_PublishFailed value) publishFailed,
+    required TResult Function(SyncFailureDto_DrawbridgeUnreachable value)
+        drawbridgeUnreachable,
   }) {
     return channelClosed(this);
   }
@@ -7244,6 +7300,8 @@ class _$SyncFailureDto_ChannelClosedImpl extends SyncFailureDto_ChannelClosed {
     TResult? Function(SyncFailureDto_Declined value)? declined,
     TResult? Function(SyncFailureDto_ChannelClosed value)? channelClosed,
     TResult? Function(SyncFailureDto_PublishFailed value)? publishFailed,
+    TResult? Function(SyncFailureDto_DrawbridgeUnreachable value)?
+        drawbridgeUnreachable,
   }) {
     return channelClosed?.call(this);
   }
@@ -7256,6 +7314,8 @@ class _$SyncFailureDto_ChannelClosedImpl extends SyncFailureDto_ChannelClosed {
     TResult Function(SyncFailureDto_Declined value)? declined,
     TResult Function(SyncFailureDto_ChannelClosed value)? channelClosed,
     TResult Function(SyncFailureDto_PublishFailed value)? publishFailed,
+    TResult Function(SyncFailureDto_DrawbridgeUnreachable value)?
+        drawbridgeUnreachable,
     required TResult orElse(),
   }) {
     if (channelClosed != null) {
@@ -7358,6 +7418,8 @@ class _$SyncFailureDto_PublishFailedImpl extends SyncFailureDto_PublishFailed {
     required TResult Function() declined,
     required TResult Function(String detail) channelClosed,
     required TResult Function(String detail) publishFailed,
+    required TResult Function(String drawbridgeUrl, String detail)
+        drawbridgeUnreachable,
   }) {
     return publishFailed(detail);
   }
@@ -7370,6 +7432,8 @@ class _$SyncFailureDto_PublishFailedImpl extends SyncFailureDto_PublishFailed {
     TResult? Function()? declined,
     TResult? Function(String detail)? channelClosed,
     TResult? Function(String detail)? publishFailed,
+    TResult? Function(String drawbridgeUrl, String detail)?
+        drawbridgeUnreachable,
   }) {
     return publishFailed?.call(detail);
   }
@@ -7382,6 +7446,8 @@ class _$SyncFailureDto_PublishFailedImpl extends SyncFailureDto_PublishFailed {
     TResult Function()? declined,
     TResult Function(String detail)? channelClosed,
     TResult Function(String detail)? publishFailed,
+    TResult Function(String drawbridgeUrl, String detail)?
+        drawbridgeUnreachable,
     required TResult orElse(),
   }) {
     if (publishFailed != null) {
@@ -7399,6 +7465,8 @@ class _$SyncFailureDto_PublishFailedImpl extends SyncFailureDto_PublishFailed {
     required TResult Function(SyncFailureDto_Declined value) declined,
     required TResult Function(SyncFailureDto_ChannelClosed value) channelClosed,
     required TResult Function(SyncFailureDto_PublishFailed value) publishFailed,
+    required TResult Function(SyncFailureDto_DrawbridgeUnreachable value)
+        drawbridgeUnreachable,
   }) {
     return publishFailed(this);
   }
@@ -7411,6 +7479,8 @@ class _$SyncFailureDto_PublishFailedImpl extends SyncFailureDto_PublishFailed {
     TResult? Function(SyncFailureDto_Declined value)? declined,
     TResult? Function(SyncFailureDto_ChannelClosed value)? channelClosed,
     TResult? Function(SyncFailureDto_PublishFailed value)? publishFailed,
+    TResult? Function(SyncFailureDto_DrawbridgeUnreachable value)?
+        drawbridgeUnreachable,
   }) {
     return publishFailed?.call(this);
   }
@@ -7423,6 +7493,8 @@ class _$SyncFailureDto_PublishFailedImpl extends SyncFailureDto_PublishFailed {
     TResult Function(SyncFailureDto_Declined value)? declined,
     TResult Function(SyncFailureDto_ChannelClosed value)? channelClosed,
     TResult Function(SyncFailureDto_PublishFailed value)? publishFailed,
+    TResult Function(SyncFailureDto_DrawbridgeUnreachable value)?
+        drawbridgeUnreachable,
     required TResult orElse(),
   }) {
     if (publishFailed != null) {
@@ -7444,6 +7516,199 @@ abstract class SyncFailureDto_PublishFailed extends SyncFailureDto {
   @JsonKey(includeFromJson: false, includeToJson: false)
   _$$SyncFailureDto_PublishFailedImplCopyWith<
           _$SyncFailureDto_PublishFailedImpl>
+      get copyWith => throw _privateConstructorUsedError;
+}
+
+/// @nodoc
+abstract class _$$SyncFailureDto_DrawbridgeUnreachableImplCopyWith<$Res> {
+  factory _$$SyncFailureDto_DrawbridgeUnreachableImplCopyWith(
+          _$SyncFailureDto_DrawbridgeUnreachableImpl value,
+          $Res Function(_$SyncFailureDto_DrawbridgeUnreachableImpl) then) =
+      __$$SyncFailureDto_DrawbridgeUnreachableImplCopyWithImpl<$Res>;
+  @useResult
+  $Res call({String drawbridgeUrl, String detail});
+}
+
+/// @nodoc
+class __$$SyncFailureDto_DrawbridgeUnreachableImplCopyWithImpl<$Res>
+    extends _$SyncFailureDtoCopyWithImpl<$Res,
+        _$SyncFailureDto_DrawbridgeUnreachableImpl>
+    implements _$$SyncFailureDto_DrawbridgeUnreachableImplCopyWith<$Res> {
+  __$$SyncFailureDto_DrawbridgeUnreachableImplCopyWithImpl(
+      _$SyncFailureDto_DrawbridgeUnreachableImpl _value,
+      $Res Function(_$SyncFailureDto_DrawbridgeUnreachableImpl) _then)
+      : super(_value, _then);
+
+  /// Create a copy of SyncFailureDto
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  @override
+  $Res call({
+    Object? drawbridgeUrl = null,
+    Object? detail = null,
+  }) {
+    return _then(_$SyncFailureDto_DrawbridgeUnreachableImpl(
+      drawbridgeUrl: null == drawbridgeUrl
+          ? _value.drawbridgeUrl
+          : drawbridgeUrl // ignore: cast_nullable_to_non_nullable
+              as String,
+      detail: null == detail
+          ? _value.detail
+          : detail // ignore: cast_nullable_to_non_nullable
+              as String,
+    ));
+  }
+}
+
+/// @nodoc
+
+class _$SyncFailureDto_DrawbridgeUnreachableImpl
+    extends SyncFailureDto_DrawbridgeUnreachable {
+  const _$SyncFailureDto_DrawbridgeUnreachableImpl(
+      {required this.drawbridgeUrl, required this.detail})
+      : super._();
+
+  @override
+  final String drawbridgeUrl;
+  @override
+  final String detail;
+
+  @override
+  String toString() {
+    return 'SyncFailureDto.drawbridgeUnreachable(drawbridgeUrl: $drawbridgeUrl, detail: $detail)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is _$SyncFailureDto_DrawbridgeUnreachableImpl &&
+            (identical(other.drawbridgeUrl, drawbridgeUrl) ||
+                other.drawbridgeUrl == drawbridgeUrl) &&
+            (identical(other.detail, detail) || other.detail == detail));
+  }
+
+  @override
+  int get hashCode => Object.hash(runtimeType, drawbridgeUrl, detail);
+
+  /// Create a copy of SyncFailureDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  @pragma('vm:prefer-inline')
+  _$$SyncFailureDto_DrawbridgeUnreachableImplCopyWith<
+          _$SyncFailureDto_DrawbridgeUnreachableImpl>
+      get copyWith => __$$SyncFailureDto_DrawbridgeUnreachableImplCopyWithImpl<
+          _$SyncFailureDto_DrawbridgeUnreachableImpl>(this, _$identity);
+
+  @override
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() noAnswer,
+    required TResult Function() requestExpired,
+    required TResult Function() declined,
+    required TResult Function(String detail) channelClosed,
+    required TResult Function(String detail) publishFailed,
+    required TResult Function(String drawbridgeUrl, String detail)
+        drawbridgeUnreachable,
+  }) {
+    return drawbridgeUnreachable(drawbridgeUrl, detail);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? noAnswer,
+    TResult? Function()? requestExpired,
+    TResult? Function()? declined,
+    TResult? Function(String detail)? channelClosed,
+    TResult? Function(String detail)? publishFailed,
+    TResult? Function(String drawbridgeUrl, String detail)?
+        drawbridgeUnreachable,
+  }) {
+    return drawbridgeUnreachable?.call(drawbridgeUrl, detail);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? noAnswer,
+    TResult Function()? requestExpired,
+    TResult Function()? declined,
+    TResult Function(String detail)? channelClosed,
+    TResult Function(String detail)? publishFailed,
+    TResult Function(String drawbridgeUrl, String detail)?
+        drawbridgeUnreachable,
+    required TResult orElse(),
+  }) {
+    if (drawbridgeUnreachable != null) {
+      return drawbridgeUnreachable(drawbridgeUrl, detail);
+    }
+    return orElse();
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(SyncFailureDto_NoAnswer value) noAnswer,
+    required TResult Function(SyncFailureDto_RequestExpired value)
+        requestExpired,
+    required TResult Function(SyncFailureDto_Declined value) declined,
+    required TResult Function(SyncFailureDto_ChannelClosed value) channelClosed,
+    required TResult Function(SyncFailureDto_PublishFailed value) publishFailed,
+    required TResult Function(SyncFailureDto_DrawbridgeUnreachable value)
+        drawbridgeUnreachable,
+  }) {
+    return drawbridgeUnreachable(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(SyncFailureDto_NoAnswer value)? noAnswer,
+    TResult? Function(SyncFailureDto_RequestExpired value)? requestExpired,
+    TResult? Function(SyncFailureDto_Declined value)? declined,
+    TResult? Function(SyncFailureDto_ChannelClosed value)? channelClosed,
+    TResult? Function(SyncFailureDto_PublishFailed value)? publishFailed,
+    TResult? Function(SyncFailureDto_DrawbridgeUnreachable value)?
+        drawbridgeUnreachable,
+  }) {
+    return drawbridgeUnreachable?.call(this);
+  }
+
+  @override
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(SyncFailureDto_NoAnswer value)? noAnswer,
+    TResult Function(SyncFailureDto_RequestExpired value)? requestExpired,
+    TResult Function(SyncFailureDto_Declined value)? declined,
+    TResult Function(SyncFailureDto_ChannelClosed value)? channelClosed,
+    TResult Function(SyncFailureDto_PublishFailed value)? publishFailed,
+    TResult Function(SyncFailureDto_DrawbridgeUnreachable value)?
+        drawbridgeUnreachable,
+    required TResult orElse(),
+  }) {
+    if (drawbridgeUnreachable != null) {
+      return drawbridgeUnreachable(this);
+    }
+    return orElse();
+  }
+}
+
+abstract class SyncFailureDto_DrawbridgeUnreachable extends SyncFailureDto {
+  const factory SyncFailureDto_DrawbridgeUnreachable(
+          {required final String drawbridgeUrl, required final String detail}) =
+      _$SyncFailureDto_DrawbridgeUnreachableImpl;
+  const SyncFailureDto_DrawbridgeUnreachable._() : super._();
+
+  String get drawbridgeUrl;
+  String get detail;
+
+  /// Create a copy of SyncFailureDto
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  _$$SyncFailureDto_DrawbridgeUnreachableImplCopyWith<
+          _$SyncFailureDto_DrawbridgeUnreachableImpl>
       get copyWith => throw _privateConstructorUsedError;
 }
 

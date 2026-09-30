@@ -118,6 +118,8 @@ pub enum SyncFailure {
     Declined,
     ChannelClosed { detail: String },
     PublishFailed { detail: String },
+    /// The rendezvous Drawbridge could not be reached.
+    DrawbridgeUnreachable { drawbridge_url: String, detail: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

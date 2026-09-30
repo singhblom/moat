@@ -436,23 +436,28 @@ class AtprotoClient {
   /// cannot be read, so a failure is not mistaken for "no relays".
   Future<List<String>> fetchDrawbridgeConfig(String did) async {
     final pdsUrl = await resolvePdsEndpoint(did);
-    final response = await _get(
-      '$pdsUrl/xrpc/com.atproto.repo.listRecords',
-      queryParams: {
-        'repo': did,
-        'collection': drawbridgeConfigNsid,
-        'limit': '100',
-      },
-    );
-
     final urls = <String>[];
-    for (final record in response['records'] as List<dynamic>? ?? []) {
-      final value = (record as Map<String, dynamic>)['value'];
-      final url = value is Map<String, dynamic> ? value['url'] : null;
-      if (url is String && url.isNotEmpty && !urls.contains(url)) {
-        urls.add(url);
+    String? cursor;
+    do {
+      final response = await _get(
+        '$pdsUrl/xrpc/com.atproto.repo.listRecords',
+        queryParams: {
+          'repo': did,
+          'collection': drawbridgeConfigNsid,
+          'limit': '100',
+          if (cursor != null) 'cursor': cursor,
+        },
+      );
+      final records = response['records'] as List<dynamic>? ?? [];
+      for (final record in records) {
+        final value = (record as Map<String, dynamic>)['value'];
+        final url = value is Map<String, dynamic> ? value['url'] : null;
+        if (url is String && url.isNotEmpty && !urls.contains(url)) {
+          urls.add(url);
+        }
       }
-    }
+      cursor = records.isEmpty ? null : response['cursor'] as String?;
+    } while (cursor != null);
     return urls;
   }
 

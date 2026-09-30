@@ -2,7 +2,10 @@ use super::*;
 
 const SECRET: [u8; 16] = [0xAA; 16];
 const TOKEN: [u8; 16] = [0xBB; 16];
-const DRAWBRIDGE: &str = "wss://drawbridge.example.com/ws";
+
+fn drawbridge() -> DrawbridgeUrl {
+    DrawbridgeUrl::parse("wss://drawbridge.example.com/ws").unwrap()
+}
 
 fn payload() -> PairingPayload {
     PairingPayload {
@@ -33,7 +36,7 @@ fn send_frame(cmds: &[PairingCommand]) -> Vec<u8> {
 
 /// `mls`'s Enroll frame, sealed for the existing device.
 fn enroll_frame(mls: &MoatSession, credential: &MoatCredential, key_bundle: &[u8]) -> Vec<u8> {
-    let mut session = PairingSession::new_device(&payload(), DRAWBRIDGE);
+    let mut session = PairingSession::new_device(&payload(), &drawbridge());
     let cmds = session
         .start_enroll(mls, credential, key_bundle, [0u8; 32], Vec::new())
         .unwrap();
@@ -76,11 +79,11 @@ fn text_form_is_53_characters_plus_grouping() {
 
 #[test]
 fn payload_and_drawbridge_roundtrip_through_uri_form() {
-    let uri = payload().to_uri(DRAWBRIDGE);
+    let uri = payload().to_uri(&drawbridge());
     assert!(uri.starts_with(PAIRING_URI_SCHEME), "{uri}");
     assert_eq!(
         PairingPayload::from_uri(&uri).unwrap(),
-        (payload(), Some(DRAWBRIDGE.to_string()))
+        (payload(), Some(drawbridge()))
     );
 }
 
@@ -94,31 +97,9 @@ fn a_uri_without_a_drawbridge_yields_none() {
 fn a_drawbridge_in_a_uri_is_normalised() {
     let uri = format!("{PAIRING_URI_SCHEME}{}?drawbridge=drawbridge.example.com", payload().to_text());
     assert_eq!(
-        PairingPayload::from_uri(&uri).unwrap().1.as_deref(),
-        Some("wss://drawbridge.example.com/ws")
+        PairingPayload::from_uri(&uri).unwrap().1,
+        Some(drawbridge())
     );
-}
-
-#[test]
-fn normalize_drawbridge_url_accepts_the_forms_a_user_types() {
-    for (typed, want) in [
-        ("wss://drawbridge.example.com/ws", "wss://drawbridge.example.com/ws"),
-        ("drawbridge.example.com", "wss://drawbridge.example.com/ws"),
-        ("  drawbridge.example.com/ws  ", "wss://drawbridge.example.com/ws"),
-        ("WSS://drawbridge.example.com", "wss://drawbridge.example.com/ws"),
-        ("ws://127.0.0.1:8080", "ws://127.0.0.1:8080/ws"),
-        ("ws://127.0.0.1:8080/", "ws://127.0.0.1:8080/ws"),
-        ("wss://drawbridge.example.com/custom", "wss://drawbridge.example.com/custom"),
-    ] {
-        assert_eq!(normalize_drawbridge_url(typed).unwrap(), want, "{typed:?}");
-    }
-}
-
-#[test]
-fn normalize_drawbridge_url_rejects_what_is_not_a_drawbridge() {
-    for typed in ["", "   ", "https://drawbridge.example.com", "wss://", "ws:///ws", "a b"] {
-        assert!(normalize_drawbridge_url(typed).is_err(), "{typed:?}");
-    }
 }
 
 #[test]
@@ -209,7 +190,7 @@ fn a_frame_does_not_open_at_another_counter() {
 #[test]
 fn an_admit_before_enroll_was_sent_fails_the_pairing() {
     let (mls, credential, _) = alice("Phone");
-    let mut session = PairingSession::new_device(&payload(), DRAWBRIDGE);
+    let mut session = PairingSession::new_device(&payload(), &drawbridge());
     let frame = admit_frame(Admit {
         ring_id: vec![1, 2, 3],
         welcome: vec![9, 9, 9],
@@ -276,7 +257,7 @@ fn an_admit_into_another_dids_ring_fails_the_pairing() {
     let mls = MoatSession::new();
     let credential = MoatCredential::new("did:plc:alice", "Phone", *mls.device_id());
     let (kp, key_bundle) = mls.generate_key_package(&credential).unwrap();
-    let mut session = PairingSession::new_device(&payload(), DRAWBRIDGE);
+    let mut session = PairingSession::new_device(&payload(), &drawbridge());
     session
         .start_enroll(&mls, &credential, &key_bundle, [0u8; 32], Vec::new())
         .unwrap();
@@ -305,12 +286,12 @@ fn an_admit_into_another_dids_ring_fails_the_pairing() {
 
 #[test]
 fn cancel_from_each_non_terminal_state_fails_the_pairing() {
-    let mut idle = PairingSession::new_device(&payload(), DRAWBRIDGE);
+    let mut idle = PairingSession::new_device(&payload(), &drawbridge());
     idle.cancel().unwrap();
     assert_failed_with_reason(&idle);
 
     let (mls_new, credential_new, kb_new) = alice("Phone");
-    let mut awaiting_admit = PairingSession::new_device(&payload(), DRAWBRIDGE);
+    let mut awaiting_admit = PairingSession::new_device(&payload(), &drawbridge());
     awaiting_admit
         .start_enroll(&mls_new, &credential_new, &kb_new, [0u8; 32], Vec::new())
         .unwrap();

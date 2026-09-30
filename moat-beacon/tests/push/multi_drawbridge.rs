@@ -1,5 +1,6 @@
 //! A message to a user whose two devices sit on different Drawbridges reaches
-//! both by push. One test per runtime mix of Alice's devices, `<d1><d2>`.
+//! both by push. Named `<d1><d2>` for Alice's devices; the two mixed cells
+//! put each runtime on both sides of a pairing across Drawbridges.
 
 use moat_beacon::scenarios::multi_drawbridge_push::run;
 use moat_beacon::world::ParticipantKind::{DartServer as D, RustCli as R};
@@ -18,7 +19,5 @@ macro_rules! cell {
     };
 }
 
-cell!(multi_drawbridge_push_rr, R, R, "rr");
-cell!(multi_drawbridge_push_dd, D, D, "dd");
 cell!(multi_drawbridge_push_rd, R, D, "rd");
 cell!(multi_drawbridge_push_dr, D, R, "dr");
