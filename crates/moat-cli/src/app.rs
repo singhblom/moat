@@ -31,6 +31,16 @@ use tokio::sync::mpsc;
 /// Quick-reaction emojis (same as Flutter app)
 pub const QUICK_EMOJIS: &[&str] = &["👍", "❤️", "😂", "😮", "😢", "🙏"];
 
+/// Where this device's `drawbridgeConfig` record stands for the current
+/// connection to its own Drawbridge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DrawbridgeRecord {
+    /// Not yet written for this connection.
+    Pending,
+    Publishing,
+    Published,
+}
+
 /// Thin wrapper around `Box<dyn StatefulProtocol>` that implements `Debug`
 /// (needed because `DisplayMessage` derives `Debug`).
 pub struct ImageProto(pub StatefulProtocol);
@@ -373,6 +383,11 @@ pub(crate) enum BgEvent {
         urls: Vec<String>,
     },
 
+    /// Writing this device's `drawbridgeConfig` record finished.
+    DrawbridgeRecordPublished {
+        result: std::result::Result<(), String>,
+    },
+
     /// Handle resolution completed for a welcome-joined conversation.
     HandleResolved {
         conv_id: String,
@@ -534,6 +549,7 @@ impl BgEvent {
             | BgEvent::DrawbridgeNewEvent { .. }
             | BgEvent::DrawbridgeDisconnected { .. }
             | BgEvent::DrawbridgeConfigFetched { .. }
+            | BgEvent::DrawbridgeRecordPublished { .. }
             | BgEvent::HandleResolved { .. }
             | BgEvent::BlobUploaded { .. }
             | BgEvent::BlobFetched { .. }
@@ -642,6 +658,9 @@ pub struct App {
     pub(crate) drawbridge_url: Option<DrawbridgeUrl>,
     /// Cache of partner relay configurations (DID -> relay URLs)
     drawbridge_config_cache: drawbridge::DrawbridgeConfigCache,
+    /// This device's `drawbridgeConfig` record, for the current connection
+    /// to its own Drawbridge.
+    drawbridge_record: DrawbridgeRecord,
 
     // HTTP API support (Some only when running in --http mode)
     /// Broadcast channel for SSE events.
@@ -816,6 +835,7 @@ impl App {
             drawbridge,
             drawbridge_url: resolved_drawbridge_url,
             drawbridge_config_cache: HashMap::new(),
+            drawbridge_record: DrawbridgeRecord::Pending,
             event_broadcast: None,
             pending_poll_result: None,
             pds_url,
@@ -1485,7 +1505,7 @@ impl App {
             let poll_interval_secs = match self.poll_interval_override {
                 Some(0) => None, // disabled
                 Some(n) => Some(n),
-                None => Some(if self.drawbridge.active_connection_count() > 0 {
+                None => Some(if self.drawbridge.has_own_connection() {
                     30
                 } else {
                     5
@@ -1595,6 +1615,7 @@ impl App {
         self.poll_in_flight = true;
         let my_did = client.did().to_string();
         self.refresh_stale_drawbridge_configs();
+        self.publish_drawbridge_record();
 
         // Collect DIDs and their last rkeys
         let mut dids_to_poll: HashMap<String, Vec<usize>> = HashMap::new();
@@ -1926,6 +1947,15 @@ impl App {
             BgEvent::DrawbridgeConnectOwn { .. } => {}
             BgEvent::DrawbridgeNotifyEventPosted { .. } => {}
             BgEvent::DrawbridgeWatchTags { .. } => {}
+            BgEvent::DrawbridgeRecordPublished { result } => match result {
+                Ok(()) => self.drawbridge_record = DrawbridgeRecord::Published,
+                Err(e) => {
+                    self.drawbridge_record = DrawbridgeRecord::Pending;
+                    self.debug_log.log(&format!(
+                        "drawbridge: publishing this device's record failed: {e} (the next poll retries)"
+                    ));
+                }
+            },
             BgEvent::DrawbridgeConfigFetched { did, urls } => {
                 let mut parsed: Vec<DrawbridgeUrl> = Vec::new();
                 for url in &urls {
@@ -2266,17 +2296,9 @@ impl App {
                             }
                         }
 
-                        // Publish our relay config so partners can discover us
-                        if let Some(ref client) = self.client {
-                            let client = client.clone();
-                            let url = url.clone();
-                            let device_id_hex = hex::encode(self.mls.device_id());
-                            tokio::spawn(async move {
-                                if let Err(e) = client.publish_drawbridge_config(&device_id_hex, url.as_str()).await {
-                                    eprintln!("drawbridge: failed to publish relay config: {e}");
-                                }
-                            });
-                        }
+                        // Each connection writes the record anew, so senders find us.
+                        self.drawbridge_record = DrawbridgeRecord::Pending;
+                        self.publish_drawbridge_record();
 
                         // A `pair_join` that reached the relay before the
                         // peer's `pair_offer` is rejected as connection-fatal
@@ -3039,6 +3061,29 @@ impl App {
             }
         }
         urls.into_iter().map(DrawbridgeUrl::to_string).collect()
+    }
+
+    /// Write this device's `drawbridgeConfig` record unless the current
+    /// connection to its own Drawbridge already has: on connecting, then from
+    /// each poll until a write succeeds.
+    fn publish_drawbridge_record(&mut self) {
+        if self.drawbridge_record != DrawbridgeRecord::Pending || !self.drawbridge.has_own_connection() {
+            return;
+        }
+        let (Some(client), Some(url)) = (self.client.clone(), self.drawbridge_url.clone()) else {
+            return;
+        };
+        self.drawbridge_record = DrawbridgeRecord::Publishing;
+        let device_id_hex = hex::encode(self.mls.device_id());
+        let tx = self.bg_tx.clone();
+        tokio::spawn(async move {
+            let result = client
+                .publish_drawbridge_config(&device_id_hex, url.as_str())
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string());
+            let _ = tx.send(BgEvent::DrawbridgeRecordPublished { result });
+        });
     }
 
     /// Fetch relay lists for a conversation's members and this user (background).

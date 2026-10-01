@@ -214,11 +214,10 @@ fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_conversations_screen(frame: &mut Frame, app: &App, area: Rect) {
     let style = Style::default().fg(color_pulse(38.0, 227.0, 195.0, 38.0, 195.0, 227.0, 5000));
 
-    let drawbridge_count = app.drawbridge.active_connection_count();
-    let title = if drawbridge_count > 0 {
-        format!(" Conversations  [drawbridge:{drawbridge_count}] ")
+    let title = if app.drawbridge.has_own_connection() {
+        " Conversations  [drawbridge] "
     } else {
-        " Conversations ".to_string()
+        " Conversations "
     };
 
     let block = Block::default()
@@ -1137,8 +1136,8 @@ fn draw_status_screen(frame: &mut Frame, app: &App, area: Rect) {
         app.drawbridge_url.as_ref().map_or_else(|| "none".to_string(), ToString::to_string),
     ));
     lines.push(field(
-        "connections",
-        app.drawbridge.active_connection_count().to_string(),
+        "connected",
+        if app.drawbridge.has_own_connection() { "yes" } else { "no" }.to_string(),
     ));
 
     lines.push(Line::from(""));

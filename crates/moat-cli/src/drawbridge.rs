@@ -442,12 +442,6 @@ impl DrawbridgeManager {
             && token.map_or(true, |t| self.pair_token.as_deref() == Some(t))
     }
 
-    /// Get the number of active event connections (for status bar): 1 when
-    /// connected to our own Drawbridge. The rendezvous connection is not counted.
-    pub fn active_connection_count(&self) -> usize {
-        if self.own.is_some() { 1 } else { 0 }
-    }
-
     /// Check if connected to own Drawbridge.
     pub fn has_own_connection(&self) -> bool {
         self.own.is_some()
@@ -783,7 +777,6 @@ mod tests {
     fn test_manager_connection_count() {
         let bg_tx = mpsc::unbounded_channel().0;
         let mgr = DrawbridgeManager::new(bg_tx);
-        assert_eq!(mgr.active_connection_count(), 0);
         assert!(!mgr.has_own_connection());
     }
 

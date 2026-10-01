@@ -7,6 +7,10 @@ import 'secure_storage.dart';
 import 'debug_log.dart';
 import '../rust/api/simple.dart';
 
+/// Where this device's `drawbridgeConfig` record stands for the current
+/// connection to its own Drawbridge.
+enum _DrawbridgeRecord { pending, publishing, published }
+
 /// Authentication state
 enum AuthState {
   loading,
@@ -26,6 +30,7 @@ class AuthService {
   String? _did;
   String? _handle;
   String? _deviceName;
+  _DrawbridgeRecord _drawbridgeRecord = _DrawbridgeRecord.pending;
 
   AuthService({
     required AtprotoClient atprotoClient,
@@ -125,7 +130,7 @@ class AuthService {
     return url.isEmpty ? null : normalizedDrawbridgeUrl(url);
   }
 
-  /// Connect to Drawbridge and publish its URL.
+  /// Connect to Drawbridge; its record is published once it authenticates.
   ///
   /// The relay is [drawbridgeUrl] if given, else [buildDrawbridgeUrl]. With
   /// neither, the host polls only.
@@ -150,12 +155,35 @@ class AuthService {
       return;
     }
 
+    // Each connection writes the record anew, so senders find this device.
+    DrawbridgeService.instance.onOwnAuthenticated = () {
+      _drawbridgeRecord = _DrawbridgeRecord.pending;
+      unawaited(publishDrawbridgeRecord());
+    };
     unawaited(DrawbridgeService.instance.connectOwn(url));
+  }
+
+  /// Write this device's `drawbridgeConfig` record unless the current
+  /// connection to its own Drawbridge already has: on connecting, then from
+  /// each poll until a write succeeds.
+  Future<void> publishDrawbridgeRecord() async {
+    final url = ownDrawbridgeUrl;
+    final session = _moatSession;
+    if (_drawbridgeRecord != _DrawbridgeRecord.pending ||
+        url == null ||
+        session == null ||
+        !DrawbridgeService.instance.isOwnConnected) {
+      return;
+    }
+    _drawbridgeRecord = _DrawbridgeRecord.publishing;
     try {
-      final deviceId = await _moatSession!.deviceId();
+      final deviceId = await session.deviceId();
       await _atprotoClient.publishDrawbridgeConfig(_bytesToHex(deviceId), url);
+      _drawbridgeRecord = _DrawbridgeRecord.published;
     } catch (e) {
-      moatLog('AuthService: Failed to publish drawbridge config: $e');
+      _drawbridgeRecord = _DrawbridgeRecord.pending;
+      moatLog('AuthService: publishing this device\'s Drawbridge record failed: $e '
+          '(the next poll retries)');
     }
   }
 

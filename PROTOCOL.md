@@ -312,7 +312,7 @@ RKey: <hex MLS device id>
 { "url": "wss://drawbridge.moat.chat/ws" }
 ```
 
-A device writes only its own record (`putRecord`, overwritten on each connect), so devices on different Drawbridges never overwrite each other. The MLS device id already appears in the key packages a device publishes, so the rkey adds nothing new to what the PDS shows.
+A device writes only its own record (`putRecord`, once its connection to its Drawbridge has authenticated, again on each reconnect, and on each later poll until a write succeeds), so devices on different Drawbridges never overwrite each other. The MLS device id already appears in the key packages a device publishes, so the rkey adds nothing new to what the PDS shows.
 
 A user's Drawbridges are the union of the URLs in `listRecords` on the collection. Clients cache that list per DID and re-read it when it is missing or older than 30 seconds, and whenever a conversation is created or joined.
 

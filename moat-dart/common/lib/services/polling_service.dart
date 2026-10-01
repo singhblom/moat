@@ -114,6 +114,7 @@ class PollingService {
 
     try {
       await _refreshDrawbridgeConfigs();
+      unawaited(_authService.publishDrawbridgeRecord());
       newConversations += await _pollOwnDid();
       newConversations += await _pollWatchedDids();
       newMessages += await _pollConversationMessages();

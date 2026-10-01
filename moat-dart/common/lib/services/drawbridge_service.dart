@@ -94,6 +94,9 @@ class DrawbridgeService {
   /// acknowledged can be resent there.
   void Function(String drawbridgeUrl)? onAuthenticated;
 
+  /// Called each time this device's own Drawbridge (re)authenticates.
+  void Function()? onOwnAuthenticated;
+
   /// Called when the rendezvous connection to a Drawbridge ends from outside,
   /// having authenticated.
   void Function(String drawbridgeUrl)? onRendezvousClosed;
@@ -194,6 +197,7 @@ class DrawbridgeService {
           _ownAuthenticated = true;
           _sendWatchedTags();
           _sendPushRegistration();
+          onOwnAuthenticated?.call();
           final own = _ownUrl;
           if (own != null) onAuthenticated?.call(own);
         case 'new_event':
