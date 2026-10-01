@@ -432,100 +432,55 @@ void main() {
     });
   });
 
-  group('describeServerDrawbridgeUrl', () {
-    test('returns endpoint when PDS advertises social.moat.drawbridge', () async {
+  group('drawbridge config records', () {
+    test('publishDrawbridgeConfig writes the record under the device id', () async {
+      late Map<String, dynamic> body;
       final mockClient = MockClient((request) async {
-        expect(request.url.path, '/xrpc/com.atproto.server.describeServer');
+        expect(request.url.path, '/xrpc/com.atproto.repo.putRecord');
+        body = jsonDecode(request.body) as Map<String, dynamic>;
+        return http.Response(_createRecordResponse(), 200);
+      });
+      final client = AtprotoClient(httpClient: mockClient);
+      client.restoreSession(_testSession());
+
+      await client.publishDrawbridgeConfig('ab12', 'wss://relay.example.com/ws');
+
+      expect(body['collection'], 'social.moat.drawbridgeConfig');
+      expect(body['rkey'], 'ab12');
+      expect(body['record'], {'url': 'wss://relay.example.com/ws'});
+    });
+
+    test('fetchDrawbridgeConfig returns the deduplicated union of every device', () async {
+      final mockClient = MockClient((request) async {
+        expect(request.url.path, '/xrpc/com.atproto.repo.listRecords');
+        expect(request.url.queryParameters['collection'],
+            'social.moat.drawbridgeConfig');
         return http.Response(
           jsonEncode({
-            'availableUserDomains': ['bsky.social'],
-            'services': {
-              'social.moat.drawbridge': {
-                'type': 'DrawbridgeService',
-                'endpoint': 'wss://drawbridge.example.com/ws',
-              },
-            },
+            'records': [
+              {'uri': 'at://d/c/aa', 'value': {'url': 'wss://a.example.com/ws'}},
+              {'uri': 'at://d/c/bb', 'value': {'url': 'wss://b.example.com/ws'}},
+              {'uri': 'at://d/c/cc', 'value': {'url': 'wss://a.example.com/ws'}},
+              {'uri': 'at://d/c/dd', 'value': {'nonsense': true}},
+            ],
           }),
           200,
         );
       });
+      final client = AtprotoClient(
+          httpClient: mockClient, pdsOverride: 'https://pds.example.com');
 
-      final client = AtprotoClient(httpClient: mockClient);
-      final url = await client.describeServerDrawbridgeUrl('https://pds.example.com');
-      expect(url, 'wss://drawbridge.example.com/ws');
+      final urls = await client.fetchDrawbridgeConfig('did:plc:bob');
+
+      expect(urls, ['wss://a.example.com/ws', 'wss://b.example.com/ws']);
     });
 
-    test('returns null when services map is absent', () async {
-      final mockClient = MockClient((request) async => http.Response(
-            jsonEncode({'availableUserDomains': ['bsky.social']}),
-            200,
-          ));
+    test('fetchDrawbridgeConfig throws rather than reporting no relays', () async {
+      final mockClient = MockClient((request) async => http.Response('boom', 500));
+      final client = AtprotoClient(
+          httpClient: mockClient, pdsOverride: 'https://pds.example.com');
 
-      final client = AtprotoClient(httpClient: mockClient);
-      final url = await client.describeServerDrawbridgeUrl('https://pds.example.com');
-      expect(url, isNull);
-    });
-
-    test('returns null when social.moat.drawbridge key is absent', () async {
-      final mockClient = MockClient((request) async => http.Response(
-            jsonEncode({
-              'services': {
-                'atproto.labeler': {'type': 'AtprotoLabeler', 'endpoint': 'https://other.com'},
-              },
-            }),
-            200,
-          ));
-
-      final client = AtprotoClient(httpClient: mockClient);
-      final url = await client.describeServerDrawbridgeUrl('https://pds.example.com');
-      expect(url, isNull);
-    });
-
-    test('returns null when endpoint field is absent', () async {
-      final mockClient = MockClient((request) async => http.Response(
-            jsonEncode({
-              'services': {
-                'social.moat.drawbridge': {'type': 'DrawbridgeService'},
-              },
-            }),
-            200,
-          ));
-
-      final client = AtprotoClient(httpClient: mockClient);
-      final url = await client.describeServerDrawbridgeUrl('https://pds.example.com');
-      expect(url, isNull);
-    });
-
-    test('returns null when endpoint is an empty string', () async {
-      final mockClient = MockClient((request) async => http.Response(
-            jsonEncode({
-              'services': {
-                'social.moat.drawbridge': {'type': 'DrawbridgeService', 'endpoint': ''},
-              },
-            }),
-            200,
-          ));
-
-      final client = AtprotoClient(httpClient: mockClient);
-      final url = await client.describeServerDrawbridgeUrl('https://pds.example.com');
-      expect(url, isNull);
-    });
-
-    test('returns null on HTTP error without throwing', () async {
-      final mockClient = MockClient((request) async =>
-          http.Response(jsonEncode({'error': 'ServerError'}), 500));
-
-      final client = AtprotoClient(httpClient: mockClient);
-      final url = await client.describeServerDrawbridgeUrl('https://pds.example.com');
-      expect(url, isNull);
-    });
-
-    test('returns null on network exception without throwing', () async {
-      final mockClient = MockClient((request) async => throw Exception('connection refused'));
-
-      final client = AtprotoClient(httpClient: mockClient);
-      final url = await client.describeServerDrawbridgeUrl('https://pds.example.com');
-      expect(url, isNull);
+      expect(client.fetchDrawbridgeConfig('did:plc:bob'), throwsA(anything));
     });
   });
 

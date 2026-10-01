@@ -1,11 +1,11 @@
 ---
 name: local-test
-description: Stand up a local Moat test environment (Postern PDS, Drawbridge relay, moat-cli and Flutter participants) and drive it for manual or exploratory testing. Use this whenever the user wants to try Moat by hand, reproduce a bug outside the test suite, test pairing or history sync end to end, generate conversation history at scale, check how something looks or reads in the TUI or the Flutter app, or asks to "run the app locally", "set up a test env", "seed some messages", or "let me try this myself".
+description: Stand up a local Moat test environment (Postern PDS, Drawbridge, moat-cli and Flutter participants) and drive it for manual or exploratory testing. Use this whenever the user wants to try Moat by hand, reproduce a bug outside the test suite, test pairing or history sync end to end, generate conversation history at scale, check how something looks or reads in the TUI or the Flutter app, or asks to "run the app locally", "set up a test env", "seed some messages", or "let me try this myself". Also use it to run the test suites or the verification gate, so that a failure keeps its panic message.
 ---
 
 # Local test environment
 
-Runs Moat against a local PDS and relay so no real accounts are involved, and
+Runs Moat against a local PDS and Drawbridge so no real accounts are involved, and
 drives it through the HTTP API — the same surface `moat-beacon` uses, so
 anything reproduced here can become a Beacon scenario.
 
@@ -34,8 +34,7 @@ mechanical half rather than handing them a forty-step checklist.
 .claude/skills/local-test/scripts/dev-stack.sh up
 ```
 
-Postern on `:4000`, Drawbridge on `:8080` with the relay advertised via
-`describeServer`. Accounts `alice.postern.test` and `bob.postern.test`, any
+Postern on `:4000`, Drawbridge on `:8080` (`ws://127.0.0.1:8080/ws`). Accounts `alice.postern.test` and `bob.postern.test`, any
 password — Postern does not validate one. `down` stops it, `logs` tails both,
 `--help` prints the full API crib sheet.
 
@@ -53,15 +52,16 @@ Each device needs its own storage dir, or they share keys and behave as one.
 
 ```bash
 # TUI — what a human looks at
-cargo run -p moat-cli -- -s /tmp/moat-alice --pds-url http://127.0.0.1:4000
+cargo run -p moat-cli -- -s /tmp/moat-alice --pds-url http://127.0.0.1:4000 \
+  --drawbridge-url ws://127.0.0.1:8080/ws
 
 # headless — what an agent drives
 cargo run -p moat-cli -- -s /tmp/moat-alice --pds-url http://127.0.0.1:4000 \
-  --http 127.0.0.1:9101
+  --drawbridge-url ws://127.0.0.1:8080/ws --http 127.0.0.1:9101
 ```
 
-HTTP devices start logged out; log in explicitly. `--drawbridge-url` overrides
-relay discovery if needed. For Flutter and Android specifics see
+HTTP devices start logged out; log in explicitly. Without `--drawbridge-url` a
+device has no Drawbridge and polls only. For Flutter and Android specifics see
 `references/flutter.md`.
 
 ## 3. Generate history
@@ -88,8 +88,9 @@ sender shows `[image — processing…]` until the blob lands.
 The HTTP API covers pairing, history sync, restart and push. `dev-stack.sh
 --help` has the full endpoint list. Three things that are easy to get wrong:
 
-**Pairing is two steps with a wait between them.** `/pair/confirm` only joins
-the rendezvous; the Enroll frame arrives over the pair WebSocket afterwards.
+**Pairing is two steps with a wait between them.** `/pair/new` returns the
+code and the Drawbridge it is on, and `/pair/confirm` needs both (the rendezvous is
+on the new device's Drawbridge). `/pair/confirm` only joins the rendezvous; the Enroll frame arrives over the pair WebSocket afterwards.
 Approving before it lands fails with "no pending Enroll". Poll `/pair/status`
 until `awaiting_approval`, then `/pair/approve`.
 
@@ -116,6 +117,41 @@ list.
 
 Record findings somewhere durable as you go. A finding that only exists in a
 terminal scrollback is lost when the session ends.
+
+## Running the suites: keep the full log
+
+Run tests so that a failure leaves its panic message behind. Failures that
+pass on rerun are common here (a Beacon world that does not come up, a
+timeout under load), and the message of that first failure is all there is
+to diagnose them from. A Beacon test that dies in `world setup` names only
+the line that called `.expect(..)`; the cause is in the message after it.
+
+**Never filter test output down to its result lines.** Piping `cargo test`
+through `grep "test result|FAILED"` drops every panic message.
+
+```bash
+# One suite: full log kept, failing tests and panic messages printed
+.claude/skills/local-test/scripts/run-tests.sh beacon-smoke \
+  cargo test -p moat-beacon --test smoke --no-fail-fast
+
+# Every suite, repeated (default 5): per-step logs and a summary that has
+# each failure's panic messages beside its FAIL line
+.claude/skills/local-test/scripts/verification-gate.sh
+
+# Any log you already have
+.claude/skills/local-test/scripts/failure-summary.sh path/to/log
+```
+
+Both scripts keep the log (`/tmp/moat-test-logs/`, and the gate's own
+`/tmp/moat-gate-<time>/`) and set `RUST_BACKTRACE=1`. Use `--no-fail-fast`
+so one failing test binary does not hide the rest. If you must run a command
+by hand, redirect it to a file (`> log 2>&1`) and read the file; do not
+filter it on the way.
+
+For a Beacon failure, the participants' own logs are in `/tmp/moat-beacon/`
+(`<handle>-<timestamp>.log`), and the panic message usually quotes the
+tail of the one that stalled. When a failure does not reproduce, say so and
+report the captured message rather than guessing at a cause.
 
 ## Cleaning up
 

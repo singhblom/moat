@@ -40,7 +40,7 @@ struct Args {
     pds_url: Option<String>,
 
     /// Drawbridge WebSocket URL (e.g., wss://drawbridge.moat.social/ws).
-    /// Persisted after first use.
+    /// Overrides the Drawbridge this build was made for, if any.
     #[arg(long = "drawbridge-url", global = true)]
     drawbridge_url: Option<String>,
 

@@ -53,7 +53,7 @@ pub async fn run(config: WorldConfig, actions: Vec<Action>, verbose: bool) {
     let push_per_participant: Vec<bool> = config
         .participants
         .iter()
-        .map(|p| p.relay_label.is_some())
+        .map(|p| p.drawbridge_label.is_some())
         .collect();
     let handle_suffix = ".postern.test";
 
@@ -93,8 +93,8 @@ pub async fn run(config: WorldConfig, actions: Vec<Action>, verbose: bool) {
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         loop {
             let mut all_connected = true;
-            for (client, &has_relay) in clients.iter().zip(push_per_participant.iter()) {
-                if !has_relay {
+            for (client, &has_drawbridge) in clients.iter().zip(push_per_participant.iter()) {
+                if !has_drawbridge {
                     continue;
                 }
                 let status = client.status().await.expect("participant status");
@@ -172,7 +172,7 @@ pub async fn run(config: WorldConfig, actions: Vec<Action>, verbose: bool) {
         }
     }
 
-    // Exchange DrawbridgeHints: one poll round picks up reciprocal hints.
+    // One poll round so every participant has caught up with the joins.
     tokio::time::sleep(Duration::from_millis(500)).await;
     for client in &clients {
         let _ = client.poll().await;
@@ -181,8 +181,8 @@ pub async fn run(config: WorldConfig, actions: Vec<Action>, verbose: bool) {
 
     // Disable auto-polling for participants with a relay — they receive via push.
     // Participants without a relay keep polling.
-    for (client, &has_relay) in clients.iter().zip(push_per_participant.iter()) {
-        if has_relay {
+    for (client, &has_drawbridge) in clients.iter().zip(push_per_participant.iter()) {
+        if has_drawbridge {
             client.set_poll_interval(0).await.expect("disable polling");
         }
     }
@@ -237,8 +237,8 @@ pub async fn run(config: WorldConfig, actions: Vec<Action>, verbose: bool) {
 
     // Re-enable polling for relay participants so they can catch up on any
     // events missed via Drawbridge (e.g. after membership changes).
-    for (client, &has_relay) in clients.iter().zip(push_per_participant.iter()) {
-        if has_relay {
+    for (client, &has_drawbridge) in clients.iter().zip(push_per_participant.iter()) {
+        if has_drawbridge {
             let _ = client.set_poll_interval(5).await;
         }
     }

@@ -12,10 +12,19 @@
 # in which run, and whether it repeats. Each step's log is kept.
 #
 # BEACON_PARALLEL is left unset on purpose (see history-sync-remaining.md).
+#
+# Every step's full output is kept, and a failing step has its failing tests
+# and panic messages printed into the summary beside the FAIL line. Failures
+# that pass on rerun (a world that did not come up, a timeout under load)
+# are only diagnosable from that first run's message.
 
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
+# Panics carry a backtrace in the kept logs.
+export RUST_BACKTRACE="${RUST_BACKTRACE:-1}"
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/../../../.." && pwd)"
 RUNS="${1:-5}"
 OUT="/tmp/moat-gate-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$OUT"
@@ -42,6 +51,8 @@ step() {
     local rc=$?
     log "  FAIL  $name  ($((SECONDS - t0))s, load ${l0}->$(load1), rc=$rc)  -> $logfile"
     echo "$run|$name|$rc|$logfile" >> "$OUT/failures.txt"
+    # Why it failed, not just that it did.
+    "$HERE/failure-summary.sh" "$logfile" | sed 's/^/      /' | tee -a "$SUMMARY"
     return 1
   fi
 }
@@ -76,17 +87,17 @@ for run in $(seq 1 "$RUNS"); do
   log "=== Run $run/$RUNS  $(date +%H:%M:%S) ==="
   run_t0=$SECONDS
 
-  step "$run" "moat-core"     cargo test -p moat-core
-  step "$run" "moat-atproto"  cargo test -p moat-atproto
-  step "$run" "moat-cli"      cargo test -p moat-cli
-  step "$run" "moat-postern"  cargo test -p moat-postern
-  step "$run" "ffi-crate"     bash -c 'cd moat-dart/app/rust && cargo test'
+  step "$run" "moat-core"     cargo test -p moat-core --no-fail-fast
+  step "$run" "moat-atproto"  cargo test -p moat-atproto --no-fail-fast
+  step "$run" "moat-cli"      cargo test -p moat-cli --no-fail-fast
+  step "$run" "moat-postern"  cargo test -p moat-postern --no-fail-fast
+  step "$run" "ffi-crate"     bash -c 'cd moat-dart/app/rust && cargo test --no-fail-fast'
   step "$run" "flutter-test"  bash -c 'cd moat-dart/app && flutter test'
   step "$run" "drawbridge-go" bash -c 'cd moat-drawbridge && go test ./...'
 
   # Beacon last: it is the slowest and the most likely to find something, so a
   # failure lands with everything else already recorded for this run.
-  step "$run" "moat-beacon"   cargo test -p moat-beacon
+  step "$run" "moat-beacon"   cargo test -p moat-beacon --no-fail-fast
 
   log "  run $run total: $(( (SECONDS - run_t0) / 60 ))m"
   log ""

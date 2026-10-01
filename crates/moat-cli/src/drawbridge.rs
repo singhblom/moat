@@ -1,20 +1,25 @@
 //! Drawbridge WebSocket connection manager.
 //!
-//! Manages a single connection to the user's own Drawbridge relay.
-//! The relay handles fan-out to recipient relays via relay-to-relay push.
+//! Manages the connection to this device's own Drawbridge, and while a
+//! pairing or sync rendezvous is live on another Drawbridge, a second connection
+//! to that one. The Drawbridge fans events out to the recipients' Drawbridges via
+//! relay-to-relay push.
 //!
 //! Architecture:
-//! - Client connects only to their own Drawbridge (DID challenge-response auth)
-//! - On send: client sends envelope with payload + recipient relay URLs
-//! - On receive: relay delivers `new_event` with inline payload for instant decryption
-//! - Drawbridge discovery: each user publishes `social.moat.drawbridgeConfig` ATProto record
+//! - Events and tags go only through the device's own Drawbridge (DID
+//!   challenge-response auth); the rendezvous connection carries only
+//!   `pair_offer` / `pair_join` and their replies
+//! - On send: client sends envelope with payload + the Drawbridges to notify
+//! - On receive: Drawbridge delivers `new_event` with inline payload for instant decryption
+//! - Drawbridge discovery: each device publishes its own `social.moat.drawbridgeConfig`
+//!   record, keyed by its device id
 
 use crate::app::BgEvent;
 use crate::keystore::hex;
 use futures_util::{SinkExt, StreamExt};
-use serde::{Deserialize, Serialize};
+use moat_core::DrawbridgeUrl;
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -24,7 +29,8 @@ type WsWriter =
 type PairWsWriter =
     futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, Message>;
 
-/// Manages the connection to the user's own Drawbridge relay.
+/// Manages the connections to Drawbridges: the device's own, and the
+/// rendezvous connection to another Drawbridge while one is live there.
 ///
 /// Architecture:
 /// - Field on App struct (not a standalone service)
@@ -33,13 +39,22 @@ type PairWsWriter =
 /// - Write operations go through the stored write-half of the WebSocket split
 pub struct DrawbridgeManager {
     /// Our own Drawbridge connection (DID-authenticated)
-    own: Option<OwnDrawbridge>,
+    own: Option<DrawbridgeConnection>,
+
+    /// A second, DID-authenticated connection to another Drawbridge, held only
+    /// while a rendezvous is live there: pairing or sync with a device that
+    /// sits on that Drawbridge. Never used for events or tags.
+    rendezvous: Option<DrawbridgeConnection>,
 
     /// Channel for sending BgEvents back to the main App loop
     bg_tx: mpsc::UnboundedSender<BgEvent>,
 
     /// Number of consecutive reconnect attempts (reset on successful connect)
     reconnect_attempt: u32,
+
+    /// Id for the next main-WS connection, so a disconnect is matched to the
+    /// connection it came from and never clears a later one.
+    next_connection_id: u64,
 
     /// Write half of the active pair WebSocket, if one is open.
     pair_writer: Option<PairWsWriter>,
@@ -53,35 +68,41 @@ pub struct DrawbridgeManager {
     pair_read_task: Option<tokio::task::AbortHandle>,
 }
 
-struct OwnDrawbridge {
+/// An authenticated main-WS connection to one Drawbridge: our own, or the
+/// one held for a rendezvous.
+struct DrawbridgeConnection {
+    id: u64,
     writer: WsWriter,
     /// Aborting closes the socket without the read loop reporting a disconnect.
     read_task: tokio::task::AbortHandle,
-    /// The relay this connection is to.
-    url: String,
+    url: DrawbridgeUrl,
 }
 
-/// Persisted Drawbridge state (stored in drawbridge.json).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct DrawbridgeState {
-    /// Our own Drawbridge URL (set via --drawbridge-url)
-    pub own_url: Option<String>,
-}
-
-/// Cached Drawbridge configuration for a conversation partner.
+/// A user's relays, as last read from their `social.moat.drawbridgeConfig` records.
 #[derive(Debug, Clone)]
 pub struct CachedDrawbridgeConfig {
-    /// Drawbridge URLs for this DID, in priority order
-    pub urls: Vec<String>,
+    /// One URL per distinct relay the user's devices sit on
+    pub urls: Vec<DrawbridgeUrl>,
+    /// When the records were read
+    pub fetched_at: Instant,
 }
+
+/// Drawbridge this binary was built for, from `MOAT_DRAWBRIDGE_URL`.
+/// `None` means no Drawbridge: the host polls only.
+pub const BUILD_DRAWBRIDGE_URL: Option<&str> = option_env!("MOAT_DRAWBRIDGE_URL");
+
+#[cfg(not(debug_assertions))]
+const _: () = assert!(
+    BUILD_DRAWBRIDGE_URL.is_some(),
+    "release builds need MOAT_DRAWBRIDGE_URL (see config/release.env)"
+);
+
+/// How long a user's relay list is trusted before a poll re-reads it.
+pub const DRAWBRIDGE_CONFIG_TTL: Duration = Duration::from_secs(30);
 
 /// In-memory cache of partner Drawbridge configs (DID -> URLs).
 /// Not persisted — refetched on login.
 pub type DrawbridgeConfigCache = HashMap<String, CachedDrawbridgeConfig>;
-
-/// How long a closing pair WS waits for its end to be confirmed: our own
-/// close for the peer's reply, a relay `pair_closed` for the socket to end.
-pub const PAIR_CLOSE_GRACE: Duration = Duration::from_secs(5);
 
 /// Backoff schedule for reconnection attempts.
 fn backoff_duration(attempt: u32) -> Duration {
@@ -99,127 +120,66 @@ impl DrawbridgeManager {
     pub fn new(bg_tx: mpsc::UnboundedSender<BgEvent>) -> Self {
         Self {
             own: None,
+            rendezvous: None,
             bg_tx,
             reconnect_attempt: 0,
+            next_connection_id: 0,
             pair_writer: None,
             pair_token: None,
             pair_read_task: None,
         }
     }
 
-    /// Export current state for persistence.
-    pub fn export_state(&self, own_url: &Option<String>) -> DrawbridgeState {
-        DrawbridgeState {
-            own_url: own_url.clone(),
-        }
-    }
-
     /// Connect to our own Drawbridge (DID challenge-response).
-    ///
-    /// 1. WebSocket connect
-    /// 2. Send request_challenge
-    /// 3. Receive challenge{nonce}
-    /// 4. Sign with Ed25519 identity key
-    /// 5. Send challenge_response{did, signature, timestamp, public_key}
-    /// 6. Receive authenticated
-    /// 7. Split: spawn read loop, store write half
     pub async fn connect_own(
         &mut self,
-        url: &str,
+        url: &DrawbridgeUrl,
         did: &str,
         identity_key_bundle: &[u8],
     ) -> Result<(), String> {
         // Replace an existing connection rather than duplicate it.
         self.close_own();
+        self.own = Some(self.connect(url, did, identity_key_bundle, Role::Own).await?);
+        self.reconnect_attempt = 0;
+        Ok(())
+    }
 
-        let (ws_stream, _) = tokio_tungstenite::connect_async(url)
-            .await
-            .map_err(|e| format!("WebSocket connect failed: {e}"))?;
+    /// Connect to another Drawbridge, for a rendezvous there. The connection is
+    /// authenticated like our own but carries only `pair_offer` / `pair_join`
+    /// and their replies. Replaces any earlier rendezvous connection.
+    pub async fn connect_rendezvous(
+        &mut self,
+        url: &DrawbridgeUrl,
+        did: &str,
+        identity_key_bundle: &[u8],
+    ) -> Result<(), String> {
+        self.close_rendezvous();
+        self.rendezvous = Some(self.connect(url, did, identity_key_bundle, Role::Rendezvous).await?);
+        Ok(())
+    }
 
-        let (mut writer, mut reader) = ws_stream.split();
-
-        // 1. Send request_challenge
-        let req = serde_json::json!({"type": "request_challenge"});
-        writer
-            .send(Message::Text(req.to_string()))
-            .await
-            .map_err(|e| format!("send request_challenge: {e}"))?;
-
-        // 2. Read challenge
-        let challenge_msg = read_json_msg(&mut reader).await?;
-        let msg_type = challenge_msg
-            .get("type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if msg_type != "challenge" {
-            return Err(format!("expected challenge, got {msg_type}"));
-        }
-        let nonce = challenge_msg
-            .get("nonce")
-            .and_then(|v| v.as_str())
-            .ok_or("missing nonce in challenge")?
-            .to_string();
-
-        // 3. Sign: nonce + "\n" + relay_url + "\n" + timestamp + "\n"
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-
-        let message_bytes = format!("{}\n{}\n{}\n", nonce, url, timestamp);
-        let (sig_bytes, pub_bytes) =
-            moat_core::MoatSession::sign_drawbridge_challenge(identity_key_bundle, message_bytes.as_bytes())
-                .map_err(|e| format!("signing failed: {e}"))?;
-        let sig_b64 = base64_encode(&sig_bytes);
-        let pub_b64 = base64_encode(&pub_bytes);
-
-        // 4. Send challenge_response
-        let resp = serde_json::json!({
-            "type": "challenge_response",
-            "did": did,
-            "signature": sig_b64,
-            "timestamp": timestamp,
-            "public_key": pub_b64,
-        });
-        writer
-            .send(Message::Text(resp.to_string()))
-            .await
-            .map_err(|e| format!("send challenge_response: {e}"))?;
-
-        // 5. Read authenticated
-        let auth_msg = read_json_msg(&mut reader).await?;
-        let auth_type = auth_msg
-            .get("type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if auth_type == "error" {
-            let err = auth_msg
-                .get("message")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown error");
-            return Err(format!("auth failed: {err}"));
-        }
-        if auth_type != "authenticated" {
-            return Err(format!("expected authenticated, got {auth_type}"));
-        }
-
-        // 6. Spawn read loop
+    async fn connect(
+        &mut self,
+        url: &DrawbridgeUrl,
+        did: &str,
+        identity_key_bundle: &[u8],
+        role: Role,
+    ) -> Result<DrawbridgeConnection, String> {
+        let (writer, reader) = authenticate(url, did, identity_key_bundle).await?;
+        let id = self.next_connection_id;
+        self.next_connection_id += 1;
         let bg_tx = self.bg_tx.clone();
-        let url_clone = url.to_string();
+        let url_clone = url.clone();
         let read_task = tokio::spawn(async move {
-            own_read_loop(reader, bg_tx, url_clone).await;
+            read_loop(reader, bg_tx, url_clone, role, id).await;
         })
         .abort_handle();
-
-        // 7. Store connection, reset reconnect backoff
-        self.own = Some(OwnDrawbridge {
+        Ok(DrawbridgeConnection {
+            id,
             writer,
             read_task,
-            url: url.to_string(),
-        });
-        self.reconnect_attempt = 0;
-
-        Ok(())
+            url: url.clone(),
+        })
     }
 
     /// Send event_posted envelope to our own Drawbridge with payload and relay URLs.
@@ -262,7 +222,7 @@ impl DrawbridgeManager {
     /// Register watched tags on our own Drawbridge.
     ///
     /// Tags are opaque 16-byte hex strings that serve as anonymous mailboxes.
-    /// The relay routes inbound relay-to-relay events to clients watching
+    /// The Drawbridge routes inbound relay-to-relay events to clients watching
     /// matching tags.
     pub async fn watch_tags(&mut self, tags: &[[u8; 16]]) -> Result<(), String> {
         let own = self
@@ -316,32 +276,67 @@ impl DrawbridgeManager {
         Ok(())
     }
 
-    /// Send `pair_offer{token}` on the main WS. Called by the new device to
-    /// start a live pairing session.
-    pub async fn send_pair_offer(&mut self, token: &[u8]) -> Result<(), String> {
-        let own = self.own.as_mut().ok_or("not connected to own Drawbridge")?;
-        let msg = serde_json::json!({
-            "type": "pair_offer",
-            "token": base64_encode(token),
-        });
-        own.writer
-            .send(Message::Text(msg.to_string()))
-            .await
-            .map_err(|e| format!("send pair_offer: {e}"))
+    /// Send `pair_offer{token}` to `drawbridge_url`. Called by the device that
+    /// opened the rendezvous.
+    pub async fn send_pair_offer(&mut self, drawbridge_url: &DrawbridgeUrl, token: &[u8]) -> Result<(), String> {
+        self.send_rendezvous_msg(drawbridge_url, "pair_offer", token).await
     }
 
-    /// Send `pair_join{token}` on the main WS. Called by the existing
-    /// device in response to a scanned/typed pairing code.
-    pub async fn send_pair_join(&mut self, token: &[u8]) -> Result<(), String> {
-        let own = self.own.as_mut().ok_or("not connected to own Drawbridge")?;
+    /// Send `pair_join{token}` to `drawbridge_url`. Called by the device joining a
+    /// rendezvous opened elsewhere.
+    pub async fn send_pair_join(&mut self, drawbridge_url: &DrawbridgeUrl, token: &[u8]) -> Result<(), String> {
+        self.send_rendezvous_msg(drawbridge_url, "pair_join", token).await
+    }
+
+    async fn send_rendezvous_msg(
+        &mut self,
+        drawbridge_url: &DrawbridgeUrl,
+        kind: &str,
+        token: &[u8],
+    ) -> Result<(), String> {
+        let conn = self
+            .connection_to(drawbridge_url)
+            .ok_or_else(|| format!("not connected to {drawbridge_url}"))?;
         let msg = serde_json::json!({
-            "type": "pair_join",
+            "type": kind,
             "token": base64_encode(token),
         });
-        own.writer
+        conn.writer
             .send(Message::Text(msg.to_string()))
             .await
-            .map_err(|e| format!("send pair_join: {e}"))
+            .map_err(|e| format!("send {kind}: {e}"))
+    }
+
+    /// The authenticated connection to `drawbridge_url`: our own if it is our
+    /// Drawbridge, else the rendezvous connection.
+    fn connection_to(&mut self, drawbridge_url: &DrawbridgeUrl) -> Option<&mut DrawbridgeConnection> {
+        if self.own.as_ref().is_some_and(|c| &c.url == drawbridge_url) {
+            self.own.as_mut()
+        } else {
+            self.rendezvous.as_mut().filter(|c| &c.url == drawbridge_url)
+        }
+    }
+
+    /// Whether the rendezvous connection is open to `drawbridge_url`.
+    pub fn has_rendezvous_connection(&self, drawbridge_url: &DrawbridgeUrl) -> bool {
+        self.rendezvous.as_ref().is_some_and(|c| &c.url == drawbridge_url)
+    }
+
+    /// Forget the rendezvous connection `id`, whose read loop has ended.
+    /// `false` if a later connection has replaced it.
+    pub fn forget_rendezvous(&mut self, id: u64) -> bool {
+        let current = self.rendezvous.as_ref().is_some_and(|c| c.id == id);
+        if current {
+            self.rendezvous = None;
+        }
+        current
+    }
+
+    /// Close the rendezvous connection, if one is open.
+    pub fn close_rendezvous(&mut self) {
+        if let Some(conn) = self.rendezvous.take() {
+            conn.read_task.abort();
+        }
     }
 
     /// Connect to the `/pair` WebSocket, send `pair_attach{token}`, and wait for `paired`.
@@ -435,7 +430,7 @@ impl DrawbridgeManager {
         }
         if let Some(handle) = self.pair_read_task.take() {
             tokio::spawn(async move {
-                tokio::time::sleep(PAIR_CLOSE_GRACE).await;
+                tokio::time::sleep(moat_core::PAIR_CLOSE_GRACE).await;
                 handle.abort();
             });
         }
@@ -447,24 +442,24 @@ impl DrawbridgeManager {
             && token.map_or(true, |t| self.pair_token.as_deref() == Some(t))
     }
 
-    /// Get the number of active connections (for status bar).
-    pub fn active_connection_count(&self) -> usize {
-        if self.own.is_some() { 1 } else { 0 }
-    }
-
     /// Check if connected to own Drawbridge.
     pub fn has_own_connection(&self) -> bool {
         self.own.is_some()
     }
 
     /// Whether this device is connected to its own relay at [url].
-    pub fn is_connected_to(&self, url: &str) -> bool {
-        self.own.as_ref().is_some_and(|own| own.url == url)
+    pub fn is_connected_to(&self, url: &DrawbridgeUrl) -> bool {
+        self.own.as_ref().is_some_and(|own| &own.url == url)
     }
 
-    /// Mark the connection as dropped (called on disconnect).
-    pub fn clear_connection(&mut self) {
-        self.own = None;
+    /// Forget our own connection `id`, whose read loop has ended. `false` if
+    /// a later connection has replaced it.
+    pub fn forget_own(&mut self, id: u64) -> bool {
+        let current = self.own.as_ref().is_some_and(|c| c.id == id);
+        if current {
+            self.own = None;
+        }
+        current
     }
 
     /// Close the connection to our own relay, if one is open.
@@ -480,6 +475,97 @@ impl DrawbridgeManager {
         self.reconnect_attempt = self.reconnect_attempt.saturating_add(1);
         delay
     }
+}
+
+/// Which of the two main-WS connections a read loop serves.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Role {
+    Own,
+    Rendezvous,
+}
+
+type WsReader = futures_util::stream::SplitStream<
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+>;
+
+/// Open a main WS to `url` and authenticate as `did` (challenge-response).
+///
+/// 1. WebSocket connect
+/// 2. Send request_challenge
+/// 3. Receive challenge{nonce}
+/// 4. Sign with Ed25519 identity key
+/// 5. Send challenge_response{did, signature, timestamp, public_key}
+/// 6. Receive authenticated
+async fn authenticate(
+    url: &DrawbridgeUrl,
+    did: &str,
+    identity_key_bundle: &[u8],
+) -> Result<(WsWriter, WsReader), String> {
+    let (ws_stream, _) = tokio_tungstenite::connect_async(url.as_str())
+        .await
+        .map_err(|e| format!("WebSocket connect failed: {e}"))?;
+
+    let (mut writer, mut reader) = ws_stream.split();
+
+    let req = serde_json::json!({"type": "request_challenge"});
+    writer
+        .send(Message::Text(req.to_string()))
+        .await
+        .map_err(|e| format!("send request_challenge: {e}"))?;
+
+    let challenge_msg = read_json_msg(&mut reader).await?;
+    let msg_type = challenge_msg
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if msg_type != "challenge" {
+        return Err(format!("expected challenge, got {msg_type}"));
+    }
+    let nonce = challenge_msg
+        .get("nonce")
+        .and_then(|v| v.as_str())
+        .ok_or("missing nonce in challenge")?
+        .to_string();
+
+    // Sign: nonce + "\n" + drawbridge_url + "\n" + timestamp + "\n"
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+
+    let message_bytes = format!("{}\n{}\n{}\n", nonce, url, timestamp);
+    let (sig_bytes, pub_bytes) =
+        moat_core::MoatSession::sign_drawbridge_challenge(identity_key_bundle, message_bytes.as_bytes())
+            .map_err(|e| format!("signing failed: {e}"))?;
+    let resp = serde_json::json!({
+        "type": "challenge_response",
+        "did": did,
+        "signature": base64_encode(&sig_bytes),
+        "timestamp": timestamp,
+        "public_key": base64_encode(&pub_bytes),
+    });
+    writer
+        .send(Message::Text(resp.to_string()))
+        .await
+        .map_err(|e| format!("send challenge_response: {e}"))?;
+
+    let auth_msg = read_json_msg(&mut reader).await?;
+    let auth_type = auth_msg
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if auth_type == "error" {
+        let err = auth_msg
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown error");
+        return Err(format!("auth failed: {err}"));
+    }
+    if auth_type != "authenticated" {
+        return Err(format!("expected authenticated, got {auth_type}"));
+    }
+
+    Ok((writer, reader))
 }
 
 /// Read a JSON message from a WebSocket reader.
@@ -502,17 +588,27 @@ async fn read_json_msg(
     }
 }
 
-/// Read loop for the own Drawbridge connection.
+/// Read loop for a main-WS connection: our own Drawbridge's, or the rendezvous
+/// connection to another.
 ///
 /// Handles:
 /// - `new_event` with inline payload (from relay-to-relay or local multi-device)
 /// - `pair_pending`, `pair_ready`, `pair_closed` pairing control messages
 /// - Connection lifecycle (errors, disconnects)
-async fn own_read_loop(
-    mut reader: futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>,
+///
+/// Reports the end of the connection exactly once, and returns: an `error`
+/// from the Drawbridge ends it too, closing the socket.
+async fn read_loop(
+    mut reader: WsReader,
     bg_tx: mpsc::UnboundedSender<BgEvent>,
-    url: String,
+    url: DrawbridgeUrl,
+    role: Role,
+    connection: u64,
 ) {
+    let disconnected = |reason: String| match role {
+        Role::Own => BgEvent::DrawbridgeDisconnected { url: url.clone(), reason, connection },
+        Role::Rendezvous => BgEvent::RendezvousDisconnected { url: url.clone(), reason, connection },
+    };
     loop {
         match reader.next().await {
             Some(Ok(Message::Text(text))) => {
@@ -576,7 +672,7 @@ async fn own_read_loop(
                             let _ = bg_tx.send(BgEvent::PairClosed {
                                 session_token,
                                 reason,
-                                via_relay: true,
+                                via_drawbridge: true,
                             });
                         }
                         "error" => {
@@ -584,10 +680,8 @@ async fn own_read_loop(
                                 .get("message")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("unknown");
-                            let _ = bg_tx.send(BgEvent::DrawbridgeDisconnected {
-                                url: url.clone(),
-                                reason: format!("server error: {err}"),
-                            });
+                            let _ = bg_tx.send(disconnected(format!("server error: {err}")));
+                            return;
                         }
                         _ => {}
                     }
@@ -595,17 +689,11 @@ async fn own_read_loop(
             }
             Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => continue,
             Some(Ok(Message::Close(_))) | None => {
-                let _ = bg_tx.send(BgEvent::DrawbridgeDisconnected {
-                    url: url.clone(),
-                    reason: "connection closed".to_string(),
-                });
+                let _ = bg_tx.send(disconnected("connection closed".to_string()));
                 return;
             }
             Some(Err(e)) => {
-                let _ = bg_tx.send(BgEvent::DrawbridgeDisconnected {
-                    url: url.clone(),
-                    reason: format!("read error: {e}"),
-                });
+                let _ = bg_tx.send(disconnected(format!("read error: {e}")));
                 return;
             }
             _ => continue,
@@ -637,7 +725,7 @@ async fn pair_read_loop(
                 let _ = bg_tx.send(BgEvent::PairClosed {
                     session_token: Some(session_token),
                     reason: "connection closed".to_string(),
-                    via_relay: false,
+                    via_drawbridge: false,
                 });
                 return;
             }
@@ -645,7 +733,7 @@ async fn pair_read_loop(
                 let _ = bg_tx.send(BgEvent::PairClosed {
                     session_token: Some(session_token),
                     reason: format!("read error: {e}"),
-                    via_relay: false,
+                    via_drawbridge: false,
                 });
                 return;
             }
@@ -669,28 +757,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_drawbridge_state_roundtrip() {
-        let state = DrawbridgeState {
-            own_url: Some("wss://relay.example.com/ws".to_string()),
-        };
-
-        let json = serde_json::to_string_pretty(&state).unwrap();
-        let parsed: DrawbridgeState = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(parsed.own_url, state.own_url);
-    }
-
-    #[test]
-    fn test_drawbridge_state_default() {
-        let state = DrawbridgeState::default();
-        assert!(state.own_url.is_none());
-    }
-
-    #[test]
     fn a_manager_with_no_connection_is_connected_to_nothing() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let mgr = DrawbridgeManager::new(tx);
-        assert!(!mgr.is_connected_to("wss://relay.example.com/ws"));
+        assert!(!mgr.is_connected_to(&DrawbridgeUrl::parse("wss://relay.example.com/ws").unwrap()));
     }
 
     #[test]
@@ -707,7 +777,6 @@ mod tests {
     fn test_manager_connection_count() {
         let bg_tx = mpsc::unbounded_channel().0;
         let mgr = DrawbridgeManager::new(bg_tx);
-        assert_eq!(mgr.active_connection_count(), 0);
         assert!(!mgr.has_own_connection());
     }
 
@@ -717,19 +786,5 @@ mod tests {
         let encoded = base64_encode(data);
         let decoded = base64_decode(&encoded).unwrap();
         assert_eq!(decoded, data);
-    }
-
-    /// Verify old DrawbridgeState format (with own_tickets + partner_hints)
-    /// deserializes into the new format without error.
-    #[test]
-    fn test_drawbridge_state_backward_compat() {
-        let old_json = r#"{
-            "own_url": "wss://relay.example.com/ws",
-            "own_tickets": {"group_abc": "ticket_123"},
-            "partner_hints": [{"url": "wss://other.com/ws", "device_id_hex": "aa", "ticket_hex": "bb", "partner_did": "did:plc:x", "group_id_hex": "cc"}]
-        }"#;
-        // serde ignores unknown fields by default
-        let parsed: DrawbridgeState = serde_json::from_str(old_json).unwrap();
-        assert_eq!(parsed.own_url, Some("wss://relay.example.com/ws".to_string()));
     }
 }

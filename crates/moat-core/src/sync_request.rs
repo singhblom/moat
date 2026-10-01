@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::{base64::Base64, serde_as};
 
 use crate::device_ring::DeviceId;
+use crate::drawbridge_url::DrawbridgeUrl;
 use crate::pairing::{
     derive_pairing_keys, PairingFrameChannel, PairingRole, PAIRING_SECRET_LEN, PAIRING_TOKEN_LEN,
 };
@@ -53,7 +54,9 @@ pub const SYNC_REQUEST_TTL_MS: i64 = 5 * 60 * 1000;
 ///
 /// The sender is not named in the payload: it is read from the MLS leaf
 /// credential at decrypt time, which is authenticated where a payload
-/// field would not be.
+/// field would not be. The payload does name the sender's Drawbridge,
+/// where the rendezvous is: the sender registered its token there, so the
+/// message is where that fact is known for certain.
 #[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -73,6 +76,7 @@ pub enum RingMsg {
         secret: [u8; PAIRING_SECRET_LEN],
         #[serde_as(as = "Option<Base64>")]
         target_device_id: Option<DeviceId>,
+        drawbridge_url: DrawbridgeUrl,
     },
 
     /// "I have history you don't — I am opening a channel; join me."
@@ -94,6 +98,7 @@ pub enum RingMsg {
         secret: [u8; PAIRING_SECRET_LEN],
         #[serde_as(as = "Base64")]
         target_device_id: DeviceId,
+        drawbridge_url: DrawbridgeUrl,
     },
 }
 
@@ -118,6 +123,8 @@ pub enum SyncFailure {
     Declined,
     ChannelClosed { detail: String },
     PublishFailed { detail: String },
+    /// The rendezvous Drawbridge could not be reached.
+    DrawbridgeUnreachable { drawbridge_url: String, detail: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,8 +172,9 @@ enum Phase {
     /// Request published (requester) or accepted (responder); waiting for
     /// the pair channel to come up.
     AwaitingPeer,
-    /// Responder only: prompt shown, no decision yet.
-    AwaitingApproval { device_name: String },
+    /// Responder only: prompt shown, no decision yet. `drawbridge_url` is
+    /// where the requester's rendezvous is.
+    AwaitingApproval { device_name: String, drawbridge_url: DrawbridgeUrl },
     /// Pair channel established.
     Active,
     Complete {
@@ -227,9 +235,16 @@ impl SyncRequestSession {
         token: [u8; PAIRING_TOKEN_LEN],
         secret: [u8; PAIRING_SECRET_LEN],
         device_name: String,
+        drawbridge_url: DrawbridgeUrl,
         now_ms: i64,
     ) -> Self {
-        Self::new(Phase::AwaitingApproval { device_name }, Role::Responder, token, secret, now_ms)
+        Self::new(
+            Phase::AwaitingApproval { device_name, drawbridge_url },
+            Role::Responder,
+            token,
+            secret,
+            now_ms,
+        )
     }
 
     /// The side that published the ring message registered the rendezvous
@@ -268,7 +283,7 @@ impl SyncRequestSession {
     pub fn ui_state(&self) -> SyncRequestUiState {
         match &self.phase {
             Phase::AwaitingPeer => SyncRequestUiState::AwaitingPeer,
-            Phase::AwaitingApproval { device_name } => {
+            Phase::AwaitingApproval { device_name, .. } => {
                 SyncRequestUiState::AwaitingApproval { device_name: device_name.clone() }
             }
             Phase::Active => SyncRequestUiState::Active,
@@ -283,15 +298,16 @@ impl SyncRequestSession {
     }
 
     /// The user approved a sibling's request. Returns the token to
-    /// `pair_join` with.
+    /// `pair_join` with, and the Drawbridge to join it on.
     ///
     /// Refused unless a decision is actually outstanding: approving twice
     /// would dial a rendezvous that already has its two attaches.
-    pub fn accept(&mut self) -> Result<[u8; PAIRING_TOKEN_LEN]> {
-        match self.phase {
-            Phase::AwaitingApproval { .. } => {
+    pub fn accept(&mut self) -> Result<([u8; PAIRING_TOKEN_LEN], DrawbridgeUrl)> {
+        match &self.phase {
+            Phase::AwaitingApproval { drawbridge_url, .. } => {
+                let drawbridge_url = drawbridge_url.clone();
                 self.phase = Phase::AwaitingPeer;
-                Ok(self.token)
+                Ok((self.token, drawbridge_url))
             }
             _ => Err(Error::SyncRequestProtocol(
                 "no sync request is awaiting approval".to_string(),

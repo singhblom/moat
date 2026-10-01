@@ -29,6 +29,11 @@ class EnterPairingCodeScreen extends StatefulWidget {
 class _EnterPairingCodeScreenState extends State<EnterPairingCodeScreen> {
   final _formKey = GlobalKey<FormState>();
   final _codeController = TextEditingController();
+  final _drawbridgeController = TextEditingController(
+    // Devices from one distribution share a Drawbridge, so the common case needs
+    // only the code.
+    text: PairChannelManager.instance.service?.ownDrawbridgeUrl ?? '',
+  );
   bool _isLoading = false;
   bool _confirmed = false;
   String? _confirmError;
@@ -36,6 +41,7 @@ class _EnterPairingCodeScreenState extends State<EnterPairingCodeScreen> {
   @override
   void dispose() {
     _codeController.dispose();
+    _drawbridgeController.dispose();
     super.dispose();
   }
 
@@ -57,6 +63,7 @@ class _EnterPairingCodeScreenState extends State<EnterPairingCodeScreen> {
       MaterialPageRoute(builder: (_) => const _QrScanScreen()),
     );
     if (code != null && mounted) {
+      // A `moat-pair:` URI names its own Drawbridge, which wins over the field.
       _codeController.text = code;
       unawaited(_confirm());
     }
@@ -73,7 +80,10 @@ class _EnterPairingCodeScreenState extends State<EnterPairingCodeScreen> {
     });
 
     try {
-      await service.confirmPairingCode(_codeController.text.trim());
+      await service.confirmPairingCode(
+        _codeController.text.trim(),
+        drawbridgeUrl: _drawbridgeController.text.trim(),
+      );
       if (!mounted) return;
       setState(() {
         _isLoading = false;
@@ -110,12 +120,31 @@ class _EnterPairingCodeScreenState extends State<EnterPairingCodeScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            'Enter the code shown on your other device, or scan its QR code.',
+            'Enter the Drawbridge and code shown on your other device, or scan its '
+            'QR code.',
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
           ),
           const SizedBox(height: 24),
+          TextFormField(
+            controller: _drawbridgeController,
+            decoration: const InputDecoration(
+              labelText: 'Drawbridge',
+              hintText: 'wss://drawbridge.example.com/ws',
+              border: OutlineInputBorder(),
+            ),
+            keyboardType: TextInputType.url,
+            autocorrect: false,
+            enabled: !_isLoading,
+            validator: (value) {
+              if (value == null || value.trim().isEmpty) {
+                return 'Please enter the Drawbridge shown beside the code';
+              }
+              return null;
+            },
+          ),
+          const SizedBox(height: 16),
           TextFormField(
             controller: _codeController,
             decoration: InputDecoration(

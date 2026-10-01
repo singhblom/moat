@@ -65,11 +65,17 @@ async fn setup(kind: ParticipantKind) -> (TestWorld, String) {
         .await
         .expect("start conversation");
     tokio::time::sleep(Duration::from_millis(500)).await;
-    let stats = bob.poll().await.expect("bob welcome poll");
-    assert!(
-        stats.new_conversations > 0,
-        "Bob should receive the Welcome"
-    );
+    // A push-triggered poll may take the Welcome before this one does, so
+    // wait for the conversation rather than for this poll's count.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        bob.poll().await.expect("bob welcome poll");
+        if !bob.list_conversations().await.expect("bob conversations").is_empty() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "Bob should receive the Welcome");
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
     (world, group_id)
 }
 

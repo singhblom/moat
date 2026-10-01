@@ -19,6 +19,7 @@ cargo test -p moat-beacon    # Run integration tests (spins up real moat-cli pro
 env BEACON_PARALLEL=4 cargo test -p moat-beacon --test proptest three_party_push  # ~4× faster when run alone
 env BEACON_WORLDS=3 cargo test -p moat-beacon --test smoke   # smoke runs 2 TestWorlds at once by default
 cargo run -p moat-cli        # Run the TUI (default, no subcommand)
+env $(cat config/release.env) cargo build --release   # Release builds need MOAT_DRAWBRIDGE_URL (compile error without)
 
 # Flutter tests
 cd moat-flutter && flutter test          # Run Dart unit tests (52 tests)
@@ -66,7 +67,8 @@ Rust workspace + Dart/Flutter packages + Go service:
 - `MoatSession` - Main API for MLS operations with file-backed persistence
 - `Event` / `EventKind` - Unified event type (Message, Commit, Welcome, Checkpoint)
 - `KeyBundle` - Serialized key package with private keys
-- `PairChannelDriver` - Sole owner of the Drawbridge pair channel: pairing, sync requests/offers and the history transfer. Hosts feed it relay events and gestures and carry out the `PairChannelCommand`s it returns; they keep no pair-channel state of their own
+- `PairChannelDriver` - Sole owner of the Drawbridge pair channel: pairing, sync requests/offers and the history transfer. Hosts feed it relay events and gestures and carry out the `PairChannelCommand`s it returns; they keep no pair-channel state of their own. Every rendezvous names its Drawbridge (the Drawbridge of the device that opened it): a host holds a connection to that Drawbridge while the rendezvous is live, and reports one it could not reach (`on_drawbridge_unreachable`), which fails the rendezvous
+- `DrawbridgeUrl` - A Drawbridge URL in normal form; `parse` is the only constructor, so `==` means "same Drawbridge". Dart has no such type (its unit tests cannot load the FFI): it normalises its own URL and record URLs through `normalize_drawbridge_url` and compares strings
 
 **moat-atproto:**
 - `MoatAtprotoClient` - Async client for PDS operations (login, publish/fetch events, key packages, stealth addresses)
@@ -124,6 +126,9 @@ flutter_rust_bridge_codegen build-web \
 
 flutter build web            # Production web build
 flutter build apk            # Android APK
+# Release builds need the relay, or they fail to compile:
+flutter build apk --dart-define-from-file=../../config/release.json
+# Debug builds run without one (poll only); add --dart-define=MOAT_DRAWBRIDGE_URL=ws://... for a local relay
 ```
 
 ### Web Platform Architecture

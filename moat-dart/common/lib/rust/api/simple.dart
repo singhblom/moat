@@ -8,7 +8,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'simple.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `commands_dto`, `credential_from_dto`, `device_id_from`, `from_core`, `identity_from_dto`, `into_core`, `push_media_label`, `push_plaintext_preview`, `to_core_sibling_stealth`, `token_from`, `with_env`
+// These functions are ignored because they are not marked as `pub`: `commands_dto`, `credential_from_dto`, `device_id_from`, `drawbridge_url_from`, `from_core`, `identity_from_dto`, `into_core`, `push_media_label`, `push_plaintext_preview`, `to_core_sibling_stealth`, `token_from`, `with_env`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `MoatError`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `try_from`
 
@@ -53,11 +53,20 @@ List<Uint8List> generateCandidateTags(
 /// Returns (signature_bytes, public_key_bytes) as raw bytes (64 and 32 bytes).
 /// The caller is responsible for base64-encoding for JSON transport.
 ///
-/// `message` is typically `"{nonce}\n{relay_url}\n{timestamp}\n"`.
+/// `message` is typically `"{nonce}\n{drawbridge_url}\n{timestamp}\n"`.
 Future<DrawbridgeChallengeSignature> signDrawbridgeChallenge(
         {required List<int> keyBundle, required List<int> message}) =>
     RustLib.instance.api.crateApiSimpleSignDrawbridgeChallenge(
         keyBundle: keyBundle, message: message);
+
+/// A Drawbridge URL as configured or found in a record, in the one form a
+/// device dials, signs and compares (see `moat_core::DrawbridgeUrl`). Two
+/// spellings of one Drawbridge are equal strings once normalised.
+String normalizeDrawbridgeUrl({required String url}) =>
+    RustLib.instance.api.crateApiSimpleNormalizeDrawbridgeUrl(url: url);
+
+/// `moat_core::PAIR_CLOSE_GRACE`, in milliseconds.
+int pairCloseGraceMs() => RustLib.instance.api.crateApiSimplePairCloseGraceMs();
 
 /// Pad plaintext to bucket size (512, 1024, or 4096 bytes).
 ///
@@ -247,6 +256,15 @@ abstract class PairChannelHandle implements RustOpaqueInterface {
   static PairChannelHandle newDriver() =>
       RustLib.instance.api.crateApiSimplePairChannelHandleNewDriver();
 
+  /// The main WS to `drawbridge_url` (re)authenticated.
+  List<PairChannelCommandDto> onDrawbridgeConnected(
+      {required String drawbridgeUrl});
+
+  /// No authenticated main WS to `drawbridge_url` could be opened: a
+  /// rendezvous there fails with `detail`.
+  List<PairChannelCommandDto> onDrawbridgeUnreachable(
+      {required String drawbridgeUrl, required String detail});
+
   /// A binary frame from the pair WS for `token`.
   Future<List<PairChannelCommandDto>> onFrame(
       {required MoatSessionHandle session,
@@ -259,6 +277,7 @@ abstract class PairChannelHandle implements RustOpaqueInterface {
   List<PairChannelCommandDto> onPairClosed(
       {required List<int> token, required String reason});
 
+  /// `pair_ready` from the Drawbridge.
   List<PairChannelCommandDto> onPairReady(
       {required List<int> token, required String url});
 
@@ -268,8 +287,6 @@ abstract class PairChannelHandle implements RustOpaqueInterface {
       required RingDriverHandle ring,
       required PlatformInt64 nowMs,
       required List<int> token});
-
-  List<PairChannelCommandDto> onRelayConnected();
 
   /// A sibling's `ring.msg` payload. `sender_name` must come from the
   /// sender's MLS leaf credential.
@@ -292,12 +309,17 @@ abstract class PairChannelHandle implements RustOpaqueInterface {
 
   List<PairChannelCommandDto> pairCancel();
 
-  /// Existing device: enter a code, in its text or `moat-pair:` form.
+  /// Existing device: enter a code, in its text or `moat-pair:` form, with
+  /// the Drawbridge shown beside it (a `moat-pair:` URI names its own).
   List<PairChannelCommandDto> pairConfirm(
-      {required PairIdentityDto identity, required String code});
+      {required PairIdentityDto identity,
+      required String code,
+      String? drawbridgeUrl});
 
-  /// New device: start a pairing; the code is what the screen shows.
-  PairNewDto pairNew({required PairIdentityDto identity});
+  /// New device: start a pairing on `drawbridge_url`, this device's Drawbridge; the code
+  /// is what the screen shows, beside the Drawbridge.
+  PairNewDto pairNew(
+      {required PairIdentityDto identity, required String drawbridgeUrl});
 
   List<PairChannelCommandDto> pairReject();
 
@@ -312,6 +334,9 @@ abstract class PairChannelHandle implements RustOpaqueInterface {
       required List<int> token,
       required List<ConvHistoryDto> history});
 
+  /// The Drawbridge the live rendezvous is on, if there is one.
+  String? rendezvousDrawbridgeUrl();
+
   List<PairChannelCommandDto> syncAccept();
 
   void syncDecline();
@@ -322,16 +347,19 @@ abstract class PairChannelHandle implements RustOpaqueInterface {
       required RingDriverHandle ring,
       required PlatformInt64 nowMs,
       required List<int> keyBundle,
-      required List<int> target});
+      required List<int> target,
+      required String drawbridgeUrl});
 
   /// Ask the user's other devices for history; `target` names one.
-  /// `key_bundle` seals the request to the ring.
+  /// `key_bundle` seals the request to the ring; `drawbridge_url` is this device's
+  /// Drawbridge, where the rendezvous happens.
   Future<List<PairChannelCommandDto>> syncRequest(
       {required MoatSessionHandle session,
       required RingDriverHandle ring,
       required PlatformInt64 nowMs,
       required List<int> keyBundle,
-      Uint8List? target});
+      Uint8List? target,
+      required String drawbridgeUrl});
 
   SyncRequestUiStateDto syncRequestUiState();
 
@@ -850,10 +878,15 @@ class OwnEventInputDto {
 sealed class PairChannelCommandDto with _$PairChannelCommandDto {
   const PairChannelCommandDto._();
 
+  /// Send `pair_offer` on an authenticated main WS to `drawbridge_url`.
   const factory PairChannelCommandDto.sendPairOffer({
+    required String drawbridgeUrl,
     required Uint8List token,
   }) = PairChannelCommandDto_SendPairOffer;
+
+  /// Send `pair_join` on an authenticated main WS to `drawbridge_url`.
   const factory PairChannelCommandDto.sendPairJoin({
+    required String drawbridgeUrl,
     required Uint8List token,
   }) = PairChannelCommandDto_SendPairJoin;
   const factory PairChannelCommandDto.connectPair({
@@ -975,6 +1008,7 @@ sealed class PairingUiStateDto with _$PairingUiStateDto {
   /// New device: code generated, waiting for the peer to enter it.
   const factory PairingUiStateDto.showingCode({
     required String code,
+    required String drawbridgeUrl,
     required String uri,
   }) = PairingUiStateDto_ShowingCode;
 
@@ -1137,6 +1171,12 @@ sealed class SyncFailureDto with _$SyncFailureDto {
   const factory SyncFailureDto.publishFailed({
     required String detail,
   }) = SyncFailureDto_PublishFailed;
+
+  /// The rendezvous Drawbridge could not be reached.
+  const factory SyncFailureDto.drawbridgeUnreachable({
+    required String drawbridgeUrl,
+    required String detail,
+  }) = SyncFailureDto_DrawbridgeUnreachable;
 }
 
 class SyncMessageDto {

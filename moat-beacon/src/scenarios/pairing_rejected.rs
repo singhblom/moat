@@ -57,7 +57,7 @@ pub async fn run(verbose: bool) {
     vlog!("[pair] new device requests a pairing code...");
     let pair_new = new_device.pair_new().await.expect("new device pair_new");
     existing
-        .pair_confirm(&pair_new.code)
+        .pair_confirm(&pair_new.code, &pair_new.drawbridge_url)
         .await
         .expect("existing device pair_confirm");
 

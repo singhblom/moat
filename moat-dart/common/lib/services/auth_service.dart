@@ -6,7 +6,10 @@ import 'drawbridge_service.dart';
 import 'secure_storage.dart';
 import 'debug_log.dart';
 import '../rust/api/simple.dart';
-import '../utils/welcome_envelope.dart';
+
+/// Where this device's `drawbridgeConfig` record stands for the current
+/// connection to its own Drawbridge.
+enum _DrawbridgeRecord { pending, publishing, published }
 
 /// Authentication state
 enum AuthState {
@@ -27,6 +30,7 @@ class AuthService {
   String? _did;
   String? _handle;
   String? _deviceName;
+  _DrawbridgeRecord _drawbridgeRecord = _DrawbridgeRecord.pending;
 
   AuthService({
     required AtprotoClient atprotoClient,
@@ -119,17 +123,21 @@ class AuthService {
     await _initDrawbridge();
   }
 
-  /// Connect to Drawbridge and publish own relay URL.
+  /// This device's Drawbridge, normalised: the [drawbridgeUrl] override, else
+  /// the one the build was made for. Null when there is none, or it is unusable.
+  String? get ownDrawbridgeUrl {
+    final url = drawbridgeUrl ?? buildDrawbridgeUrl;
+    return url.isEmpty ? null : normalizedDrawbridgeUrl(url);
+  }
+
+  /// Connect to Drawbridge; its record is published once it authenticates.
   ///
-  /// URL resolution order:
-  ///   1. [drawbridgeUrl] `"disabled"` → skip entirely
-  ///   2. [drawbridgeUrl] non-null → explicit override
-  ///   3. PDS-advertised via `com.atproto.server.describeServer`
-  ///   4. [defaultDrawbridgeUrl] — hardcoded fallback
+  /// The relay is [drawbridgeUrl] if given, else [buildDrawbridgeUrl]. With
+  /// neither, the host polls only.
   ///
   /// Safe to call multiple times — DrawbridgeService is idempotent.
   Future<void> _initDrawbridge() async {
-    if (drawbridgeUrl == "disabled" ||_did == null) return;
+    if (_did == null) return;
 
     final session = _atprotoClient.session;
     if (session == null) return;
@@ -137,25 +145,45 @@ class AuthService {
     final keyBundle = await _secureStorage.loadKeyBundle();
     if (keyBundle == null) return;
 
-    final pdsAdvertised = drawbridgeUrl == null
-        ? await _atprotoClient.describeServerDrawbridgeUrl(session.pdsUrl)
-        : null;
-    final url = drawbridgeUrl ?? pdsAdvertised ?? defaultDrawbridgeUrl;
+    // Initialised even with no Drawbridge of our own: a rendezvous on a sibling's
+    // Drawbridge still needs this device's identity.
+    DrawbridgeService.instance.init(did: _did!, keyBundle: keyBundle);
 
-    if (drawbridgeUrl != null) {
-      moatLog('AuthService: Using explicit drawbridge override: $url');
-    } else if (pdsAdvertised != null) {
-      moatLog('AuthService: Using PDS-advertised drawbridge: $url');
-    } else {
-      moatLog('AuthService: Using default drawbridge: $url');
+    final url = ownDrawbridgeUrl;
+    if (url == null) {
+      moatLog('AuthService: no Drawbridge configured, push delivery is off');
+      return;
     }
 
-    DrawbridgeService.instance.init(did: _did!, keyBundle: keyBundle);
+    // Each connection writes the record anew, so senders find this device.
+    DrawbridgeService.instance.onOwnAuthenticated = () {
+      _drawbridgeRecord = _DrawbridgeRecord.pending;
+      unawaited(publishDrawbridgeRecord());
+    };
     unawaited(DrawbridgeService.instance.connectOwn(url));
+  }
+
+  /// Write this device's `drawbridgeConfig` record unless the current
+  /// connection to its own Drawbridge already has: on connecting, then from
+  /// each poll until a write succeeds.
+  Future<void> publishDrawbridgeRecord() async {
+    final url = ownDrawbridgeUrl;
+    final session = _moatSession;
+    if (_drawbridgeRecord != _DrawbridgeRecord.pending ||
+        url == null ||
+        session == null ||
+        !DrawbridgeService.instance.isOwnConnected) {
+      return;
+    }
+    _drawbridgeRecord = _DrawbridgeRecord.publishing;
     try {
-      await _atprotoClient.publishDrawbridgeConfig(url);
+      final deviceId = await session.deviceId();
+      await _atprotoClient.publishDrawbridgeConfig(_bytesToHex(deviceId), url);
+      _drawbridgeRecord = _DrawbridgeRecord.published;
     } catch (e) {
-      moatLog('AuthService: Failed to publish drawbridge config: $e');
+      _drawbridgeRecord = _DrawbridgeRecord.pending;
+      moatLog('AuthService: publishing this device\'s Drawbridge record failed: $e '
+          '(the next poll retries)');
     }
   }
 
@@ -346,10 +374,9 @@ class AuthService {
       newMemberKeyPackage: recipientKeyPackage,
     );
 
-    final envelope = encodeWelcomeEnvelope(welcomeResult.welcome);
     final stealthCiphertext = await encryptForStealth(
       recipientScanPubkeys: recipientStealthPubkeys,
-      welcomeBytes: envelope,
+      welcomeBytes: welcomeResult.welcome,
     );
 
     final random = Random.secure();

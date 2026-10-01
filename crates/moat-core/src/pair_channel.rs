@@ -10,10 +10,20 @@
 //! or a sync request is still waiting on a peer or a decision. A sibling's
 //! request or offer that arrives while it is busy is ignored; a gesture of
 //! the user's own supersedes whatever held the channel.
+//!
+//! Every rendezvous happens on one named Drawbridge: the Drawbridge of the device that
+//! opened it. Devices of one user may sit on different Drawbridges, so the other
+//! device goes to that Drawbridge, whichever its own is. The driver only carries
+//! the name; the host keeps a connection to it for as long as the rendezvous
+//! lives, and reports a Drawbridge it could not reach, which ends the
+//! rendezvous there.
+
+use std::time::Duration;
 
 use rand::RngCore;
 
 use crate::device_ring::{DeviceId, DeviceRingState, SiblingStealth, KP_POOL_TARGET};
+use crate::drawbridge_url::DrawbridgeUrl;
 use crate::pairing::{
     PairingCommand, PairingFrameChannel, PairingPayload, PairingSession, PairingUiState,
     SiblingInfo, PAIRING_TOKEN_LEN, PAIRING_URI_SCHEME,
@@ -25,6 +35,12 @@ use crate::sync_request::{
     encode_ring_msg, RingMsg, SyncFailure, SyncRequestSession, SyncRequestUiState,
 };
 use crate::{Error, Event, MoatCredential, MoatSession, Result, SyncMessage};
+
+/// How long a host waits for a closing pair channel to finish: our own
+/// close for the peer's reply, a Drawbridge's `pair_closed` for the socket to
+/// end, and a rendezvous connection for the peer to read the last frames
+/// before it is closed.
+pub const PAIR_CLOSE_GRACE: Duration = Duration::from_secs(5);
 
 /// Who this device is, for the steps that need its keys. A pairing keeps
 /// the identity it was started with.
@@ -46,12 +62,17 @@ pub struct PairEnv<'a> {
 /// Host I/O requested by [`PairChannelDriver`], to be carried out in order.
 #[derive(Debug, Clone)]
 pub enum PairChannelCommand {
-    /// Send `pair_offer{token}` on the main WS.
+    /// Send `pair_offer{token}` on an authenticated main WS to `drawbridge_url`.
+    /// A host that cannot open one reports it through
+    /// [`PairChannelDriver::on_drawbridge_unreachable`].
     SendPairOffer {
+        drawbridge_url: DrawbridgeUrl,
         token: [u8; PAIRING_TOKEN_LEN],
     },
-    /// Send `pair_join{token}` on the main WS.
+    /// Send `pair_join{token}` on an authenticated main WS to `drawbridge_url`,
+    /// as for [`SendPairOffer`](Self::SendPairOffer).
     SendPairJoin {
+        drawbridge_url: DrawbridgeUrl,
         token: [u8; PAIRING_TOKEN_LEN],
     },
     /// Open the pair WS at `url` and attach with `token`.
@@ -126,6 +147,7 @@ enum Owner {
 /// The rendezvous the pair channel is bound to.
 #[derive(Debug)]
 struct Rendezvous {
+    drawbridge_url: DrawbridgeUrl,
     token: [u8; PAIRING_TOKEN_LEN],
     /// `pair_offer` rather than `pair_join`.
     offer: bool,
@@ -201,6 +223,13 @@ impl PairChannelDriver {
         )
     }
 
+    /// The Drawbridge the live rendezvous is on, if there is one. A host keeps
+    /// its connection to that Drawbridge open, and to no other on the channel's
+    /// behalf.
+    pub fn rendezvous_drawbridge_url(&self) -> Option<&DrawbridgeUrl> {
+        self.rendezvous.as_ref().map(|r| &r.drawbridge_url)
+    }
+
     fn busy(&self, now_ms: i64) -> bool {
         self.rendezvous.is_some()
             || self.transfer.is_some()
@@ -216,8 +245,14 @@ impl PairChannelDriver {
 
     // ── User gestures ────────────────────────────────────────────────────────
 
-    /// New device: start a pairing and return the code to show.
-    pub fn pair_new(&mut self, identity: PairIdentity) -> (String, Vec<PairChannelCommand>) {
+    /// New device: start a pairing and return the code to show. `drawbridge_url` is
+    /// this device's Drawbridge, where the rendezvous happens; the peer is told
+    /// it beside the code.
+    pub fn pair_new(
+        &mut self,
+        identity: PairIdentity,
+        drawbridge_url: DrawbridgeUrl,
+    ) -> (String, Vec<PairChannelCommand>) {
         let mut cmds = self.supersede();
         let payload = PairingPayload {
             token: random_bytes(),
@@ -225,31 +260,45 @@ impl PairChannelDriver {
         };
         let code = payload.to_text();
         self.pairing = Some(Pairing {
-            session: PairingSession::new_device(&payload),
+            session: PairingSession::new_device(&payload, &drawbridge_url),
             identity,
         });
-        self.open_rendezvous(payload.token, true, Owner::Pairing, &mut cmds);
+        self.open_rendezvous(drawbridge_url, payload.token, true, Owner::Pairing, &mut cmds);
         (code, cmds)
     }
 
     /// Existing device: enter a code, in its text or `moat-pair:` form.
+    /// `drawbridge_url` is the Drawbridge as typed beside the code; a `moat-pair:`
+    /// URI names its own, which wins.
     pub fn pair_confirm(
         &mut self,
         identity: PairIdentity,
         code: &str,
+        drawbridge_url: Option<&str>,
     ) -> Result<Vec<PairChannelCommand>> {
         let code = code.trim();
-        let payload = if code.starts_with(PAIRING_URI_SCHEME) {
+        let (payload, uri_drawbridge_url) = if code.starts_with(PAIRING_URI_SCHEME) {
             PairingPayload::from_uri(code)?
         } else {
-            PairingPayload::from_text(code)?
+            (PairingPayload::from_text(code)?, None)
+        };
+        let drawbridge_url = match uri_drawbridge_url {
+            Some(drawbridge_url) => drawbridge_url,
+            None => {
+                let typed = drawbridge_url.filter(|u| !u.trim().is_empty()).ok_or_else(|| {
+                    Error::InvalidDrawbridgeUrl(
+                        "the pairing code needs the Drawbridge URL shown beside it".to_string(),
+                    )
+                })?;
+                DrawbridgeUrl::parse(typed)?
+            }
         };
         let mut cmds = self.supersede();
         self.pairing = Some(Pairing {
             session: PairingSession::existing_device(&payload.secret, &payload.token),
             identity,
         });
-        self.open_rendezvous(payload.token, false, Owner::Pairing, &mut cmds);
+        self.open_rendezvous(drawbridge_url, payload.token, false, Owner::Pairing, &mut cmds);
         Ok(cmds)
     }
 
@@ -344,12 +393,14 @@ impl PairChannelDriver {
 
     /// Ask the user's other devices for history. `target` names one
     /// sibling; `None` asks them all. `key_bundle` seals the request to the
-    /// ring.
+    /// ring. `drawbridge_url` is this device's Drawbridge, where the rendezvous
+    /// happens; the ring message names it.
     pub fn sync_request(
         &mut self,
         env: &mut PairEnv<'_>,
         key_bundle: &[u8],
         target: Option<DeviceId>,
+        drawbridge_url: DrawbridgeUrl,
     ) -> Result<Vec<PairChannelCommand>> {
         let token = random_bytes();
         let secret = random_bytes();
@@ -357,21 +408,23 @@ impl PairChannelDriver {
             token,
             secret,
             target_device_id: target,
+            drawbridge_url: drawbridge_url.clone(),
         };
         let publish = seal_ring_msg(env, key_bundle, &msg)?;
         let mut cmds = self.supersede();
         self.sync_request = Some(SyncRequestSession::request(token, secret, env.now_ms));
-        self.start_ring_rendezvous(token, publish, &mut cmds);
+        self.start_ring_rendezvous(drawbridge_url, token, publish, &mut cmds);
         Ok(cmds)
     }
 
     /// Offer this device's history to `target`, which joins without a
-    /// prompt of its own.
+    /// prompt of its own. `drawbridge_url` is as for [`sync_request`](Self::sync_request).
     pub fn sync_offer(
         &mut self,
         env: &mut PairEnv<'_>,
         key_bundle: &[u8],
         target: DeviceId,
+        drawbridge_url: DrawbridgeUrl,
     ) -> Result<Vec<PairChannelCommand>> {
         if &target == env.mls.device_id() {
             return Err(Error::SyncRequestProtocol(
@@ -384,11 +437,12 @@ impl PairChannelDriver {
             token,
             secret,
             target_device_id: target,
+            drawbridge_url: drawbridge_url.clone(),
         };
         let publish = seal_ring_msg(env, key_bundle, &msg)?;
         let mut cmds = self.supersede();
         self.sync_request = Some(SyncRequestSession::request(token, secret, env.now_ms));
-        self.start_ring_rendezvous(token, publish, &mut cmds);
+        self.start_ring_rendezvous(drawbridge_url, token, publish, &mut cmds);
         Ok(cmds)
     }
 
@@ -398,11 +452,11 @@ impl PairChannelDriver {
             .sync_request
             .as_mut()
             .ok_or_else(|| Error::SyncRequestProtocol("no sync request to accept".to_string()))?;
-        let token = session.accept()?;
+        let (token, drawbridge_url) = session.accept()?;
         let mut cmds = Vec::new();
         self.drop_channel(&mut cmds);
         self.pairing = None;
-        self.open_rendezvous(token, false, Owner::SyncRequest, &mut cmds);
+        self.open_rendezvous(drawbridge_url, token, false, Owner::SyncRequest, &mut cmds);
         Ok(cmds)
     }
 
@@ -433,6 +487,7 @@ impl PairChannelDriver {
                 token,
                 secret,
                 target_device_id,
+                drawbridge_url,
             } => {
                 if target_device_id.is_some_and(|t| &t != own_device_id) {
                     return vec![Cmd::Log(
@@ -448,6 +503,7 @@ impl PairChannelDriver {
                     token,
                     secret,
                     sender_name.clone(),
+                    drawbridge_url,
                     now_ms,
                 ));
                 vec![Cmd::Log(format!(
@@ -458,6 +514,7 @@ impl PairChannelDriver {
                 token,
                 secret,
                 target_device_id,
+                drawbridge_url,
             } => {
                 if &target_device_id != own_device_id {
                     return vec![Cmd::Log(
@@ -473,7 +530,7 @@ impl PairChannelDriver {
                 let mut cmds = vec![Cmd::Log(format!(
                     "sync: accepting {sender_name}'s offer of history"
                 ))];
-                self.open_rendezvous(token, false, Owner::SyncRequest, &mut cmds);
+                self.open_rendezvous(drawbridge_url, token, false, Owner::SyncRequest, &mut cmds);
                 cmds
             }
         }
@@ -498,16 +555,62 @@ impl PairChannelDriver {
 
     // ── Relay and pair-WS events ─────────────────────────────────────────────
 
-    /// The main WS (re)authenticated: resend an offer or join the relay
-    /// has not acknowledged, which it may have lost.
-    pub fn on_relay_connected(&self) -> Vec<PairChannelCommand> {
+    /// The main WS to `drawbridge_url` (re)authenticated: resend an offer or join it
+    /// has not acknowledged, which it may have lost. A connection to any
+    /// other Drawbridge has nothing to resend.
+    pub fn on_drawbridge_connected(&self, drawbridge_url: &DrawbridgeUrl) -> Vec<PairChannelCommand> {
         match &self.rendezvous {
-            Some(r) if !r.acknowledged => vec![rendezvous_cmd(r)],
+            Some(r) if !r.acknowledged && &r.drawbridge_url == drawbridge_url => {
+                vec![rendezvous_cmd(r)]
+            }
             _ => Vec::new(),
         }
     }
 
-    /// `pair_ready{token, pair_url}` from the relay.
+    /// The host could not open an authenticated main WS to `drawbridge_url`.
+    /// A rendezvous there cannot happen, so it fails with `detail`; the user
+    /// can start again, perhaps with the URL corrected. Any other Drawbridge
+    /// is no concern of the channel's.
+    pub fn on_drawbridge_unreachable(
+        &mut self,
+        drawbridge_url: &DrawbridgeUrl,
+        detail: String,
+    ) -> Vec<PairChannelCommand> {
+        let mut cmds = Vec::new();
+        let Some(owner) = self
+            .rendezvous
+            .as_ref()
+            .filter(|r| &r.drawbridge_url == drawbridge_url)
+            .map(|r| r.owner)
+        else {
+            return cmds;
+        };
+        let reason = format!("could not reach the Drawbridge at {drawbridge_url}: {detail}");
+        cmds.push(Cmd::Log(format!("pair: {reason}")));
+        if self.transfer.is_some() {
+            self.end_channel(reason, &mut cmds);
+            return cmds;
+        }
+        match owner {
+            Owner::Pairing => {
+                if let Some(pairing) = self.pairing.as_mut() {
+                    pairing.session.fail(reason);
+                }
+            }
+            Owner::SyncRequest => {
+                if let Some(session) = self.sync_request.as_mut() {
+                    session.fail(SyncFailure::DrawbridgeUnreachable {
+                        drawbridge_url: drawbridge_url.to_string(),
+                        detail,
+                    });
+                }
+            }
+        }
+        self.drop_channel(&mut cmds);
+        cmds
+    }
+
+    /// `pair_ready{token, pair_url}` from the Drawbridge.
     pub fn on_pair_ready(&mut self, token: &[u8], url: String) -> Vec<PairChannelCommand> {
         match self.rendezvous.as_mut() {
             Some(r) if r.token.as_slice() == token => {
@@ -737,12 +840,14 @@ impl PairChannelDriver {
 
     fn open_rendezvous(
         &mut self,
+        drawbridge_url: DrawbridgeUrl,
         token: [u8; PAIRING_TOKEN_LEN],
         offer: bool,
         owner: Owner,
         cmds: &mut Vec<PairChannelCommand>,
     ) {
         let rendezvous = Rendezvous {
+            drawbridge_url,
             token,
             offer,
             owner,
@@ -754,12 +859,13 @@ impl PairChannelDriver {
 
     fn start_ring_rendezvous(
         &mut self,
+        drawbridge_url: DrawbridgeUrl,
         token: [u8; PAIRING_TOKEN_LEN],
         (tag, ciphertext): ([u8; 16], Vec<u8>),
         cmds: &mut Vec<PairChannelCommand>,
     ) {
         cmds.push(Cmd::SaveMlsState);
-        self.open_rendezvous(token, true, Owner::SyncRequest, cmds);
+        self.open_rendezvous(drawbridge_url, token, true, Owner::SyncRequest, cmds);
         self.published_tag = Some(tag);
         cmds.push(Cmd::PublishRingEvent { tag, ciphertext });
     }
@@ -978,10 +1084,11 @@ impl PairChannelDriver {
 }
 
 fn rendezvous_cmd(r: &Rendezvous) -> PairChannelCommand {
+    let drawbridge_url = r.drawbridge_url.clone();
     if r.offer {
-        Cmd::SendPairOffer { token: r.token }
+        Cmd::SendPairOffer { drawbridge_url, token: r.token }
     } else {
-        Cmd::SendPairJoin { token: r.token }
+        Cmd::SendPairJoin { drawbridge_url, token: r.token }
     }
 }
 

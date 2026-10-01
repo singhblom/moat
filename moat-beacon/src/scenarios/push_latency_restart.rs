@@ -107,7 +107,7 @@ pub async fn run(verbose: bool) {
     );
     vlog!(verbose, "[setup] bob joined group");
 
-    // Give Bob time to send reciprocal DrawbridgeHint, then Alice picks it up.
+    // Let Bob's join settle, then have Alice poll so both are caught up.
     tokio::time::sleep(Duration::from_millis(500)).await;
     let _ = alice.poll().await;
     tokio::time::sleep(Duration::from_millis(500)).await;

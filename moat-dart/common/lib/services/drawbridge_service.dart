@@ -4,13 +4,31 @@ import 'dart:typed_data';
 import 'package:web_socket_channel/status.dart' as ws_status;
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../rust/api/simple.dart' as ffi;
+import 'atproto_client.dart';
 import 'debug_log.dart';
+import 'rendezvous_connection.dart';
 
 /// No dart:ui dependency — VoidCallback defined here.
 typedef VoidCallback = void Function();
 
-/// Default Drawbridge relay URL.
-const defaultDrawbridgeUrl = 'wss://moat-drawbridge.fly.dev/ws';
+/// Drawbridge relay this build was made for, from
+/// `--dart-define=MOAT_DRAWBRIDGE_URL=...`. Empty means no relay.
+const buildDrawbridgeUrl = String.fromEnvironment('MOAT_DRAWBRIDGE_URL');
+
+/// moat-core's `PAIR_CLOSE_GRACE`, read once the Rust library is loaded.
+final pairCloseGrace = Duration(milliseconds: ffi.pairCloseGraceMs());
+
+/// [url] in the one form moat-core dials, signs and compares, or null if it
+/// is not a Drawbridge URL. Every Drawbridge URL this library holds is in
+/// that form, so two of them name one Drawbridge exactly when they are equal.
+String? normalizedDrawbridgeUrl(String url) {
+  try {
+    return ffi.normalizeDrawbridgeUrl(url: url);
+  } catch (e) {
+    moatLog('Drawbridge URL $url is unusable: $e');
+    return null;
+  }
+}
 
 /// Event received from own Drawbridge relay via WebSocket.
 class DrawbridgeNewEvent {
@@ -35,11 +53,13 @@ class DrawbridgePairReady {
   DrawbridgePairReady({required this.pairUrl, required this.token});
 }
 
-/// Manages a single WebSocket connection to the user's own Drawbridge relay.
+/// Manages the WebSocket connection to the user's own Drawbridge, and
+/// while a pairing or sync rendezvous is live on another Drawbridge, a
+/// [RendezvousConnection] to that one.
 ///
-/// After the ticket/partner architecture was removed, the client only connects
-/// to its **own** Drawbridge. Sending uses envelope-based fan-out (payload +
-/// relay_urls). Receiving uses tag-based routing on the own relay.
+/// Events and tags go only through the **own** Drawbridge. Sending uses
+/// envelope-based fan-out (payload + relay_urls). Receiving uses tag-based
+/// routing on the own relay.
 class DrawbridgeService {
   static final DrawbridgeService instance = DrawbridgeService._();
   DrawbridgeService._();
@@ -69,9 +89,23 @@ class DrawbridgeService {
   /// (cleanly or with an error).
   void Function(Uint8List token, String reason)? onPairClosed;
 
-  /// Called each time the own relay (re)authenticates, so an offer or
-  /// join it has not acknowledged can be resent.
-  void Function()? onAuthenticated;
+  /// Called each time a Drawbridge we hold a main WS to, our own or a rendezvous
+  /// connection's, (re)authenticates, so an offer or join it has not
+  /// acknowledged can be resent there.
+  void Function(String drawbridgeUrl)? onAuthenticated;
+
+  /// Called each time this device's own Drawbridge (re)authenticates.
+  void Function()? onOwnAuthenticated;
+
+  /// Called when the rendezvous connection to a Drawbridge ends from outside,
+  /// having authenticated.
+  void Function(String drawbridgeUrl)? onRendezvousClosed;
+
+  /// Called when a rendezvous connection to a Drawbridge ended before it
+  /// authenticated: the Drawbridge could not be reached.
+  void Function(String drawbridgeUrl, String reason)? onRendezvousUnreachable;
+
+  RendezvousConnection? _rendezvous;
 
   WebSocketChannel? _pairChannel;
   StreamSubscription? _pairSubscription;
@@ -93,8 +127,11 @@ class DrawbridgeService {
   String? _pushToken;
   String? _pushPlatform;
 
-  /// Drawbridge config cache: DID → list of relay URLs.
-  final Map<String, List<String>> _configCache = {};
+  /// Drawbridge config cache: DID → the relays its devices sit on.
+  final Map<String, _CachedConfig> _configCache = {};
+
+  /// How long a DID's relay list is trusted before a poll re-reads it.
+  static const configTtl = Duration(seconds: 30);
 
   void init({
     required String did,
@@ -160,7 +197,9 @@ class DrawbridgeService {
           _ownAuthenticated = true;
           _sendWatchedTags();
           _sendPushRegistration();
-          onAuthenticated?.call();
+          onOwnAuthenticated?.call();
+          final own = _ownUrl;
+          if (own != null) onAuthenticated?.call(own);
         case 'new_event':
           _handleNewEvent(msg);
         case 'pair_pending':
@@ -269,29 +308,83 @@ class DrawbridgeService {
 
   // -- Pair WS (sync-session transport) --------------------------------------
 
-  /// Send `pair_offer{token}` on the own WS. Caller is the offerer.
-  void sendPairOffer(Uint8List token) {
-    if (!_ownAuthenticated || _ownChannel == null) {
-      moatLog('DrawbridgeService: sendPairOffer dropped — own WS not ready');
+  /// Send `pair_offer{token}` to [drawbridgeUrl]. Caller is the offerer.
+  void sendPairOffer(String drawbridgeUrl, Uint8List token) =>
+      _sendRendezvous(drawbridgeUrl, 'pair_offer', token);
+
+  /// Send `pair_join{token}` to [drawbridgeUrl]. Caller is the joiner.
+  void sendPairJoin(String drawbridgeUrl, Uint8List token) =>
+      _sendRendezvous(drawbridgeUrl, 'pair_join', token);
+
+  /// Whether [drawbridgeUrl] is the Drawbridge this device's own connection is to.
+  bool isOwnDrawbridge(String drawbridgeUrl) => _ownUrl == drawbridgeUrl;
+
+  /// Whether the rendezvous connection is to [drawbridgeUrl].
+  bool hasRendezvousConnection(String drawbridgeUrl) =>
+      _rendezvous?.url == drawbridgeUrl;
+
+  void _sendRendezvous(String drawbridgeUrl, String type, Uint8List token) {
+    if (isOwnDrawbridge(drawbridgeUrl)) {
+      if (!_ownAuthenticated || _ownChannel == null) {
+        moatLog('DrawbridgeService: $type dropped — own WS not ready');
+        return;
+      }
+      _ownChannel!.sink.add(jsonEncode({
+        'type': type,
+        'token': base64Encode(token),
+      }));
       return;
     }
-    _ownChannel!.sink.add(jsonEncode({
-      'type': 'pair_offer',
-      'token': base64Encode(token),
-    }));
+    // Sent once the connection has authenticated: `onAuthenticated` then
+    // asks the driver to resend whatever is unacknowledged.
+    final connection = ensureRendezvous(drawbridgeUrl);
+    if (connection != null && !connection.send(type, token)) {
+      moatLog('DrawbridgeService: $type waits for the rendezvous connection to $drawbridgeUrl');
+    }
   }
 
-  /// Send `pair_join{token}` on the own WS. Caller is the joiner.
-  void sendPairJoin(Uint8List token) {
-    if (!_ownAuthenticated || _ownChannel == null) {
-      moatLog('DrawbridgeService: sendPairJoin dropped — own WS not ready (authenticated=$_ownAuthenticated channel=${_ownChannel != null})');
-      return;
+  /// The rendezvous connection to [drawbridgeUrl], opened if there is none
+  /// yet. Null when this device cannot authenticate anywhere, which
+  /// [onRendezvousUnreachable] reports as it would a failed connection.
+  RendezvousConnection? ensureRendezvous(String drawbridgeUrl) {
+    final existing = _rendezvous;
+    if (existing != null && existing.url == drawbridgeUrl) return existing;
+    _rendezvous = null;
+    unawaited(existing?.close());
+    final did = _did;
+    final keyBundle = _keyBundle;
+    if (did == null || keyBundle == null) {
+      onRendezvousUnreachable?.call(drawbridgeUrl, 'not signed in');
+      return null;
     }
-    moatLog('DrawbridgeService: sendPairJoin sending token=${base64Encode(token).substring(0, 8)}...');
-    _ownChannel!.sink.add(jsonEncode({
-      'type': 'pair_join',
-      'token': base64Encode(token),
-    }));
+    late final RendezvousConnection connection;
+    connection = RendezvousConnection(
+      url: drawbridgeUrl,
+      did: did,
+      keyBundle: keyBundle,
+      onAuthenticated: (drawbridgeUrl) => onAuthenticated?.call(drawbridgeUrl),
+      onPairReady: (token, pairUrl) =>
+          onPairReady?.call(DrawbridgePairReady(pairUrl: pairUrl, token: token)),
+      onClosed: (drawbridgeUrl, reason, wasAuthenticated) {
+        if (!identical(_rendezvous, connection)) return;
+        _rendezvous = null;
+        if (wasAuthenticated) {
+          onRendezvousClosed?.call(drawbridgeUrl);
+        } else {
+          onRendezvousUnreachable?.call(drawbridgeUrl, reason);
+        }
+      },
+    );
+    _rendezvous = connection;
+    unawaited(connection.connect());
+    return connection;
+  }
+
+  /// Close the rendezvous connection, if one is open.
+  Future<void> closeRendezvous() async {
+    final connection = _rendezvous;
+    _rendezvous = null;
+    await connection?.close();
   }
 
   /// Open the `/pair` WebSocket, send `pair_attach{token}`, and wait for `paired`.
@@ -405,7 +498,7 @@ class DrawbridgeService {
     try {
       await channel?.sink
           .close(ws_status.normalClosure)
-          .timeout(const Duration(seconds: 5));
+          .timeout(pairCloseGrace);
     } catch (e) {
       moatLog('DrawbridgeService: pair WS close: $e');
     }
@@ -522,7 +615,7 @@ class DrawbridgeService {
     required Uint8List tag,
     required String rkey,
     required Uint8List payload,
-    required List<String> relayUrls,
+    required List<String> drawbridgeUrls,
   }) {
     if (!_ownAuthenticated || _ownChannel == null) return;
     final tagHex = _bytesToHex(tag);
@@ -532,29 +625,54 @@ class DrawbridgeService {
       'tag': tagHex,
       'rkey': rkey,
       'payload': base64Encode(payload),
-      'relay_urls': relayUrls,
+      'relay_urls': drawbridgeUrls,
     }));
   }
 
   // -- Drawbridge config cache -----------------------------------------------
 
-  /// Cache a DID's Drawbridge relay URLs.
+  /// Cache the relay URLs a DID's devices sit on, as just read from its PDS
+  /// and normalised.
   void cacheDrawbridgeConfig(String did, List<String> urls) {
-    if (urls.isNotEmpty) {
-      _configCache[did] = urls;
-    }
+    _configCache[did] = _CachedConfig(urls, DateTime.now());
   }
 
-  /// Get cached relay URLs for a list of participant DIDs.
-  /// Returns a flat, deduplicated list of relay URLs.
-  List<String> relayUrlsForParticipants(List<String> participantDids) {
+  /// Read the Drawbridges of [dids] from their PDSes, all at once, and cache
+  /// them. A DID whose read fails keeps what was cached, and stays stale.
+  Future<void> refreshDrawbridgeConfigs(
+      AtprotoClient client, Iterable<String> dids) async {
+    await Future.wait(dids.toSet().map((did) async {
+      try {
+        final urls = await client.fetchDrawbridgeConfig(did);
+        cacheDrawbridgeConfig(
+            did, urls.map(normalizedDrawbridgeUrl).whereType<String>().toSet().toList());
+      } catch (e) {
+        moatLog('DrawbridgeService: reading the Drawbridges of $did failed: $e');
+      }
+    }));
+  }
+
+  /// The DIDs among [dids] whose relay list is missing or older than [configTtl].
+  List<String> staleConfigDids(Iterable<String> dids) {
+    final now = DateTime.now();
+    return dids.toSet().where((did) {
+      final cached = _configCache[did];
+      return cached == null || now.difference(cached.fetchedAt) >= configTtl;
+    }).toList();
+  }
+
+  /// Relay URLs to notify for an event: the union of [participantDids]' relays
+  /// and this user's own, less our own relay, which already routed the event
+  /// to the devices connected to it.
+  List<String> drawbridgeUrlsForParticipants(List<String> participantDids) {
     final urls = <String>{};
-    for (final did in participantDids) {
+    for (final did in {...participantDids, if (_did != null) _did!}) {
       final cached = _configCache[did];
       if (cached != null) {
-        urls.addAll(cached);
+        urls.addAll(cached.urls);
       }
     }
+    urls.remove(_ownUrl);
     return urls.toList();
   }
 
@@ -597,6 +715,7 @@ class DrawbridgeService {
     disconnectAll();
     _watchedTagHexes.clear();
     _configCache.clear();
+    unawaited(closeRendezvous());
     _keyBundle = null;
     _did = null;
     _pushDeviceId = null;
@@ -609,4 +728,11 @@ class DrawbridgeService {
   static String _bytesToHex(Uint8List bytes) {
     return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   }
+}
+
+class _CachedConfig {
+  final List<String> urls;
+  final DateTime fetchedAt;
+
+  _CachedConfig(this.urls, this.fetchedAt);
 }

@@ -25,7 +25,8 @@ Uint8List _hexToBytes(String hex) {
 Map<String, dynamic> _pairingUiStateJson(PairingUiStateDto state) {
   return state.when(
     idle: () => {'phase': 'idle'},
-    showingCode: (code, uri) => {'phase': 'showing_code', 'code': code, 'uri': uri},
+    showingCode: (code, drawbridgeUrl, uri) =>
+        {'phase': 'showing_code', 'code': code, 'drawbridge_url': drawbridgeUrl, 'uri': uri},
     awaitingPeer: () => {'phase': 'awaiting_peer'},
     awaitingApproval: (deviceName, did) =>
         {'phase': 'awaiting_approval', 'device_name': deviceName, 'did': did},
@@ -67,6 +68,11 @@ Map<String, dynamic> _syncFailureJson(SyncFailureDto reason) {
     declined: () => {'kind': 'declined'},
     channelClosed: (detail) => {'kind': 'channel_closed', 'detail': detail},
     publishFailed: (detail) => {'kind': 'publish_failed', 'detail': detail},
+    drawbridgeUnreachable: (drawbridgeUrl, detail) => {
+      'kind': 'drawbridge_unreachable',
+      'drawbridge_url': drawbridgeUrl,
+      'detail': detail,
+    },
   );
 }
 
@@ -565,7 +571,9 @@ Handler buildRouter({
   router.post('/pair/new', (Request request) async {
     try {
       final code = await pairChannel.startPairing();
-      return Response.ok(jsonEncode({'code': code}), headers: _jsonHeaders);
+      return Response.ok(
+          jsonEncode({'code': code, 'drawbridge_url': pairChannel.ownDrawbridgeUrl}),
+          headers: _jsonHeaders);
     } catch (e) {
       moatLog('Server: pair/new error: $e');
       return Response(500,
@@ -579,7 +587,8 @@ Handler buildRouter({
     try {
       final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
       final code = body['code'] as String;
-      await pairChannel.confirmPairingCode(code);
+      final drawbridgeUrl = body['drawbridge_url'] as String?;
+      await pairChannel.confirmPairingCode(code, drawbridgeUrl: drawbridgeUrl);
       return Response.ok(jsonEncode({'ok': true}), headers: _jsonHeaders);
     } catch (e) {
       moatLog('Server: pair/confirm error: $e');

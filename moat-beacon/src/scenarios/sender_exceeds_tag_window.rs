@@ -50,7 +50,7 @@ async fn run_with(recipient_kind: ParticipantKind, name: &str, push_phase: bool,
     vlog!("=== Scenario: {name} ===");
 
     let mut world = TestWorld::new_with_kinds_and_drawbridge(
-        &[("alice", "alice"), ("bob", "bob")],
+        &[("alice", "drawbridge"), ("bob", "drawbridge")],
         &[ParticipantKind::RustCli, recipient_kind],
         ".postern.test",
     )

@@ -65,8 +65,8 @@ class PairChannelService {
         _ring = ring,
         _convService = conversationsService,
         _messageStorage = messageStorage {
-    _drawbridge.onPairReady = (ready) =>
-        _run(() => _apply(_driver.onPairReady(token: ready.token, url: ready.pairUrl)));
+    _drawbridge.onPairReady =
+        (ready) => _run(() => _apply(_driver.onPairReady(token: ready.token, url: ready.pairUrl)));
     _drawbridge.onPairConnected = (token) => _run(() async {
           final e = _env();
           await _apply(await _driver.onPaired(
@@ -82,7 +82,19 @@ class PairChannelService {
     _drawbridge.onPairClosed = (token, reason) =>
         _run(() => _apply(_driver.onPairClosed(token: token, reason: reason)));
     _drawbridge.onAuthenticated =
-        () => _run(() => _apply(_driver.onRelayConnected()));
+        (drawbridgeUrl) => _run(() => _apply(_driver.onDrawbridgeConnected(drawbridgeUrl: drawbridgeUrl)));
+    // A rendezvous connection that drops mid-rendezvous is reopened, and the
+    // unacknowledged offer or join resent once it authenticates. One that
+    // cannot be opened fails the rendezvous.
+    _drawbridge.onRendezvousClosed = (drawbridgeUrl) {
+      Timer(const Duration(seconds: 3), () {
+        if (_driver.rendezvousDrawbridgeUrl() == drawbridgeUrl) {
+          _drawbridge.ensureRendezvous(drawbridgeUrl);
+        }
+      });
+    };
+    _drawbridge.onRendezvousUnreachable = (drawbridgeUrl, reason) => _run(() => _apply(
+        _driver.onDrawbridgeUnreachable(drawbridgeUrl: drawbridgeUrl, detail: reason)));
   }
 
   void dispose() {
@@ -91,23 +103,46 @@ class PairChannelService {
     _drawbridge.onPairFrame = null;
     _drawbridge.onPairClosed = null;
     _drawbridge.onAuthenticated = null;
+    _drawbridge.onRendezvousClosed = null;
+    _drawbridge.onRendezvousUnreachable = null;
     unawaited(_drawbridge.clearPair());
+    unawaited(_drawbridge.closeRendezvous());
   }
 
   // ── Pairing ─────────────────────────────────────────────────────────────
 
-  /// New device: start a pairing and return the code to show. Render
-  /// [pairingState]'s `showingCode` for both its text and QR forms.
+  /// This device's Drawbridge, or null if the build has none. A pairing screen
+  /// offers it as the Drawbridge to type beside a code: devices from one
+  /// distribution share a Drawbridge.
+  String? get ownDrawbridgeUrl => _auth.ownDrawbridgeUrl;
+
+  /// This device's Drawbridge, where its rendezvous happen. Throws if the build
+  /// has none.
+  String _ownDrawbridgeUrl() {
+    final drawbridgeUrl = _auth.ownDrawbridgeUrl;
+    if (drawbridgeUrl == null) {
+      throw StateError(
+          'this build has no Drawbridge, and pairing and sync need one');
+    }
+    return drawbridgeUrl;
+  }
+
+  /// New device: start a pairing on this device's Drawbridge and return the code
+  /// to show. Render [pairingState]'s `showingCode` for the Drawbridge and the
+  /// code, or its QR form, which carries both.
   Future<String> startPairing() => _call(() async {
-        final started = _driver.pairNew(identity: await _identity());
+        final started =
+            _driver.pairNew(identity: await _identity(), drawbridgeUrl: _ownDrawbridgeUrl());
         await _apply(started.commands);
         return started.code;
       });
 
   /// Existing device: enter a code shown elsewhere, as text or as the
-  /// `moat-pair:` URI a QR scan yields. Approval is a separate step.
-  Future<void> confirmPairingCode(String code) => _call(() async {
-        await _apply(_driver.pairConfirm(identity: await _identity(), code: code));
+  /// `moat-pair:` URI a QR scan yields, with the Drawbridge shown beside it (a
+  /// URI names its own). Approval is a separate step.
+  Future<void> confirmPairingCode(String code, {String? drawbridgeUrl}) => _call(() async {
+        await _apply(_driver.pairConfirm(
+            identity: await _identity(), code: code, drawbridgeUrl: drawbridgeUrl));
       });
 
   /// Existing device: approve the pending `Enroll`. Throws if there was
@@ -146,6 +181,7 @@ class PairChannelService {
           nowMs: _now(),
           keyBundle: await _keyBundle(),
           target: targetDeviceId,
+          drawbridgeUrl: _ownDrawbridgeUrl(),
         ));
       });
 
@@ -159,6 +195,7 @@ class PairChannelService {
           nowMs: _now(),
           keyBundle: await _keyBundle(),
           target: targetDeviceId,
+          drawbridgeUrl: _ownDrawbridgeUrl(),
         ));
       });
 
@@ -257,10 +294,10 @@ class PairChannelService {
   Future<void> _apply(List<ffi.PairChannelCommandDto> cmds) async {
     for (final cmd in cmds) {
       switch (cmd) {
-        case ffi.PairChannelCommandDto_SendPairOffer(:final token):
-          _drawbridge.sendPairOffer(token);
-        case ffi.PairChannelCommandDto_SendPairJoin(:final token):
-          _drawbridge.sendPairJoin(token);
+        case ffi.PairChannelCommandDto_SendPairOffer(:final drawbridgeUrl, :final token):
+          _drawbridge.sendPairOffer(drawbridgeUrl, token);
+        case ffi.PairChannelCommandDto_SendPairJoin(:final drawbridgeUrl, :final token):
+          _drawbridge.sendPairJoin(drawbridgeUrl, token);
         case ffi.PairChannelCommandDto_ConnectPair(:final url, :final token):
           unawaited(_drawbridge.connectPair(url, token));
         case ffi.PairChannelCommandDto_SendFrame(:final data):
@@ -268,6 +305,7 @@ class PairChannelService {
         case ffi.PairChannelCommandDto_ClosePair():
         case ffi.PairChannelCommandDto_DropPair():
           await _drawbridge.clearPair();
+          _releaseRendezvousLater();
         case ffi.PairChannelCommandDto_PublishRingEvent(:final tag, :final ciphertext):
           await _publishRingEvent(tag, ciphertext);
         case ffi.PairChannelCommandDto_LoadHistory(:final token):
@@ -318,6 +356,18 @@ class PairChannelService {
     _syncState();
   }
 
+  /// Close the rendezvous connection once the pair channel has been idle
+  /// for a grace period, unless a new rendezvous needs it: a peer may still
+  /// be reading its last frames.
+  void _releaseRendezvousLater() {
+    Timer(pairCloseGrace, () {
+      final live = _driver.rendezvousDrawbridgeUrl();
+      if (live == null || !_drawbridge.hasRendezvousConnection(live)) {
+        unawaited(_drawbridge.closeRendezvous());
+      }
+    });
+  }
+
   Future<void> _publishRingEvent(Uint8List tag, Uint8List ciphertext) async {
     try {
       final uri = await _auth.atprotoClient.publishEvent(tag, ciphertext);
@@ -325,7 +375,7 @@ class PairChannelService {
         tag: tag,
         rkey: uri.split('/').last,
         payload: ciphertext,
-        relayUrls: const [],
+        drawbridgeUrls: const [],
       );
     } catch (e) {
       moatLog('PairChannelService: publish ring event failed: $e');

@@ -60,10 +60,10 @@ Future<Conversation> startConversation({
 
   final groupIdHex = _bytesToHex(result.groupId);
 
-  // 9. Fetch recipient's Drawbridge config and cache it.
-  final recipientRelayUrls = await client.fetchDrawbridgeConfig(recipientDid);
-  DrawbridgeService.instance
-      .cacheDrawbridgeConfig(recipientDid, recipientRelayUrls);
+  // 9. Fetch the Drawbridges of the recipient's devices and of our
+  //    own other devices, and cache them.
+  await DrawbridgeService.instance
+      .refreshDrawbridgeConfigs(client, [recipientDid, if (authService.did != null) authService.did!]);
 
   // 10. Save conversation.
   final conversation = Conversation(

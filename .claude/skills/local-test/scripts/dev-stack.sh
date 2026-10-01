@@ -1,5 +1,5 @@
 #!/bin/bash
-# Local manual-testing stack: Postern (PDS) + Drawbridge (relay).
+# Local manual-testing stack: Postern (PDS) + Drawbridge.
 # dev-stack.sh --help for services, accounts and how to drive devices.
 
 set -euo pipefail
@@ -7,7 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
 RUN_DIR="/tmp/moat-dev-stack"
 POSTERN_PORT=4000
-RELAY_PORT=8080
+DRAWBRIDGE_PORT=8080
 
 mkdir -p "$RUN_DIR"
 
@@ -26,8 +26,7 @@ start() {
   (cd "$ROOT/moat-drawbridge" && go build -o "$RUN_DIR/drawbridge" ./...)
 
   echo "Starting Postern on :${POSTERN_PORT}..."
-  DRAWBRIDGE_URL="ws://127.0.0.1:$RELAY_PORT/ws" \
-    "$ROOT/target/debug/dev_server" "$POSTERN_PORT" > "$RUN_DIR/postern.log" 2>&1 &
+  "$ROOT/target/debug/dev_server" "$POSTERN_PORT" > "$RUN_DIR/postern.log" 2>&1 &
   echo $! > "$RUN_DIR/postern.pid"
 
   # describeServer is the readiness signal: it is the endpoint clients hit first.
@@ -35,23 +34,23 @@ start() {
     sleep 0.2
   done
 
-  echo "Starting Drawbridge on :${RELAY_PORT}..."
+  echo "Starting Drawbridge on :${DRAWBRIDGE_PORT}..."
   RELAY_TLS=false \
-  RELAY_ADDR=":$RELAY_PORT" \
-  RELAY_PUBLIC_URL="ws://127.0.0.1:$RELAY_PORT" \
+  RELAY_ADDR=":$DRAWBRIDGE_PORT" \
+  RELAY_PUBLIC_URL="ws://127.0.0.1:$DRAWBRIDGE_PORT" \
   LOG_FORMAT=text \
   PLC_BASE_URL="http://127.0.0.1:$POSTERN_PORT" \
     "$RUN_DIR/drawbridge" > "$RUN_DIR/drawbridge.log" 2>&1 &
   echo $! > "$RUN_DIR/drawbridge.pid"
 
-  until curl -sf "http://127.0.0.1:$RELAY_PORT/health" >/dev/null; do sleep 0.2; done
+  until curl -sf "http://127.0.0.1:$DRAWBRIDGE_PORT/health" >/dev/null; do sleep 0.2; done
 
   cat <<EOF
 
 Stack up.
 
   Postern      http://127.0.0.1:$POSTERN_PORT   (emulator: http://10.0.2.2:$POSTERN_PORT)
-  Drawbridge   ws://127.0.0.1:$RELAY_PORT/ws    (advertised via describeServer)
+  Drawbridge   ws://127.0.0.1:$DRAWBRIDGE_PORT/ws    (pass to devices with --drawbridge-url)
   Logs         $RUN_DIR/{postern,drawbridge}.log
 
 '$0 --help' for how to drive devices against it.
@@ -61,7 +60,7 @@ EOF
 
 usage() {
   cat <<EOF
-Local manual-testing stack: Postern (PDS) + Drawbridge (relay).
+Local manual-testing stack: Postern (PDS) + Drawbridge.
 
   $0 up      build and start both services (default)
   $0 down    stop them
@@ -70,7 +69,7 @@ Local manual-testing stack: Postern (PDS) + Drawbridge (relay).
 
 Services
   Postern      http://127.0.0.1:$POSTERN_PORT   (emulator: http://10.0.2.2:$POSTERN_PORT)
-  Drawbridge   ws://127.0.0.1:$RELAY_PORT/ws    (advertised via describeServer)
+  Drawbridge   ws://127.0.0.1:$DRAWBRIDGE_PORT/ws    (pass to devices with --drawbridge-url)
   Logs         $RUN_DIR/{postern,drawbridge}.log
   PID files    $RUN_DIR/{postern,drawbridge}.pid
 
@@ -83,13 +82,14 @@ they hold separate keys, and delete them between passes for a clean slate:
   rm -rf /tmp/moat-alice /tmp/moat-bob1 /tmp/moat-bob2
 
 Start a device (TUI):
-  cargo run -p moat-cli -- -s /tmp/moat-alice --pds-url http://127.0.0.1:$POSTERN_PORT
+  cargo run -p moat-cli -- -s /tmp/moat-alice --pds-url http://127.0.0.1:$POSTERN_PORT \\
+    --drawbridge-url ws://127.0.0.1:$DRAWBRIDGE_PORT/ws
 
 Start a device (headless HTTP API) — one port per device:
   cargo run -p moat-cli -- -s /tmp/moat-alice --pds-url http://127.0.0.1:$POSTERN_PORT \\
-    --http 127.0.0.1:9101
+    --drawbridge-url ws://127.0.0.1:$DRAWBRIDGE_PORT/ws --http 127.0.0.1:9101
   cargo run -p moat-cli -- -s /tmp/moat-bob1  --pds-url http://127.0.0.1:$POSTERN_PORT \\
-    --http 127.0.0.1:9102
+    --drawbridge-url ws://127.0.0.1:$DRAWBRIDGE_PORT/ws --http 127.0.0.1:9102
 
   HTTP devices start logged out; log in explicitly (any password):
     curl -s -X POST http://127.0.0.1:9101/login \\
@@ -111,9 +111,9 @@ Start a device (headless HTTP API) — one port per device:
     POST /poll/<seconds>               set poll interval (300 = push-only test)
 
   Pairing a second device (new device mints the code, existing one approves):
-    curl -s -X POST http://127.0.0.1:9102/pair/new       # -> {"code": "..."}
+    curl -s -X POST http://127.0.0.1:9102/pair/new       # -> {"code": "...", "drawbridge_url": "ws://..."}
     curl -s -X POST http://127.0.0.1:9101/pair/confirm \\
-      -H 'Content-Type: application/json' -d '{"code":"<code>"}'
+      -H 'Content-Type: application/json' -d '{"code":"<code>","drawbridge_url":"<drawbridge_url>"}'
     curl -s -X POST http://127.0.0.1:9101/pair/approve
     curl -s    http://127.0.0.1:9102/pair/status
 
@@ -124,8 +124,8 @@ Start a device (headless HTTP API) — one port per device:
 
 Health checks:
   curl -s http://127.0.0.1:$POSTERN_PORT/xrpc/com.atproto.server.describeServer
-  curl -s http://127.0.0.1:$RELAY_PORT/health
-  curl -s http://127.0.0.1:$RELAY_PORT/metrics
+  curl -s http://127.0.0.1:$DRAWBRIDGE_PORT/health
+  curl -s http://127.0.0.1:$DRAWBRIDGE_PORT/metrics
 
 A full manual pass is scripted in scripts/MANUAL_TEST.md.
 EOF

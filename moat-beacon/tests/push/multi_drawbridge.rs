@@ -1,0 +1,23 @@
+//! A message to a user whose two devices sit on different Drawbridges reaches
+//! both by push. Named `<d1><d2>` for Alice's devices; the two mixed cells
+//! put each runtime on both sides of a pairing across Drawbridges.
+
+use moat_beacon::scenarios::multi_drawbridge_push::run;
+use moat_beacon::world::ParticipantKind::{DartServer as D, RustCli as R};
+
+macro_rules! cell {
+    ($name:ident, $d1:expr, $d2:expr, $cell:literal) => {
+        #[test]
+        fn $name() {
+            let _slot = moat_beacon::parallel::world_slot(super::WORLDS);
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build tokio runtime");
+            rt.block_on(run($d1, $d2, $cell, true));
+        }
+    };
+}
+
+cell!(multi_drawbridge_push_rd, R, D, "rd");
+cell!(multi_drawbridge_push_dr, D, R, "dr");

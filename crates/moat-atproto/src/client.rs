@@ -2,12 +2,12 @@
 
 use crate::error::{Error, Result};
 use crate::records::{
-    BlobRef, DrawbridgeConfigRecord, DrawbridgeEntry, EventData, EventRecord, KeyPackageData,
+    BlobRef, DrawbridgeConfigRecord, EventData, EventRecord, KeyPackageData,
     KeyPackageRecord, StealthAddressData, StealthAddressRecord,
 };
 use atrium_api::agent::{store::MemorySessionStore, AtpAgent};
 use atrium_api::com::atproto::repo::{
-    create_record, delete_record, get_record, list_records, put_record,
+    create_record, delete_record, list_records, put_record,
 };
 use atrium_api::com::atproto::server::create_session::OutputData as SessionData;
 use atrium_api::types::string::{AtIdentifier, Nsid};
@@ -760,18 +760,15 @@ impl MoatAtprotoClient {
         Ok(records)
     }
 
-    /// Publish (or update) this user's relay configuration.
+    /// Publish (or update) this device's Drawbridge.
     ///
-    /// Uses `putRecord` with rkey `"self"` so the record is a singleton —
-    /// calling this again overwrites the previous configuration.
+    /// The record's rkey is `device_id_hex`, so a device writes only its own
+    /// record and siblings on other Drawbridges keep theirs.
     ///
     /// Returns the AT-URI of the record.
-    pub async fn publish_drawbridge_config(&self, url: &str) -> Result<String> {
+    pub async fn publish_drawbridge_config(&self, device_id_hex: &str, url: &str) -> Result<String> {
         let data = DrawbridgeConfigRecord {
-            drawbridges: vec![DrawbridgeEntry {
-                url: url.to_string(),
-                priority: 1,
-            }],
+            url: url.to_string(),
         };
 
         let record_value = serde_json::to_value(&data)?;
@@ -795,7 +792,7 @@ impl MoatAtprotoClient {
                     .parse()
                     .map_err(|_| Error::InvalidDid(self.did.clone()))?,
             ),
-            rkey: "self".to_string(),
+            rkey: device_id_hex.to_string(),
             swap_commit: None,
             swap_record: None,
             validate: None,
@@ -814,44 +811,59 @@ impl MoatAtprotoClient {
         Ok(output.uri.to_string())
     }
 
-    /// Fetch a user's Drawbridge configuration.
+    /// The Drawbridges a user's devices sit on: every device's
+    /// `social.moat.drawbridgeConfig` record, deduplicated.
     ///
-    /// Resolves the DID's PDS and fetches the `social.moat.drawbridgeConfig` record
-    /// with rkey `"self"`. Returns `None` if the user hasn't published one.
-    pub async fn fetch_drawbridge_config(&self, did: &str) -> Result<Option<DrawbridgeConfigRecord>> {
+    /// Resolves the DID's PDS and lists the collection there. A user with no
+    /// records has no Drawbridge.
+    pub async fn fetch_drawbridge_urls(&self, did: &str) -> Result<Vec<String>> {
         let pds_url = self.resolve_pds_endpoint(did).await?;
         let pds_agent = self.agent_for_pds(&pds_url);
 
-        let input = get_record::ParametersData {
-            collection: Nsid::new(DRAWBRIDGE_CONFIG_NSID.to_string())
-                .map_err(|e| Error::InvalidRecord(e.to_string()))?,
-            repo: AtIdentifier::Did(
-                did.parse()
-                    .map_err(|_| Error::InvalidDid(did.to_string()))?,
-            ),
-            rkey: "self".to_string(),
-            cid: None,
-        };
+        let mut urls: Vec<String> = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let input = list_records::ParametersData {
+                collection: Nsid::new(DRAWBRIDGE_CONFIG_NSID.to_string())
+                    .map_err(|e| Error::InvalidRecord(e.to_string()))?,
+                cursor: cursor.clone(),
+                limit: Some(100.try_into().unwrap()),
+                repo: AtIdentifier::Did(
+                    did.parse()
+                        .map_err(|_| Error::InvalidDid(did.to_string()))?,
+                ),
+                reverse: None,
+                rkey_start: None,
+                rkey_end: None,
+            };
 
-        let output = match pds_agent
-            .api
-            .com
-            .atproto
-            .repo
-            .get_record(input.into())
-            .await
-        {
-            Ok(output) => output,
-            Err(_) => return Ok(None),
-        };
+            let output = pds_agent
+                .api
+                .com
+                .atproto
+                .repo
+                .list_records(input.into())
+                .await
+                .map_err(|e| Error::Pds(e.to_string()))?;
 
-        let value = serde_json::to_value(&output.value)
-            .map_err(|e| Error::Serialization(e.to_string()))?;
+            for item in &output.records {
+                let value = serde_json::to_value(&item.value)
+                    .map_err(|e| Error::Serialization(e.to_string()))?;
+                if let Ok(record) = serde_json::from_value::<DrawbridgeConfigRecord>(value) {
+                    if !urls.contains(&record.url) {
+                        urls.push(record.url);
+                    }
+                }
+            }
 
-        match serde_json::from_value::<DrawbridgeConfigRecord>(value) {
-            Ok(record) => Ok(Some(record)),
-            Err(_) => Ok(None),
+            match &output.cursor {
+                Some(next_cursor) if !output.records.is_empty() => {
+                    cursor = Some(next_cursor.clone());
+                }
+                _ => break,
+            }
         }
+        Ok(urls)
     }
 
     /// Delete all Moat records from the user's PDS.
@@ -1008,27 +1020,6 @@ impl MoatAtprotoClient {
     /// Resolves the sender's PDS endpoint from their DID, then fetches the blob
     /// via `com.atproto.sync.getBlob`. The returned bytes are the raw encrypted
     /// blob (`nonce || ciphertext`) — callers must decrypt with `blob_decrypt`.
-    /// Call `com.atproto.server.describeServer` on `pds_url` and return the
-    /// Drawbridge endpoint advertised under `services['social.moat.drawbridge']`,
-    /// or `None` if the PDS does not advertise one or the call fails.
-    pub async fn describe_server_drawbridge_url(&self, pds_url: &str) -> Option<String> {
-        let url = format!("{pds_url}/xrpc/com.atproto.server.describeServer");
-        let response = self.http_client.get(&url).send().await.ok()?;
-        if !response.status().is_success() {
-            return None;
-        }
-        let json: serde_json::Value = response.json().await.ok()?;
-        let endpoint = json
-            .get("services")?
-            .get("social.moat.drawbridge")?
-            .get("endpoint")?
-            .as_str()?;
-        if endpoint.is_empty() {
-            return None;
-        }
-        Some(endpoint.to_string())
-    }
-
     pub async fn fetch_blob(&self, did: &str, cid: &str) -> Result<Vec<u8>> {
         let pds_url = self.resolve_pds_endpoint(did).await?;
         let url = format!(

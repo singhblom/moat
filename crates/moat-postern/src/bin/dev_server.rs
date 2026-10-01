@@ -10,9 +10,6 @@
 //! via `10.0.2.2:<port>`; a process on this same host (Drawbridge, moat-cli)
 //! reaches it via `127.0.0.1:<port>`.
 //!
-//! Set `DRAWBRIDGE_URL` to advertise a relay via `describeServer`, e.g.
-//! `DRAWBRIDGE_URL=ws://127.0.0.1:8080`. Without it clients poll only.
-//!
 //! Seeds two accounts sharing the `did:plc:` prefix `moat-beacon`'s
 //! `TestWorld` uses, so nothing here surprises anyone used to that harness.
 //! No password validation — this is a test PDS (see `server.rs`) — so any
@@ -46,11 +43,6 @@ async fn main() {
     })
     .await;
 
-    let drawbridge_url = std::env::var("DRAWBRIDGE_URL").ok();
-    if let Some(ref url) = drawbridge_url {
-        postern.set_drawbridge_url(url);
-    }
-
     println!("Postern dev server running.");
     println!();
     println!("  PDS URL — from this Mac (moat-cli, Drawbridge):  http://127.0.0.1:{port}");
@@ -59,11 +51,6 @@ async fn main() {
     println!("  Accounts (any password — Postern does not validate one):");
     println!("    alice.postern.test  (did:plc:alice-dev)");
     println!("    bob.postern.test    (did:plc:bob-dev)");
-    println!();
-    match drawbridge_url {
-        Some(url) => println!("  Drawbridge advertised via describeServer: {url}"),
-        None => println!("  Drawbridge: not advertised (set DRAWBRIDGE_URL); clients poll only"),
-    }
     println!();
     println!("  State directory: {}", postern.data_dir().display());
     println!();

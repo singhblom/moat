@@ -456,12 +456,15 @@ async fn get_sync_status(State(state): State<Arc<ServerState>>) -> Json<Value> {
 #[derive(Deserialize)]
 struct PairConfirmRequest {
     code: String,
+    /// The Drawbridge URL shown beside the code; a `moat-pair:` URI names its own.
+    #[serde(default)]
+    drawbridge_url: Option<String>,
 }
 
 async fn post_pair_new(State(state): State<Arc<ServerState>>) -> HandlerResult<Json<Value>> {
     let mut app = state.app.lock().await;
-    let code = app.api_pair_new().map_err(app_err)?;
-    Ok(Json(json!({ "code": code })))
+    let (code, drawbridge_url) = app.api_pair_new().map_err(app_err)?;
+    Ok(Json(json!({ "code": code, "drawbridge_url": drawbridge_url.as_str() })))
 }
 
 async fn post_pair_confirm(
@@ -469,7 +472,7 @@ async fn post_pair_confirm(
     Json(body): Json<PairConfirmRequest>,
 ) -> HandlerResult<Json<Value>> {
     let mut app = state.app.lock().await;
-    app.api_pair_confirm(&body.code).map_err(app_err)?;
+    app.api_pair_confirm(&body.code, body.drawbridge_url.as_deref()).map_err(app_err)?;
     Ok(Json(json!({ "ok": true })))
 }
 

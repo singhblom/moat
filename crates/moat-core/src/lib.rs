@@ -25,6 +25,7 @@
 pub mod blob;
 pub(crate) mod credential;
 pub(crate) mod device_ring;
+pub(crate) mod drawbridge_url;
 pub(crate) mod error;
 pub(crate) mod event;
 pub mod message;
@@ -82,7 +83,10 @@ pub use crate::sync::{ConvHistory, SyncMessage, SyncProgress, SyncReaction, Sync
 pub use crate::sync_request::{
     decode_ring_msg, RingMsg, SyncFailure, SyncRequestUiState, SYNC_REQUEST_TTL_MS,
 };
-pub use crate::pair_channel::{PairChannelCommand, PairChannelDriver, PairEnv, PairIdentity};
+pub use crate::drawbridge_url::DrawbridgeUrl;
+pub use crate::pair_channel::{
+    PairChannelCommand, PairChannelDriver, PairEnv, PairIdentity, PAIR_CLOSE_GRACE,
+};
 pub use crate::pairing::{PairingUiState, PAIRING_TOKEN_LEN};
 
 /// The ciphersuite used by Moat
@@ -2176,7 +2180,7 @@ impl MoatSession {
     /// Returns `(signature_bytes, public_key_bytes)` as raw bytes (64 and 32 bytes respectively).
     /// The caller is responsible for encoding these as needed (e.g., base64 for JSON transport).
     ///
-    /// The `message` is typically `"{nonce}\n{relay_url}\n{timestamp}\n"`.
+    /// The `message` is typically `"{nonce}\n{drawbridge_url}\n{timestamp}\n"`.
     pub fn sign_drawbridge_challenge(
         key_bundle: &[u8],
         message: &[u8],

@@ -14,7 +14,6 @@ import 'device_ring_service.dart';
 import 'drawbridge_service.dart';
 import 'secure_storage.dart';
 import 'debug_log.dart';
-import '../utils/welcome_envelope.dart';
 
 /// Stats returned by a single poll cycle.
 class PollStats {
@@ -114,6 +113,8 @@ class PollingService {
     var newConversations = 0;
 
     try {
+      await _refreshDrawbridgeConfigs();
+      unawaited(_authService.publishDrawbridgeRecord());
       newConversations += await _pollOwnDid();
       newConversations += await _pollWatchedDids();
       newMessages += await _pollConversationMessages();
@@ -124,6 +125,18 @@ class PollingService {
     }
 
     return PollStats(newMessages: newMessages, newConversations: newConversations);
+  }
+
+  /// Re-read the relay lists of every conversation's members and this user
+  /// that are missing or older than [DrawbridgeService.configTtl].
+  Future<void> _refreshDrawbridgeConfigs() async {
+    final dids = <String>{
+      if (_authService.did != null) _authService.did!,
+      for (final conv in _conversationsService.conversations) ...conv.participants,
+    };
+    final db = DrawbridgeService.instance;
+    await db.refreshDrawbridgeConfigs(
+        _authService.atprotoClient, db.staleConfigDids(dids));
   }
 
   /// Poll our own DID for incoming welcome messages.
@@ -515,14 +528,9 @@ class PollingService {
           if (membersChanged) {
             await _conversationsService.saveConversation(conversation);
             // Fetch Drawbridge configs for new members.
-            for (final did in otherDids) {
-              if (!currentParticipants.contains(did)) {
-                try {
-                  final urls = await _authService.atprotoClient.fetchDrawbridgeConfig(did);
-                  DrawbridgeService.instance.cacheDrawbridgeConfig(did, urls);
-                } catch (_) {}
-              }
-            }
+            await DrawbridgeService.instance.refreshDrawbridgeConfigs(
+                _authService.atprotoClient,
+                otherDids.where((did) => !currentParticipants.contains(did)));
           }
 
           await _authService.populateConversationTags(conversation.groupId);
@@ -602,13 +610,9 @@ class PollingService {
     }
   }
 
-  /// Process a decrypted Welcome message.
-  ///
-  /// Handles both raw MLS Welcome bytes and the envelope format used by the
-  /// Rust CLI's add-member flow (`[MWE1][4-byte len BE][welcome][hints_json]`).
+  /// Process a decrypted Welcome message (raw MLS Welcome bytes).
   Future<void> _processWelcome(Uint8List data, String senderDid) async {
-    final welcomeBytes = decodeWelcomeEnvelope(data);
-    final groupId = await _authService.processWelcome(welcomeBytes);
+    final groupId = await _authService.processWelcome(data);
 
     final session = _authService.moatSession;
     final epoch = session != null
@@ -654,17 +658,10 @@ class PollingService {
 
     await _conversationsService.saveConversation(conversation);
 
-    // Fetch partner config.
-    final db = DrawbridgeService.instance;
-
-    for (final did in otherDids) {
-      try {
-        final urls = await _authService.atprotoClient.fetchDrawbridgeConfig(did);
-        db.cacheDrawbridgeConfig(did, urls);
-      } catch (e) {
-        moatLog('PollingService: Failed to fetch drawbridge config for $did: $e');
-      }
-    }
+    // Fetch the Drawbridges of the members and of our own other devices.
+    await DrawbridgeService.instance.refreshDrawbridgeConfigs(
+        _authService.atprotoClient,
+        [...otherDids, if (_authService.did != null) _authService.did!]);
   }
 
   void dispose() {

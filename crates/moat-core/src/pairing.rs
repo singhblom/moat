@@ -25,6 +25,7 @@ use serde_with::{base64::Base64, serde_as};
 use sha2::Sha256;
 
 use crate::device_ring::{DeviceId, OfferedKp};
+use crate::drawbridge_url::DrawbridgeUrl;
 use crate::{Error, MoatCredential, MoatSession, Result};
 
 // ─── Wire payload (the code itself) ─────────────────────────────────────────
@@ -55,10 +56,10 @@ pub const CROCKFORD_ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 /// The decoded contents of a pairing code: enough for the new device to
 /// register a Drawbridge rendezvous token and for both sides to derive the
-/// channel AEAD keys. Deliberately excludes the DID and relay URL: both
-/// devices already know their own DID (equality is verified inside the
-/// encrypted channel), and the relay URL is discoverable from the shared
-/// DID's PDS.
+/// channel AEAD keys. Deliberately excludes the DID: both devices already
+/// know it (equality is verified inside the encrypted channel). The Drawbridge
+/// the rendezvous happens on travels beside the code, not in it: see
+/// [`to_uri`](Self::to_uri).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairingPayload {
     pub token: [u8; PAIRING_TOKEN_LEN],
@@ -120,22 +121,66 @@ impl PairingPayload {
         Self::decode(&crockford_decode(s)?)
     }
 
-    /// Encode to the `moat-pair:<text-form>` URI used for the QR payload, so
-    /// the app can register a URI handler and reject foreign QRs cheaply.
-    pub fn to_uri(&self) -> String {
-        format!("{PAIRING_URI_SCHEME}{}", self.to_text())
+    /// Encode to the `moat-pair:<text-form>?drawbridge=<url>` URI used for the QR
+    /// payload, so the app can register a URI handler and reject foreign QRs
+    /// cheaply. `drawbridge_url` is the new device's Drawbridge, where the rendezvous is.
+    pub fn to_uri(&self, drawbridge_url: &DrawbridgeUrl) -> String {
+        format!(
+            "{PAIRING_URI_SCHEME}{}?drawbridge={}",
+            self.to_text(),
+            percent_encode(drawbridge_url.as_str())
+        )
     }
 
-    /// Decode from the `moat-pair:` URI form. Rejects a missing/foreign
-    /// scheme.
-    pub fn from_uri(s: &str) -> Result<Self> {
+    /// Decode from the `moat-pair:` URI form, returning the Drawbridge it names
+    /// if it names one. Rejects a missing/foreign scheme.
+    pub fn from_uri(s: &str) -> Result<(Self, Option<DrawbridgeUrl>)> {
         let rest = s.strip_prefix(PAIRING_URI_SCHEME).ok_or_else(|| {
             Error::PairingProtocol(format!(
                 "pairing uri must start with {PAIRING_URI_SCHEME}, got: {s}"
             ))
         })?;
-        Self::from_text(rest)
+        let (text, query) = rest.split_once('?').unwrap_or((rest, ""));
+        let drawbridge_url = query
+            .split('&')
+            .find_map(|pair| pair.strip_prefix("drawbridge="))
+            .map(|v| DrawbridgeUrl::parse(&percent_decode(v)?))
+            .transpose()?;
+        Ok((Self::from_text(text)?, drawbridge_url))
     }
+}
+
+/// Percent-encode everything but RFC 3986 unreserved characters.
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+fn percent_decode(s: &str) -> Result<String> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = s
+                .get(i + 1..i + 3)
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+                .ok_or_else(|| Error::PairingProtocol("bad %-escape in pairing uri".to_string()))?;
+            out.push(hex);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).map_err(|_| Error::PairingProtocol("pairing uri is not UTF-8".to_string()))
 }
 
 /// Crockford base32 encode of arbitrary bytes (no hyphen grouping, no
@@ -501,7 +546,9 @@ enum Phase {
 struct DisplayedCode {
     /// Bare text, for manual entry on the peer.
     text: String,
-    /// `moat-pair:` URI, for the QR.
+    /// The Drawbridge the peer joins, beside the code.
+    drawbridge_url: String,
+    /// `moat-pair:` URI carrying both, for the QR.
     uri: String,
 }
 
@@ -522,7 +569,7 @@ pub enum PairingUiState {
     /// steady across the whole wait, including after `Enroll` has been
     /// sent (still waiting on `Admit`) — the code stays valid and
     /// displayed for the whole exchange.
-    ShowingCode { code: String, uri: String },
+    ShowingCode { code: String, drawbridge_url: String, uri: String },
     /// Existing device: code accepted, waiting for the peer's `Enroll`.
     AwaitingPeer,
     /// Existing device: `Enroll` received, waiting on the approve/reject
@@ -576,7 +623,7 @@ impl PairingSession {
     /// [`PairingPayload::to_text`]/[`to_uri`](PairingPayload::to_uri) off it
     /// once here, so hosts don't need a second copy of the code alongside
     /// the session.
-    pub fn new_device(payload: &PairingPayload) -> Self {
+    pub fn new_device(payload: &PairingPayload, drawbridge_url: &DrawbridgeUrl) -> Self {
         Self {
             phase: Phase::NewDevice(NewDevicePhase::Idle),
             channel: Some(PairingFrameChannel::new(
@@ -587,7 +634,8 @@ impl PairingSession {
             ring_id: None,
             displayed_code: Some(DisplayedCode {
                 text: payload.to_text(),
-                uri: payload.to_uri(),
+                drawbridge_url: drawbridge_url.to_string(),
+                uri: payload.to_uri(drawbridge_url),
             }),
         }
     }
@@ -626,7 +674,7 @@ impl PairingSession {
     /// Move to `Failed { reason }` unless already terminal — a stray
     /// failure must not erase a real `Done`, and an existing `Failed` keeps
     /// its original reason.
-    fn fail(&mut self, reason: String) {
+    pub(crate) fn fail(&mut self, reason: String) {
         if !self.is_terminal() {
             self.phase = Phase::Failed { reason };
         }
@@ -649,7 +697,7 @@ impl PairingSession {
                     .displayed_code
                     .clone()
                     .expect("a new-device session always has a code, set at construction");
-                PairingUiState::ShowingCode { code: code.text, uri: code.uri }
+                PairingUiState::ShowingCode { code: code.text, drawbridge_url: code.drawbridge_url, uri: code.uri }
             }
             Phase::NewDevice(NewDevicePhase::Done) => PairingUiState::Done {
                 ring_id: self

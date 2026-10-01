@@ -17,7 +17,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:web_socket_channel/io.dart';
 
-String get _relayUrl =>
+String get _drawbridgeUrl =>
     Platform.environment['DRAWBRIDGE_TEST_URL'] ?? 'ws://localhost:9877/ws';
 
 /// Helper to connect and read one JSON message.
@@ -36,7 +36,7 @@ Future<Map<String, dynamic>> _readOne(IOWebSocketChannel channel) {
 void main() {
   group('Drawbridge relay protocol', () {
     test('request_challenge returns a challenge with nonce', () async {
-      final channel = IOWebSocketChannel.connect(Uri.parse(_relayUrl));
+      final channel = IOWebSocketChannel.connect(Uri.parse(_drawbridgeUrl));
       await channel.ready;
 
       // Send request_challenge
@@ -52,7 +52,7 @@ void main() {
     });
 
     test('unauthenticated event_posted returns error', () async {
-      final channel = IOWebSocketChannel.connect(Uri.parse(_relayUrl));
+      final channel = IOWebSocketChannel.connect(Uri.parse(_drawbridgeUrl));
       await channel.ready;
 
       // Try sending event_posted without authenticating first
@@ -71,7 +71,7 @@ void main() {
     });
 
     test('unauthenticated watch_tags returns error', () async {
-      final channel = IOWebSocketChannel.connect(Uri.parse(_relayUrl));
+      final channel = IOWebSocketChannel.connect(Uri.parse(_drawbridgeUrl));
       await channel.ready;
 
       channel.sink.add(jsonEncode({
@@ -86,7 +86,7 @@ void main() {
     });
 
     test('unknown message type returns error', () async {
-      final channel = IOWebSocketChannel.connect(Uri.parse(_relayUrl));
+      final channel = IOWebSocketChannel.connect(Uri.parse(_drawbridgeUrl));
       await channel.ready;
 
       channel.sink.add(jsonEncode({
@@ -100,7 +100,7 @@ void main() {
     });
 
     test('ticket_auth is rejected (ticket system removed)', () async {
-      final channel = IOWebSocketChannel.connect(Uri.parse(_relayUrl));
+      final channel = IOWebSocketChannel.connect(Uri.parse(_drawbridgeUrl));
       await channel.ready;
 
       channel.sink.add(jsonEncode({

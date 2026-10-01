@@ -75,12 +75,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             "Enter handle to watch:",
             &app.watch_handle_input,
         ),
-        Overlay::PairEnterCode => draw_handle_input_popup(
-            frame,
-            "Link a Device",
-            "Enter pairing code:",
-            &app.pair_enter_code_input,
-        ),
+        Overlay::PairEnterCode => draw_pair_enter_code_popup(frame, app),
         Overlay::PairShowCode => draw_pair_show_code_popup(frame, app),
         Overlay::PairApprove => draw_pair_approve_popup(frame, app),
         Overlay::SyncApprove => draw_sync_approve_popup(frame, app),
@@ -219,11 +214,10 @@ fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_conversations_screen(frame: &mut Frame, app: &App, area: Rect) {
     let style = Style::default().fg(color_pulse(38.0, 227.0, 195.0, 38.0, 195.0, 227.0, 5000));
 
-    let relay_count = app.drawbridge.active_connection_count();
-    let title = if relay_count > 0 {
-        format!(" Conversations  [relay:{relay_count}] ")
+    let title = if app.drawbridge.has_own_connection() {
+        " Conversations  [drawbridge] "
     } else {
-        " Conversations ".to_string()
+        " Conversations "
     };
 
     let block = Block::default()
@@ -709,8 +703,11 @@ const fn mnem(label: &'static str) -> Hint {
 /// which page a key lands on, and which is cut where nothing can page.
 fn hints(app: &App) -> Vec<Hint> {
     match app.overlay {
-        Overlay::NewConversation | Overlay::WatchHandle | Overlay::PairEnterCode => {
+        Overlay::NewConversation | Overlay::WatchHandle => {
             vec![hint("⏎", "confirm"), hint("esc", "cancel")]
+        }
+        Overlay::PairEnterCode => {
+            vec![hint("tab", "next field"), hint("⏎", "confirm"), hint("esc", "cancel")]
         }
         Overlay::PairShowCode | Overlay::PairApprove if app.pairing_is_terminal() => {
             vec![hint("any key", "close")]
@@ -928,6 +925,65 @@ fn draw_handle_input_popup(frame: &mut Frame, title: &str, label: &str, input: &
     frame.set_cursor_position((chunks[1].x + 1 + input.len() as u16, chunks[1].y + 1));
 }
 
+/// Existing device: the Drawbridge and the pairing code shown on the new device.
+fn draw_pair_enter_code_popup(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+
+    let popup_width = 64.min(area.width.saturating_sub(4));
+    let popup_height = 10;
+    let popup_x = (area.width - popup_width) / 2;
+    let popup_y = (area.height - popup_height) / 2;
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+    frame.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .title(" Link a Device ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(3),
+            Constraint::Length(1),
+            Constraint::Length(3),
+        ])
+        .split(inner);
+
+    let field = |active: bool| {
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(if active { Color::Yellow } else { Color::DarkGray }))
+    };
+    frame.render_widget(
+        Paragraph::new("Drawbridge shown on the new device:").style(Style::default().fg(Color::Yellow)),
+        chunks[0],
+    );
+    frame.render_widget(
+        Paragraph::new(app.pair_enter_drawbridge_input.as_str()).block(field(!app.pair_enter_on_code)),
+        chunks[1],
+    );
+    frame.render_widget(
+        Paragraph::new("Pairing code:").style(Style::default().fg(Color::Yellow)),
+        chunks[2],
+    );
+    frame.render_widget(
+        Paragraph::new(app.pair_enter_code_input.as_str()).block(field(app.pair_enter_on_code)),
+        chunks[3],
+    );
+
+    let (active, input) = if app.pair_enter_on_code {
+        (chunks[3], &app.pair_enter_code_input)
+    } else {
+        (chunks[1], &app.pair_enter_drawbridge_input)
+    };
+    frame.set_cursor_position((active.x + 1 + input.len() as u16, active.y + 1));
+}
+
 /// New device: display the pairing code and wait. Renders straight off
 /// `App::pairing_ui_state()` — the code text, the waiting/paired/failed
 /// status, and the border color are all derived from it, never cached
@@ -936,7 +992,7 @@ fn draw_pair_show_code_popup(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
     let popup_width = 60.min(area.width.saturating_sub(4));
-    let popup_height = 8;
+    let popup_height = 10;
     let popup_x = (area.width - popup_width) / 2;
     let popup_y = (area.height - popup_height) / 2;
     let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
@@ -944,13 +1000,17 @@ fn draw_pair_show_code_popup(frame: &mut Frame, app: &App) {
     frame.render_widget(Clear, popup_area);
 
     let (border_color, lines): (Color, Vec<Line>) = match app.pairing_ui_state() {
-        PairingUiState::ShowingCode { code, .. } => (
+        PairingUiState::ShowingCode { code, drawbridge_url, .. } => (
             Color::Cyan,
             vec![
+                Line::from(vec![
+                    Span::raw("Drawbridge: "),
+                    Span::styled(drawbridge_url, Style::default().fg(Color::Yellow)),
+                ]),
                 Line::from(Span::styled(code, Style::default().fg(Color::Yellow))),
                 Line::from(""),
                 Line::from(
-                    "On your other device: Settings -> Link a device, then enter this code.",
+                    "On your other device: Settings -> Link a device, then enter this Drawbridge URL and code.",
                 ),
             ],
         ),
@@ -1070,14 +1130,14 @@ fn draw_status_screen(frame: &mut Frame, app: &App, area: Rect) {
     ));
 
     lines.push(Line::from(""));
-    lines.push(section("Relay"));
+    lines.push(section("Drawbridge"));
     lines.push(field(
         "url",
-        app.drawbridge_url.clone().unwrap_or_else(|| "none".to_string()),
+        app.drawbridge_url.as_ref().map_or_else(|| "none".to_string(), ToString::to_string),
     ));
     lines.push(field(
-        "connections",
-        app.drawbridge.active_connection_count().to_string(),
+        "connected",
+        if app.drawbridge.has_own_connection() { "yes" } else { "no" }.to_string(),
     ));
 
     lines.push(Line::from(""));
@@ -1291,6 +1351,9 @@ fn responder_failure_text(reason: &SyncFailure) -> String {
         SyncFailure::PublishFailed { detail } => {
             format!("The request could not be sent ({detail}).")
         }
+        SyncFailure::DrawbridgeUnreachable { drawbridge_url, detail } => {
+            format!("Could not reach the Drawbridge at {drawbridge_url} ({detail}).")
+        }
     }
 }
 
@@ -1307,6 +1370,9 @@ fn requester_failure_text(reason: &SyncFailure) -> String {
         }
         SyncFailure::PublishFailed { detail } => {
             format!("The request could not be sent ({detail}).")
+        }
+        SyncFailure::DrawbridgeUnreachable { drawbridge_url, detail } => {
+            format!("Could not reach the Drawbridge at {drawbridge_url} ({detail}).")
         }
         // Responder-side outcomes; see the note in `responder_failure_text`.
         SyncFailure::RequestExpired => "This request expired.".to_string(),
