@@ -78,7 +78,7 @@ log ""
 # One web build up front: it is slow, it is not per-run, and a broken WASM
 # build invalidates any Flutter result that follows it.
 log "Pre-flight"
-step 0 "flutter-build-web" bash -c 'cd moat-dart/app && flutter build web' || true
+step 0 "flutter-build-web" bash -c 'cd moat-dart/app && flutter build web --dart-define-from-file=../../config/release.json' || true
 step 0 "cargo-build-workspace" cargo build --workspace --all-targets || true
 step 0 "go-build-drawbridge" bash -c 'cd moat-drawbridge && go build ./...' || true
 log ""
